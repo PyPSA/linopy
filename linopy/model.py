@@ -12,41 +12,82 @@ import numpy as np
 import os
 import shutil
 from tempfile import mkstemp
-from dask.array import asarray
 from xarray import DataArray
+from numpy import inf
+from functools import reduce
 
 
 class Model:
     
     
-    def __init__(self, solver_dir=None):
+    def __init__(self, solver_dir=None, chunk=100):
         self._xCounter = 1
         self._cCounter = 1
+        self.chunk = chunk 
 
-        self.vars = xr.Dataset()
-        self.cons = xr.Dataset()
+        self.variables = xr.Dataset()
+        self.variables_lower_bounds = xr.Dataset()
+        self.variables_upper_bounds = xr.Dataset()
+        
+        self.constraints == xr.Dataset()
+        self.constraints_lhs = xr.Dataset()
+        self.constraints_sign = xr.Dataset()
+        self.constraints_rhs = xr.Dataset()
         
         self.solver_dir = solver_dir
         
 
-    def define_variables(self, name, lower=None, upper=None, coords=None):
-        assert coords is not None or (lower is not None and upper is not None)
-        if coords is not None:
-            # TODO: check lower and upper not array_like
-            lower = -np.inf if lower is None else lower 
-            upper = np.inf if upper is None else upper
-        else:
-            lower = DataArray(lower).chunk(1)
-            upper = DataArray(upper).chunk(1)
+    def add_variables(self, name, lower=-inf, upper=inf, coords=None):
+
+        assert name not in self.variables
+        # TODO: warning if name is like var names (x100).
+        
+        lower = DataArray(lower).chunk(self.chunk)
+        upper = DataArray(upper).chunk(self.chunk)
+        if coords is None:
             coords = (lower + upper).coords # lazy calculation for extracting coords
-        shape = [len(c[1]) if isinstance(c, tuple) else len(c) for c in coords]
-        size = np.prod(shape)
+        reslike = DataArray(coords=coords)
         start = self._xCounter
-        var = np.arange(start, start + size).reshape(shape)
-        var = xr.DataArray(var, coords=coords).chunk(1)
-        self.vars = self.vars.assign({name: var})
+        var = np.arange(start, start + reslike.size).reshape(reslike.shape)
+        self._xCounter += reslike.size
+        var = xr.DataArray(var, coords=reslike.coords).chunk(self.chunk)
+        self.variables = self.variables.assign({name: var})
+        self.variables_lower_bounds = self.variables_lower_bounds.assign({name: lower})
+        self.variables_upper_bounds = self.variables_upper_bounds.assign({name: upper})
+        return var
 
 
+    def add_constraints(self, name, lhs, sign, rhs):
+
+        assert name not in self.constraints
+
+        lhs = DataArray(lhs).chunk(self.chunk)
+        sign = DataArray(sign).chunk(self.chunk)
+        rhs = DataArray(rhs).chunk(self.chunk)
+
+
+        start = self._cCounter
+        con = np.arange(start, start + reslike.size).reshape(reslike.shape)
+        self._cCounter += reslike.size
+        con = xr.DataArray(con, coords=reslike.coords).chunk(self.chunk)
+        self.constraints = self.constraints.assign({name: con})
+
+        # TODO: assert (or warning) when dimensions are not overlapping 
+        self.constraints_lhs = self.constraints_lhs.assign({name: lhs})
+        self.constraints_sign = self.constraints_sign.assign({name: sign})
+        self.constraints_rhs = self.constraints_rhs.assign({name: rhs})
+
+
+
+    def linexpr(self, *tuples):
+        return linexpr(*tuples, model=self)
+
+
+    def __repr__(self):
+        return (f"<Linopy model>\n"
+                f"Variables: {' ,'.join(self.variables)}\n"
+                f"Constraints: {' ,'.join(self.constraints)}\n"
+                f"Dimensions: {' ,'.join(self.variables.indexes)}")
 
 
     def to_file(self, keep_files=False):
@@ -91,5 +132,47 @@ class Model:
 
 
 
+def to_float_str(da):
+    func = np.vectorize(lambda f: '%+f'%f, otypes=[object])
+    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+    
+def to_int_str(da):
+    func = np.vectorize(lambda d: '%d'%d, otypes=[object])
+    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+
+
+
+def linexpr(*tuples, model=None, chunk=None):
+    expr = xr.DataArray('').astype(object)
+    chunk = 100 if model is None else model.chunk
+    for coeff, var in tuples:
+        if isinstance(var, str) and model is not None:
+            var = model.variables[var]
+        if not isinstance(coeff, DataArray):
+            coeff = DataArray(coeff).chunk(chunk)
+        if not isinstance(var, DataArray):
+            var = DataArray(var).chunk(chunk)
+        expr = join_exprs(expr, to_float_str(coeff), ' x', to_int_str(var), '\n')
+    # ensure dtype is object (necessary when vars are only scalars) 
+    return expr if expr.dtype == object else expr.astype(object) 
+
+
+def join_exprs(*arrays):
+    func = lambda *l: np.add(*l, dtype=object)
+    return reduce(func, arrays, '')
+    
+
+
+m = Model()
+
+lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
+upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+m.add_variables('var1', lower, upper)    
+
+m.add_variables('var2')    
+
+lhs = m.linexpr((1, 'var1'), (10, 'var2'))
+
+m.linexpr((1, 1), (10, 'var1'))
 
 
