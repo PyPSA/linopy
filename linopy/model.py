@@ -12,7 +12,7 @@ import numpy as np
 import os
 import shutil
 from tempfile import mkstemp
-from xarray import DataArray
+from xarray import DataArray, Dataset
 from numpy import inf
 from functools import reduce
 
@@ -21,6 +21,8 @@ class Model:
 
 
     def __init__(self, solver_dir=None, chunk=100):
+        # TODO maybe allow the model to be non-lazy, perhaps with an attribute
+        # self._is_lazy and a maybe_chunk function
         self._xCounter = 1
         self._cCounter = 1
         self.chunk = chunk
@@ -33,6 +35,8 @@ class Model:
         self.constraints_lhs = xr.Dataset()
         self.constraints_sign = xr.Dataset()
         self.constraints_rhs = xr.Dataset()
+
+        self.objective = DataArray('')
 
         self.solver_dir = solver_dir
 
@@ -65,6 +69,8 @@ class Model:
     def add_constraints(self, name, lhs, sign, rhs):
 
         assert name not in self.constraints
+       # TODO: warning if name is like con names (c100).
+       # TODO: check if rhs is constants (floats, int)
 
         lhs = DataArray(lhs).chunk(self.chunk)
         sign = DataArray(sign).chunk(self.chunk)
@@ -83,6 +89,25 @@ class Model:
         self.constraints_lhs = self.constraints_lhs.assign({name: lhs})
         self.constraints_sign = self.constraints_sign.assign({name: sign})
         self.constraints_rhs = self.constraints_rhs.assign({name: rhs})
+        return con
+
+
+    def add_objective(self, expr, extend=False, overwrite=False):
+        if not extend and not overwrite:
+            assert self.objective.compute().item() == ''
+        if isinstance(expr, (list, tuple)):
+            expr = self.linexpr(expr).sum()
+        if isinstance(expr, str):
+            expr = DataArray(expr)
+        assert isinstance(expr, DataArray) and expr.size == 1
+        if extend:
+            # Extension requires computing, as .sum() of a string object
+            # DataArray automatically converts to unicode,
+            # see https://github.com/pydata/xarray/issues/5024
+            self.objective = join_exprs(self.objective.compute(), expr.compute())
+        else:
+            self.objective = expr
+        return self.objective
 
 
 
@@ -152,6 +177,8 @@ def to_int_str(da):
 def linexpr(*tuples, model=None, chunk=None):
     expr = xr.DataArray('').astype(object)
     chunk = 100 if model is None else model.chunk
+    # TODO: allow joining linear expresssion in tuples as well
+    # like: linexpr(expr, (1, 'p'))
     for coeff, var in tuples:
         if isinstance(var, str) and model is not None:
             var = model.variables[var]
@@ -170,16 +197,14 @@ def join_exprs(*arrays):
 
 
 
-m = Model()
 
-lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
-upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-m.add_variables('var1', lower, upper)
+# m = Model()
 
-m.add_variables('var2')
+# lower = xr.DataArray(np.zeros((100,100)), coords=[range(100), range(100)])
+# upper = xr.DataArray(np.ones((100, 100)), coords=[range(100), range(100)])
+# m.add_variables('var1', lower, upper)
 
-lhs = m.linexpr((1, 'var1'), (10, 'var2'))
+# m.add_variables('var2')
 
-m.linexpr((1, 1), (10, 'var1'))
-
+# lhs = m.linexpr((1, 'var1'), (10, 'var2')).compute()
 
