@@ -84,6 +84,8 @@ def test_add_variables_shape():
 
 
 
+# def test_LinearExpression():
+
 
 def test_linexpr():
     m = Model()
@@ -91,29 +93,25 @@ def test_linexpr():
     lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     m.add_variables('var1', lower, upper)
-
     m.add_variables('var2')
 
     expr = m.linexpr((1, 'var1'), (10, 'var2'))
-    assert expr.shape == (10, 10)
-    assert expr.dtype == object
+    assert expr.nterm == 2
+    assert expr.shape[1:] == (10, 10)
 
 
     # select a variable by a scalar and broadcast if over another variable array
     expr = m.linexpr((1, 1), (10, 'var1'))
-    assert expr.shape == (10, 10)
-    assert expr.dtype == object
+    assert expr.shape[1:] == (10, 10)
 
 
     # select a variable by a scalar and weight it with different coefficients
     expr = m.linexpr((np.arange(0, 10), 1), (10, 'var1'))
-    assert expr.shape == (10, 10)
-    assert expr.dtype == object
+    assert expr.shape[1:] == (10, 10)
 
     # select two explicit variables by scalars
     expr = m.linexpr((1, 1), (10, 2))
-    assert expr.size == 1
-    assert expr.dtype == object
+    assert expr.size == 2
 
 
 
@@ -131,9 +129,8 @@ def test_constraints():
 
     assert m.constraints.con1.shape == (10, 10)
     assert m.constraints.con1.dtype == int
-    assert m.constraints_lhs.con1.dtype == object
-    assert np.issubdtype(m.constraints_sign.con1.dtype, str) or \
-        m.constraints_sign.con1.dtype == object
+    assert m.constraints_lhs.con1_coefficients.dtype in (int, float)
+    assert m.constraints_lhs.con1_variables.dtype in (int, float)
     assert m.constraints_rhs.con1.dtype in (int, float)
 
 

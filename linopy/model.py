@@ -6,7 +6,6 @@ This is a temporary script file.
 """
 
 import pandas as pd
-import dask
 import xarray as xr
 import numpy as np
 import os
@@ -14,7 +13,6 @@ import shutil
 from tempfile import mkstemp
 from xarray import DataArray, Dataset
 from numpy import inf
-from functools import reduce
 
 
 class Model:
@@ -27,14 +25,14 @@ class Model:
         self._cCounter = 1
         self.chunk = chunk
 
-        self.variables = xr.Dataset()
-        self.variables_lower_bounds = xr.Dataset()
-        self.variables_upper_bounds = xr.Dataset()
+        self.variables = Dataset()
+        self.variables_lower_bounds = Dataset()
+        self.variables_upper_bounds = Dataset()
 
-        self.constraints = xr.Dataset()
-        self.constraints_lhs = xr.Dataset()
-        self.constraints_sign = xr.Dataset()
-        self.constraints_rhs = xr.Dataset()
+        self.constraints = Dataset()
+        self.constraints_lhs = Dataset()
+        self.constraints_sign = Dataset()
+        self.constraints_rhs = Dataset()
 
         self.objective = DataArray('')
 
@@ -46,12 +44,12 @@ class Model:
         assert name not in self.variables
         # TODO: warning if name is like var names (x100).
 
-        lower = DataArray(lower).chunk(self.chunk)
-        upper = DataArray(upper).chunk(self.chunk)
+        lower = DataArray(lower)
+        upper = DataArray(upper)
 
         if coords is None:
             # only a lazy calculation for extracting coords, shape and size
-            coords = (lower + upper).coords
+            coords = (lower.chunk() + upper.chunk()).coords
 
         reslike = DataArray(coords=coords)
 
@@ -59,6 +57,12 @@ class Model:
         var = np.arange(start, start + reslike.size).reshape(reslike.shape)
         self._xCounter += reslike.size
         var = xr.DataArray(var, coords=reslike.coords).chunk(self.chunk)
+        var = var.assign_attrs(name=name)
+
+        if self.chunk:
+            lower = lower.chunk(self.chunk)
+            upper = upper.chunk(self.chunk)
+            var = var.chunk(self.chunk)
 
         self.variables = self.variables.assign({name: var})
         self.variables_lower_bounds = self.variables_lower_bounds.assign({name: lower})
@@ -72,47 +76,48 @@ class Model:
        # TODO: warning if name is like con names (c100).
        # TODO: check if rhs is constants (floats, int)
 
-        lhs = DataArray(lhs).chunk(self.chunk)
-        sign = DataArray(sign).chunk(self.chunk)
-        rhs = DataArray(rhs).chunk(self.chunk)
+        assert isinstance(lhs, LinearExpression)
 
-        # only a lazy calculation for extracting coords, shape and size
-        reslike = join_exprs(lhs, sign, rhs)
+        sign = DataArray(sign)
+        rhs = DataArray(rhs)
+
+        reslike = (lhs.variables.chunk() + rhs).sum('term_')
 
         start = self._cCounter
         con = np.arange(start, start + reslike.size).reshape(reslike.shape)
         self._cCounter += reslike.size
-        con = xr.DataArray(con, coords=reslike.coords).chunk(self.chunk)
-        self.constraints = self.constraints.assign({name: con})
+        con = DataArray(con, coords=reslike.coords)
+        con = con.assign_attrs(name=name)
 
-        # TODO: assert (or warning) when dimensions are not overlapping
-        self.constraints_lhs = self.constraints_lhs.assign({name: lhs})
+        if self.chunk:
+            lhs.coefficients = lhs.coefficients.chunk(self.chunk)
+            lhs.variables = lhs.variables.chunk(self.chunk)
+            sign = sign.chunk(self.chunk)
+            rhs = rhs.chunk(self.chunk)
+            con = con.chunk(self.chunk)
+
+        self.constraints = self.constraints.assign({name: con})
+        _ = {name + '_coefficients': lhs.coefficients,
+             name + '_variables': lhs.variables}
+        self.constraints_lhs = self.constraints_lhs.assign(_)
         self.constraints_sign = self.constraints_sign.assign({name: sign})
         self.constraints_rhs = self.constraints_rhs.assign({name: rhs})
         return con
 
 
-    def add_objective(self, expr, extend=False, overwrite=False):
-        if not extend and not overwrite:
-            assert self.objective.compute().item() == ''
-        if isinstance(expr, (list, tuple)):
-            expr = self.linexpr(expr).sum()
-        if isinstance(expr, str):
-            expr = DataArray(expr)
-        assert isinstance(expr, DataArray) and expr.size == 1
-        if extend:
-            # Extension requires computing, as .sum() of a string object
-            # DataArray automatically converts to unicode,
-            # see https://github.com/pydata/xarray/issues/5024
-            self.objective = join_exprs(self.objective.compute(), expr.compute())
-        else:
-            self.objective = expr
+    def add_objective(self, expr):
+        assert isinstance(expr, LinearExpression)
+        if expr.ndim > 1:
+            expr = expr.sum()
+        self.objective = expr
         return self.objective
 
 
-
     def linexpr(self, *tuples):
-        return linexpr(*tuples, model=self)
+        # TODO: allow setting index from variables name
+        tuples = [(coef, self.variables[var]) if isinstance(var, str)
+                  else (coef, var) for (coef, var) in tuples]
+        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
 
     def __repr__(self):
@@ -164,47 +169,122 @@ class Model:
 
 
 
-def to_float_str(da):
-    func = np.vectorize(lambda f: '%+f'%f, otypes=[object])
-    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
 
-def to_int_str(da):
-    func = np.vectorize(lambda d: '%d'%d, otypes=[object])
-    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+class LinearExpression:
 
+    def __init__(self, coefficients, variables):
 
+        assert isinstance(coefficients, DataArray)
+        assert isinstance(variables, DataArray)
 
-def linexpr(*tuples, model=None, chunk=None):
-    expr = xr.DataArray('').astype(object)
-    chunk = 100 if model is None else model.chunk
-    # TODO: allow joining linear expresssion in tuples as well
-    # like: linexpr(expr, (1, 'p'))
-    for coeff, var in tuples:
-        if isinstance(var, str) and model is not None:
-            var = model.variables[var]
-        if not isinstance(coeff, DataArray):
-            coeff = DataArray(coeff).chunk(chunk)
-        if not isinstance(var, DataArray):
-            var = DataArray(var).chunk(chunk)
-        expr = join_exprs(expr, to_float_str(coeff), ' x', to_int_str(var), '\n')
-    # ensure dtype is object (necessary when vars are only scalars)
-    return expr if expr.dtype == object else expr.astype(object)
+        assert 'term_' in coefficients.dims
+        assert 'term_' in variables.dims
+
+        coefficients, variables  = xr.broadcast(coefficients, variables)
+        # TODO: perhaps use a datset here in self.data
+        self.coefficients = coefficients
+        self.variables = variables
 
 
-def join_exprs(*arrays):
-    func = lambda *l: np.add(*l, dtype=object) # np.core.defchararray.add
-    return reduce(func, arrays, '')
+    def __add__(self, other):
+        assert isinstance(other, LinearExpression)
+        n_terms = len(self.variables.term_) + len(other.variables.term_)
+        dim = pd.Index(range(n_terms), name='term_')
+        variables = xr.concat([self.variables, other.variables], dim=dim)
+
+        n_terms = len(self.coefficients.term_) + len(other.coefficients.term_)
+        dim = pd.Index(range(n_terms), name='term_')
+        coefficients = xr.concat([self.coefficients, other.coefficients], dim=dim)
+
+        return LinearExpression(coefficients, variables)
+
+    def __repr__(self):
+        coeff_string = self.coefficients.__repr__()
+        var_string = self.variables.__repr__()
+        return (f"Linear Expression with {self.nterm} terms: \n\n"
+                f"Coefficients:\n-------------\n {coeff_string}\n\n"
+                f"Variables:\n----------\n{var_string}")
 
 
+    def sum(self, dims=None):
+        # TODO: add a flag with keep_coords=True?
+        if dims:
+            dims = list(np.atleast_1d(dims))
+            if 'term_' not in dims:
+                dims = ['term_'] + dims
+        else:
+            dims = [...]
+
+        variables = self.variables.stack(new_ = dims)
+        coefficients = self.coefficients.stack(new_ = dims)
+
+        # reset index (there might be a more clever way)
+        term_i = pd.Index(range(len(variables.new_)))
+        variables = variables.assign_coords(new_ = term_i).rename(new_='term_')
+        term_i = pd.Index(range(len(coefficients.new_)))
+        coefficients = coefficients.assign_coords(new_ = term_i).rename(new_='term_')
+
+        return LinearExpression(coefficients, variables)
 
 
-# m = Model()
+    def from_tuples(*tuples, chunk=100):
 
-# lower = xr.DataArray(np.zeros((100,100)), coords=[range(100), range(100)])
-# upper = xr.DataArray(np.ones((100, 100)), coords=[range(100), range(100)])
-# m.add_variables('var1', lower, upper)
+        coeffs, varrs = zip(*tuples)
+        coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
+        dim = pd.Index(range(len(coeffs)), name='term_')
+        coefficients = xr.concat(coeffs, dim=dim)
 
-# m.add_variables('var2')
 
-# lhs = m.linexpr((1, 'var1'), (10, 'var2')).compute()
+        varrs = [DataArray(v) if isinstance(v, int) else v for v in varrs]
+        dim = pd.Index(range(len(coeffs)), name='term_')
+        variables = xr.concat(varrs, dim=dim)
+
+        if chunk:
+            coefficients = coefficients.chunk(chunk)
+            variables = variables.chunk(chunk)
+
+        return LinearExpression(coefficients, variables)
+
+
+    def compute(self):
+        return LinearExpression(self.coefficients.compute(),
+                                self.variables.compute())
+
+
+    def load(self):
+        self.coefficients.load()
+        self.variables.load()
+        return self
+
+
+    @property
+    def shape(self):
+        return self.coefficients.shape
+
+    @property
+    def ndim(self):
+        return self.coefficients.ndim
+
+    @property
+    def nterm(self):
+        return len(self.coefficients.term_)
+
+    @property
+    def size(self):
+        return self.coefficients.size
+
+    @property
+    def coords(self):
+        return self.coefficients.coords
+
+
+m = Model()
+
+lower = xr.DataArray(np.zeros((100,100)), coords=[range(100), range(100)])
+upper = xr.DataArray(np.ones((100, 100)), coords=[range(100), range(100)])
+m.add_variables('var1', lower, upper)
+m.add_variables('var2')
+
+lhs = m.linexpr((1, 'var1'), (10, 'var2'))
+m.add_constraints('con1', lhs, '==', 0)
 

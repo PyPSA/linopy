@@ -6,5 +6,5 @@ Created on Wed Mar 10 11:03:06 2021
 @author: fabulous
 """
 
-from . import model 
-from .model import Model, linexpr
+from . import model
+from .model import Model, LinearExpression
