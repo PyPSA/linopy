@@ -84,6 +84,9 @@ def test_add_variables_shape():
 
 
 # def test_LinearExpression():
+    # lin + other
+    # lin.sum() in different dimensions
+    # lin.load()/.compute()
 
 
 def test_linexpr():
@@ -128,8 +131,8 @@ def test_constraints():
 
     assert m.constraints.con1.shape == (10, 10)
     assert m.constraints.con1.dtype == int
-    assert m.constraints_lhs.con1_coefficients.dtype in (int, float)
-    assert m.constraints_lhs.con1_variables.dtype in (int, float)
+    assert m.constraints_lhs_coeffs.con1.dtype in (int, float)
+    assert m.constraints_lhs_vars.con1.dtype in (int, float)
     assert m.constraints_rhs.con1.dtype in (int, float)
 
 

@@ -13,7 +13,10 @@ import shutil
 from tempfile import mkstemp
 from xarray import DataArray, Dataset
 from numpy import inf
+from functools import reduce
+import logging
 
+logger = logging.getLogger(__name__)
 
 class Model:
 
@@ -30,11 +33,12 @@ class Model:
         self.variables_upper_bounds = Dataset()
 
         self.constraints = Dataset()
-        self.constraints_lhs = Dataset()
+        self.constraints_lhs_coeffs = Dataset()
+        self.constraints_lhs_vars = Dataset()
         self.constraints_sign = Dataset()
         self.constraints_rhs = Dataset()
 
-        self.objective = DataArray('')
+        self.objective = None
 
         self.solver_dir = solver_dir
 
@@ -64,9 +68,9 @@ class Model:
             upper = upper.chunk(self.chunk)
             var = var.chunk(self.chunk)
 
-        self.variables = self.variables.assign({name: var})
-        self.variables_lower_bounds = self.variables_lower_bounds.assign({name: lower})
-        self.variables_upper_bounds = self.variables_upper_bounds.assign({name: upper})
+        self.variables[name] = var
+        self.variables_lower_bounds[name] = lower
+        self.variables_upper_bounds[name] = upper
         return var
 
 
@@ -90,18 +94,16 @@ class Model:
         con = con.assign_attrs(name=name)
 
         if self.chunk:
-            lhs.coefficients = lhs.coefficients.chunk(self.chunk)
-            lhs.variables = lhs.variables.chunk(self.chunk)
+            lhs = lhs.chunk(self.chunk)
             sign = sign.chunk(self.chunk)
             rhs = rhs.chunk(self.chunk)
             con = con.chunk(self.chunk)
 
-        self.constraints = self.constraints.assign({name: con})
-        _ = {name + '_coefficients': lhs.coefficients,
-             name + '_variables': lhs.variables}
-        self.constraints_lhs = self.constraints_lhs.assign(_)
-        self.constraints_sign = self.constraints_sign.assign({name: sign})
-        self.constraints_rhs = self.constraints_rhs.assign({name: rhs})
+        self.constraints[name] = con
+        self.constraints_lhs_coeffs[name] = lhs.coefficients
+        self.constraints_lhs_vars[name] = lhs.variables
+        self.constraints_sign[name] = sign
+        self.constraints_rhs[name] = rhs
         return con
 
 
@@ -130,11 +132,11 @@ class Model:
     def to_file(self, keep_files=False):
         tmpkwargs = dict(text=True, dir=self.solver_dir)
 
-        fdo, objective_fn = mkstemp('.txt', 'objectve-', **tmpkwargs)
-        fdc, constraints_fn = mkstemp('.txt', 'constraints-', **tmpkwargs)
-        fdb, bounds_fn = mkstemp('.txt', 'bounds-', **tmpkwargs)
-        fdi, binaries_fn = mkstemp('.txt', 'binaries-', **tmpkwargs)
-        fdp, problem_fn = mkstemp('.lp', 'problem-', **tmpkwargs)
+        fdo, objective_fn = mkstemp('.txt', 'linopy-objectve-', **tmpkwargs)
+        fdc, constraints_fn = mkstemp('.txt', 'linopy-constraints-', **tmpkwargs)
+        fdb, bounds_fn = mkstemp('.txt', 'linopy-bounds-', **tmpkwargs)
+        fdi, binaries_fn = mkstemp('.txt', 'linopy-binaries-', **tmpkwargs)
+        fdp, problem_fn = mkstemp('.lp', 'linopy-problem-', **tmpkwargs)
 
         self.objective_f = open(objective_fn, mode='w')
         self.constraints_f = open(constraints_fn, mode='w')
@@ -146,8 +148,41 @@ class Model:
         self.bounds_f.write("\nbounds\n")
         self.binaries_f.write("\nbinary\n")
 
+        # Bounds
+        bounds_str = join_str_arrays(
+            to_float_str(self.variables_lower_bounds),
+            ' <= x',to_int_str(self.variables),
+            ' <= ', to_float_str(self.variables_upper_bounds), '\n')
+        str_array_to_file(bounds_str, self.bounds_f).compute()
 
-        # write everything...
+
+        # Contraints
+        lhs_str = join_str_arrays(
+            to_float_str(self.constraints_lhs_coeffs),
+            ' x', to_int_str(self.constraints_lhs_vars), '\n'
+            ).reduce(np.sum, 'term_') # .sum() does not work
+
+        constraints_str = join_str_arrays(
+            'c', to_int_str(self.constraints), ': \n',
+            lhs_str,
+            self.constraints_sign, '\n',
+            to_float_str(self.constraints_rhs), '\n\n')
+        str_array_to_file(constraints_str, self.constraints_f).compute()
+
+
+        # Objective
+        objective_str = join_str_arrays(
+            to_float_str(self.objective.coefficients),
+            ' x', to_int_str(self.objective.variables), '\n'
+            ).expand_dims('objective').sum('term_') # .sum() does not work
+        str_array_to_file(objective_str, self.objective_f).compute()
+
+
+        # Binaries
+        # binaries_str = join_str_arrays(to_int_str(self.binaries))
+        # str_array_to_file(binaries_str, self.binaries_f).compute()
+
+
 
         self.binaries_f.write("end\n")
 
@@ -164,9 +199,29 @@ class Model:
                 if not keep_files:
                     os.remove(f)
 
-        logger.info(f'Total preparation time: {round(time.time()-start, 2)}s')
+        # logger.info(f'Total preparation time: {round(time.time()-start, 2)}s')
         return fdp, problem_fn
 
+
+# IO functions
+def to_float_str(da):
+    func = np.vectorize(lambda f: '%+f'%f, otypes=[object])
+    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+
+
+def to_int_str(da):
+    func = np.vectorize(lambda d: '%d'%d, otypes=[object])
+    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+
+
+def join_str_arrays(*arrays):
+    func = lambda *l: np.add(*l, dtype=object) # np.core.defchararray.add
+    return reduce(func, arrays, '')
+
+def str_array_to_file(array, fn):
+    # TODO: sometimes line are written out two times
+    func = np.vectorize(lambda x: fn.write(x))
+    return xr.apply_ufunc(func, array, dask='parallelized', output_dtypes=[int])
 
 
 
@@ -181,7 +236,7 @@ class LinearExpression:
         assert 'term_' in variables.dims
 
         coefficients, variables  = xr.broadcast(coefficients, variables)
-        # TODO: perhaps use a datset here in self.data
+        # TODO: perhaps use a datset here in self.data?
         self.coefficients = coefficients
         self.variables = variables
 
@@ -246,6 +301,11 @@ class LinearExpression:
         return LinearExpression(coefficients, variables)
 
 
+    def chunk(self, chunk=None):
+        return LinearExpression(self.coefficients.chunk(chunk),
+                                self.variables.chunk(chunk))
+
+
     def compute(self):
         return LinearExpression(self.coefficients.compute(),
                                 self.variables.compute())
@@ -276,15 +336,4 @@ class LinearExpression:
     @property
     def coords(self):
         return self.coefficients.coords
-
-
-m = Model()
-
-lower = xr.DataArray(np.zeros((100,100)), coords=[range(100), range(100)])
-upper = xr.DataArray(np.ones((100, 100)), coords=[range(100), range(100)])
-m.add_variables('var1', lower, upper)
-m.add_variables('var2')
-
-lhs = m.linexpr((1, 'var1'), (10, 'var2'))
-m.add_constraints('con1', lhs, '==', 0)
 
