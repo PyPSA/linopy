@@ -9,9 +9,8 @@ Created on Wed Mar 10 11:23:13 2021
 import pytest
 import xarray as xr
 import numpy as np
-from linopy import Model, linexpr
+from linopy import Model
 import pandas as pd
-import numpy as np
 
 # Test model functions
 
@@ -145,17 +144,5 @@ def test_objective():
     obj = m.linexpr((np.arange(0, 20, 2), 'var1'), (10, 'var2')).sum()
 
     m.add_objective(obj)
-    assert m.objective.size == 1
-    assert isinstance(m.objective.compute().item(), str)
-
-    with pytest.raises(AssertionError):
-        m.add_objective(obj)
-
-    obj2 = m.linexpr((np.arange(1, 21, 2), 'var1'), (10, 'var2')).sum()
-    m.add_objective(obj2, overwrite=True)
-    assert len(m.objective.compute().item()) == len(obj.compute().item())
-    assert m.objective.compute() != obj.compute()
-
-    m.add_objective(obj, extend=True)
-    assert len(m.objective.compute().item()) > len(obj2.compute().item())
+    assert m.objective.size == 200
 
