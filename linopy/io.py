@@ -11,6 +11,10 @@ from functools import reduce
 from tempfile import mkstemp
 import os
 import shutil
+import time
+import logging
+logger = logging.getLogger(__name__)
+
 
 # IO functions
 def to_float_str(da):
@@ -27,31 +31,20 @@ def join_str_arrays(*arrays):
     func = lambda *l: np.add(*l, dtype=object) # np.core.defchararray.add
     return reduce(func, arrays, '')
 
+
 def str_array_to_file(array, fn):
-    # TODO: sometimes lines are written out two times
-    func = np.vectorize(lambda x: fn.write(x))
-    return xr.apply_ufunc(func, array, dask='parallelized', output_dtypes=[int])
+    return xr.apply_ufunc(lambda x: fn.write(x), array, dask='parallelized',
+                          vectorize=True, output_dtypes=[int])
 
 
-
-def bounds_to_file(model, f):
-        f.write("\nbounds\n")
-
-        bounds_str = join_str_arrays(
-            to_float_str(model.variables_lower_bounds),
-            ' <= x',to_int_str(model.variables),
-            ' <= ', to_float_str(model.variables_upper_bounds), '\n')
-        str_array_to_file(bounds_str, f).compute()
-
-
-
-def binaries_to_file(model, f):
-        f.write("\nbinary\n")
-
-        binaries_str = join_str_arrays(to_int_str(model.binaries))
-        str_array_to_file(binaries_str, f).compute()
-
-
+def objective_to_file(model, f):
+        f.write('\* LOPF *\n\nmin\nobj:\n')
+        # breakpoint()
+        objective_str = join_str_arrays(
+            to_float_str(model.objective.coefficients),
+            ' x', to_int_str(model.objective.variables), '\n'
+            ).expand_dims('objective').sum('term_') # .sum() does not work
+        str_array_to_file(objective_str, f).compute()
 
 
 def constraints_to_file(model, f):
@@ -70,57 +63,38 @@ def constraints_to_file(model, f):
         str_array_to_file(constraints_str, f).compute()
 
 
+def bounds_to_file(model, f):
+        f.write("\nbounds\n")
 
-def objective_to_file(model, f):
-        f.write('\* LOPF *\n\nmin\nobj:\n')
-
-        objective_str = join_str_arrays(
-            to_float_str(model.objective.coefficients),
-            ' x', to_int_str(model.objective.variables), '\n'
-            ).expand_dims('objective').sum('term_') # .sum() does not work
-        str_array_to_file(objective_str, f).compute()
-
+        bounds_str = join_str_arrays(
+            to_float_str(model.variables_lower_bounds),
+            ' <= x',to_int_str(model.variables),
+            ' <= ', to_float_str(model.variables_upper_bounds), '\n')
+        str_array_to_file(bounds_str, f).compute()
 
 
-def to_file(model, fn=None, tmp_dir=None, keep_files=False):
+def binaries_to_file(model, f):
+        f.write("\nbinary\n")
 
-    if tmp_dir is None:
-        tmp_dir = model.solver_dir
-
-    tmpkwargs = dict(text=True, dir=model.solver_dir)
-    if fn is None:
-        fdp, fn = mkstemp('.lp', 'linopy-problem-', **tmpkwargs)
-
-    fdo, objective_fn = mkstemp('.txt', 'linopy-objectve-', **tmpkwargs)
-    fdc, constraints_fn = mkstemp('.txt', 'linopy-constraints-', **tmpkwargs)
-    fdb, bounds_fn = mkstemp('.txt', 'linopy-bounds-', **tmpkwargs)
-    fdi, binaries_fn = mkstemp('.txt', 'linopy-binaries-', **tmpkwargs)
-    fdp, problem_fn = mkstemp('.lp', 'linopy-problem-', **tmpkwargs)
+        binaries_str = join_str_arrays(to_int_str(model.binaries))
+        str_array_to_file(binaries_str, f).compute()
+        f.write("end\n")
 
 
-    objective_f = open(objective_fn, mode='w')
-    constraints_f = open(constraints_fn, mode='w')
-    bounds_f = open(bounds_fn, mode='w')
-    binaries_f = open(binaries_fn, mode='w')
+def to_file(model, fn):
 
+    if os.path.exists(fn):
+        os.remove(fn)  # ensure a clear file
 
-    try:
-        bounds_to_file(model, bounds_f)
-        constraints_to_file(model, constraints_f)
-        objective_to_file(model, objective_f)
-        binaries_to_file(model, binaries_f)
+    f = open(fn, mode='w')
 
-        # concat files
-        with open(problem_fn, 'wb') as wfd:
-            for f in [objective_fn, constraints_fn, bounds_fn, binaries_fn]:
-                with open(f,'rb') as fd:
-                    shutil.copyfileobj(fd, wfd)
-    finally:
-        for f in [objective_fn, constraints_fn, bounds_fn, binaries_fn]:
-            if not keep_files:
-                os.remove(f)
+    start = time.time()
 
-    # logger.info(f'Total preparation time: {round(time.time()-start, 2)}s')
-    return fdp, problem_fn
+    objective_to_file(model, f)
+    constraints_to_file(model, f)
+    bounds_to_file(model, f)
+    binaries_to_file(model, f)
+
+    logger.info(f' Writing time: {round(time.time()-start, 2)}s')
 
 
