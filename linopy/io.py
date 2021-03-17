@@ -43,7 +43,7 @@ def objective_to_file(model, f):
         objective_str = join_str_arrays(
             to_float_str(model.objective.coefficients),
             ' x', to_int_str(model.objective.variables), '\n'
-            ).expand_dims('objective').sum('term_') # .sum() does not work
+            )
         str_array_to_file(objective_str, f).compute()
 
 

@@ -60,6 +60,13 @@ class Model:
                 f"Dimensions: {', '.join(self.variables.indexes)}\n"
                 f"Status: {self.status}")
 
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return self.variables[key]
+        if isinstance(key, tuple):
+            return self.linexpr(key)
+
+
     # TODO should be named add_variable
     def add_variables(self, name, lower=-inf, upper=inf, coords=None):
 
