@@ -77,16 +77,26 @@ def test_add_variables_shape():
     assert m.variables.var9.shape == target_shape
 
 
+    # set a variable with different set of coordinates, this should be properly
+    # merged
+    lower = pd.DataFrame(np.zeros((20, 10)))
+    upper = pd.Series(np.ones((20)))
+    m.add_variables('var10', lower, upper)
+    assert m.variables.var10.shape == (20, 10)
+    # var9 should now be aligned to new coords and contain 100 nans
+    assert m.variables.var9.shape == (20, 10)
+    assert m.variables.var9.notnull().sum() == 100
+
+
+    # setting with scalar and list
+    with pytest.raises(ValueError):
+        m.add_variables('var11', 0, [1,2])
+
+
     # repeated variable assignment is forbidden
     with pytest.raises(AssertionError):
         m.add_variables('var9', lower, upper)
 
-
-
-# def test_LinearExpression():
-    # lin + other
-    # lin.sum() in different dimensions
-    # lin.load()/.compute()
 
 
 def test_linexpr():
@@ -127,7 +137,7 @@ def test_constraints():
 
     lhs = m.linexpr((1, 'var1'), (10, 'var2'))
 
-    m.add_constraints('con1', lhs, '==', 0)
+    m.add_constraints('con1', lhs, '=', 0)
 
     assert m.constraints.con1.shape == (10, 10)
     assert m.constraints.con1.dtype == int
@@ -148,4 +158,21 @@ def test_objective():
 
     m.add_objective(obj)
     assert m.objective.size == 200
+
+
+def test_variable_getitem():
+    m = Model()
+    var1 = m.add_variables('var1')
+    assert m['var1'] == var1
+
+
+def test_constraint_getitem():
+    m = Model()
+    m.add_variables('var1')
+    m.add_variables('var2')
+    assert m[(1, 'var1')].variables == m.linexpr((1, 'var1')).variables
+    assert m[(1, 'var1')].coefficients == m.linexpr((1, 'var1')).coefficients
+
+
+
 

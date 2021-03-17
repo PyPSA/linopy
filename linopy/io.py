@@ -18,11 +18,13 @@ logger = logging.getLogger(__name__)
 
 # IO functions
 def to_float_str(da):
+    # TODO deal with nans
     func = np.vectorize(lambda f: '%+f'%f, otypes=[object])
     return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
 
 
 def to_int_str(da):
+    # TODO deal with nans
     func = np.vectorize(lambda d: '%d'%d, otypes=[object])
     return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
 
@@ -39,7 +41,6 @@ def str_array_to_file(array, fn):
 
 def objective_to_file(model, f):
         f.write('\* LOPF *\n\nmin\nobj:\n')
-        # breakpoint()
         objective_str = join_str_arrays(
             to_float_str(model.objective.coefficients),
             ' x', to_int_str(model.objective.variables), '\n'

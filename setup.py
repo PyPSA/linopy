@@ -17,7 +17,7 @@ setup(
     name='linopy',
     author='Fabian Hofmann',
     author_email='hofmann@fias.uni-frankfurt.de',
-    description='Library for low memory linear problem modeling',
+    description='Linear Optimization with N-D labeled arrays in Python',
     long_description=long_description,
     long_description_content_type='text/markdown',
     # url='https://github.com/PyPSA/linopy',

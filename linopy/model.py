@@ -10,11 +10,14 @@ import xarray as xr
 import numpy as np
 import os
 import shutil
+import logging
+import re
+
 from tempfile import mkstemp, gettempdir
-from xarray import DataArray, Dataset
+from xarray import DataArray, Dataset, merge
 from numpy import inf
 from functools import reduce
-import logging
+
 
 from .io import to_file
 from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
@@ -26,8 +29,6 @@ class Model:
 
 
     def __init__(self, solver_dir=None, chunk=None):
-        # TODO maybe allow the model to be non-lazy, perhaps with an attribute
-        # self._is_lazy and a maybe_chunk function
         self._xCounter = 1
         self._cCounter = 1
         self.chunk = chunk
@@ -64,28 +65,43 @@ class Model:
         if isinstance(key, str):
             return self.variables[key]
         if isinstance(key, tuple):
+            if isinstance(key[0], tuple):
+                return self.linexpr(*key)
             return self.linexpr(key)
 
 
-    # TODO should be named add_variable
+    def _merge_inplace(self, attr, da, name):
+        """
+        Assign a new variable to the dataset `attr` by merging.
+
+        This takes care of all coordinate alignments, instead of a direct
+        assignment like self.variables[name] = var
+        """
+        ds = merge([getattr(self, attr), da.to_dataset(name=name)])
+        setattr(self, attr, ds)
+
+    # TODO should be named add_variable?
     def add_variables(self, name, lower=-inf, upper=inf, coords=None):
 
         assert name not in self.variables
-        # TODO: warning if name is like var names (x100).
 
         lower = DataArray(lower)
         upper = DataArray(upper)
 
         if coords is None:
             # only a lazy calculation for extracting coords, shape and size
-            coords = (lower.chunk() + upper.chunk()).coords
+            broadcasted = (lower.chunk() + upper.chunk())
+            coords = broadcasted.coords
+            if not coords and broadcasted.size > 1:
+                raise ValueError('Both `lower` and `upper` have missing coordinates'
+                                 ' while the broadcasted array is of size > 1.')
 
-        reslike = DataArray(coords=coords)
+        broadcasted = DataArray(coords=coords)
 
         start = self._xCounter
-        var = np.arange(start, start + reslike.size).reshape(reslike.shape)
-        self._xCounter += reslike.size
-        var = xr.DataArray(var, coords=reslike.coords)
+        var = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
+        self._xCounter += broadcasted.size
+        var = xr.DataArray(var, coords=broadcasted.coords)
         var = var.assign_attrs(name=name)
 
         if self.chunk:
@@ -93,9 +109,11 @@ class Model:
             upper = upper.chunk(self.chunk)
             var = var.chunk(self.chunk)
 
-        self.variables[name] = var
-        self.variables_lower_bounds[name] = lower
-        self.variables_upper_bounds[name] = upper
+
+        self._merge_inplace('variables', var, name)
+        self._merge_inplace('variables_lower_bounds', lower, name)
+        self._merge_inplace('variables_upper_bounds', upper, name)
+
         return var
 
 
@@ -103,8 +121,6 @@ class Model:
     def add_constraints(self, name, lhs, sign, rhs):
 
         assert name not in self.constraints
-       # TODO: warning if name is like con names (c100).
-       # TODO: check if rhs is constants (floats, int)
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
@@ -116,12 +132,12 @@ class Model:
         if (sign == '==').any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        reslike = (lhs.variables.chunk() + rhs).sum('term_')
+        broadcasted = (lhs.variables.chunk() + rhs).sum('term_')
 
         start = self._cCounter
-        con = np.arange(start, start + reslike.size).reshape(reslike.shape)
-        self._cCounter += reslike.size
-        con = DataArray(con, coords=reslike.coords)
+        con = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
+        self._cCounter += broadcasted.size
+        con = DataArray(con, coords=broadcasted.coords)
         con = con.assign_attrs(name=name)
 
         if self.chunk:
@@ -130,11 +146,13 @@ class Model:
             rhs = rhs.chunk(self.chunk)
             con = con.chunk(self.chunk)
 
-        self.constraints[name] = con
-        self.constraints_lhs_coeffs[name] = lhs.coefficients
-        self.constraints_lhs_vars[name] = lhs.variables
-        self.constraints_sign[name] = sign
-        self.constraints_rhs[name] = rhs
+        # assign everything
+        self._merge_inplace('constraints', con, name)
+        self._merge_inplace('constraints_lhs_coeffs', lhs.coefficients, name)
+        self._merge_inplace('constraints_lhs_vars', lhs.variables, name)
+        self._merge_inplace('constraints_sign', sign, name)
+        self._merge_inplace('constraints_rhs', rhs, name)
+
         return con
 
 
@@ -149,7 +167,6 @@ class Model:
 
 
     def linexpr(self, *tuples):
-        # TODO: allow setting index from variables name
         tuples = [(coef, self.variables[var]) if isinstance(var, str)
                   else (coef, var) for (coef, var) in tuples]
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
@@ -243,7 +260,6 @@ class LinearExpression:
         assert 'term_' in variables.dims
 
         coefficients, variables  = xr.broadcast(coefficients, variables)
-        # TODO: perhaps use a datset here in self.data?
         self.coefficients = coefficients
         self.variables = variables
 
@@ -292,14 +308,14 @@ class LinearExpression:
     def from_tuples(*tuples, chunk=100):
 
         coeffs, varrs = zip(*tuples)
-        coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
-        dim = pd.Index(range(len(coeffs)), name='term_')
-        coefficients = xr.concat(coeffs, dim=dim)
-
 
         varrs = [DataArray(v) if isinstance(v, int) else v for v in varrs]
-        dim = pd.Index(range(len(coeffs)), name='term_')
-        variables = xr.concat(varrs, dim=dim)
+        maybe_names = [v.attrs.get('name', i) for i,v in enumerate(varrs)]
+        dim = pd.Index(maybe_names, name='term_')
+        variables = xr.concat(varrs, dim=dim, combine_attrs='drop')
+
+        coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
+        coefficients = xr.concat(coeffs, dim=dim, combine_attrs='drop')
 
         if chunk:
             coefficients = coefficients.chunk(chunk)
