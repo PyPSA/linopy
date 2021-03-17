@@ -6,10 +6,23 @@ Created on Tue Mar 16 10:30:21 2021
 @author: fabian
 """
 import pandas as pd
-import logging, re, io, subprocess, os
+import logging, re, io, os
+import subprocess as sub
 import gurobipy
-import cplex
-# import xpress
+
+# TODO check if there are really available
+available_solvers = ['gurobi', 'cbc', 'glpk',]
+try:
+    import xpress
+    available_solvers.append('xpress')
+except ModuleNotFoundError:
+    None
+
+try:
+    import cplex
+    available_solvers.append('cplex')
+except ModuleNotFoundError:
+    None
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +56,16 @@ def run_cbc(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
     if not os.path.exists(solution_fn):
         os.mknod(solution_fn)
 
-    result = subprocess.run(command.split(' '), stdout=subprocess.PIPE)
-    if log_fn is not None:
-        print(result.stdout.decode('utf-8'), file=open(log_fn, 'w'))
+    if log_fn is None:
+        p = sub.Popen(command.split(' '), stdout=sub.PIPE, stderr=sub.PIPE)
+        for line in iter(p.stdout.readline, b''):
+            print(line.decode(), end='')
+        p.stdout.close()
+        p.wait()
+    else:
+        log_f = open(log_fn, 'w')
+        p = sub.Popen(command.split(' '), stdout=log_f, stderr=log_f)
+
 
     with open(solution_fn, "r") as f:
         data = f.readline()
@@ -99,7 +119,12 @@ def run_glpk(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
         command += f' -w {basis_fn}'
     command += ' '.join('-'+' '.join([k, str(v)]) for k, v in solver_options.items())
 
-    subprocess.run(command.split(' '), stdout=subprocess.PIPE)
+    p = sub.Popen(command.split(' '), stdout=sub.PIPE, stderr=sub.PIPE)
+    if log_fn is None:
+        for line in iter(p.stdout.readline, b''):
+            print(line.decode(), end='')
+        p.stdout.close()
+        p.wait()
 
     f = open(solution_fn)
     def read_until_break(f):
@@ -149,12 +174,18 @@ def run_cplex(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
     """
     Solving function. Reads the linear problem file and passes it to the cplex
     solver. If the solution is sucessful it returns variable solutions and
-    constraint dual values. Cplex must be installed for using this function
+    constraint dual values. Cplex must be installed for using this function.
 
+    Note if you pass additional solver_options, the key can specify deeper
+    layered parameters, use a dot as a separator here,
+    i.e. `**{'aa.bb.cc' : x}`.
     """
     m = cplex.Cplex()
     if log_fn is not None:
         log_f = open(log_fn, 'w')
+        m.set_results_stream(log_f)
+        m.set_warning_stream(log_f)
+        m.set_error_stream(log_f)
         m.set_log_stream(log_f)
 
     if solver_options is not None:

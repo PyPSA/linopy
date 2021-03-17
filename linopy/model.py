@@ -17,7 +17,8 @@ from functools import reduce
 import logging
 
 from .io import to_file
-from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress)
+from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
+                      available_solvers)
 
 logger = logging.getLogger(__name__)
 
@@ -165,12 +166,16 @@ class Model:
               **solver_options):
 
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
+        assert solver_name in available_solvers, (
+            f'Solver {solver_name} not installed')
 
         tmp_kwargs = dict(text=True, dir=self.solver_dir)
         if problem_fn is None:
             fds, problem_fn = mkstemp('.lp', 'linopy-problem-', **tmp_kwargs)
         if solution_fn is None:
             fds, solution_fn = mkstemp('.sol', 'linopy-solve-', **tmp_kwargs)
+        if log_fn is not None:
+            logger.info(f'Solver logs written to `{log_fn}`.')
 
         try:
             self.to_file(problem_fn)
