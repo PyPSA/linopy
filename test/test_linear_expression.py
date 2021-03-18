@@ -58,3 +58,4 @@ def test_sum():
     assert res.size == other.size
     assert len(res.coords['term_']) == len(other.coords['term_']) * len(other.coords['dim_1'])
 
+

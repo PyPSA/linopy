@@ -262,9 +262,12 @@ class LinearExpression:
         assert 'term_' in coefficients.dims
         assert 'term_' in variables.dims
 
-        assert (coefficients.notnull() == variables.notnull()).all()
 
         coefficients, variables  = xr.broadcast(coefficients, variables)
+        notnull_b = coefficients.notnull() & variables.notnull()
+        coefficients = coefficients.where(notnull_b)
+        variables = variables.where(notnull_b)
+
         self.coefficients = coefficients
         self.variables = variables
 

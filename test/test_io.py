@@ -45,3 +45,5 @@ def test_str_arrays_with_nans():
 
     da = to_int_str(m['x'])
     assert da.dtype == object
+
+
