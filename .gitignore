@@ -3,3 +3,4 @@ linopy/__pycache__
 test/__pycache__
 linopy.egg-info
 dev-scripts/
+examples/.ipynb_checkpoints/
