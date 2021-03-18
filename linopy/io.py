@@ -9,6 +9,7 @@ import numpy as np
 import xarray as xr
 from functools import reduce
 from tempfile import mkstemp
+from xarray import apply_ufunc
 import os
 import shutil
 import time
@@ -16,17 +17,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+ufunc_kwargs = dict(dask='parallelized', vectorize=True, output_dtypes=[object])
+
 # IO functions
 def to_float_str(da):
-    # TODO deal with nans
-    func = np.vectorize(lambda f: '%+f'%f, otypes=[object])
-    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+    nonnans = da.notnull()
+    da = da.where(nonnans, 0)
+    return apply_ufunc(lambda f: '%+f'%f, da, **ufunc_kwargs).where(nonnans, '')
 
 
 def to_int_str(da):
-    # TODO deal with nans
-    func = np.vectorize(lambda d: '%d'%d, otypes=[object])
-    return xr.apply_ufunc(func, da, dask='parallelized', output_dtypes=[object])
+    nonnans = da.notnull()
+    da = da.where(nonnans, 0)
+    return xr.apply_ufunc(lambda d: '%d'%d, da, **ufunc_kwargs).where(nonnans, '')
 
 
 def join_str_arrays(*arrays):

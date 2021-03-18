@@ -262,6 +262,8 @@ class LinearExpression:
         assert 'term_' in coefficients.dims
         assert 'term_' in variables.dims
 
+        assert (coefficients.notnull() == variables.notnull()).all()
+
         coefficients, variables  = xr.broadcast(coefficients, variables)
         self.coefficients = coefficients
         self.variables = variables
