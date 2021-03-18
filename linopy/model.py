@@ -61,9 +61,10 @@ class Model:
                 f"Dimensions: {', '.join(self.variables.indexes)}\n"
                 f"Status: {self.status}")
 
+
     def __getitem__(self, key):
         if isinstance(key, str):
-            return self.variables[key]
+            return Variable(self.variables[key])
         if isinstance(key, tuple):
             if isinstance(key[0], tuple):
                 return self.linexpr(*key)
@@ -114,7 +115,7 @@ class Model:
         self._merge_inplace('variables_lower_bounds', lower, name)
         self._merge_inplace('variables_upper_bounds', upper, name)
 
-        return var
+        return Variable(var)
 
 
     # TODO should be named add_constraint
@@ -250,6 +251,23 @@ class Model:
     to_file = to_file
 
 
+class Variable:
+
+    def __init__(self, data):
+        self.data = data
+
+    def __repr__(self):
+        data_string = self.data.__repr__()
+        return (f"Variable container with variables:\n"
+                f"----------------------------------\n\n{data_string}")
+
+    def __mul__(self, coefficient):
+        return LinearExpression.from_tuples((coefficient, self.data))
+
+    def __rmul__(self, coefficient):
+        return LinearExpression.from_tuples((coefficient, self.data))
+
+
 
 
 class LinearExpression:
@@ -274,14 +292,8 @@ class LinearExpression:
 
     def __add__(self, other):
         assert isinstance(other, LinearExpression)
-        n_terms = len(self.variables.term_) + len(other.variables.term_)
-        dim = pd.Index(range(n_terms), name='term_')
-        variables = xr.concat([self.variables, other.variables], dim=dim)
-
-        n_terms = len(self.coefficients.term_) + len(other.coefficients.term_)
-        dim = pd.Index(range(n_terms), name='term_')
-        coefficients = xr.concat([self.coefficients, other.coefficients], dim=dim)
-
+        variables = xr.concat([self.variables, other.variables], dim='term_')
+        coefficients = xr.concat([self.coefficients, other.coefficients], dim='term_')
         return LinearExpression(coefficients, variables)
 
     def __repr__(self):
@@ -313,17 +325,22 @@ class LinearExpression:
         return LinearExpression(coefficients, variables)
 
 
-    def from_tuples(*tuples, chunk=100):
+    def from_tuples(*tuples, chunk=None):
 
-        coeffs, varrs = zip(*tuples)
+        if len(tuples) == 1:
+            coeffs, varrs = tuples[0]
+            dim = {'term_': [varrs.attrs.get('name', 0)]}
+            coefficients = DataArray(coeffs).expand_dims(dim)
+            variables = DataArray(varrs).expand_dims(dim)
+        else:
+            coeffs, varrs = zip(*tuples)
+            varrs = [DataArray(v) if isinstance(v, int) else v for v in varrs]
+            maybe_names = [v.attrs.get('name', i) for i,v in enumerate(varrs)]
+            dim = pd.Index(maybe_names, name='term_')
+            variables = xr.concat(varrs, dim=dim, combine_attrs='drop')
 
-        varrs = [DataArray(v) if isinstance(v, int) else v for v in varrs]
-        maybe_names = [v.attrs.get('name', i) for i,v in enumerate(varrs)]
-        dim = pd.Index(maybe_names, name='term_')
-        variables = xr.concat(varrs, dim=dim, combine_attrs='drop')
-
-        coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
-        coefficients = xr.concat(coeffs, dim=dim, combine_attrs='drop')
+            coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
+            coefficients = xr.concat(coeffs, dim=dim, combine_attrs='drop')
 
         if chunk:
             coefficients = coefficients.chunk(chunk)

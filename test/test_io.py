@@ -17,20 +17,20 @@ from linopy.io import to_int_str
 def test_str_arrays():
     m = Model()
 
-    m.add_variables('x', 4, pd.Series([8,10]))
-    m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+    x = m.add_variables('x', 4, pd.Series([8,10]))
+    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
-    da = to_int_str(m['y'])
+    da = to_int_str(x.data)
     assert da.dtype == object
 
 
 def test_str_arrays_chunked():
     m = Model(chunk=-1)
 
-    m.add_variables('x', 4, pd.Series([8,10]))
-    m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+    x = m.add_variables('x', 4, pd.Series([8,10]))
+    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
-    da = to_int_str(m['y']).compute()
+    da = to_int_str(y.data).compute()
     assert da.dtype == object
 
 
@@ -38,12 +38,12 @@ def test_str_arrays_chunked():
 def test_str_arrays_with_nans():
     m = Model()
 
-    m.add_variables('x', 4, pd.Series([8,10]))
+    x = m.add_variables('x', 4, pd.Series([8,10]))
     # now expand the second dimension, expended values of x will be nan
-    m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
-    assert not m['x'].notnull().all()
+    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
+    assert not m['x'].data.notnull().all()
 
-    da = to_int_str(m['x'])
+    da = to_int_str(m['x'].data)
     assert da.dtype == object
 
 

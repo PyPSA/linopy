@@ -163,7 +163,7 @@ def test_objective():
 def test_variable_getitem():
     m = Model()
     var1 = m.add_variables('var1')
-    assert m['var1'] == var1
+    assert m['var1'].data == var1.data
 
 
 def test_constraint_getitem():
