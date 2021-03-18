@@ -46,7 +46,7 @@ def test_add():
     assert (res.coords['dim_0'] == lhs.coords['dim_0']).all()
     assert (res.coords['dim_1'] == other.coords['dim_1']).all()
     assert res.coefficients.notnull().all()
-    # assert res.variables.notnull().all()
+    assert res.variables.notnull().all()
 
 
 def test_sum():
