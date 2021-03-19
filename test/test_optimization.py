@@ -14,17 +14,13 @@ import pytest
 def init_model():
     m = Model(chunk=None)
 
-    m.add_variables('x')
-    m.add_variables('y')
+    x = m.add_variables('x')
+    y = m.add_variables('y')
 
-    lhs = (2, 'x'), (6, 'y')
-    m.add_constraints('Constraint1', lhs, '>=', 10)
+    m.add_constraints('Constraint1', 2*x + 6*y, '>=', 10)
+    m.add_constraints('Constraint2', 4*x + 2*y, '>=', 3)
 
-    lhs = (4, 'x'), (2, 'y')
-    m.add_constraints('Constraint2', lhs, '>=', 3)
-
-    obj = (2, 'y'), (1, 'x')
-    m.add_objective(obj)
+    m.add_objective(2*y + x)
     return m
 
 @pytest.mark.skipif('glpk' not in available_solvers, reason='Solver not available')

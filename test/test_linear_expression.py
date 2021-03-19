@@ -9,53 +9,68 @@ Created on Wed Mar 17 17:06:36 2021
 import xarray as xr
 import numpy as np
 import pandas as pd
-
+from xarray.testing import assert_equal
 from linopy import LinearExpression, Model
 
 
 m = Model()
 
-m.add_variables('x', pd.Series([0,0]), 1)
-m.add_variables('y', 4, pd.Series([8,10]))
-m.add_variables('z', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+x = m.add_variables('x', pd.Series([0,0]), 1)
+y = m.add_variables('y', 4, pd.Series([8,10]))
+z = m.add_variables('z', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
-lhs = m.linexpr((1, 'x'), (4, 'y'))
-other = m.linexpr((2, 'y'), (1, 'z'))
+
+def test_variable_to_linexpr():
+    expr = 1 * x
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 1
+    assert len(expr.vars.dim_0) == x.data.shape[0]
+
+    expr = 10 * x + y
+    assert isinstance(expr, LinearExpression)
+    assert_equal(expr, m.linexpr((10, 'x'), (1, 'y')))
+
+    expr = x + 8 * y
+    assert isinstance(expr, LinearExpression)
+    assert_equal(expr, m.linexpr((1, 'x'), (8, 'y')))
+
+    expr = x + y
+    assert isinstance(expr, LinearExpression)
+    assert_equal(expr, m.linexpr((1, 'x'), (1, 'y')))
+
+
 
 def test_term_labels():
     "Test that the term_ dimension is named after the variables."
-    assert (lhs.coefficients.term_ == ['x', 'y']).all()
-    assert (lhs.variables.term_ == ['x', 'y']).all()
+    expr = 10 * x + y
+    other = m.linexpr((2, 'y'), (1, 'z'))
 
-    assert (other.coefficients.term_ == ['y', 'z']).all()
-    assert (other.variables.term_ == ['y', 'z']).all()
-
-
-def test_coords():
-    "Make sure that the coords are the same for variables and coefficients."
-    assert (lhs.coords['term_'] == lhs.coefficients.term_).all()
-    assert (lhs.coords['dim_0'] == lhs.coefficients.dim_0).all()
-
-    assert (lhs.coords['term_'] == lhs.variables.term_).all()
-    assert (lhs.coords['dim_0'] == lhs.variables.dim_0).all()
+    assert (expr.term_ == ['x', 'y']).all()
+    assert (other.term_ == ['y', 'z']).all()
 
 
 def test_add():
-    res = lhs + other
-    assert len(res.coords['term_']) == len(lhs.coords['term_']) + len(other.coords['term_'])
-    assert (res.coords['dim_0'] == lhs.coords['dim_0']).all()
+    expr = 10 * x + y
+    other = 2 * y + z
+    res = expr + other
+
+    assert res.nterm == expr.nterm + other.nterm
+    assert (res.coords['dim_0'] == expr.coords['dim_0']).all()
     assert (res.coords['dim_1'] == other.coords['dim_1']).all()
-    assert res.coefficients.notnull().all()
-    assert res.variables.notnull().all()
+    assert res.notnull().all().to_array().all()
 
 
 def test_sum():
-    res = lhs.sum()
-    assert res.size == lhs.size
-    assert len(res.coords['term_']) == lhs.size
+    expr = 10 * x + y + z
+    res = expr.sum('dim_0')
 
-    res = other.sum('dim_1')
-    assert res.size == other.size
-    assert len(res.coords['term_']) == len(other.coords['term_']) * len(other.coords['dim_1'])
+    assert res.size == expr.size
+    assert res.nterm == expr.nterm * len(expr.dim_0)
+
+    res = expr.sum()
+    assert res.size == expr.size
+    assert res.nterm == expr.size
+    assert res.notnull().all().to_array().all()
+
 
 

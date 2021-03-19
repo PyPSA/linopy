@@ -104,26 +104,13 @@ def test_linexpr():
 
     lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    m.add_variables('var1', lower, upper)
-    m.add_variables('var2')
-
-    expr = m.linexpr((1, 'var1'), (10, 'var2'))
-    assert expr.nterm == 2
-    assert expr.shape[1:] == (10, 10)
-
+    x = m.add_variables('x', lower, upper)
+    y = m.add_variables('y')
 
     # select a variable by a scalar and broadcast if over another variable array
-    expr = m.linexpr((1, 1), (10, 'var1'))
-    assert expr.shape[1:] == (10, 10)
-
-
-    # select a variable by a scalar and weight it with different coefficients
-    expr = m.linexpr((np.arange(0, 10), 1), (10, 'var1'))
-    assert expr.shape[1:] == (10, 10)
-
-    # select two explicit variables by scalars
-    expr = m.linexpr((1, 1), (10, 2))
-    assert expr.size == 2
+    expr = m.linexpr((1, 'x'), (10, 'y'))
+    assert (expr.term_ == ['x', 'y']).all()
+    assert (expr == 1 * x + 10 * y).all().to_array().all()
 
 
 
@@ -132,12 +119,10 @@ def test_constraints():
 
     lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    m.add_variables('var1', lower, upper)
-    m.add_variables('var2')
+    x = m.add_variables('x', lower, upper)
+    y = m.add_variables('y')
 
-    lhs = m.linexpr((1, 'var1'), (10, 'var2'))
-
-    m.add_constraints('con1', lhs, '=', 0)
+    m.add_constraints('con1', 1 * x + 10 * y, '=', 0)
 
     assert m.constraints.con1.shape == (10, 10)
     assert m.constraints.con1.dtype == int
@@ -151,27 +136,18 @@ def test_objective():
 
     lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    m.add_variables('var1', lower, upper)
-    m.add_variables('var2', lower, upper)
+    x = m.add_variables('x', lower, upper)
+    y = m.add_variables('y', lower, upper)
 
-    obj = m.linexpr((np.arange(0, 20, 2), 'var1'), (10, 'var2')).sum()
-
+    obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
-    assert m.objective.size == 200
+    assert m.objective.vars.size == 200
 
 
 def test_variable_getitem():
     m = Model()
-    var1 = m.add_variables('var1')
-    assert m['var1'].data == var1.data
-
-
-def test_constraint_getitem():
-    m = Model()
-    m.add_variables('var1')
-    m.add_variables('var2')
-    assert m[(1, 'var1')].variables == m.linexpr((1, 'var1')).variables
-    assert m[(1, 'var1')].coefficients == m.linexpr((1, 'var1')).coefficients
+    x = m.add_variables('x')
+    assert m['x'].data == x.data
 
 
 

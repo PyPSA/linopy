@@ -63,12 +63,7 @@ class Model:
 
 
     def __getitem__(self, key):
-        if isinstance(key, str):
-            return Variable(self.variables[key])
-        if isinstance(key, tuple):
-            if isinstance(key[0], tuple):
-                return self.linexpr(*key)
-            return self.linexpr(key)
+        return Variable(self.variables[key])
 
 
     def _merge_inplace(self, attr, da, name):
@@ -133,7 +128,7 @@ class Model:
         if (sign == '==').any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        broadcasted = (lhs.variables.chunk() + rhs).sum('term_')
+        broadcasted = (lhs.vars.chunk() + rhs).sum('term_')
 
         start = self._cCounter
         con = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
@@ -149,8 +144,8 @@ class Model:
 
         # assign everything
         self._merge_inplace('constraints', con, name)
-        self._merge_inplace('constraints_lhs_coeffs', lhs.coefficients, name)
-        self._merge_inplace('constraints_lhs_vars', lhs.variables, name)
+        self._merge_inplace('constraints_lhs_coeffs', lhs.coeffs, name)
+        self._merge_inplace('constraints_lhs_vars', lhs.vars, name)
         self._merge_inplace('constraints_sign', sign, name)
         self._merge_inplace('constraints_rhs', rhs, name)
 
@@ -161,15 +156,15 @@ class Model:
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         assert isinstance(expr, LinearExpression)
-        if expr.ndim > 1:
+        if expr.vars.ndim > 1:
             expr = expr.sum()
         self.objective = expr
         return self.objective
 
 
     def linexpr(self, *tuples):
-        tuples = [(coef, self.variables[var]) if isinstance(var, str)
-                  else (coef, var) for (coef, var) in tuples]
+        tuples = [(c, self.variables[v]) if isinstance(v, str)
+                  else (c, v) for (c, v) in tuples]
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
 
@@ -251,7 +246,7 @@ class Model:
     to_file = to_file
 
 
-class Variable:
+class Variable():
 
     def __init__(self, data):
         self.data = data
@@ -264,124 +259,102 @@ class Variable:
     def __mul__(self, coefficient):
         return LinearExpression.from_tuples((coefficient, self.data))
 
+
     def __rmul__(self, coefficient):
         return LinearExpression.from_tuples((coefficient, self.data))
 
+    def __add__(self, other):
+        if isinstance(other, Variable):
+            return LinearExpression.from_tuples((1, self.data), (1, other.data))
+        elif isinstance(other, LinearExpression):
+            return LinearExpression.from_tuples((1, self.data)) + other
+        else:
+            raise TypeError("unsupported operand type(s) for +: "
+                            f"{type(self)} and {type(other)}")
 
 
 
-class LinearExpression:
+class LinearExpression(Dataset):
+    __slots__ = ('_cache', '_coords', '_indexes', '_name', '_variable')
 
-    def __init__(self, coefficients, variables):
-
-        assert isinstance(coefficients, DataArray)
-        assert isinstance(variables, DataArray)
-
-        assert 'term_' in coefficients.dims
-        assert 'term_' in variables.dims
-
-
-        coefficients, variables  = xr.broadcast(coefficients, variables)
-        notnull_b = coefficients.notnull() & variables.notnull()
-        coefficients = coefficients.where(notnull_b)
-        variables = variables.where(notnull_b)
-
-        self.coefficients = coefficients
-        self.variables = variables
+    def __init__(self, dataset):
+        assert set(dataset) == {'coeffs', 'vars'}
+        (dataset,) = xr.broadcast(dataset)
+        super().__init__(dataset)
 
 
     def __add__(self, other):
-        assert isinstance(other, LinearExpression)
-        variables = xr.concat([self.variables, other.variables], dim='term_')
-        coefficients = xr.concat([self.coefficients, other.coefficients], dim='term_')
-        return LinearExpression(coefficients, variables)
+        if isinstance(other, Variable):
+            other = LinearExpression.from_tuples((1, other.data))
+        if not isinstance(other, LinearExpression):
+            raise TypeError("unsupported operand type(s) for +: "
+                            f"{type(self)} and {type(other)}")
+        return LinearExpression(xr.concat([self, other], dim='term_'))
+
+
 
     def __repr__(self):
-        coeff_string = self.coefficients.__repr__()
-        var_string = self.variables.__repr__()
-        return (f"Linear Expression with {self.nterm} terms: \n\n"
+        coeff_string = self.coeffs.__repr__()
+        var_string = self.vars.__repr__()
+        return (f"Linear Expression with {self.nterm} term(s): \n\n"
                 f"Coefficients:\n-------------\n {coeff_string}\n\n"
                 f"Variables:\n----------\n{var_string}")
 
 
-    def sum(self, dims=None):
-        # TODO: add a flag with keep_coords=True?
+    def to_dataset(self):
+        return Dataset(self)
+
+
+    def sum(self, dims=None, keep_coords=False):
+
         if dims:
             dims = list(np.atleast_1d(dims))
-            if 'term_' not in dims:
-                dims = ['term_'] + dims
         else:
             dims = [...]
+        if 'term_' in dims:
+            dims.remove('term_')
 
-        variables = self.variables.stack(new_ = dims)
-        coefficients = self.coefficients.stack(new_ = dims)
+        stacked_term_dim = 'term_dim_'
+        num = 0
+        while stacked_term_dim + str(num) in self.indexes['term_'].names:
+            num += 1
+        stacked_term_dim += str(num)
+        dims.append(stacked_term_dim)
 
-        # reset index (there might be a more clever way)
-        term_i = pd.Index(range(len(variables.new_)))
-        variables = variables.assign_coords(new_ = term_i).rename(new_='term_')
-        term_i = pd.Index(range(len(coefficients.new_)))
-        coefficients = coefficients.assign_coords(new_ = term_i).rename(new_='term_')
-
-        return LinearExpression(coefficients, variables)
+        ds = self.rename(term_ = stacked_term_dim).stack(term_ = dims)
+        if not keep_coords:
+            ds = ds.assign_coords(term_ = pd.RangeIndex(len(ds.term_)))
+        return LinearExpression(ds)
 
 
     def from_tuples(*tuples, chunk=None):
 
-        if len(tuples) == 1:
-            coeffs, varrs = tuples[0]
-            dim = {'term_': [varrs.attrs.get('name', 0)]}
-            coefficients = DataArray(coeffs).expand_dims(dim)
-            variables = DataArray(varrs).expand_dims(dim)
+        idx = []
+        for i, (c, v) in enumerate(tuples):
+            if isinstance(v, (Variable, DataArray)):
+                idx.append(v.attrs['name'])
+            else:
+                idx.append(i)
+
+        ds_list = [Dataset({'coeffs': c, 'vars': v}) for c, v in tuples]
+        if len(ds_list) > 1:
+            ds = xr.concat(ds_list, dim=pd.Index(idx, name='term_'))
         else:
-            coeffs, varrs = zip(*tuples)
-            varrs = [DataArray(v) if isinstance(v, int) else v for v in varrs]
-            maybe_names = [v.attrs.get('name', i) for i,v in enumerate(varrs)]
-            dim = pd.Index(maybe_names, name='term_')
-            variables = xr.concat(varrs, dim=dim, combine_attrs='drop')
+            ds = ds_list[0].expand_dims(term_=idx)
+        return LinearExpression(ds)
 
-            coeffs = [c if isinstance(c, DataArray) else DataArray(c) for c in coeffs]
-            coefficients = xr.concat(coeffs, dim=dim, combine_attrs='drop')
-
-        if chunk:
-            coefficients = coefficients.chunk(chunk)
-            variables = variables.chunk(chunk)
-
-        return LinearExpression(coefficients, variables)
-
-
-    def chunk(self, chunk=None):
-        return LinearExpression(self.coefficients.chunk(chunk),
-                                self.variables.chunk(chunk))
-
-
-    def compute(self):
-        return LinearExpression(self.coefficients.compute(),
-                                self.variables.compute())
-
-
-    def load(self):
-        self.coefficients.load()
-        self.variables.load()
-        return self
-
-
-    @property
-    def shape(self):
-        return self.coefficients.shape
-
-    @property
-    def ndim(self):
-        return self.coefficients.ndim
 
     @property
     def nterm(self):
-        return len(self.coefficients.term_)
+        return len(self.term_)
+
+    @property
+    def shape(self):
+        assert self.vars.shape == self.coeffs.shape
+        return self.vars.shape
 
     @property
     def size(self):
-        return self.coefficients.size
-
-    @property
-    def coords(self):
-        return self.coefficients.coords
+        assert self.vars.size == self.coeffs.size
+        return self.vars.size
 
