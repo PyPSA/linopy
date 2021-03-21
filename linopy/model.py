@@ -55,11 +55,14 @@ class Model:
             self.solver_dir = gettempdir()
 
     def __repr__(self):
-        return (f"<Linopy model>\n"
-                f"Variables: {', '.join(self.variables)}\n"
-                f"Constraints: {', '.join(self.constraints)}\n"
-                f"Dimensions: {', '.join(self.variables.indexes)}\n"
-                f"Status: {self.status}")
+        var_string = self.variables.__repr__().split('\n', 1)[1]
+        var_string = var_string.replace('Data variables:\n', 'Data:\n')
+        con_string = self.constraints.__repr__().split('\n', 1)[1]
+        con_string = con_string.replace('Data variables:\n', 'Data:\n')
+        return (f"Linopy model\n============\n\n"
+                f"Variables:\n----------\n{var_string}\n\n"
+                f"Constraints:\n------------\n{con_string}\n\n"
+                f"Status:\n-------\n{self.status}")
 
 
     def __getitem__(self, key):
@@ -252,9 +255,9 @@ class Variable():
         self.data = data
 
     def __repr__(self):
-        data_string = self.data.__repr__()
-        return (f"Variable container with variables:\n"
-                f"----------------------------------\n\n{data_string}")
+        data_string = "Variables:\n" + self.data.__repr__().split('\n', 1)[1]
+        return (f"Variable container:\n"
+                f"-------------------\n\n{data_string}")
 
     def __mul__(self, coefficient):
         return LinearExpression.from_tuples((coefficient, self.data))
@@ -294,11 +297,10 @@ class LinearExpression(Dataset):
 
 
     def __repr__(self):
-        coeff_string = self.coeffs.__repr__()
-        var_string = self.vars.__repr__()
-        return (f"Linear Expression with {self.nterm} term(s): \n\n"
-                f"Coefficients:\n-------------\n {coeff_string}\n\n"
-                f"Variables:\n----------\n{var_string}")
+        ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
+        ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
+        return (f"Linear Expression with {self.nterm} term(s):\n"
+                f"----------------------------------\n\n{ds_string}")
 
 
     def to_dataset(self):
