@@ -8,19 +8,17 @@ Created on Tue Mar 16 10:30:21 2021
 import pandas as pd
 import logging, re, io, os
 import subprocess as sub
-import gurobipy
 
-# TODO check if there are really available
 available_solvers = ['glpk']
 
 try:
-    sub.run('cbc')
+    sub.run('cbc', stdout=sub.DEVNULL)
     available_solvers.append('cbc')
 except FileNotFoundError:
     None
 
 try:
-    import gurobi
+    import gurobipy
     available_solvers.append('gurobi')
 except ModuleNotFoundError:
     None
