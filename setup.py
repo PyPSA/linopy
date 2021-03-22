@@ -30,6 +30,7 @@ setup(
     install_requires=['numpy',
                       'scipy',
                       'bottleneck',
+                      'tlz',
                       'numexpr',
                       'cplex',
                       'xarray>=0.16',
