@@ -17,7 +17,7 @@ setup(
     name='linopy',
     author='Fabian Hofmann',
     author_email='hofmann@fias.uni-frankfurt.de',
-    description='Linear Optimization with N-D labeled arrays in Python',
+    description='Linear optimization with N-D labeled arrays in Python',
     long_description=long_description,
     long_description_content_type='text/markdown',
     # url='https://github.com/PyPSA/linopy',

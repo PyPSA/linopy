@@ -79,6 +79,7 @@ class Model:
         ds = merge([getattr(self, attr), da.to_dataset(name=name)])
         setattr(self, attr, ds)
 
+
     # TODO should be named add_variable?
     def add_variables(self, name, lower=-inf, upper=inf, coords=None):
 
