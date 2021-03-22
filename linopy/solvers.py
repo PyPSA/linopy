@@ -9,7 +9,14 @@ import pandas as pd
 import logging, re, io, os
 import subprocess as sub
 
-available_solvers = ['glpk']
+available_solvers = []
+
+
+if sub.run(['which', 'glpsol'], stdout=sub.DEVNULL).returncode == 0:
+    available_solvers.append('glpk')
+
+if sub.run(['which', 'cbc'], stdout=sub.DEVNULL).returncode == 0:
+    available_solvers.append('cbc')
 
 try:
     sub.run('cbc', stdout=sub.DEVNULL)
