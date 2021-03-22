@@ -383,6 +383,11 @@ class LinearExpression(Dataset):
         return LinearExpression(ds)
 
 
+    def group_terms(self, group):
+        groups = self.groupby(group)
+        return groups.map(lambda ds: ds.sum(groups._group_dim))
+
+
     @property
     def nterm(self):
         return len(self.term_)
