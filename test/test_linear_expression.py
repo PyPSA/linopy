@@ -20,6 +20,13 @@ y = m.add_variables('y', 4, pd.Series([8,10]))
 z = m.add_variables('z', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
 
+def test_values():
+    expr = m.linexpr((10, 'x'), (1, 'y'))
+    target = xr.DataArray([[10, 1], [10, 1]],
+                          coords=(('dim_0', [0, 1]), ('term_', ['x', 'y'])))
+    assert_equal(expr.coeffs, target)
+
+
 def test_variable_to_linexpr():
     expr = 1 * x
     assert isinstance(expr, LinearExpression)
@@ -38,6 +45,13 @@ def test_variable_to_linexpr():
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((1, 'x'), (1, 'y')))
 
+    expr = x - y
+    assert isinstance(expr, LinearExpression)
+    assert_equal(expr, m.linexpr((1, 'x'), (-1, 'y')))
+
+    expr = -x - 8*y
+    assert isinstance(expr, LinearExpression)
+    assert_equal(expr, m.linexpr((-1, 'x'), (-8, 'y')))
 
 
 def test_term_labels():
@@ -53,6 +67,17 @@ def test_add():
     expr = 10 * x + y
     other = 2 * y + z
     res = expr + other
+
+    assert res.nterm == expr.nterm + other.nterm
+    assert (res.coords['dim_0'] == expr.coords['dim_0']).all()
+    assert (res.coords['dim_1'] == other.coords['dim_1']).all()
+    assert res.notnull().all().to_array().all()
+
+
+def test_sub():
+    expr = 10 * x + y
+    other = 2 * y + z
+    res = expr - other
 
     assert res.nterm == expr.nterm + other.nterm
     assert (res.coords['dim_0'] == expr.coords['dim_0']).all()

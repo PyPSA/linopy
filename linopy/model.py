@@ -260,18 +260,32 @@ class Variable():
         return (f"Variable container:\n"
                 f"-------------------\n\n{data_string}")
 
-    def __mul__(self, coefficient):
+    def to_linexpr(self, coefficient=1):
         return LinearExpression.from_tuples((coefficient, self.data))
 
+    def __neg__(self):
+        return self.to_linexpr(-1)
+
+    def __mul__(self, coefficient):
+        return self.to_linexpr(coefficient)
 
     def __rmul__(self, coefficient):
-        return LinearExpression.from_tuples((coefficient, self.data))
+        return self.to_linexpr(coefficient)
 
     def __add__(self, other):
         if isinstance(other, Variable):
             return LinearExpression.from_tuples((1, self.data), (1, other.data))
         elif isinstance(other, LinearExpression):
-            return LinearExpression.from_tuples((1, self.data)) + other
+            return self.to_linexpr() + other
+        else:
+            raise TypeError("unsupported operand type(s) for +: "
+                            f"{type(self)} and {type(other)}")
+
+    def __sub__(self, other):
+        if isinstance(other, Variable):
+            return LinearExpression.from_tuples((1, self.data), (-1, other.data))
+        elif isinstance(other, LinearExpression):
+            return self.to_linexpr() - other
         else:
             raise TypeError("unsupported operand type(s) for +: "
                             f"{type(self)} and {type(other)}")
@@ -296,6 +310,28 @@ class LinearExpression(Dataset):
         return LinearExpression(xr.concat([self, other], dim='term_'))
 
 
+    def __sub__(self, other):
+        if isinstance(other, Variable):
+            other = LinearExpression.from_tuples((-1, other.data))
+        elif isinstance(other, LinearExpression):
+            other = -other
+        else:
+            raise TypeError("unsupported operand type(s) for +: "
+                            f"{type(self)} and {type(other)}")
+        return LinearExpression(xr.concat([self, other], dim='term_'))
+
+
+    def __neg__(self):
+        return LinearExpression(self.assign(coeffs=-self.coeffs))
+
+
+    def __mul__(self, other):
+        coeffs = other * self.coeffs
+        assert coeffs.shape == self.coeffs.shape
+        return LinearExpression(self.assign(coeffs=coeffs))
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
 
     def __repr__(self):
         ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
