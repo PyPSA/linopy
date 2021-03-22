@@ -11,16 +11,30 @@ import subprocess as sub
 import gurobipy
 
 # TODO check if there are really available
-available_solvers = ['gurobi', 'cbc', 'glpk',]
+available_solvers = ['glpk']
+
 try:
-    import xpress
-    available_solvers.append('xpress')
+    sub.run('cbc')
+    available_solvers.append('cbc')
+except FileNotFoundError:
+    None
+
+try:
+    import gurobi
+    available_solvers.append('gurobi')
 except ModuleNotFoundError:
     None
+
 
 try:
     import cplex
     available_solvers.append('cplex')
+except ModuleNotFoundError:
+    None
+
+try:
+    import xpress
+    available_solvers.append('xpress')
 except ModuleNotFoundError:
     None
 

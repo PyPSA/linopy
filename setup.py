@@ -31,7 +31,6 @@ setup(
                       'scipy',
                       'bottleneck',
                       'numexpr',
-                      'gurobi',
                       'cplex',
                       'xarray>=0.16',
                       'dask>=0.18.0'],
