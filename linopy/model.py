@@ -260,6 +260,13 @@ class Variable():
         return (f"Variable container:\n"
                 f"-------------------\n\n{data_string}")
 
+    def _repr_html_(self):
+        # return self.__repr__()
+        data_string = self.data._repr_html_()
+        data_string = data_string.replace('xarray.DataArray', 'linopy.Variable')
+        return data_string
+
+
     def to_linexpr(self, coefficient=1):
         return LinearExpression.from_tuples((coefficient, self.data))
 
@@ -301,6 +308,19 @@ class LinearExpression(Dataset):
         super().__init__(dataset)
 
 
+    def __repr__(self):
+        ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
+        ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
+        return (f"Linear Expression with {self.nterm} term(s):\n"
+                f"----------------------------------\n\n{ds_string}")
+
+    def _repr_html_(self):
+        # return self.__repr__()
+        ds_string = self.to_dataset()._repr_html_()
+        ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
+        ds_string = ds_string.replace('xarray.Dataset', 'linopy.LinearExpression')
+        return ds_string
+
     def __add__(self, other):
         if isinstance(other, Variable):
             other = LinearExpression.from_tuples((1, other.data))
@@ -332,12 +352,6 @@ class LinearExpression(Dataset):
 
     def __rmul__(self, other):
         return self.__mul__(other)
-
-    def __repr__(self):
-        ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
-        ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
-        return (f"Linear Expression with {self.nterm} term(s):\n"
-                f"----------------------------------\n\n{ds_string}")
 
 
     def to_dataset(self):
