@@ -298,7 +298,7 @@ class Variable(DataArray):
         elif isinstance(other, LinearExpression):
             return self.to_linexpr() - other
         else:
-            raise TypeError("unsupported operand type(s) for +: "
+            raise TypeError("unsupported operand type(s) for -: "
                             f"{type(self)} and {type(other)}")
 
 
@@ -342,7 +342,7 @@ class LinearExpression(Dataset):
         elif isinstance(other, LinearExpression):
             other = -other
         else:
-            raise TypeError("unsupported operand type(s) for +: "
+            raise TypeError("unsupported operand type(s) for -: "
                             f"{type(self)} and {type(other)}")
         res = LinearExpression(xr.concat([self, other], dim='term_'))
         if res.indexes['term_'].duplicated().any():
