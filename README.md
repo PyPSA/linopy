@@ -1,6 +1,6 @@
 # LINOPY (Prototype)
 
-Linear optimization with N-D labeled arrays in Python
+Linear optimization with N-D labeled arrays in Python. 
 
 
 # License 
