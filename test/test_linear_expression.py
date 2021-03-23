@@ -36,7 +36,7 @@ def test_variable_to_linexpr():
     expr = 1 * x
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 1
-    assert len(expr.vars.dim_0) == x.data.shape[0]
+    assert len(expr.vars.dim_0) == x.shape[0]
 
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)

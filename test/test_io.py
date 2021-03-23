@@ -20,7 +20,7 @@ def test_str_arrays():
     x = m.add_variables('x', 4, pd.Series([8,10]))
     y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
-    da = to_int_str(x.data)
+    da = to_int_str(x)
     assert da.dtype == object
 
 
@@ -30,7 +30,7 @@ def test_str_arrays_chunked():
     x = m.add_variables('x', 4, pd.Series([8,10]))
     y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
-    da = to_int_str(y.data).compute()
+    da = to_int_str(y).compute()
     assert da.dtype == object
 
 
@@ -41,9 +41,9 @@ def test_str_arrays_with_nans():
     x = m.add_variables('x', 4, pd.Series([8,10]))
     # now expand the second dimension, expended values of x will be nan
     y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
-    assert not m['x'].data.notnull().all()
+    assert not m['x'].notnull().all()
 
-    da = to_int_str(m['x'].data)
+    da = to_int_str(m['x'])
     assert da.dtype == object
 
 

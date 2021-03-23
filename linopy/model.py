@@ -250,25 +250,29 @@ class Model:
     to_file = to_file
 
 
-class Variable():
+class Variable(DataArray):
+    __slots__ = ('_cache', '_coords', '_indexes', '_name', '_variable')
 
-    def __init__(self, data):
-        self.data = data
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def to_array(self):
+        return DataArray(self)
+
+    def to_linexpr(self, coefficient=1):
+        return LinearExpression.from_tuples((coefficient, self))
 
     def __repr__(self):
-        data_string = "Variables:\n" + self.data.__repr__().split('\n', 1)[1]
+        data_string = "Variables:\n" + self.to_array().__repr__().split('\n', 1)[1]
         return (f"Variable container:\n"
                 f"-------------------\n\n{data_string}")
 
     def _repr_html_(self):
         # return self.__repr__()
-        data_string = self.data._repr_html_()
+        data_string = self.to_array()._repr_html_()
         data_string = data_string.replace('xarray.DataArray', 'linopy.Variable')
         return data_string
 
-
-    def to_linexpr(self, coefficient=1):
-        return LinearExpression.from_tuples((coefficient, self.data))
 
     def __neg__(self):
         return self.to_linexpr(-1)
@@ -281,7 +285,7 @@ class Variable():
 
     def __add__(self, other):
         if isinstance(other, Variable):
-            return LinearExpression.from_tuples((1, self.data), (1, other.data))
+            return LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, LinearExpression):
             return self.to_linexpr() + other
         else:
@@ -290,7 +294,7 @@ class Variable():
 
     def __sub__(self, other):
         if isinstance(other, Variable):
-            return LinearExpression.from_tuples((1, self.data), (-1, other.data))
+            return LinearExpression.from_tuples((1, self), (-1, other))
         elif isinstance(other, LinearExpression):
             return self.to_linexpr() - other
         else:
@@ -323,7 +327,7 @@ class LinearExpression(Dataset):
 
     def __add__(self, other):
         if isinstance(other, Variable):
-            other = LinearExpression.from_tuples((1, other.data))
+            other = LinearExpression.from_tuples((1, other))
         if not isinstance(other, LinearExpression):
             raise TypeError("unsupported operand type(s) for +: "
                             f"{type(self)} and {type(other)}")
@@ -334,7 +338,7 @@ class LinearExpression(Dataset):
 
     def __sub__(self, other):
         if isinstance(other, Variable):
-            other = LinearExpression.from_tuples((-1, other.data))
+            other = LinearExpression.from_tuples((-1, other))
         elif isinstance(other, LinearExpression):
             other = -other
         else:

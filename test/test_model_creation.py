@@ -147,7 +147,7 @@ def test_objective():
 def test_variable_getitem():
     m = Model()
     x = m.add_variables('x')
-    assert m['x'].data == x.data
+    assert m['x'] == x
 
 
 
