@@ -80,7 +80,6 @@ class Model:
         setattr(self, attr, ds)
 
 
-    # TODO should be named add_variable?
     def add_variables(self, name, lower=-inf, upper=inf, coords=None):
 
         assert name not in self.variables
@@ -117,7 +116,6 @@ class Model:
         return Variable(var)
 
 
-    # TODO should be named add_constraint
     def add_constraints(self, name, lhs, sign, rhs):
 
         assert name not in self.constraints
@@ -232,11 +230,13 @@ class Model:
         self.solver_model = res.pop('model', None)
         self.status = termination_condition
 
+        res['solution'].loc[np.nan] = np.nan
         for v in self.variables:
             idx = self.variables[v].data.ravel()
             sol = res['solution'][idx].values.reshape(self.variables[v].shape)
             self.solution[v] = xr.DataArray(sol, self.variables[v].coords)
 
+        res['dual'].loc[np.nan] = np.nan
         for c in self.constraints:
             idx = self.constraints[c].data.ravel()
             du = res['dual'][idx].values.reshape(self.constraints[c].shape)
@@ -327,8 +327,10 @@ class LinearExpression(Dataset):
         if not isinstance(other, LinearExpression):
             raise TypeError("unsupported operand type(s) for +: "
                             f"{type(self)} and {type(other)}")
-        return LinearExpression(xr.concat([self, other], dim='term_'))
-
+        res = LinearExpression(xr.concat([self, other], dim='term_'))
+        if res.indexes['term_'].duplicated().any():
+            return res.assign_coords(term_=pd.RangeIndex(len(res.term_)))
+        return res
 
     def __sub__(self, other):
         if isinstance(other, Variable):
@@ -338,7 +340,10 @@ class LinearExpression(Dataset):
         else:
             raise TypeError("unsupported operand type(s) for +: "
                             f"{type(self)} and {type(other)}")
-        return LinearExpression(xr.concat([self, other], dim='term_'))
+        res = LinearExpression(xr.concat([self, other], dim='term_'))
+        if res.indexes['term_'].duplicated().any():
+            return res.assign_coords(term_=pd.RangeIndex(len(res.term_)))
+        return res
 
 
     def __neg__(self):
@@ -382,13 +387,7 @@ class LinearExpression(Dataset):
 
     def from_tuples(*tuples, chunk=None):
 
-        idx = []
-        for i, (c, v) in enumerate(tuples):
-            if isinstance(v, (Variable, DataArray)):
-                idx.append(v.attrs['name'])
-            else:
-                idx.append(i)
-
+        idx = pd.RangeIndex(len(tuples))
         ds_list = [Dataset({'coeffs': c, 'vars': v}) for c, v in tuples]
         if len(ds_list) > 1:
             ds = xr.concat(ds_list, dim=pd.Index(idx, name='term_'))

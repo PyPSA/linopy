@@ -21,20 +21,16 @@ ufunc_kwargs = dict(dask='parallelized', vectorize=True, output_dtypes=[object])
 
 # IO functions
 def to_float_str(da):
-    nonnans = da.notnull()
-    da = da.where(nonnans, 0)
-    return apply_ufunc(lambda f: '%+f'%f, da, **ufunc_kwargs).where(nonnans, '')
+    return apply_ufunc(lambda f: '%+f'%f, da.fillna(0), **ufunc_kwargs)
 
 
-def to_int_str(da):
-    nonnans = da.notnull()
-    da = da.where(nonnans, 0)
-    return xr.apply_ufunc(lambda d: '%d'%d, da, **ufunc_kwargs).where(nonnans, '')
+def to_int_str(da, nonnans=None):
+    return xr.apply_ufunc(lambda d: '%d'%d, da.fillna(0), **ufunc_kwargs)
 
 
-def join_str_arrays(*arrays):
+def join_str_arrays(arraylist):
     func = lambda *l: np.add(*l, dtype=object) # np.core.defchararray.add
-    return reduce(func, arrays, '')
+    return reduce(func, arraylist, '')
 
 
 def str_array_to_file(array, fn):
@@ -42,50 +38,60 @@ def str_array_to_file(array, fn):
                           vectorize=True, output_dtypes=[int])
 
 
-def objective_to_file(model, f):
-        f.write('\* LOPF *\n\nmin\nobj:\n')
-        objective_str = join_str_arrays(
-            to_float_str(model.objective.coeffs),
-            ' x', to_int_str(model.objective.vars), '\n'
-            )
+def objective_to_file(m, f):
+        f.write('min\nobj:\n')
+        coef = m.objective.coeffs
+        var = m.objective.vars
+
+        nonnans = coef.notnull() & var.notnull()
+        join = [to_float_str(coef), ' x', to_int_str(var), '\n']
+        objective_str = join_str_arrays(join).where(nonnans, '')
         str_array_to_file(objective_str, f).compute()
 
 
-def constraints_to_file(model, f):
+def constraints_to_file(m, f):
         f.write("\n\ns.t.\n\n")
+        con = m.constraints
+        coef = m.constraints_lhs_coeffs
+        var = m.constraints_lhs_vars
+        sign = m.constraints_sign
+        rhs = m.constraints_rhs
 
-        lhs_str = join_str_arrays(
-            to_float_str(model.constraints_lhs_coeffs),
-            ' x', to_int_str(model.constraints_lhs_vars), '\n'
-            ).reduce(np.sum, 'term_') # .sum() does not work
+        nonnans = coef.notnull() & var.notnull()
+        join = [to_float_str(coef), ' x', to_int_str(var), '\n']
+        lhs_str = join_str_arrays(join).where(nonnans, '').reduce(np.sum, 'term_')
+        # .sum() does not work
 
-        constraints_str = join_str_arrays(
-            'c', to_int_str(model.constraints), ': \n',
-            lhs_str,
-            model.constraints_sign, '\n',
-            to_float_str(model.constraints_rhs), '\n\n')
+        nonnans = (nonnans.any('term_') & con.notnull() &
+                   sign.notnull() & rhs.notnull())
+
+        join = ['c', to_int_str(con), ': \n', lhs_str, sign, '\n',
+                to_float_str(rhs), '\n\n']
+        constraints_str = join_str_arrays(join).where(nonnans, '')
         str_array_to_file(constraints_str, f).compute()
 
 
-def bounds_to_file(model, f):
+def bounds_to_file(m, f):
         f.write("\nbounds\n")
+        lb = m.variables_lower_bounds
+        v = m.variables
+        ub = m.variables_upper_bounds
 
-        bounds_str = join_str_arrays(
-            to_float_str(model.variables_lower_bounds),
-            ' <= x',to_int_str(model.variables),
-            ' <= ', to_float_str(model.variables_upper_bounds), '\n')
+        nonnans = lb.notnull() & v.notnull() & ub.notnull()
+        join = [to_float_str(lb), ' <= x', to_int_str(v), ' <= ', to_float_str(ub), '\n']
+        bounds_str = join_str_arrays(join).where(nonnans, '')
         str_array_to_file(bounds_str, f).compute()
 
 
-def binaries_to_file(model, f):
+def binaries_to_file(m, f):
         f.write("\nbinary\n")
 
-        binaries_str = join_str_arrays(to_int_str(model.binaries))
+        binaries_str = join_str_arrays([to_int_str(m.binaries)])
         str_array_to_file(binaries_str, f).compute()
         f.write("end\n")
 
 
-def to_file(model, fn):
+def to_file(m, fn):
 
     if os.path.exists(fn):
         os.remove(fn)  # ensure a clear file
@@ -94,11 +100,12 @@ def to_file(model, fn):
 
     start = time.time()
 
-    objective_to_file(model, f)
-    constraints_to_file(model, f)
-    bounds_to_file(model, f)
-    binaries_to_file(model, f)
+    objective_to_file(m, f)
+    constraints_to_file(m, f)
+    bounds_to_file(m, f)
+    binaries_to_file(m, f)
 
+    f.close()
     logger.info(f' Writing time: {round(time.time()-start, 2)}s')
 
 

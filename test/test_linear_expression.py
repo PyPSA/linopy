@@ -23,8 +23,13 @@ z = m.add_variables('z', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 def test_values():
     expr = m.linexpr((10, 'x'), (1, 'y'))
     target = xr.DataArray([[10, 1], [10, 1]],
-                          coords=(('dim_0', [0, 1]), ('term_', ['x', 'y'])))
+                          coords=(('dim_0', [0, 1]), ('term_', [0, 1])))
     assert_equal(expr.coeffs, target)
+
+
+def test_duplicated_index():
+    expr = m.linexpr((10, 'x'), (-1, 'x'))
+    assert (expr.term_ == [0,1]).all()
 
 
 def test_variable_to_linexpr():
@@ -59,8 +64,8 @@ def test_term_labels():
     expr = 10 * x + y
     other = m.linexpr((2, 'y'), (1, 'z'))
 
-    assert (expr.term_ == ['x', 'y']).all()
-    assert (other.term_ == ['y', 'z']).all()
+    assert (expr.term_ == [0, 1]).all()
+    assert (other.term_ == [0, 1]).all()
 
 
 def test_add():
@@ -98,4 +103,9 @@ def test_sum():
     assert res.notnull().all().to_array().all()
 
 
-
+def test_groupby():
+    expr = 10 * x + y + z
+    group = xr.DataArray([1,1,2], dims='dim_1')
+    expr = expr.group_terms(group)
+    assert 'group' in expr.dims
+    assert (expr.group == [1, 2]).all()
