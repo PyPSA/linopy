@@ -43,8 +43,8 @@ def test_add_variables_shape():
     # single variable between minus and plus inf
     m.add_variables()
     assert m.variables.var5.shape == ()
-    assert m.variables_lower_bounds.var5 == -np.inf
-    assert m.variables_upper_bounds.var5 == np.inf
+    assert m.variables_lower_bound.var5 == -np.inf
+    assert m.variables_upper_bound.var5 == np.inf
 
 
     # setting bounds with scalar and no coords
@@ -52,8 +52,8 @@ def test_add_variables_shape():
     upper = 1
     m.add_variables(lower, upper)
     assert m.variables.var6.shape == ()
-    assert m.variables_lower_bounds.var6 == 0
-    assert m.variables_upper_bounds.var6 == 1
+    assert m.variables_lower_bound.var6 == 0
+    assert m.variables_upper_bound.var6 == 1
 
 
     # setting bounds with scalar and coords
@@ -151,5 +151,20 @@ def test_variable_getitem():
     assert m['x'] == x
 
 
+def test_remove_variable():
+    m = Model()
 
+    lower = xr.DataArray(np.zeros((10,10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name='x')
+    y = m.add_variables(name='y')
+
+    m.add_constraints(1 * x + 10 * y, '=', 0)
+
+    m.remove_variables('x')
+    assert 'x' not in m.variables
+    assert 'x' not in m.variables_lower_bound
+    assert 'x' not in m.variables_upper_bound
+
+    assert 1 not in m.constraints_lhs_vars.con1
 

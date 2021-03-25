@@ -73,9 +73,9 @@ def constraints_to_file(m, f):
 
 def bounds_to_file(m, f):
         f.write("\nbounds\n")
-        lb = m.variables_lower_bounds
+        lb = m.variables_lower_bound
         v = m.variables
-        ub = m.variables_upper_bounds
+        ub = m.variables_upper_bound
 
         nonnans = lb.notnull() & v.notnull() & ub.notnull()
         join = [to_float_str(lb), ' <= x', to_int_str(v), ' <= ', to_float_str(ub), '\n']
@@ -109,7 +109,7 @@ def to_file(m, fn):
     logger.info(f' Writing time: {round(time.time()-start, 2)}s')
 
 
-all_ds_attrs = ['variables', 'variables_lower_bounds', 'variables_upper_bounds',
+all_ds_attrs = ['variables', 'variables_lower_bound', 'variables_upper_bound',
                'binaries',
                'constraints', 'constraints_lhs_coeffs', 'constraints_lhs_vars',
                'constraints_sign', 'constraints_rhs',

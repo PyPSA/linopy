@@ -39,8 +39,8 @@ class Model:
         self.objective_value = None
 
         self.variables = Dataset()
-        self.variables_lower_bounds = Dataset()
-        self.variables_upper_bounds = Dataset()
+        self.variables_lower_bound = Dataset()
+        self.variables_upper_bound = Dataset()
 
         self.binaries = Dataset()
 
@@ -50,7 +50,7 @@ class Model:
         self.constraints_sign = Dataset()
         self.constraints_rhs = Dataset()
 
-        self.objective = None
+        self.objective = LinearExpression()
 
         self.solution = Dataset()
         self.dual = Dataset()
@@ -119,8 +119,8 @@ class Model:
 
 
         self._merge_inplace('variables', var, name)
-        self._merge_inplace('variables_lower_bounds', lower, name)
-        self._merge_inplace('variables_upper_bounds', upper, name)
+        self._merge_inplace('variables_lower_bound', lower, name)
+        self._merge_inplace('variables_upper_bound', upper, name)
 
         return Variable(var)
 
@@ -168,7 +168,11 @@ class Model:
         return con
 
 
-    def add_objective(self, expr):
+    def add_objective(self, expr, overwrite=False):
+        if not overwrite:
+            assert self.objective.empty(), ('Objective already defined.'
+                ' Set `overwrite` to True to force overwriting.')
+
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         assert isinstance(expr, LinearExpression)
@@ -176,6 +180,37 @@ class Model:
             expr = expr.sum()
         self.objective = expr
         return self.objective
+
+
+    def remove_variables(self, name):
+        "Remove all variables stored under name `name`."
+
+        labels = self.variables[name]
+        self.variables = self.variables.drop_vars(name)
+        self.variables_lower_bound = self.variables_lower_bound.drop_vars(name)
+        self.variables_upper_bound = self.variables_upper_bound.drop_vars(name)
+
+        keep_b = ~self.constraints_lhs_vars.isin(labels)
+        self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.where(keep_b)
+        self.constraints_lhs_vars = self.constraints_lhs_vars.where(keep_b)
+
+        keep_b_con = keep_b.any(dim='term_')
+        self.constraints = self.constraints.where(keep_b_con)
+        self.constraints_sign = self.constraints_sign.where(keep_b_con)
+        self.constraints_rhs = self.constraints_rhs.where(keep_b_con)
+
+        self.objective = self.objective.where(~self.objective.isin(labels))
+
+
+    def remove_constraints(self, name):
+        "Remove all constraints stored under name `name`."
+        self.constraints = self.constraints.drop_vars(name)
+        self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.drop_vars(name)
+        self.constraints_lhs_vars = self.constraints_lhs_vars.drop_vars(name)
+        self.constraints_sign = self.constraints_sign.drop_vars(name)
+        self.constraints_rhs = self.constraints_rhs.drop_vars(name)
+
+
 
 
     def linexpr(self, *tuples):
@@ -433,3 +468,6 @@ class LinearExpression(Dataset):
         assert self.vars.size == self.coeffs.size
         return self.vars.size
 
+
+    def empty(self):
+        return not bool(self)
