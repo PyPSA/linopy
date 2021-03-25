@@ -15,9 +15,9 @@ from linopy import LinearExpression, Model
 
 m = Model()
 
-x = m.add_variables('x', pd.Series([0,0]), 1)
-y = m.add_variables('y', 4, pd.Series([8,10]))
-z = m.add_variables('z', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+x = m.add_variables(pd.Series([0,0]), 1, name='x')
+y = m.add_variables(4, pd.Series([8,10]), name='y')
+z = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]).T, name='z')
 
 
 def test_values():

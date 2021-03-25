@@ -15,11 +15,11 @@ import pandas as pd
 def init_model():
     m = Model(chunk=None)
 
-    x = m.add_variables('x')
-    y = m.add_variables('y')
+    x = m.add_variables(name='x')
+    y = m.add_variables(name='y')
 
-    m.add_constraints('Constraint1', 2*x + 6*y, '>=', 10)
-    m.add_constraints('Constraint2', 4*x + 2*y, '>=', 3)
+    m.add_constraints(2*x + 6*y, '>=', 10)
+    m.add_constraints(4*x + 2*y, '>=', 3)
 
     m.add_objective(2*y + x)
     return m

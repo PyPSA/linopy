@@ -18,8 +18,8 @@ from xarray.testing import assert_allclose, assert_equal
 def test_str_arrays():
     m = Model()
 
-    x = m.add_variables('x', 4, pd.Series([8,10]))
-    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+    x = m.add_variables(4, pd.Series([8,10]))
+    y = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
     da = to_int_str(x)
     assert da.dtype == object
@@ -28,8 +28,8 @@ def test_str_arrays():
 def test_str_arrays_chunked():
     m = Model(chunk=-1)
 
-    x = m.add_variables('x', 4, pd.Series([8,10]))
-    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
+    x = m.add_variables(4, pd.Series([8,10]))
+    y = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]).T)
 
     da = to_int_str(y).compute()
     assert da.dtype == object
@@ -39,9 +39,9 @@ def test_str_arrays_chunked():
 def test_str_arrays_with_nans():
     m = Model()
 
-    x = m.add_variables('x', 4, pd.Series([8,10]))
+    x = m.add_variables(4, pd.Series([8,10]), name='x')
     # now expand the second dimension, expended values of x will be nan
-    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
+    y = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]), name='y')
     assert not m['x'].notnull().all()
 
     da = to_int_str(m['x'])
@@ -55,10 +55,10 @@ def test_to_file():
 
     m = Model()
 
-    x = m.add_variables('x', 4, pd.Series([8,10]))
-    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
+    x = m.add_variables(4, pd.Series([8,10]))
+    y = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]))
 
-    m.add_constraints('con1', x + y, '<=', 10)
+    m.add_constraints(x + y, '<=', 10)
 
     m.add_objective(2*x + 3*y)
     m.to_file('test.lp')
@@ -70,9 +70,9 @@ def test_to_file():
 def test_to_file():
     m = Model()
 
-    x = m.add_variables('x', 4, pd.Series([8,10]))
-    y = m.add_variables('y', 0, pd.DataFrame([[1,2], [3,4], [5,6]]))
-    m.add_constraints('con1', x + y, '<=', 10)
+    x = m.add_variables(4, pd.Series([8,10]))
+    y = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]))
+    m.add_constraints(x + y, '<=', 10)
     m.add_objective(2*x + 3*y)
 
     m.to_netcdf('test.nc')

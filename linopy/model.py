@@ -31,6 +31,9 @@ class Model:
     def __init__(self, solver_dir=None, chunk=None):
         self._xCounter = 1
         self._cCounter = 1
+        self._varnameCounter = 1
+        self._connameCounter = 1
+
         self.chunk = chunk
         self.status = 'initialized'
         self.objective_value = None
@@ -81,7 +84,12 @@ class Model:
         setattr(self, attr, ds)
 
 
-    def add_variables(self, name, lower=-inf, upper=inf, coords=None):
+    def add_variables(self, lower=-inf, upper=inf, coords=None, name=None):
+
+        if name is None:
+            while 'var' + str(self._varnameCounter) in self.variables:
+                self._varnameCounter += 1
+            name = 'var' + str(self._varnameCounter)
 
         assert name not in self.variables
 
@@ -117,7 +125,12 @@ class Model:
         return Variable(var)
 
 
-    def add_constraints(self, name, lhs, sign, rhs):
+    def add_constraints(self, lhs, sign, rhs, name=None):
+
+        if name is None:
+            while 'con' + str(self._connameCounter) in self.constraints:
+                self._connameCounter += 1
+            name = 'con' + str(self._connameCounter)
 
         assert name not in self.constraints
 
