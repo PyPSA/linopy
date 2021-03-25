@@ -5,3 +5,5 @@ linopy.egg-info
 dev-scripts/
 examples/.ipynb_checkpoints/
 linopy/version.py
+dist/
+build/

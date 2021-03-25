@@ -109,3 +109,43 @@ def to_file(m, fn):
     logger.info(f' Writing time: {round(time.time()-start, 2)}s')
 
 
+all_ds_attrs = ['variables', 'variables_lower_bounds', 'variables_upper_bounds',
+               'binaries',
+               'constraints', 'constraints_lhs_coeffs', 'constraints_lhs_vars',
+               'constraints_sign', 'constraints_rhs',
+               'solution', 'dual', 'objective']
+all_obj_attrs = ['objective_value', 'status', '_xCounter', '_cCounter']
+
+
+def to_netcdf(m, *args, **kwargs):
+
+    def get_and_rename(m, attr):
+        ds = getattr(m, attr)
+        return ds.rename({v: attr + '-' + v for v in ds})
+
+    ds = xr.merge([get_and_rename(m, d) for d in all_ds_attrs])
+    ds = ds.assign_attrs({k: getattr(m, k) for k in all_obj_attrs})
+
+    ds.to_netcdf(*args, **kwargs)
+
+
+def read_netcdf(path, **kwargs):
+    from .model import Model, LinearExpression #aviod cyclic imports
+
+    m = Model()
+    all_ds = xr.load_dataset(path, **kwargs)
+
+    for attr in all_ds_attrs:
+        keys = [k for k in all_ds if k.startswith(attr+'-')]
+        ds = all_ds[keys].rename({k: k[len(attr)+1:] for k in keys})
+        setattr(m, attr, ds)
+    m.objective = LinearExpression(m.objective)
+
+    for k in all_obj_attrs:
+        setattr(m, k, ds.attrs.pop(k))
+
+    return m
+
+
+
+

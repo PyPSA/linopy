@@ -19,7 +19,7 @@ from numpy import inf
 from functools import reduce
 
 
-from .io import to_file
+from .io import to_file, to_netcdf
 from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
                       available_solvers)
 
@@ -33,6 +33,7 @@ class Model:
         self._cCounter = 1
         self.chunk = chunk
         self.status = 'initialized'
+        self.objective_value = None
 
         self.variables = Dataset()
         self.variables_lower_bounds = Dataset()
@@ -244,8 +245,7 @@ class Model:
 
         return self
 
-    # TODO
-    # to_netcdf = to_netcdf
+    to_netcdf = to_netcdf
 
     to_file = to_file
 
@@ -306,9 +306,10 @@ class Variable(DataArray):
 class LinearExpression(Dataset):
     __slots__ = ('_cache', '_coords', '_indexes', '_name', '_variable')
 
-    def __init__(self, dataset):
-        assert set(dataset) == {'coeffs', 'vars'}
-        (dataset,) = xr.broadcast(dataset)
+    def __init__(self, dataset=None):
+        if dataset is not None:
+            assert set(dataset) == {'coeffs', 'vars'}
+            (dataset,) = xr.broadcast(dataset)
         super().__init__(dataset)
 
 

@@ -8,3 +8,4 @@ Created on Wed Mar 10 11:03:06 2021
 
 from . import model
 from .model import Model, LinearExpression, Variable, available_solvers
+from .io import read_netcdf
