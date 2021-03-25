@@ -26,9 +26,40 @@ from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
 logger = logging.getLogger(__name__)
 
 class Model:
+    """
+    Linear optimization model.
 
+    The Model contains all relevant data of a linear programm, including
+
+    * variables with lower and upper bounds
+    * contraints with left hand side (lhs) being a linear expression of variables
+      and a right hand side (rhs) being a constant. Lhs and rhs
+      are set in relation by the sign
+    * objective being a linear expression of variables
+
+    The model supports different solvers (see `linopy.available_solvers`) for
+    the optimization process.
+    """
 
     def __init__(self, solver_dir=None, chunk=None):
+        """
+        Initialize the linopy model.
+
+        Parameters
+        ----------
+        solver_dir : pathlike, optional
+            Path where temporary files like the lp file or solution file should
+            be stored. The default None results in taking the default temporary
+            directory.
+        chunk : int, optional
+            Chunksize used when assigning data, this can speed up large
+            programs while keeping memory-usage low. The default is None.
+
+        Returns
+        -------
+        linopy.Model
+
+        """
         self._xCounter = 1
         self._cCounter = 1
         self._varnameCounter = 1
@@ -59,6 +90,7 @@ class Model:
             self.solver_dir = gettempdir()
 
     def __repr__(self):
+        """Return a string represenation of the linopy model."""
         var_string = self.variables.__repr__().split('\n', 1)[1]
         var_string = var_string.replace('Data variables:\n', 'Data:\n')
         con_string = self.constraints.__repr__().split('\n', 1)[1]
@@ -70,6 +102,7 @@ class Model:
 
 
     def __getitem__(self, key):
+        """Get a model variable by the name."""
         return Variable(self.variables[key])
 
 
@@ -85,6 +118,33 @@ class Model:
 
 
     def add_variables(self, lower=-inf, upper=inf, coords=None, name=None):
+        """
+        Assign a new, possibly multi-dimensional variable to the model.
+
+        Variables may be added
+
+        Parameters
+        ----------
+        lower : float/array_like, optional
+            Lower bound of the variable. The default is -inf.
+        upper : TYPE, optional
+            DESCRIPTION. The default is inf.
+        coords : TYPE, optional
+            DESCRIPTION. The default is None.
+        name : TYPE, optional
+            DESCRIPTION. The default is None.
+
+        Raises
+        ------
+        ValueError
+            DESCRIPTION.
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        """
 
         if name is None:
             while 'var' + str(self._varnameCounter) in self.variables:
