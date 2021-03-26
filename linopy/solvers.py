@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Tue Mar 16 10:30:21 2021
-
-@author: fabian
-"""
+"""Linopy module for solving lp files with different solvers."""
 import pandas as pd
 import logging, re, io, os
 import subprocess as sub
@@ -47,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def set_int_index(ser):
+    """Convert string index to int index."""
     ser.index = ser.index.str[1:].astype(int)
     return ser
 
@@ -54,10 +51,11 @@ def set_int_index(ser):
 def run_cbc(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
             basis_fn=None, **solver_options):
     """
-    Solving function. Reads the linear problem file and passes it to the cbc
+    Solve a linear problem using the cbc solver.
+
+    The function reads the linear problem file and passes it to the cbc
     solver. If the solution is sucessful it returns variable solutions and
     constraint dual values.
-
     For more information on the solver options, run 'cbc' in your shell
     """
     #printingOptions is about what goes in solution file
@@ -121,7 +119,9 @@ def run_cbc(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
 def run_glpk(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
             basis_fn=None, **solver_options):
     """
-    Solving function. Reads the linear problem file and passes it to the glpk
+    Solve a linear problem using the glpk solver.
+
+    This function reads the linear problem file and passes it to the glpk
     solver. If the solution is sucessful it returns variable solutions and
     constraint dual values.
 
@@ -191,7 +191,9 @@ def run_glpk(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
 def run_cplex(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
             basis_fn=None, **solver_options):
     """
-    Solving function. Reads the linear problem file and passes it to the cplex
+    Solve a linear problem using the cplex solver.
+
+    This function reads the linear problem file and passes it to the cplex
     solver. If the solution is sucessful it returns variable solutions and
     constraint dual values. Cplex must be installed for using this function.
 
@@ -257,14 +259,14 @@ def run_cplex(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
 def run_gurobi(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
                basis_fn=None, **solver_options):
     """
-    Solving function. Reads the linear problem file and passes it to the gurobi
+    Solve a linear problem using the gurobi solver.
+
+    This function reads the linear problem file and passes it to the gurobi
     solver. If the solution is sucessful it returns variable solutions and
     constraint dual values. Gurobipy must be installed for using this function
-
     For more information on solver options:
     https://www.gurobi.com/documentation/{gurobi_verion}/refman/parameter_descriptions.html
     """
-
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
@@ -325,7 +327,9 @@ def run_gurobi(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
 def run_xpress(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
                basis_fn=None, **solver_options):
     """
-    Solving function. Reads the linear problem file and passes it to
+    Solve a linear problem using the xpress solver.
+
+    This function reads the linear problem file and passes it to
     the Xpress solver. If the solution is successful it returns
     variable solutions and constraint dual values. The xpress module
     must be installed for using this function.
