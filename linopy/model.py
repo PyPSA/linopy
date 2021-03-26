@@ -1,23 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Spyder Editor
-
-This is a temporary script file.
+Linopy model module.
+This module contains frontend implementations of the package.
 """
 
 import pandas as pd
 import xarray as xr
 import numpy as np
 import os
-import shutil
 import logging
-import re
 
 from tempfile import mkstemp, gettempdir
 from xarray import DataArray, Dataset, merge
 from numpy import inf
-from functools import reduce
-
 
 from .io import to_file, to_netcdf
 from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
@@ -119,30 +114,54 @@ class Model:
 
     def add_variables(self, lower=-inf, upper=inf, coords=None, name=None):
         """
-        Assign a new, possibly multi-dimensional variable to the model.
+        Assign a new, possibly multi-dimensional array of variables to the model.
 
-        Variables may be added
+        Variables may be added with lower and/or upper bounds. Unless a
+        `coords` argument is provided, the shape of the lower and upper bounds
+        define the number of variables which will be added to the model
+        under the name `name`.
 
         Parameters
         ----------
         lower : float/array_like, optional
-            Lower bound of the variable. The default is -inf.
+            Lower bound of the variable(s). The default is -inf.
         upper : TYPE, optional
-            DESCRIPTION. The default is inf.
-        coords : TYPE, optional
-            DESCRIPTION. The default is None.
-        name : TYPE, optional
-            DESCRIPTION. The default is None.
+            Upper bound of the variable(s). The default is inf.
+        coords : list/xarray.Coordinates, optional
+            The coords of the variable array. For every single combination of
+            coordinates a optimization variable is added to the model.
+            The default is None. Is ignored when lower and upper bound provide
+            coordinates.
+        name : str, optional
+            Reference name of the added variables. The default None results in
+            a name like "var1", "var2" etc.
 
         Raises
         ------
         ValueError
-            DESCRIPTION.
+            If neither lower bound and upper bound have coordinates, nor
+            `coords` are directly given.
 
         Returns
         -------
-        TYPE
-            DESCRIPTION.
+        linopy.Variable
+            Variable which was added to the model.
+
+
+        Examples
+        --------
+        >>> m = linopy.Model()
+        >>> time = pd.RangeIndex(10, name='Time')
+        >>> m.add_variables(lower=0, coords=[time], name='x')
+        Variable container:
+        -------------------
+
+        Variables:
+        array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])
+        Coordinates:
+            * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
+        Attributes:
+            name:     x
 
         """
 
@@ -186,7 +205,33 @@ class Model:
 
 
     def add_constraints(self, lhs, sign, rhs, name=None):
+        """
+        Assign a new, possibly multi-dimensional array of constraints to the model.
 
+        Constraints are added by defining a left hand side (lhs), the sign and
+        the right hand side (rhs). The lhs has to be a linopy.LinearExpression
+        and the rhs a constant (array of constants). The function return the
+        an array with the constraint labels (integers).
+
+        Parameters
+        ----------
+        lhs : linopy.LinearExpression
+            Left hand side of the constraint(s).
+        sign : str/array_like
+            Relation between the lhs and rhs, valid values are {'=', '>=', '<='}.
+        rhs : int/float/array_like
+            Right hand side of the constraint(s).
+        name : str, optional
+            Reference name of the added constraints. The default None results
+            results a name like "con1", "con2" etc.
+
+
+        Returns
+        -------
+        con : xarray.DataArray
+            Array containing the labels of the added constraints.
+
+        """
         if name is None:
             while 'con' + str(self._connameCounter) in self.constraints:
                 self._connameCounter += 1
@@ -229,6 +274,22 @@ class Model:
 
 
     def add_objective(self, expr, overwrite=False):
+        """
+        Add a linear objective function to the model.
+
+        Parameters
+        ----------
+        expr : linopy.LinearExpression
+            Linear Expressions describing the objective function.
+        overwrite : False, optional
+            Whether to overwrite the existing objective. The default is False.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            The objective function assigned to the model.
+
+        """
         if not overwrite:
             assert self.objective.empty(), ('Objective already defined.'
                 ' Set `overwrite` to True to force overwriting.')
@@ -243,8 +304,24 @@ class Model:
 
 
     def remove_variables(self, name):
-        "Remove all variables stored under name `name`."
+        """
+        Remove all variables stored under reference name `name` from the model.
 
+        This function also removes the variables from constraints and the
+        objective function. Note that this will leave blank spaces where the
+        variables were stored which ensures dimensional compatibility.
+
+        Parameters
+        ----------
+        name : str
+            Reference name of the variables which to remove, same as used in
+            `model.add_variables`.
+
+        Returns
+        -------
+        None.
+
+        """
         labels = self.variables[name]
         self.variables = self.variables.drop_vars(name)
         self.variables_lower_bound = self.variables_lower_bound.drop_vars(name)
@@ -263,7 +340,20 @@ class Model:
 
 
     def remove_constraints(self, name):
-        "Remove all constraints stored under name `name`."
+        """
+        Remove all constraints stored under reference name `name` from the model.
+
+        Parameters
+        ----------
+        name : str
+            Reference name of the constraints which to remove, same as used in
+            `model.add_constraints`.
+
+        Returns
+        -------
+        None.
+
+        """
         self.constraints = self.constraints.drop_vars(name)
         self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.drop_vars(name)
         self.constraints_lhs_vars = self.constraints_lhs_vars.drop_vars(name)
@@ -274,6 +364,37 @@ class Model:
 
 
     def linexpr(self, *tuples):
+        """
+        Create a linopy.LinearExpression by using variable names.
+
+        Calls the function LinearExpression.from_tuples but loads variables from
+        the model if a variable name is used.
+
+        Parameters
+        ----------
+        *tuples : tuples of (coefficients, variables)
+            Each tuple represents on term in the linear expression, which can
+            span over multiple dimensions:
+            * coefficients : int/float/array_like
+                The coefficient(s) in the term, if the coefficients array
+                contains dimensions which do not appear in
+                the variables, the variables are broadcasted.
+            * variables : str/array_like/linopy.Variable
+                The variable(s) going into the term. These may be referenced
+                by name.
+
+        Returns
+        -------
+        linopy.LinearExpression
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> m.add_variables(pd.Series([0,0]), 1, name='x')
+        >>> m.add_variables(4, pd.Series([8,10]), name='y')
+        >>> expr = m.linexpr((10, 'x'), (1, 'y'))
+
+        """
         tuples = [(c, self.variables[v]) if isinstance(v, str)
                   else (c, v) for (c, v) in tuples]
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
@@ -281,12 +402,14 @@ class Model:
 
     @property
     def coefficientrange(self):
+        """Coefficient range of the constraints in the model."""
         return xr.concat([self.constraints_lhs_coeffs.min(),
                           self.constraints_lhs_coeffs.max()],
                          dim = pd.Index(['min', 'max'])).to_dataframe().T
 
     @property
     def objectiverange(self):
+        """Objective range of the objective in the model."""
         return pd.Series([self.objective.coefficients.min().item(),
                           self.objective.coefficients.max().item()],
                          index = ['min', 'max'])
@@ -295,6 +418,47 @@ class Model:
     def solve(self, solver_name='gurobi', problem_fn=None, solution_fn=None,
               log_fn=None, basis_fn=None, warmstart_fn=None, keep_files=False,
               **solver_options):
+        """
+        Solve the model with possibly different solvers.
+
+        The optimal values of the variables are stored in `model.solution`.
+        The optimal dual variables are stored in `model.dual`.
+
+        Parameters
+        ----------
+        solver_name : str, optional
+            Name of the solver to use, this must be in `linopy.available_solvers`.
+            The default is 'gurobi'.
+        problem_fn : path_like, optional
+            Path of the lp file which is written out during the process. The
+            default None results in a temporary file.
+        solution_fn : path_like, optional
+            Path of the solution file which is written out during the process.
+            The default None results in a temporary file.
+        log_fn : path_like, optional
+            Path of the logging file which is written out during the process.
+            The default None results in the no log file, hence all solver
+            outputs are piped to the python repl.
+        basis_fn : path_like, optional
+            Path of the basis file of the solution which is written after
+            solving. The default None results in a temporary file, if the solver/method
+            supports writing out a basis file.
+        warmstart_fn : path_like, optional
+            Path of the basis file which should be used to warmstart the
+            solving. The default is None.
+        keep_files : bool, optional
+            Wheter to keep all temporary files like lp file, solution file.
+            This argument is ignored for the logger file `log_fn`. The default
+            is False.
+        **solver_options : kwargs
+            Options passed to the solver.
+
+        Returns
+        -------
+        linopy.Model
+            Optimized model.
+
+        """
 
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, (
@@ -359,23 +523,74 @@ class Model:
 
 
 class Variable(DataArray):
+    """
+    Variable Container for storing variable labels.
+
+    The Variable class is a subclass of xr.DataArray hence most xarray functions
+    can be applied to it. However most arithmetic operations are overwritten.
+    Like this one can easily combine variables into a linear expression.
+
+    Examples
+    --------
+    >>> m = Model()
+    >>> x = m.add_variables(pd.Series([0,0]), 1, name='x')
+    >>> y = m.add_variables(4, pd.Series([8,10]), name='y')
+
+    Add variable together:
+
+    >>> x + y
+    Linear Expression with 2 term(s):
+    ----------------------------------
+
+    Dimensions:  (dim_0: 2, term_: 2)
+    Coordinates:
+        * dim_0    (dim_0) int64 0 1
+        * term_    (term_) int64 0 1
+    Data:
+        coeffs   (dim_0, term_) int64 1 1 1 1
+        vars     (dim_0, term_) int64 1 3 2 4
+
+
+    Multiply them with a coefficient:
+
+    >>> 3 * x
+    Linear Expression with 1 term(s):
+    ----------------------------------
+
+    Dimensions:  (dim_0: 2, term_: 1)
+    Coordinates:
+        * term_    (term_) int64 0
+        * dim_0    (dim_0) int64 0 1
+    Data:
+        coeffs   (dim_0, term_) int64 3 3
+        vars     (dim_0, term_) int64 1 2
+
+
+    Further operations like taking the negative and substracting are supported.
+
+    """
+
     __slots__ = ('_cache', '_coords', '_indexes', '_name', '_variable')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def to_array(self):
+        """Convert the variable array to a xarray.DataArray."""
         return DataArray(self)
 
     def to_linexpr(self, coefficient=1):
+        """Create a linear exprssion from the variables."""
         return LinearExpression.from_tuples((coefficient, self))
 
     def __repr__(self):
+        """Get the string represenation of the variables."""
         data_string = "Variables:\n" + self.to_array().__repr__().split('\n', 1)[1]
         return (f"Variable container:\n"
                 f"-------------------\n\n{data_string}")
 
     def _repr_html_(self):
+        """Get the html represenation of the variables."""
         # return self.__repr__()
         data_string = self.to_array()._repr_html_()
         data_string = data_string.replace('xarray.DataArray', 'linopy.Variable')
@@ -383,15 +598,19 @@ class Variable(DataArray):
 
 
     def __neg__(self):
+        """Calculate the negative of the variables (converts coefficients only)."""
         return self.to_linexpr(-1)
 
     def __mul__(self, coefficient):
+        """Multiply variables with a coefficient."""
         return self.to_linexpr(coefficient)
 
     def __rmul__(self, coefficient):
+        """Right-multiply variables with a coefficient."""
         return self.to_linexpr(coefficient)
 
     def __add__(self, other):
+        """Add variables to linear expessions or other variables."""
         if isinstance(other, Variable):
             return LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, LinearExpression):
@@ -401,6 +620,7 @@ class Variable(DataArray):
                             f"{type(self)} and {type(other)}")
 
     def __sub__(self, other):
+        """Substract linear expessions or other variables from the variables."""
         if isinstance(other, Variable):
             return LinearExpression.from_tuples((1, self), (-1, other))
         elif isinstance(other, LinearExpression):
@@ -412,6 +632,49 @@ class Variable(DataArray):
 
 
 class LinearExpression(Dataset):
+    """
+    A linear expression consisting of terms of coefficients and variables.
+
+    The LinearExpression class is a subclass of xarray.Dataset which allows to
+    apply most xarray functions on it. However most arithmetic operations are
+    overwritten. Like this you can easily expand and modify the linear
+    expression.
+
+    Examples
+    --------
+    >>> m = Model()
+    >>> x = m.add_variables(pd.Series([0,0]), 1, name='x')
+    >>> y = m.add_variables(4, pd.Series([8,10]), name='y')
+
+    Combining expressions:
+
+    >>> expr = 3*x
+    >>> type(expr)
+    linopy.model.LinearExpression
+
+    >>> other = 4*y
+    >>> type(expr + other)
+    linopy.model.LinearExpression
+
+    Multiplying:
+    >>> type(3*expr)
+    linopy.model.LinearExpression
+
+    Summation over dimensions
+    >>> expr.sum(dim='dim_0')
+    Linear Expression with 2 term(s):
+    ----------------------------------
+
+    Dimensions:  (term_: 2)
+    Coordinates:
+        * term_    (term_) int64 0 1
+    Data:
+        coeffs   (term_) int64 3 3
+        vars     (term_) int64 1 2
+
+
+    """
+
     __slots__ = ('_cache', '_coords', '_indexes', '_name', '_variable')
 
     def __init__(self, dataset=None):
@@ -422,12 +685,14 @@ class LinearExpression(Dataset):
 
 
     def __repr__(self):
+        """Get the string represenation of the expression."""
         ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
         ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
         return (f"Linear Expression with {self.nterm} term(s):\n"
                 f"----------------------------------\n\n{ds_string}")
 
     def _repr_html_(self):
+        """Get the html represenation of the expression."""
         # return self.__repr__()
         ds_string = self.to_dataset()._repr_html_()
         ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
@@ -435,6 +700,7 @@ class LinearExpression(Dataset):
         return ds_string
 
     def __add__(self, other):
+        """Add a expression to others."""
         if isinstance(other, Variable):
             other = LinearExpression.from_tuples((1, other))
         if not isinstance(other, LinearExpression):
@@ -446,6 +712,7 @@ class LinearExpression(Dataset):
         return res
 
     def __sub__(self, other):
+        """Substract others form expression."""
         if isinstance(other, Variable):
             other = LinearExpression.from_tuples((-1, other))
         elif isinstance(other, LinearExpression):
@@ -460,24 +727,47 @@ class LinearExpression(Dataset):
 
 
     def __neg__(self):
+        """Get the negative of the expression."""
         return LinearExpression(self.assign(coeffs=-self.coeffs))
 
 
     def __mul__(self, other):
+        """Multiply the expr by a factor."""
         coeffs = other * self.coeffs
         assert coeffs.shape == self.coeffs.shape
         return LinearExpression(self.assign(coeffs=coeffs))
 
     def __rmul__(self, other):
+        """Right-multiply the expr by a factor."""
         return self.__mul__(other)
 
 
     def to_dataset(self):
+        """Convert the expression to a xarray.Dataset."""
         return Dataset(self)
 
 
     def sum(self, dims=None, keep_coords=False):
+        """
+        Sum the expression over all or a subset of dimensions.
 
+        This stack all terms of the dimensions, that are summed over, together.
+
+        Parameters
+        ----------
+        dims : str/list, optional
+            Dimension(s) to sum over. The default is None which results in all
+            dimensions.
+        keep_coords : bool, optional
+            Whether to keep the coordinates of the stacked dimensions in a
+            MultiIndex. The default is False.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            Summed expression.
+
+        """
         if dims:
             dims = list(np.atleast_1d(dims))
         else:
@@ -499,7 +789,35 @@ class LinearExpression(Dataset):
 
 
     def from_tuples(*tuples, chunk=None):
+        """
+        Create a linear expression by using tuples of coefficients and variables.
 
+        Parameters
+        ----------
+        *tuples : tuples of (coefficients, variables)
+            Each tuple represents on term in the resulting linear expression,
+            which can possibly span over multiple dimensions:
+            * coefficients : int/float/array_like
+                The coefficient(s) in the term, if the coefficients array
+                contains dimensions which do not appear in
+                the variables, the variables are broadcasted.
+            * variables : str/array_like/linopy.Variable
+                The variable(s) going into the term. These may be referenced
+                by name.
+
+        Returns
+        -------
+        linopy.LinearExpression
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> x = m.add_variables(pd.Series([0,0]), 1)
+        >>> m.add_variables(4, pd.Series([8,10]))
+        >>> expr = LinearExpression.from_tuples((10, x), (1, y))
+
+        This is the same as calling ``10*x + y`` but a bit more performant.
+        """
         idx = pd.RangeIndex(len(tuples))
         ds_list = [Dataset({'coeffs': c, 'vars': v}) for c, v in tuples]
         if len(ds_list) > 1:
@@ -510,24 +828,43 @@ class LinearExpression(Dataset):
 
 
     def group_terms(self, group):
+        """
+        Sum expression over groups.
+
+        The function works in the same manner as the xarray.Dataset.groupby
+        function, but automatically sums over all terms.
+
+        Parameters
+        ----------
+        group : DataArray or IndexVariable
+            Array whose unique values should be used to group the expressions.
+
+        Returns
+        -------
+        Grouped linear expression.
+
+        """
         groups = self.groupby(group)
         return groups.map(lambda ds: ds.sum(groups._group_dim))
 
 
     @property
     def nterm(self):
+        """Get the number of terms in the linear expression."""
         return len(self.term_)
 
     @property
     def shape(self):
+        """Get the total shape of the linear expression."""
         assert self.vars.shape == self.coeffs.shape
         return self.vars.shape
 
     @property
     def size(self):
+        """Get the total size of the linear expression."""
         assert self.vars.size == self.coeffs.size
         return self.vars.size
 
-
     def empty(self):
+        """Get whether the linear expression is empty."""
         return not bool(self)
