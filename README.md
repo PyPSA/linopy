@@ -30,13 +30,15 @@ pip install linopy
 
 ## Supported solvers
 
+**linopy** supports the following solvers
+
 * [Cbc](https://projects.coin-or.org/Cbc)
 * [GLPK](https://www.gnu.org/software/glpk/)
 * [Gurobi](https://www.gurobi.com/)
 * [Xpress](https://www.fico.com/en/products/fico-xpress-solver)
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
 
-
+Note that these do have to be installed by the user separately. 
 
 
 # License 
