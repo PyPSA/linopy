@@ -249,7 +249,7 @@ class Model:
         if (sign == '==').any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        broadcasted = (lhs.vars.chunk() + rhs).sum('term_')
+        broadcasted = (lhs.vars.chunk() + rhs).sum('_term')
 
         start = self._cCounter
         con = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
@@ -331,7 +331,7 @@ class Model:
         self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.where(keep_b)
         self.constraints_lhs_vars = self.constraints_lhs_vars.where(keep_b)
 
-        keep_b_con = keep_b.any(dim='term_')
+        keep_b_con = keep_b.any(dim='_term')
         self.constraints = self.constraints.where(keep_b_con)
         self.constraints_sign = self.constraints_sign.where(keep_b_con)
         self.constraints_rhs = self.constraints_rhs.where(keep_b_con)
@@ -542,13 +542,13 @@ class Variable(DataArray):
     Linear Expression with 2 term(s):
     ----------------------------------
 
-    Dimensions:  (dim_0: 2, term_: 2)
+    Dimensions:  (dim_0: 2, _term: 2)
     Coordinates:
         * dim_0    (dim_0) int64 0 1
-        * term_    (term_) int64 0 1
+        * _term    (_term) int64 0 1
     Data:
-        coeffs   (dim_0, term_) int64 1 1 1 1
-        vars     (dim_0, term_) int64 1 3 2 4
+        coeffs   (dim_0, _term) int64 1 1 1 1
+        vars     (dim_0, _term) int64 1 3 2 4
 
 
     Multiply them with a coefficient:
@@ -557,13 +557,13 @@ class Variable(DataArray):
     Linear Expression with 1 term(s):
     ----------------------------------
 
-    Dimensions:  (dim_0: 2, term_: 1)
+    Dimensions:  (dim_0: 2, _term: 1)
     Coordinates:
-        * term_    (term_) int64 0
+        * _term    (_term) int64 0
         * dim_0    (dim_0) int64 0 1
     Data:
-        coeffs   (dim_0, term_) int64 3 3
-        vars     (dim_0, term_) int64 1 2
+        coeffs   (dim_0, _term) int64 3 3
+        vars     (dim_0, _term) int64 1 2
 
 
     Further operations like taking the negative and substracting are supported.
@@ -665,12 +665,12 @@ class LinearExpression(Dataset):
     Linear Expression with 2 term(s):
     ----------------------------------
 
-    Dimensions:  (term_: 2)
+    Dimensions:  (_term: 2)
     Coordinates:
-        * term_    (term_) int64 0 1
+        * _term    (_term) int64 0 1
     Data:
-        coeffs   (term_) int64 3 3
-        vars     (term_) int64 1 2
+        coeffs   (_term) int64 3 3
+        vars     (_term) int64 1 2
 
 
     """
@@ -706,9 +706,9 @@ class LinearExpression(Dataset):
         if not isinstance(other, LinearExpression):
             raise TypeError("unsupported operand type(s) for +: "
                             f"{type(self)} and {type(other)}")
-        res = LinearExpression(xr.concat([self, other], dim='term_'))
-        if res.indexes['term_'].duplicated().any():
-            return res.assign_coords(term_=pd.RangeIndex(len(res.term_)))
+        res = LinearExpression(xr.concat([self, other], dim='_term'))
+        if res.indexes['_term'].duplicated().any():
+            return res.assign_coords(_term=pd.RangeIndex(len(res._term)))
         return res
 
     def __sub__(self, other):
@@ -720,9 +720,9 @@ class LinearExpression(Dataset):
         else:
             raise TypeError("unsupported operand type(s) for -: "
                             f"{type(self)} and {type(other)}")
-        res = LinearExpression(xr.concat([self, other], dim='term_'))
-        if res.indexes['term_'].duplicated().any():
-            return res.assign_coords(term_=pd.RangeIndex(len(res.term_)))
+        res = LinearExpression(xr.concat([self, other], dim='_term'))
+        if res.indexes['_term'].duplicated().any():
+            return res.assign_coords(_term=pd.RangeIndex(len(res._term)))
         return res
 
 
@@ -772,19 +772,19 @@ class LinearExpression(Dataset):
             dims = list(np.atleast_1d(dims))
         else:
             dims = [...]
-        if 'term_' in dims:
-            dims.remove('term_')
+        if '_term' in dims:
+            dims.remove('_term')
 
         stacked_term_dim = 'term_dim_'
         num = 0
-        while stacked_term_dim + str(num) in self.indexes['term_'].names:
+        while stacked_term_dim + str(num) in self.indexes['_term'].names:
             num += 1
         stacked_term_dim += str(num)
         dims.append(stacked_term_dim)
 
-        ds = self.rename(term_ = stacked_term_dim).stack(term_ = dims)
+        ds = self.rename(_term = stacked_term_dim).stack(_term = dims)
         if not keep_coords:
-            ds = ds.assign_coords(term_ = pd.RangeIndex(len(ds.term_)))
+            ds = ds.assign_coords(_term = pd.RangeIndex(len(ds._term)))
         return LinearExpression(ds)
 
 
@@ -821,9 +821,9 @@ class LinearExpression(Dataset):
         idx = pd.RangeIndex(len(tuples))
         ds_list = [Dataset({'coeffs': c, 'vars': v}) for c, v in tuples]
         if len(ds_list) > 1:
-            ds = xr.concat(ds_list, dim=pd.Index(idx, name='term_'))
+            ds = xr.concat(ds_list, dim=pd.Index(idx, name='_term'))
         else:
-            ds = ds_list[0].expand_dims(term_=idx)
+            ds = ds_list[0].expand_dims(_term=idx)
         return LinearExpression(ds)
 
 
@@ -851,7 +851,7 @@ class LinearExpression(Dataset):
     @property
     def nterm(self):
         """Get the number of terms in the linear expression."""
-        return len(self.term_)
+        return len(self._term)
 
     @property
     def shape(self):

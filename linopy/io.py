@@ -59,10 +59,10 @@ def constraints_to_file(m, f):
 
     nonnans = coef.notnull() & var.notnull()
     join = [to_float_str(coef), ' x', to_int_str(var), '\n']
-    lhs_str = join_str_arrays(join).where(nonnans, '').reduce(np.sum, 'term_')
+    lhs_str = join_str_arrays(join).where(nonnans, '').reduce(np.sum, '_term')
     # .sum() does not work
 
-    nonnans = (nonnans.any('term_') & con.notnull() &
+    nonnans = (nonnans.any('_term') & con.notnull() &
                sign.notnull() & rhs.notnull())
 
     join = ['c', to_int_str(con), ': \n', lhs_str, sign, '\n',
