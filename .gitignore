@@ -1,4 +1,5 @@
 .eggs
+.DS_Store
 linopy/__pycache__
 test/__pycache__
 linopy.egg-info

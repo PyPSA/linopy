@@ -7,7 +7,6 @@ Created on Wed Mar 17 17:06:36 2021
 """
 
 import xarray as xr
-import numpy as np
 import pandas as pd
 from xarray.testing import assert_equal
 from linopy import LinearExpression, Model
