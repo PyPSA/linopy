@@ -1,6 +1,6 @@
 # linopy: Linear optimization with N-D labeled variables
 
-![PyPI](https://img.shields.io/pypi/v/linopy) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/pythonapp.yml)  [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+![PyPI](https://img.shields.io/pypi/v/linopy) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 **linopy** is an open-source python package that facilitates **linear or mixed-integer optimisation** with **real world data**. It builds a bridge between data analysis packages like [xarray](https://github.com/pydata/xarray) & [pandas](https://pandas.pydata.org/) and linear problem solvers like [cbc](https://projects.coin-or.org/Cbc), [gurobi](https://www.gurobi.com/) (see the full list below). The project aims to make linear programming in python easy, highly-flexible and performant. 
 
