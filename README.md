@@ -45,4 +45,6 @@ Note that these do have to be installed by the user separately.
 
 Copyright 2021 Fabian Hofmann
 
-This package is published under license GNU Public License GPLv3.
+
+
+This package is published under license GNU Public License GPLv3

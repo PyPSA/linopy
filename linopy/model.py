@@ -55,10 +55,10 @@ class Model:
         linopy.Model
 
         """
-        self._xCounter = 1
-        self._cCounter = 1
-        self._varnameCounter = 1
-        self._connameCounter = 1
+        self._xCounter = 0
+        self._cCounter = 0
+        self._varnameCounter = 0
+        self._connameCounter = 0
 
         self.chunk = chunk
         self.status = 'initialized'
@@ -164,7 +164,6 @@ class Model:
             name:     x
 
         """
-
         if name is None:
             while 'var' + str(self._varnameCounter) in self.variables:
                 self._varnameCounter += 1
@@ -629,6 +628,50 @@ class Variable(DataArray):
             raise TypeError("unsupported operand type(s) for -: "
                             f"{type(self)} and {type(other)}")
 
+
+    def sum(self, dims=None, keep_coords=False):
+        """
+        Sum the variables over all or a subset of dimensions.
+
+        This stack all terms of the dimensions, that are summed over, together.
+        The function works exaclty in the same way as ``LinearExpression.sum()``.
+
+        Parameters
+        ----------
+        dims : str/list, optional
+            Dimension(s) to sum over. The default is None which results in all
+            dimensions.
+        keep_coords : bool, optional
+            Whether to keep the coordinates of the stacked dimensions in a
+            MultiIndex. The default is False.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            Summed expression.
+
+        """
+        return self.to_linexpr().sum(dims, keep_coords)
+
+
+    def group_terms(self, group):
+        """
+        Sum variables over groups.
+
+        The function works in the same manner as the xarray.Dataset.groupby
+        function, but automatically sums over all terms.
+
+        Parameters
+        ----------
+        group : DataArray or IndexVariable
+            Array whose unique values should be used to group the expressions.
+
+        Returns
+        -------
+        Grouped linear expression.
+
+        """
+        return self.to_linexpr().group_terms(group)
 
 
 class LinearExpression(Dataset):
