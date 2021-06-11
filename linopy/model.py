@@ -13,6 +13,7 @@ import logging
 from tempfile import mkstemp, gettempdir
 from xarray import DataArray, Dataset, merge
 from numpy import inf
+from typing import Callable
 
 from .io import to_file, to_netcdf
 from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
@@ -458,7 +459,6 @@ class Model:
             Optimized model.
 
         """
-
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, (
             f'Solver {solver_name} not installed')
@@ -726,12 +726,16 @@ class LinearExpression(Dataset):
             (dataset,) = xr.broadcast(dataset)
         super().__init__(dataset)
 
+    # We have to set the _reduce_method to None, in order to overwrite basic
+    # reduction functions as `sum`. There might be a better solution (?).
+    _reduce_method = None
 
     def __repr__(self):
         """Get the string represenation of the expression."""
         ds_string = self.to_dataset().__repr__().split('\n', 1)[1]
         ds_string = ds_string.replace('Data variables:\n', 'Data:\n')
-        return (f"Linear Expression with {self.nterm} term(s):\n"
+        nterm = getattr(self, 'nterm', 0)
+        return (f"Linear Expression with {nterm} term(s):\n"
                 f"----------------------------------\n\n{ds_string}")
 
     def _repr_html_(self):
@@ -789,7 +793,6 @@ class LinearExpression(Dataset):
         """Convert the expression to a xarray.Dataset."""
         return Dataset(self)
 
-
     def sum(self, dims=None, keep_coords=False):
         """
         Sum the expression over all or a subset of dimensions.
@@ -829,6 +832,7 @@ class LinearExpression(Dataset):
         if not keep_coords:
             ds = ds.assign_coords(_term = pd.RangeIndex(len(ds._term)))
         return LinearExpression(ds)
+
 
 
     def from_tuples(*tuples, chunk=None):
