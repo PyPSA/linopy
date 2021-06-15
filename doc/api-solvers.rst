@@ -1,4 +1,3 @@
 
 
 .. automodapi:: linopy.solvers
-

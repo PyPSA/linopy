@@ -6,29 +6,30 @@ Created on Wed Mar 17 17:06:36 2021
 @author: fabian
 """
 
-import xarray as xr
 import pandas as pd
+import xarray as xr
 from xarray.testing import assert_equal
-from linopy import LinearExpression, Model
 
+from linopy import LinearExpression, Model
 
 m = Model()
 
-x = m.add_variables(pd.Series([0,0]), 1, name='x')
-y = m.add_variables(4, pd.Series([8,10]), name='y')
-z = m.add_variables(0, pd.DataFrame([[1,2], [3,4], [5,6]]).T, name='z')
+x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+y = m.add_variables(4, pd.Series([8, 10]), name="y")
+z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
 
 
 def test_values():
-    expr = m.linexpr((10, 'x'), (1, 'y'))
-    target = xr.DataArray([[10, 10], [1, 1]],
-                          coords=(('_term', [0, 1]), ('dim_0', [0, 1])))
+    expr = m.linexpr((10, "x"), (1, "y"))
+    target = xr.DataArray(
+        [[10, 10], [1, 1]], coords=(("_term", [0, 1]), ("dim_0", [0, 1]))
+    )
     assert_equal(expr.coeffs, target)
 
 
 def test_duplicated_index():
-    expr = m.linexpr((10, 'x'), (-1, 'x'))
-    assert (expr._term == [0,1]).all()
+    expr = m.linexpr((10, "x"), (-1, "x"))
+    assert (expr._term == [0, 1]).all()
 
 
 def test_variable_to_linexpr():
@@ -39,29 +40,29 @@ def test_variable_to_linexpr():
 
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((10, 'x'), (1, 'y')))
+    assert_equal(expr, m.linexpr((10, "x"), (1, "y")))
 
     expr = x + 8 * y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, 'x'), (8, 'y')))
+    assert_equal(expr, m.linexpr((1, "x"), (8, "y")))
 
     expr = x + y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, 'x'), (1, 'y')))
+    assert_equal(expr, m.linexpr((1, "x"), (1, "y")))
 
     expr = x - y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, 'x'), (-1, 'y')))
+    assert_equal(expr, m.linexpr((1, "x"), (-1, "y")))
 
-    expr = -x - 8*y
+    expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((-1, 'x'), (-8, 'y')))
+    assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
 
 def test_term_labels():
     "Test that the _term dimension is named after the variables."
     expr = 10 * x + y
-    other = m.linexpr((2, 'y'), (1, 'z'))
+    other = m.linexpr((2, "y"), (1, "z"))
 
     assert (expr._term == [0, 1]).all()
     assert (other._term == [0, 1]).all()
@@ -73,8 +74,8 @@ def test_add():
     res = expr + other
 
     assert res.nterm == expr.nterm + other.nterm
-    assert (res.coords['dim_0'] == expr.coords['dim_0']).all()
-    assert (res.coords['dim_1'] == other.coords['dim_1']).all()
+    assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
+    assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.notnull().all().to_array().all()
 
 
@@ -84,14 +85,14 @@ def test_sub():
     res = expr - other
 
     assert res.nterm == expr.nterm + other.nterm
-    assert (res.coords['dim_0'] == expr.coords['dim_0']).all()
-    assert (res.coords['dim_1'] == other.coords['dim_1']).all()
+    assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
+    assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.notnull().all().to_array().all()
 
 
 def test_sum():
     expr = 10 * x + y + z
-    res = expr.sum('dim_0')
+    res = expr.sum("dim_0")
 
     assert res.size == expr.size
     assert res.nterm == expr.nterm * len(expr.dim_0)
@@ -104,7 +105,7 @@ def test_sum():
 
 def test_groupby():
     expr = 10 * x + y + z
-    group = xr.DataArray([1,1,2], dims='dim_1')
+    group = xr.DataArray([1, 1, 2], dims="dim_1")
     expr = expr.group_terms(group)
-    assert 'group' in expr.dims
+    assert "group" in expr.dims
     assert (expr.group == [1, 2]).all()
