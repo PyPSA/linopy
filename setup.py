@@ -38,7 +38,7 @@ setup(
     extras_require = {
         "docs": ["numpydoc", "sphinx-automodapi",
                  "sphinx", "sphinx_rtd_theme",
-                 "nbsphinx", "npbshinx-link"]
+                 "nbsphinx", "nbsphinx-link"]
     },
     classifiers=[
         'Development Status :: 3 - Alpha',
