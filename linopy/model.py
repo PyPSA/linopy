@@ -734,10 +734,12 @@ class LinearExpression(Dataset):
     linopy.model.LinearExpression
 
     Multiplying:
+
     >>> type(3 * expr)
     linopy.model.LinearExpression
 
     Summation over dimensions
+
     >>> expr.sum(dim="dim_0")
 
     ::
