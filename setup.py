@@ -37,7 +37,8 @@ setup(
                       'dask>=0.18.0'],
     extras_require = {
         "docs": ["numpydoc", "sphinx-automodapi",
-                 "sphinx", "sphinx_rtd_theme", "nbsphinx"]
+                 "sphinx", "sphinx_rtd_theme",
+                 "nbsphinx", "npbshinx-link"]
     },
     classifiers=[
         'Development Status :: 3 - Alpha',
