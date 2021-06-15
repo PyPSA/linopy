@@ -12,7 +12,7 @@ jobs:
        - uses: actions/setup-python@v2
        - uses: casperdcl/deploy-pypi@v2
          with:
-           username: ${{ secrets.PYPI_USERNAME }}
+           user: ${{ secrets.PYPI_USERNAME }}
            password: ${{ secrets.PYPI_TOKEN }}
            pip: wheel -w dist/ --no-deps .
            # only upload if a tag is pushed (otherwise just build & check)
