@@ -8,3 +8,5 @@ examples/.ipynb_checkpoints/
 linopy/version.py
 dist/
 build/
+doc/_build
+doc/api

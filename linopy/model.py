@@ -13,7 +13,6 @@ import logging
 from tempfile import mkstemp, gettempdir
 from xarray import DataArray, Dataset, merge
 from numpy import inf
-from typing import Callable
 
 from .io import to_file, to_netcdf
 from .solvers import (run_cbc, run_gurobi, run_glpk, run_cplex, run_xpress,
@@ -154,15 +153,18 @@ class Model:
         >>> m = linopy.Model()
         >>> time = pd.RangeIndex(10, name='Time')
         >>> m.add_variables(lower=0, coords=[time], name='x')
-        Variable container:
-        -------------------
 
-        Variables:
-        array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])
-        Coordinates:
-            * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
-        Attributes:
-            name:     x
+        ::
+
+            Variable container:
+            -------------------
+
+            Variables:
+            array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])
+            Coordinates:
+                * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
+            Attributes:
+                name:     x
 
         """
         if name is None:
@@ -372,9 +374,10 @@ class Model:
 
         Parameters
         ----------
-        *tuples : tuples of (coefficients, variables)
+        tuples : tuples of (coefficients, variables)
             Each tuple represents on term in the linear expression, which can
             span over multiple dimensions:
+
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
                 contains dimensions which do not appear in
@@ -538,31 +541,37 @@ class Variable(DataArray):
     Add variable together:
 
     >>> x + y
-    Linear Expression with 2 term(s):
-    ----------------------------------
 
-    Dimensions:  (dim_0: 2, _term: 2)
-    Coordinates:
-        * dim_0    (dim_0) int64 0 1
-        * _term    (_term) int64 0 1
-    Data:
-        coeffs   (dim_0, _term) int64 1 1 1 1
-        vars     (dim_0, _term) int64 1 3 2 4
+    ::
+
+        Linear Expression with 2 term(s):
+        ----------------------------------
+
+        Dimensions:  (dim_0: 2, _term: 2)
+        Coordinates:
+            * dim_0    (dim_0) int64 0 1
+            * _term    (_term) int64 0 1
+        Data:
+            coeffs   (dim_0, _term) int64 1 1 1 1
+            vars     (dim_0, _term) int64 1 3 2 4
 
 
     Multiply them with a coefficient:
 
     >>> 3 * x
-    Linear Expression with 1 term(s):
-    ----------------------------------
 
-    Dimensions:  (dim_0: 2, _term: 1)
-    Coordinates:
-        * _term    (_term) int64 0
-        * dim_0    (dim_0) int64 0 1
-    Data:
-        coeffs   (dim_0, _term) int64 3 3
-        vars     (dim_0, _term) int64 1 2
+    ::
+
+        Linear Expression with 1 term(s):
+        ----------------------------------
+
+        Dimensions:  (dim_0: 2, _term: 1)
+        Coordinates:
+            * _term    (_term) int64 0
+            * dim_0    (dim_0) int64 0 1
+        Data:
+            coeffs   (dim_0, _term) int64 3 3
+            vars     (dim_0, _term) int64 1 2
 
 
     Further operations like taking the negative and substracting are supported.
@@ -705,16 +714,18 @@ class LinearExpression(Dataset):
 
     Summation over dimensions
     >>> expr.sum(dim='dim_0')
-    Linear Expression with 2 term(s):
-    ----------------------------------
 
-    Dimensions:  (_term: 2)
-    Coordinates:
-        * _term    (_term) int64 0 1
-    Data:
-        coeffs   (_term) int64 3 3
-        vars     (_term) int64 1 2
+    ::
 
+        Linear Expression with 2 term(s):
+        ----------------------------------
+
+        Dimensions:  (_term: 2)
+        Coordinates:
+            * _term    (_term) int64 0 1
+        Data:
+            coeffs   (_term) int64 3 3
+            vars     (_term) int64 1 2
 
     """
 
@@ -841,9 +852,10 @@ class LinearExpression(Dataset):
 
         Parameters
         ----------
-        *tuples : tuples of (coefficients, variables)
+        tuples : tuples of (coefficients, variables)
             Each tuple represents on term in the resulting linear expression,
             which can possibly span over multiple dimensions:
+
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
                 contains dimensions which do not appear in

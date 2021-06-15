@@ -15,12 +15,6 @@ if sub.run(['which', 'cbc'], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append('cbc')
 
 try:
-    sub.run('cbc', stdout=sub.DEVNULL)
-    available_solvers.append('cbc')
-except FileNotFoundError:
-    None
-
-try:
     import gurobipy
     available_solvers.append('gurobi')
 except ModuleNotFoundError:
@@ -265,7 +259,7 @@ def run_gurobi(problem_fn, log_fn, solution_fn=None, warmstart_fn=None,
     solver. If the solution is sucessful it returns variable solutions and
     constraint dual values. Gurobipy must be installed for using this function
     For more information on solver options:
-    https://www.gurobi.com/documentation/{gurobi_verion}/refman/parameter_descriptions.html
+    https://www.gurobi.com/documentation/{gurobi_version}/refman/parameter_descriptions.html
     """
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
