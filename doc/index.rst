@@ -28,7 +28,7 @@ flexible data-handling features:
 -  Define (arrays of) contnuous or binary variables with
    **coordinates**, e.g. time, consumers, etc.
 -  Apply **arithmetic operations** on the variables like adding,
-   substracting, multiplying with all the **broadcasting** potentials of
+   subtracting, multiplying with all the **broadcasting** potentials of
    xarray
 -  Apply **arithmetic operations** on the **linear expressions**
    (combination of variables)
@@ -77,8 +77,8 @@ This package is published under license GNU Public License GPLv3
 .. |License: GPL v3| image:: https://img.shields.io/badge/License-GPLv3-blue.svg
    :target: https://www.gnu.org/licenses/gpl-3.0
 
-   
-   
+
+
 .. toctree::
    :hidden:
    :maxdepth: 2
