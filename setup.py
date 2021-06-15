@@ -36,7 +36,7 @@ setup(
                       'xarray>=0.16',
                       'dask>=0.18.0'],
     extras_require = {
-        "docs": ["numpydoc", "automodapi",
+        "docs": ["numpydoc", "sphinx-automodapi",
                  "sphinx", "sphinx_rtd_theme", "nbsphinx"]
     },
     classifiers=[
