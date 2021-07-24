@@ -15,14 +15,8 @@ from numpy import inf
 from xarray import DataArray, Dataset, merge
 
 from .io import to_file, to_netcdf
-from .solvers import (
-    available_solvers,
-    run_cbc,
-    run_cplex,
-    run_glpk,
-    run_gurobi,
-    run_xpress,
-)
+from .solvers import available_solvers
+from . import solvers
 
 logger = logging.getLogger(__name__)
 
@@ -494,7 +488,7 @@ class Model:
 
         try:
             self.to_file(problem_fn)
-            solve = eval(f"run_{solver_name}")
+            solve = getattr(solvers, f"run_{solver_name}")
             res = solve(
                 problem_fn,
                 log_fn,
