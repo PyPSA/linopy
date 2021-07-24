@@ -34,8 +34,11 @@ def join_str_arrays(arraylist):
 
 def str_array_to_file(array, fn):
     """Elementwise writing out string values to a file."""
+    # TODO try to find out if we are possibly creating race conditions here!!!
+    # the writing order of each chunk might be random if called from multiple
+    # processes
     return xr.apply_ufunc(
-        lambda x: fn.write(x),
+        fn.write,
         array,
         dask="parallelized",
         vectorize=True,
@@ -195,6 +198,7 @@ def read_netcdf(path, **kwargs):
         setattr(m, attr, ds)
     m.objective = LinearExpression(m.objective)
 
+    # TODO : Should either be all_ds or inside the loop, hard to judge for me
     for k in all_obj_attrs:
         setattr(m, k, ds.attrs.pop(k))
 
