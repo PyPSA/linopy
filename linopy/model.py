@@ -6,7 +6,7 @@ This module contains frontend implementations of the package.
 
 import logging
 import os
-from tempfile import gettempdir, mkstemp
+from tempfile import NamedTemporaryFile, gettempdir
 
 import numpy as np
 import pandas as pd
@@ -478,11 +478,13 @@ class Model:
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
-        tmp_kwargs = dict(text=True, dir=self.solver_dir)
+        tmp_kwargs = dict(mode="w", delete=False, dir=self.solver_dir)
         if problem_fn is None:
-            fds, problem_fn = mkstemp(".lp", "linopy-problem-", **tmp_kwargs)
+            with NamedTemporaryFile(suffix=".lp", prefix="linopy-problem-", **tmp_kwargs) as f:
+                problem_fn = f.name
         if solution_fn is None:
-            fds, solution_fn = mkstemp(".sol", "linopy-solve-", **tmp_kwargs)
+            with NamedTemporaryFile(suffix=".sol", prefix="linopy-solve-", **tmp_kwargs) as f:
+                solution_fn = f.name
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
 
