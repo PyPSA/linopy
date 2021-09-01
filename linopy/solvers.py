@@ -23,7 +23,7 @@ try:
 
     available_solvers.append("gurobi")
 except ModuleNotFoundError:
-    None
+    pass
 
 
 try:
@@ -31,14 +31,14 @@ try:
 
     available_solvers.append("cplex")
 except ModuleNotFoundError:
-    None
+    pass
 
 try:
     import xpress
 
     available_solvers.append("xpress")
 except ModuleNotFoundError:
-    None
+    pass
 
 logger = logging.getLogger(__name__)
 
