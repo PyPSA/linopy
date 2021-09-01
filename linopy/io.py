@@ -198,8 +198,7 @@ def read_netcdf(path, **kwargs):
         setattr(m, attr, ds)
     m.objective = LinearExpression(m.objective)
 
-    # TODO : Should either be all_ds or inside the loop, hard to judge for me
     for k in all_obj_attrs:
-        setattr(m, k, ds.attrs.pop(k))
+        setattr(m, k, all_ds.attrs.pop(k))
 
     return m
