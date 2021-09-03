@@ -519,11 +519,11 @@ class Model:
             logger.info(f" Optimization successful. Objective value: {obj:.2e}")
         elif status == "warning" and termination_condition == "suboptimal":
             logger.warning(
-                " Optimization solution is sub-optimal. " "Objective value: {obj:.2e}"
+                f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
             )
         else:
             logger.warning(
-                f" Optimization failed with status {status} and "
+                f"Optimization failed with status {status} and "
                 f"termination condition {termination_condition}"
             )
             return status, termination_condition
@@ -544,7 +544,7 @@ class Model:
             du = res["dual"][idx].values.reshape(self.constraints[c].shape)
             self.dual[c] = xr.DataArray(du, self.constraints[c].coords)
 
-        return self
+        return status, termination_condition
 
     to_netcdf = to_netcdf
 
