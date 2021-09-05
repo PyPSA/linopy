@@ -1,12 +1,11 @@
-from typing import Optional, Union, Sequence
 from dataclasses import dataclass
+from typing import Optional, Sequence, Union
 
 import numpy as np
-from xarray import Dataset, DataArray
 from scipy.sparse import csr_matrix, vstack
+from xarray import DataArray, Dataset
 
 from .model import Model
-
 
 # Methods to convert a full model into a vector and sparse matrix representation
 # (that's basically the original playground makes sense to understand, especially the
@@ -194,7 +193,7 @@ class Constraints:
     def __getitem__(
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
-        if isinstance(str, names):
+        if isinstance(names, str):
             return Constraint(
                 names,
                 self.defs[names],

@@ -22,7 +22,7 @@ z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
 def test_values():
     expr = m.linexpr((10, "x"), (1, "y"))
     target = xr.DataArray(
-        [[10, 1], [10, 1]], coords=(("dim_0", [0, 1]), ("_term", [0, 1]))
+        [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", "_term"]
     )
     assert_equal(expr.coeffs, target)
 
@@ -106,6 +106,6 @@ def test_sum():
 def test_groupby():
     expr = 10 * x + y + z
     group = xr.DataArray([1, 1, 2], dims="dim_1")
-    expr = expr.group_terms(group)
+    expr = expr.groupby(group).sum()
     assert "group" in expr.dims
     assert (expr.group == [1, 2]).all()
