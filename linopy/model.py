@@ -762,6 +762,7 @@ class LinearExpression(Dataset):
         if dataset is not None:
             assert set(dataset) == {"coeffs", "vars"}
             (dataset,) = xr.broadcast(dataset)
+            dataset = dataset.transpose(..., "_term")
         super().__init__(dataset)
 
     # We have to set the _reduce_method to None, in order to overwrite basic
