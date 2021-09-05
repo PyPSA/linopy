@@ -14,9 +14,9 @@ import xarray as xr
 from numpy import inf
 from xarray import DataArray, Dataset, merge
 
+from . import solvers
 from .io import to_file, to_netcdf
 from .solvers import available_solvers
-from . import solvers
 
 logger = logging.getLogger(__name__)
 
@@ -479,10 +479,14 @@ class Model:
 
         tmp_kwargs = dict(mode="w", delete=False, dir=self.solver_dir)
         if problem_fn is None:
-            with NamedTemporaryFile(suffix=".lp", prefix="linopy-problem-", **tmp_kwargs) as f:
+            with NamedTemporaryFile(
+                suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
+            ) as f:
                 problem_fn = f.name
         if solution_fn is None:
-            with NamedTemporaryFile(suffix=".sol", prefix="linopy-solve-", **tmp_kwargs) as f:
+            with NamedTemporaryFile(
+                suffix=".sol", prefix="linopy-solve-", **tmp_kwargs
+            ) as f:
                 solution_fn = f.name
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
@@ -758,6 +762,9 @@ class LinearExpression(Dataset):
             assert set(dataset) == {"coeffs", "vars"}
             (dataset,) = xr.broadcast(dataset)
             dataset = dataset.transpose(..., "_term")
+        else:
+            dataset = xr.Dataset({"coeffs": DataArray([]), "vars": DataArray([])})
+            dataset = dataset.assign_coords(_term=[])
         super().__init__(dataset)
 
     # We have to set the _reduce_method to None, in order to overwrite basic
@@ -850,8 +857,7 @@ class LinearExpression(Dataset):
             dims.remove("_term")
 
         ds = (
-            self
-            .rename(_term="_stacked_term")
+            self.rename(_term="_stacked_term")
             .stack(_term=["_stacked_term"] + dims)
             .reset_index("_term", drop=True)
         )
@@ -895,6 +901,7 @@ class LinearExpression(Dataset):
             ds = ds_list[0].expand_dims("_term")
         return LinearExpression(ds)
 
+    # TODO: remove since covered by expr.groupby(...).sum()
     def group_terms(self, group):
         """
         Sum expression over groups.
@@ -934,4 +941,4 @@ class LinearExpression(Dataset):
 
     def empty(self):
         """Get whether the linear expression is empty."""
-        return not bool(self)
+        return self.shape == (0,)

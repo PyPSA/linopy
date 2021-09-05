@@ -159,4 +159,4 @@ def test_remove_variable():
     assert "x" not in m.variables_lower_bound
     assert "x" not in m.variables_upper_bound
 
-    assert 1 not in m.constraints_lhs_vars.con0
+    assert "con0" not in m.constraints_lhs_vars
