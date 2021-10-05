@@ -40,6 +40,7 @@ setup(
     ],
     extras_require={
         "docs": [
+            "ipython",
             "numpydoc",
             "sphinx-automodapi",
             "sphinx",
