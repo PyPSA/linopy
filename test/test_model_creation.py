@@ -83,7 +83,7 @@ def test_add_variables_shape():
     assert m.variables.var9.shape == (20, 10)
     # var8 should now be aligned to new coords and contain 100 nans
     assert m.variables.var8.shape == (20, 10)
-    assert m.variables.var8.notnull().sum() == 100
+    assert (m.variables.var8 != -1).sum() == 100
 
     # setting with scalar and list
     with pytest.raises(ValueError):
@@ -92,6 +92,31 @@ def test_add_variables_shape():
     # repeated variable assignment is forbidden
     with pytest.raises(AssertionError):
         m.add_variables(lower, upper, name="var8")
+
+
+def test_masked_variables():
+    m = Model()
+
+    lower = pd.DataFrame(np.zeros((10, 10)))
+    upper = pd.Series(np.ones((10)))
+    mask = [True] * 5 + [False] * 5
+    m.add_variables(lower, upper, mask=mask)
+    assert m.variables.var0[-1, -1].item() == -1
+
+
+def test_variable_merging():
+    """
+    Test the merger of a variables with same dimension name but with
+    different lengths. Missing values should be filled up with -1.
+    """
+    m = Model()
+
+    upper = pd.Series(np.ones((10)))
+    m.add_variables(upper)
+
+    upper = pd.Series(np.ones((12)))
+    m.add_variables(upper)
+    assert m.variables.var0[-1].item() == -1
 
 
 def test_linexpr():
@@ -123,6 +148,20 @@ def test_constraints():
     assert m.constraints_lhs_coeffs.con0.dtype in (int, float)
     assert m.constraints_lhs_vars.con0.dtype in (int, float)
     assert m.constraints_rhs.con0.dtype in (int, float)
+
+
+def test_masked_constraints():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+
+    mask = [True] * 5 + [False] * 5
+    m.add_constraints(1 * x + 10 * y, "=", 0, mask=mask)
+    assert (m.constraints.con0[:, 0:5] != -1).all()
+    assert (m.constraints.con0[:, 5:10] == -1).all()
 
 
 def test_objective():

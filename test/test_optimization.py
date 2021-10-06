@@ -62,6 +62,46 @@ def test_xpress():
     assert np.isclose(m.objective_value, 3.3)
 
 
+@pytest.mark.skipif("cplex" not in available_solvers, reason="Solver not available")
+def test_masked_variables_with_cplex():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    mask = [True] * 8 + [False, False]
+    y = m.add_variables(lower, name="y", mask=mask)
+
+    m.add_constraints(x + y, ">=", 10)
+
+    m.add_objective(2 * x + y)
+
+    m.solve("cbc")
+    assert m.solution.y[-2:].isnull().all()
+    assert m.solution.y[:-2].notnull().all()
+    assert m.solution.x.notnull().all()
+    assert (m.solution.x[-2:] == 10).all()
+
+
+@pytest.mark.skipif("cplex" not in available_solvers, reason="Solver not available")
+def test_masked_constraints_with_cplex():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    mask = [True] * 8 + [False, False]
+    m.add_constraints(x + y, ">=", 10, mask=mask)
+    # for the last two entries only the following constraint will be active
+    m.add_constraints(x + y, ">=", 5)
+
+    m.add_objective(2 * x + y)
+
+    m.solve("cbc")
+    assert (m.solution.y[:-2] == 10).all()
+    assert (m.solution.y[-2:] == 5).all()
+
+
 def init_model_large():
     m = Model()
     time = pd.Index(range(10), name="time")
@@ -70,12 +110,12 @@ def init_model_large():
     y = m.add_variables(name="y", lower=0, coords=[time])
     factor = pd.Series(time, index=time)
 
-    m.add_constraints("Constraint1", 3 * x + 7 * y, ">=", 10 * factor)
-    m.add_constraints("Constraint2", 5 * x + 2 * y, ">=", 3 * factor)
+    m.add_constraints(3 * x + 7 * y, ">=", 10 * factor, name="Constraint1")
+    m.add_constraints(5 * x + 2 * y, ">=", 3 * factor, name="Constraint2")
 
     shifted = (1 * x).shift(time=1)
     lhs = (x - shifted).sel(time=time[1:])
-    m.add_constraints("Limited growth", lhs, "<=", 0.2)
+    m.add_constraints(lhs, "<=", 0.2, "Limited growth")
 
     m.add_objective((x + 2 * y).sum())
     m.solve()
