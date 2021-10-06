@@ -59,15 +59,6 @@ def test_variable_to_linexpr():
     assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
 
-def test_term_labels():
-    "Test that the _term dimension is named after the variables."
-    expr = 10 * x + y
-    other = m.linexpr((2, "y"), (1, "z"))
-
-    assert (expr._term == [0, 1]).all()
-    assert (other._term == [0, 1]).all()
-
-
 def test_add():
     expr = 10 * x + y
     other = 2 * y + z

@@ -4,7 +4,7 @@
 import logging
 import os
 import time
-from functools import reduce, partial
+from functools import partial, reduce
 
 import numpy as np
 import xarray as xr
@@ -49,7 +49,7 @@ def objective_to_file(m, f):
     coef = m.objective.coeffs
     var = m.objective.vars
 
-    nonnans = coef.notnull() & var.notnull()
+    nonnans = coef.notnull() & (var != -1)
     join = [to_float_str(coef), " x", to_int_str(var), "\n"]
     objective_str = join_str_arrays(join).where(nonnans, "")
     str_array_to_file(objective_str, f).compute()
@@ -66,12 +66,12 @@ def constraints_to_file(m, f):
 
     term_names = [f"{n}_term" for n in con]
 
-    nonnans = coef.notnull() & var.notnull()
+    nonnans = coef.notnull() & (var != -1)
     join = [to_float_str(coef), " x", to_int_str(var), "\n"]
     lhs_str = join_str_arrays(join).where(nonnans, "").reduce(np.sum, term_names)
     # .sum() does not work
 
-    nonnans = nonnans.any(term_names) & con.notnull() & sign.notnull() & rhs.notnull()
+    nonnans = nonnans.any(term_names) & (con != -1) & sign.notnull() & rhs.notnull()
 
     join = [
         "c",
@@ -94,7 +94,7 @@ def bounds_to_file(m, f):
     v = m.variables
     ub = m.variables_upper_bound
 
-    nonnans = lb.notnull() & v.notnull() & ub.notnull()
+    nonnans = lb.notnull() & ub.notnull() & (v != -1)
     join = [to_float_str(lb), " <= x", to_int_str(v), " <= ", to_float_str(ub), "\n"]
     bounds_str = join_str_arrays(join).where(nonnans, "")
     str_array_to_file(bounds_str, f).compute()

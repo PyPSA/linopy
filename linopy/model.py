@@ -102,17 +102,17 @@ class Model:
         """Get a model variable by the name."""
         return Variable(self.variables[key])
 
-    def _merge_inplace(self, attr, da, name):
+    def _merge_inplace(self, attr, da, name, **kwargs):
         """
         Assign a new variable to the dataset `attr` by merging.
 
         This takes care of all coordinate alignments, instead of a direct
         assignment like self.variables[name] = var
         """
-        ds = merge([getattr(self, attr), da.to_dataset(name=name)])
+        ds = merge([getattr(self, attr), da.to_dataset(name=name)], **kwargs)
         setattr(self, attr, ds)
 
-    def add_variables(self, lower=-inf, upper=inf, coords=None, name=None):
+    def add_variables(self, lower=-inf, upper=inf, coords=None, name=None, mask=None):
         """
         Assign a new, possibly multi-dimensional array of variables to the model.
 
@@ -135,6 +135,10 @@ class Model:
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
+        mask : array_like, optional
+            Boolean mask with False values for variables which are skipped.
+            The shape of the mask has to match the shape the added variables.
+            Default is None.
 
         Raises
         ------
@@ -195,18 +199,21 @@ class Model:
         var = xr.DataArray(var, coords=broadcasted.coords)
         var = var.assign_attrs(name=name)
 
+        if mask is not None:
+            var = var.where(mask, -1)
+
         if self.chunk:
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
             var = var.chunk(self.chunk)
 
-        self._merge_inplace("variables", var, name)
+        self._merge_inplace("variables", var, name, fill_value=-1)
         self._merge_inplace("variables_lower_bound", lower, name)
         self._merge_inplace("variables_upper_bound", upper, name)
 
         return Variable(var)
 
-    def add_constraints(self, lhs, sign, rhs, name=None):
+    def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
         Assign a new, possibly multi-dimensional array of constraints to the model.
 
@@ -226,6 +233,10 @@ class Model:
         name : str, optional
             Reference name of the added constraints. The default None results
             results a name like "con1", "con2" etc.
+        mask : array_like, optional
+            Boolean mask with False values for variables which are skipped.
+            The shape of the mask has to match the shape the added variables.
+            Default is None.
 
 
         Returns
@@ -259,6 +270,9 @@ class Model:
         con = DataArray(con, coords=broadcasted.coords)
         con = con.assign_attrs(name=name)
 
+        if mask is not None:
+            con = con.where(mask, -1)
+
         lhs = lhs.rename({"_term": f"{name}_term"})
 
         if self.chunk:
@@ -268,7 +282,7 @@ class Model:
             con = con.chunk(self.chunk)
 
         # assign everything
-        self._merge_inplace("constraints", con, name)
+        self._merge_inplace("constraints", con, name, fill_value=-1)
         self._merge_inplace("constraints_lhs_coeffs", lhs.coeffs, name)
         self._merge_inplace("constraints_lhs_vars", lhs.vars, name)
         self._merge_inplace("constraints_sign", sign, name)
@@ -531,13 +545,13 @@ class Model:
         self.solver_model = res.pop("model", None)
         self.status = termination_condition
 
-        res["solution"].loc[np.nan] = np.nan
+        res["solution"].loc[-1] = np.nan
         for v in self.variables:
             idx = np.ravel(self.variables[v])
             sol = res["solution"][idx].values.reshape(self.variables[v].shape)
             self.solution[v] = xr.DataArray(sol, self.variables[v].coords)
 
-        res["dual"].loc[np.nan] = np.nan
+        res["dual"].loc[-1] = np.nan
         for c in self.constraints:
             idx = np.ravel(self.constraints[c])
             du = res["dual"][idx].values.reshape(self.constraints[c].shape)
