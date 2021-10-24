@@ -79,6 +79,12 @@ html_theme_options = {
 
 # These folders are copied to the documentation's HTML output
 html_static_path = ["_static"]
+html_logo = "logo.png"
+html_theme_options = {
+    "logo_only": True,
+    "display_version": False,
+}
+
 
 # These paths are either relative to html_static_path
 # or fully qualified paths (eg. https://...)
