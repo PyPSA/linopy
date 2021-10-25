@@ -21,6 +21,16 @@ from .solvers import available_solvers
 logger = logging.getLogger(__name__)
 
 
+var_attrs = [f"variables{s}" for s in ["", "_lower_bound", "_upper_bound"]]
+con_attrs = [
+    f"constraints{s}" for s in ["", "_lhs_coeffs", "_lhs_vars", "_sign", "_rhs"]
+]
+array_attrs = (
+    var_attrs + con_attrs + ["binaries", "solution", "dual", "objective", "parameter"]
+)
+obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
+
+
 class Model:
     """
     Linear optimization model.
@@ -63,24 +73,12 @@ class Model:
 
         self.chunk = chunk
         self.status = "initialized"
-        self.objective_value = None
+        self.objective_value = np.nan
 
-        self.variables = Dataset()
-        self.variables_lower_bound = Dataset()
-        self.variables_upper_bound = Dataset()
-
-        self.binaries = Dataset()
-
-        self.constraints = Dataset()
-        self.constraints_lhs_coeffs = Dataset()
-        self.constraints_lhs_vars = Dataset()
-        self.constraints_sign = Dataset()
-        self.constraints_rhs = Dataset()
+        for attr in array_attrs:
+            setattr(self, attr, Dataset())
 
         self.objective = LinearExpression()
-
-        self.solution = Dataset()
-        self.dual = Dataset()
 
         if solver_dir is None:
             self.solver_dir = gettempdir()
@@ -339,17 +337,13 @@ class Model:
 
         """
         labels = self.variables[name]
-        self.variables = self.variables.drop_vars(name)
-        self.variables_lower_bound = self.variables_lower_bound.drop_vars(name)
-        self.variables_upper_bound = self.variables_upper_bound.drop_vars(name)
+        for attr in var_attrs:
+            setattr(self, attr, getattr(self, attr).drop_vars(name))
 
         remove_b = self.constraints_lhs_vars.isin(labels).any()
         names = [name for name, remove in remove_b.items() if remove.item()]
-        self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.drop_vars(names)
-        self.constraints_lhs_vars = self.constraints_lhs_vars.drop_vars(names)
-        self.constraints = self.constraints.drop_vars(names)
-        self.constraints_sign = self.constraints_sign.drop_vars(names)
-        self.constraints_rhs = self.constraints_rhs.drop_vars(names)
+        for attr in con_attrs:
+            setattr(self, attr, getattr(self, attr).drop_vars(names))
 
         self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
 
@@ -368,11 +362,8 @@ class Model:
         None.
 
         """
-        self.constraints = self.constraints.drop_vars(name)
-        self.constraints_lhs_coeffs = self.constraints_lhs_coeffs.drop_vars(name)
-        self.constraints_lhs_vars = self.constraints_lhs_vars.drop_vars(name)
-        self.constraints_sign = self.constraints_sign.drop_vars(name)
-        self.constraints_rhs = self.constraints_rhs.drop_vars(name)
+        for attr in con_attrs:
+            setattr(self, attr, getattr(self, attr).drop_vars(name))
 
     def linexpr(self, *tuples):
         """
@@ -700,25 +691,6 @@ class Variable(DataArray):
 
         """
         return self.to_linexpr().sum(dims, keep_coords)
-
-    def group_terms(self, group):
-        """
-        Sum variables over groups.
-
-        The function works in the same manner as the xarray.Dataset.groupby
-        function, but automatically sums over all terms.
-
-        Parameters
-        ----------
-        group : DataArray or IndexVariable
-            Array whose unique values should be used to group the expressions.
-
-        Returns
-        -------
-        Grouped linear expression.
-
-        """
-        return self.to_linexpr().group_terms(group)
 
 
 class LinearExpression(Dataset):

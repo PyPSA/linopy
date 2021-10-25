@@ -13,7 +13,8 @@ import xarray as xr
 from xarray.testing import assert_allclose, assert_equal
 
 from linopy import LinearExpression, Model, available_solvers, read_netcdf
-from linopy.io import all_ds_attrs, all_obj_attrs, to_int_str
+from linopy.io import to_int_str
+from linopy.model import array_attrs, obj_attrs
 
 
 def test_str_arrays():
@@ -48,6 +49,25 @@ def test_str_arrays_with_nans():
     assert da.dtype == object
 
 
+@pytest.fixture(scope="session")
+def test_to_netcdf():
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]))
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
+    m.add_constraints(x + y, "<=", 10)
+    m.add_objective(2 * x + 3 * y)
+
+    m.to_netcdf("test.nc")
+    p = read_netcdf("test.nc")
+
+    for k in obj_attrs:
+        if k != "objective_value":
+            assert getattr(m, k) == getattr(p, k)
+    for k in array_attrs:
+        assert_equal(getattr(m, k), getattr(p, k))
+
+
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not available")
 @pytest.fixture(scope="session")
 def test_to_file():
@@ -64,21 +84,3 @@ def test_to_file():
     m.to_file("test.lp")
 
     gm = gurobi.read("test.lp")
-
-
-@pytest.fixture(scope="session")
-def test_to_file():
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-    m.add_constraints(x + y, "<=", 10)
-    m.add_objective(2 * x + 3 * y)
-
-    m.to_netcdf("test.nc")
-    p = read_netcdf("test.nc")
-
-    for k in all_obj_attrs:
-        assert getattr(m, k) == getattr(p, k)
-    for k in all_ds_attrs:
-        assert_equal(getattr(m, k), getattr(p, k))

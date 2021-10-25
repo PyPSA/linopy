@@ -126,23 +126,6 @@ def to_file(m, fn):
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
-all_ds_attrs = [
-    "variables",
-    "variables_lower_bound",
-    "variables_upper_bound",
-    "binaries",
-    "constraints",
-    "constraints_lhs_coeffs",
-    "constraints_lhs_vars",
-    "constraints_sign",
-    "constraints_rhs",
-    "solution",
-    "dual",
-    "objective",
-]
-all_obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
-
-
 def to_netcdf(m, *args, **kwargs):
     """
     Write out the model to a netcdf file.
@@ -157,13 +140,14 @@ def to_netcdf(m, *args, **kwargs):
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
     """
+    from .model import array_attrs, obj_attrs  # avoid cyclic imports
 
     def get_and_rename(m, attr):
         ds = getattr(m, attr)
         return ds.rename({v: attr + "-" + v for v in ds})
 
-    ds = xr.merge([get_and_rename(m, d) for d in all_ds_attrs])
-    ds = ds.assign_attrs({k: getattr(m, k) for k in all_obj_attrs})
+    ds = xr.merge([get_and_rename(m, d) for d in array_attrs])
+    ds = ds.assign_attrs({k: getattr(m, k) for k in obj_attrs})
 
     ds.to_netcdf(*args, **kwargs)
 
@@ -184,18 +168,23 @@ def read_netcdf(path, **kwargs):
     m : linopy.Model
 
     """
-    from .model import LinearExpression, Model  # avoid cyclic imports
+    from .model import (  # avoid cyclic imports
+        LinearExpression,
+        Model,
+        array_attrs,
+        obj_attrs,
+    )
 
     m = Model()
     all_ds = xr.load_dataset(path, **kwargs)
 
-    for attr in all_ds_attrs:
+    for attr in array_attrs:
         keys = [k for k in all_ds if k.startswith(attr + "-")]
         ds = all_ds[keys].rename({k: k[len(attr) + 1 :] for k in keys})
         setattr(m, attr, ds)
     m.objective = LinearExpression(m.objective)
 
-    for k in all_obj_attrs:
+    for k in obj_attrs:
         setattr(m, k, ds.attrs.pop(k))
 
     return m
