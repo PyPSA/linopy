@@ -90,9 +90,9 @@ def constraints_to_file(m, f):
 def bounds_to_file(m, f):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
-    lb = m.variables_lower_bound
-    v = m.variables
-    ub = m.variables_upper_bound
+    lb = m.variables_lower_bound[m._non_binary_variables]
+    v = m.variables[m._non_binary_variables]
+    ub = m.variables_upper_bound[m._non_binary_variables]
 
     nonnans = lb.notnull() & ub.notnull() & (v != -1)
     join = [to_float_str(lb), " <= x", to_int_str(v), " <= ", to_float_str(ub), "\n"]
@@ -104,7 +104,11 @@ def binaries_to_file(m, f):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
 
-    binaries_str = join_str_arrays([to_int_str(m.binaries)])
+    v = m.binaries
+    nonnans = v != -1
+    binaries_str = join_str_arrays(["x", to_int_str(m.binaries), "\n"]).where(
+        nonnans, ""
+    )
     str_array_to_file(binaries_str, f).compute()
     f.write("end\n")
 

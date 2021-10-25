@@ -25,9 +25,7 @@ var_attrs = [f"variables{s}" for s in ["", "_lower_bound", "_upper_bound"]]
 con_attrs = [
     f"constraints{s}" for s in ["", "_lhs_coeffs", "_lhs_vars", "_sign", "_rhs"]
 ]
-array_attrs = (
-    var_attrs + con_attrs + ["binaries", "solution", "dual", "objective", "parameter"]
-)
+array_attrs = var_attrs + con_attrs + ["parameter", "solution", "dual", "objective"]
 obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
 
 
@@ -68,8 +66,8 @@ class Model:
         """
         self._xCounter = 0
         self._cCounter = 0
-        self._varnameCounter = 0
-        self._connameCounter = 0
+        self._varnameCounter = counter()
+        self._connameCounter = counter()
 
         self.chunk = chunk
         self.status = "initialized"
@@ -110,7 +108,9 @@ class Model:
         ds = merge([getattr(self, attr), da.to_dataset(name=name)], **kwargs)
         setattr(self, attr, ds)
 
-    def add_variables(self, lower=-inf, upper=inf, coords=None, name=None, mask=None):
+    def add_variables(
+        self, lower=-inf, upper=inf, coords=None, name=None, mask=None, binary=False
+    ):
         """
         Assign a new, possibly multi-dimensional array of variables to the model.
 
@@ -122,9 +122,11 @@ class Model:
         Parameters
         ----------
         lower : float/array_like, optional
-            Lower bound of the variable(s). The default is -inf.
+            Lower bound of the variable(s). Ignored if `binary` is True.
+            The default is -inf.
         upper : TYPE, optional
-            Upper bound of the variable(s). The default is inf.
+            Upper bound of the variable(s). Ignored if `binary` is True.
+            The default is inf.
         coords : list/xarray.Coordinates, optional
             The coords of the variable array. For every single combination of
             coordinates a optimization variable is added to the model.
@@ -137,6 +139,9 @@ class Model:
             Boolean mask with False values for variables which are skipped.
             The shape of the mask has to match the shape the added variables.
             Default is None.
+        binary : bool
+            Whether the new variable is a binary variable which are used for
+            Mixed-Integer problems.
 
         Raises
         ------
@@ -170,32 +175,29 @@ class Model:
 
         """
         if name is None:
-            while "var" + str(self._varnameCounter) in self.variables:
-                self._varnameCounter += 1
-            name = "var" + str(self._varnameCounter)
+            name = "var" + str(next(self._varnameCounter))
 
         assert name not in self.variables
 
-        lower = DataArray(lower)
-        upper = DataArray(upper)
+        if not binary:
+            lower = DataArray(lower)
+            upper = DataArray(upper)
 
-        if coords is None:
-            # only a lazy calculation for extracting coords, shape and size
-            broadcasted = lower.chunk() + upper.chunk()
-            coords = broadcasted.coords
-            if not coords and broadcasted.size > 1:
-                raise ValueError(
-                    "Both `lower` and `upper` have missing coordinates"
-                    " while the broadcasted array is of size > 1."
-                )
+            if coords is None:
+                # only a lazy calculation for extracting coords, shape and size
+                broadcasted = lower.chunk() + upper.chunk()
+                coords = broadcasted.coords
+                if not coords and broadcasted.size > 1:
+                    raise ValueError(
+                        "Both `lower` and `upper` have missing coordinates"
+                        " while the broadcasted array is of size > 1."
+                    )
 
-        broadcasted = DataArray(coords=coords)
+        var = DataArray(coords=coords).assign_attrs(name=name, binary=binary)
 
         start = self._xCounter
-        var = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
-        self._xCounter += broadcasted.size
-        var = xr.DataArray(var, coords=broadcasted.coords)
-        var = var.assign_attrs(name=name)
+        var.data = np.arange(start, start + var.size).reshape(var.shape)
+        self._xCounter += var.size
 
         if mask is not None:
             var = var.where(mask, -1)
@@ -206,8 +208,9 @@ class Model:
             var = var.chunk(self.chunk)
 
         self._merge_inplace("variables", var, name, fill_value=-1)
-        self._merge_inplace("variables_lower_bound", lower, name)
-        self._merge_inplace("variables_upper_bound", upper, name)
+        if not binary:
+            self._merge_inplace("variables_lower_bound", lower, name)
+            self._merge_inplace("variables_upper_bound", upper, name)
 
         return Variable(var)
 
@@ -244,9 +247,7 @@ class Model:
 
         """
         if name is None:
-            while "con" + str(self._connameCounter) in self.constraints:
-                self._connameCounter += 1
-            name = "con" + str(self._connameCounter)
+            name = "con" + str(next(self._connameCounter))
 
         assert name not in self.constraints
 
@@ -260,13 +261,11 @@ class Model:
         if (sign == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        broadcasted = (lhs.vars.chunk() + rhs).sum("_term")
+        con = (lhs.vars.chunk() + rhs).sum("_term").assign_attrs(name=name)
 
         start = self._cCounter
-        con = np.arange(start, start + broadcasted.size).reshape(broadcasted.shape)
-        self._cCounter += broadcasted.size
-        con = DataArray(con, coords=broadcasted.coords)
-        con = con.assign_attrs(name=name)
+        con.data = np.arange(start, start + con.size).reshape(con.shape)
+        self._cCounter += con.size
 
         if mask is not None:
             con = con.where(mask, -1)
@@ -364,6 +363,18 @@ class Model:
         """
         for attr in con_attrs:
             setattr(self, attr, getattr(self, attr).drop_vars(name))
+
+    @property
+    def _binary_variables(self):
+        return [v for v in self.variables if self.variables[v].attrs["binary"]]
+
+    @property
+    def _non_binary_variables(self):
+        return [v for v in self.variables if not self.variables[v].attrs["binary"]]
+
+    @property
+    def binaries(self):
+        return self.variables[self._binary_variables]
 
     def linexpr(self, *tuples):
         """
@@ -553,6 +564,13 @@ class Model:
     to_netcdf = to_netcdf
 
     to_file = to_file
+
+
+def counter():
+    num = 0
+    while True:
+        yield num
+        num += 1
 
 
 class Variable(DataArray):

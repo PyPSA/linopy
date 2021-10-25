@@ -119,6 +119,16 @@ def test_variable_merging():
     assert m.variables.var0[-1].item() == -1
 
 
+def test_binaries():
+    target_shape = (10, 10)
+    m = Model()
+
+    coords = [pd.Index(range(10)), pd.Index(range(10))]
+    m.add_variables(coords=coords, binary=True)
+
+    assert m.variables.var0.shape == target_shape
+
+
 def test_linexpr():
     m = Model()
 

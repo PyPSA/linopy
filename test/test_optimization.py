@@ -102,6 +102,23 @@ def test_masked_constraints_with_cplex():
     assert (m.solution.y[-2:] == 5).all()
 
 
+@pytest.mark.skipif("cbc" not in available_solvers, reason="Solver not available")
+def test_MILP_with_cbc():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(coords=x.coords, name="y", binary=True)
+
+    m.add_constraints(x + y, ">=", 10)
+
+    m.add_objective(2 * x + y)
+
+    status, termination = m.solve("cbc")
+    assert termination == "optimal"
+    assert ((m.solution.y == 1) | (m.solution.y == 0)).all()
+
+
 def init_model_large():
     m = Model()
     time = pd.Index(range(10), name="time")
