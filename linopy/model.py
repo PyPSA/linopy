@@ -632,6 +632,10 @@ class Variable(DataArray):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    # We have to set the _reduce_method to None, in order to overwrite basic
+    # reduction functions as `sum`. There might be a better solution (?).
+    _reduce_method = None
+
     def to_array(self):
         """Convert the variable array to a xarray.DataArray."""
         return DataArray(self)
