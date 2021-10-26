@@ -17,6 +17,7 @@ m = Model()
 x = m.add_variables(pd.Series([0, 0]), 1, name="x")
 y = m.add_variables(4, pd.Series([8, 10]), name="y")
 z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
+v = m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
 
 
 def test_values():
@@ -94,9 +95,17 @@ def test_sum():
     assert res.notnull().all().to_array().all()
 
 
-def test_groupby():
-    expr = 10 * x + y + z
-    group = xr.DataArray([1, 1, 2], dims="dim_1")
-    expr = expr.groupby(group).sum()
-    assert "group" in expr.dims
-    assert (expr.group == [1, 2]).all()
+def test_group_terms():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.to_linexpr().group_terms(groups)
+    assert "group" in grouped.dims
+    assert (grouped.group == [1, 2]).all()
+    assert grouped._term.size == 10
+
+
+def test_group_terms_variable():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.group_terms(groups)
+    assert "group" in grouped.dims
+    assert (grouped.group == [1, 2]).all()
+    assert grouped._term.size == 10

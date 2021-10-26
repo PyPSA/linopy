@@ -253,6 +253,8 @@ class Model:
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
+        elif isinstance(lhs, Variable):
+            lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
         sign = DataArray(sign)
@@ -690,6 +692,25 @@ class Variable(DataArray):
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
 
+    def group_terms(self, group):
+        """
+        Sum variable over groups.
+
+        The function works in the same manner as the xarray.Dataset.groupby
+        function, but automatically sums over all terms.
+
+        Parameters
+        ----------
+        group : DataArray or IndexVariable
+            Array whose unique values should be used to group the expressions.
+
+        Returns
+        -------
+        Grouped linear expression.
+
+        """
+        return self.to_linexpr().group_terms(group)
+
     def sum(self, dims=None, keep_coords=False):
         """
         Sum the variables over all or a subset of dimensions.
@@ -909,7 +930,6 @@ class LinearExpression(Dataset):
             ds = ds_list[0].expand_dims("_term")
         return LinearExpression(ds)
 
-    # TODO: remove since covered by expr.groupby(...).sum()
     def group_terms(self, group):
         """
         Sum expression over groups.
