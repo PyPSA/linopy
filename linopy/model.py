@@ -736,6 +736,15 @@ class Model:
 
 
 def counter():
+    """
+    Create a counter generator that counts from 0 on upwards.
+
+    Yields
+    ------
+    num : int
+        Current counting.
+
+    """
     num = 0
     while True:
         yield num
@@ -743,11 +752,31 @@ def counter():
 
 
 def check_force_dim_names(model, ds):
+    """
+    Ensure that the added data does not lead to unintended broadcasting.
+
+    Parameters
+    ----------
+    model : linopy.Model
+    ds : xr.DataArray/Variable/LinearExpression
+        Data that should be added to the model.
+
+    Raises
+    ------
+    ValueError
+        If broadcasted data leads to unspecified dimension names.
+
+    Returns
+    -------
+    None.
+
+    """
     if model.force_dim_names:
-        assert not any(bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims), (
-            "Added data contains non-customized dimension names. This is not "
-            "allowed when setting `force_dim_names` to True."
-        )
+        if any(bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims):
+            raise ValueError(
+                "Added data contains non-customized dimension names. This is not "
+                "allowed when setting `force_dim_names` to True."
+            )
 
 
 class Variable(DataArray):
