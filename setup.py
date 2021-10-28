@@ -34,7 +34,6 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "cplex",
         "xarray>=0.16",
         "dask>=0.18.0",
     ],
