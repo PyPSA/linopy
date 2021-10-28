@@ -94,6 +94,7 @@ This package is published under license GNU Public License GPLv3
    api-model
    api-solvers
    api-io
+   api-eval
 
 
 .. toctree::

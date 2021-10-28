@@ -9,6 +9,8 @@ Upcoming Release
 * ``LinearExpression`` now allows empty data as input.
 * ``add_variables`` and ``add_constraints`` now accept a new argument ``mask``. The mask, which should be an boolean array, defines whether a variable/constraint is active (True) or should be ignored (False).
 * Missing values in the ``Model.variables`` and ``Model.constraints`` arrays are now indicated by -1. This circumvents changing the type from `int` to `float`.
+* A set of experimental eval functions was added. Now one can assign variable and constraints using string expressions. For further information see `linopy.Model.vareval`, `linopy.Model.lineval` and `linopy.Model.coneval`.
+* ``Model`` has a new argument `force_dim_names`. When set to true assigned variables, constraints and data must always have custom dimension names, otherwise a ValueError is raised. These helps to avoid unintended broadcasting over dimension. Especially the use of pandas DataFrames and Series may become safer.
 
 Version 0.0.3
 -------------
