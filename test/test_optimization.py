@@ -62,8 +62,8 @@ def test_xpress():
     assert np.isclose(m.objective_value, 3.3)
 
 
-@pytest.mark.skipif("cplex" not in available_solvers, reason="Solver not available")
-def test_masked_variables_with_cplex():
+@pytest.mark.skipif("cbc" not in available_solvers, reason="Solver not available")
+def test_masked_variables_with_cbc():
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -82,8 +82,8 @@ def test_masked_variables_with_cplex():
     assert (m.solution.x[-2:] == 10).all()
 
 
-@pytest.mark.skipif("cplex" not in available_solvers, reason="Solver not available")
-def test_masked_constraints_with_cplex():
+@pytest.mark.skipif("cbc" not in available_solvers, reason="Solver not available")
+def test_masked_constraints_with_cbc():
     m = Model()
 
     lower = pd.Series(0, range(10))

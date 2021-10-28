@@ -6,6 +6,7 @@ This module contains frontend implementations of the package.
 
 import logging
 import os
+import re
 from tempfile import NamedTemporaryFile, gettempdir
 
 import numpy as np
@@ -15,6 +16,7 @@ from numpy import inf
 from xarray import DataArray, Dataset, merge
 
 from . import solvers
+from .eval import Expr
 from .io import to_file, to_netcdf
 from .solvers import available_solvers
 
@@ -25,7 +27,7 @@ var_attrs = [f"variables{s}" for s in ["", "_lower_bound", "_upper_bound"]]
 con_attrs = [
     f"constraints{s}" for s in ["", "_lhs_coeffs", "_lhs_vars", "_sign", "_rhs"]
 ]
-array_attrs = var_attrs + con_attrs + ["parameter", "solution", "dual", "objective"]
+array_attrs = var_attrs + con_attrs + ["parameters", "solution", "dual", "objective"]
 obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
 
 
@@ -45,7 +47,7 @@ class Model:
     the optimization process.
     """
 
-    def __init__(self, solver_dir=None, chunk=None):
+    def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
         """
         Initialize the linopy model.
 
@@ -58,6 +60,12 @@ class Model:
         chunk : int, optional
             Chunksize used when assigning data, this can speed up large
             programs while keeping memory-usage low. The default is None.
+        force_dim_names : bool
+            Whether assigned variables, constraints and data should always have
+            custom dimension names, i.e. not matching dimension names "dim_0",
+            "dim_1" and so on. These helps to avoid unintended broadcasting
+            over dimension. Especially the use of pandas DataFrames and Series
+            may become safer.
 
         Returns
         -------
@@ -72,6 +80,7 @@ class Model:
         self.chunk = chunk
         self.status = "initialized"
         self.objective_value = np.nan
+        self.force_dim_names = force_dim_names
 
         for attr in array_attrs:
             setattr(self, attr, Dataset())
@@ -177,7 +186,9 @@ class Model:
         if name is None:
             name = "var" + str(next(self._varnameCounter))
 
-        assert name not in self.variables
+        assert (
+            name not in self.variables
+        ), f"Variable '{name}' already assigned to model"
 
         if not binary:
             lower = DataArray(lower)
@@ -195,11 +206,15 @@ class Model:
 
         var = DataArray(coords=coords).assign_attrs(name=name, binary=binary)
 
+        check_force_dim_names(self, var)
+
         start = self._xCounter
         var.data = np.arange(start, start + var.size).reshape(var.shape)
         self._xCounter += var.size
 
         if mask is not None:
+            # assert var.broadcast_equals(mask), (
+            #     "The variable and the mask do not have the same coordinates.")
             var = var.where(mask, -1)
 
         if self.chunk:
@@ -265,11 +280,15 @@ class Model:
 
         con = (lhs.vars.chunk() + rhs).sum("_term").assign_attrs(name=name)
 
+        check_force_dim_names(self, con)
+
         start = self._cCounter
         con.data = np.arange(start, start + con.size).reshape(con.shape)
         self._cCounter += con.size
 
         if mask is not None:
+            # assert con.broadcast_equals(mask), (
+            #     "The constraint and the mask do not have the same coordinates.")
             con = con.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
@@ -315,6 +334,7 @@ class Model:
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         assert isinstance(expr, LinearExpression)
+
         if expr.vars.ndim > 1:
             expr = expr.sum()
         self.objective = expr
@@ -416,6 +436,153 @@ class Model:
             for (c, v) in tuples
         ]
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+
+    def _eval(self, expr: str, **kwargs):
+        from pandas.core.computation.eval import eval as pd_eval
+
+        kwargs.setdefault("engine", "python")
+        resolvers = kwargs.pop("resolvers", None)
+        kwargs["level"] = kwargs.pop("level", 0) + 1
+        resolvers = [self.variables, self.parameters]
+        kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
+        return pd_eval(expr, inplace=False, **kwargs)
+
+    def vareval(self, expr: str, eval_kw={}, **kwargs):
+        """
+        Define a variable based a string expression (experimental).
+
+        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
+        global variables can be referenced with a @-suffix, model attributes
+        such as parameters and variables can be referenced by the key.
+
+        Parameters
+        ----------
+        expr : str
+            Valid string to be compiled as a variable definition (lower and upper bounds!).
+        eval_kw : dict
+            Keyword arguments to be passed to `pandas.eval`.
+        **kwargs :
+            Keyword arguments to be passed to `model.add_constraints`.
+
+
+        Returns
+        -------
+        linopy.Variable
+            Variable which was added to the model.
+
+
+        Examples
+        --------
+
+        >>> import linopy, xarray as xr
+        >>> m = linopy.Model()
+        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+        >>> m.vareval("@lower <= x <= @upper")
+
+        This is the same as
+        >>> m.add_variables(lower, upper, name="x")
+
+        """
+
+    def lineval(self, expr: str, eval_kw={}, **kwargs):
+        """
+        Evaluate linear expressions given as a string (experimental).
+
+        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
+        global variables can be referenced with a @-suffix, model attributes
+        such as parameters and variables can be referenced by the key.
+
+        Parameters
+        ----------
+        expr : str
+            Valid string to be compiled as a linear expression.
+        eval_kw : dict
+            Keyword arguments to be passed to `pandas.eval`.
+        **kwargs :
+            Keyword arguments to be passed to `LinearExpression.from_tuples`.
+
+        Returns
+        -------
+        A linear expression based on the input string.
+
+
+        Examples
+        --------
+
+        >>> import linopy, xarray as xr
+        >>> m = linopy.Model()
+        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+        >>> m.add_variables(lower, upper, name="x")
+        >>> m.add_variables(lower, upper, name="y")
+        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
+
+        Now create the linear expression
+        >>> m.lineval("@c * x - y")
+
+        This is the same as
+        >>> m.linexpr((c, "x"), (-1, "y"))
+
+        """
+        eval_kw["level"] = eval_kw.pop("level", 1) + 1
+
+        tuples = Expr(expr).to_string_tuples()
+        tuples = [
+            (self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in tuples
+        ]
+        return self.linexpr(*tuples, **kwargs)
+
+    def coneval(self, expr: str, eval_kw={}, **kwargs):
+        """
+        Define a constraint determined by a string expression (experimental).
+
+        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
+        global variables can be referenced with a @-suffix, model attributes
+        such as parameters and variables can be referenced by the key.
+
+        Parameters
+        ----------
+        expr : str
+            Valid string to be compiled as a linear expression.
+        eval_kw : dict
+            Keyword arguments to be passed to `pandas.eval`.
+        **kwargs :
+            Keyword arguments to be passed to `model.add_constraints`.
+
+
+        Returns
+        -------
+        con : xarray.DataArray
+            Array containing the labels of the added constraints.
+
+
+        Examples
+        --------
+
+        >>> import linopy, xarray as xr
+        >>> m = linopy.Model()
+        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+        >>> m.add_variables(lower, upper, name="x")
+        >>> m.add_variables(lower, upper, name="y")
+        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
+
+        Now create the constraint:
+        >>> m.coneval("@c * x - y <= 5 ")
+
+        This is the same as
+        >>> lhs = m.linexpr((c, "x"), (-1, "y"))
+        >>> m.add_constraints(lhs, "<=", 5)
+
+        """
+        eval_kw["level"] = eval_kw.pop("level", 1) + 1
+
+        (lhs, sign, rhs), kw = Expr(expr).to_constraint_keywords()
+        lhs = [(self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in lhs]
+        lhs = self.linexpr(*lhs)
+        rhs = self._eval(rhs)
+        return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
 
     @property
     def coefficientrange(self):
@@ -573,6 +740,14 @@ def counter():
     while True:
         yield num
         num += 1
+
+
+def check_force_dim_names(model, ds):
+    if model.force_dim_names:
+        assert not any(bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims), (
+            "Added data contains non-customized dimension names. This is not "
+            "allowed when setting `force_dim_names` to True."
+        )
 
 
 class Variable(DataArray):
@@ -925,7 +1100,7 @@ class LinearExpression(Dataset):
         """
         ds_list = [Dataset({"coeffs": c, "vars": v}) for c, v in tuples]
         if len(ds_list) > 1:
-            ds = xr.concat(ds_list, dim="_term")
+            ds = xr.concat(ds_list, dim="_term", coords="minimal")
         else:
             ds = ds_list[0].expand_dims("_term")
         return LinearExpression(ds)
