@@ -21,7 +21,7 @@ setup(
     description="Linear optimization with N-D labeled arrays in Python",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    # url='https://github.com/PyPSA/linopy',
+    url="https://github.com/PyPSA/linopy",
     license="GPLv3",
     packages=find_packages(exclude=["doc", "test"]),
     include_package_data=True,
