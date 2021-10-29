@@ -12,6 +12,7 @@ import pytest
 import xarray as xr
 
 from linopy import Model
+from linopy.model import con_attrs, var_attrs
 
 # Test model functions
 
@@ -119,6 +120,13 @@ def test_variable_merging():
     assert m.variables.var0[-1].item() == -1
 
 
+def test_variable_bound_accessor():
+    m = Model()
+    x = m.add_variables(0, 10)
+    assert x.upper_bound().item() == 10
+    assert x.lower_bound().item() == 0
+
+
 def test_binaries():
     target_shape = (10, 10)
     m = Model()
@@ -152,6 +160,9 @@ def test_constraints():
     y = m.add_variables()
 
     m.add_constraints(1 * x + 10 * y, "=", 0)
+
+    for attr in con_attrs:
+        assert "con0" in getattr(m, attr)
 
     assert m.constraints.con0.shape == (10, 10)
     assert m.constraints.con0.dtype == int
@@ -204,8 +215,7 @@ def test_remove_variable():
     m.add_constraints(1 * x + 10 * y, "=", 0)
 
     m.remove_variables("x")
-    assert "x" not in m.variables
-    assert "x" not in m.variables_lower_bound
-    assert "x" not in m.variables_upper_bound
+    for attr in con_attrs:
+        assert "x" not in getattr(m, attr)
 
     assert "con0" not in m.constraints_lhs_vars

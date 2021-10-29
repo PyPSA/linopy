@@ -107,14 +107,14 @@ class Model:
         """Get a model variable by the name."""
         return Variable(self.variables[key])
 
-    def _merge_inplace(self, attr, da, name, **kwargs):
+    def _merge_inplace(self, attr, da, **kwargs):
         """
         Assign a new variable to the dataset `attr` by merging.
 
         This takes care of all coordinate alignments, instead of a direct
         assignment like self.variables[name] = var
         """
-        ds = merge([getattr(self, attr), da.to_dataset(name=name)], **kwargs)
+        ds = merge([getattr(self, attr), da], **kwargs)
         setattr(self, attr, ds)
 
     def add_variables(
@@ -191,8 +191,8 @@ class Model:
         ), f"Variable '{name}' already assigned to model"
 
         if not binary:
-            lower = DataArray(lower)
-            upper = DataArray(upper)
+            lower = DataArray(lower, name=name)
+            upper = DataArray(upper, name=name)
 
             if coords is None:
                 # only a lazy calculation for extracting coords, shape and size
@@ -203,8 +203,7 @@ class Model:
                         "Both `lower` and `upper` have missing coordinates"
                         " while the broadcasted array is of size > 1."
                     )
-
-        var = DataArray(coords=coords).assign_attrs(name=name, binary=binary)
+        var = DataArray(coords=coords, name=name).assign_attrs(binary=binary)
 
         check_force_dim_names(self, var)
 
@@ -222,12 +221,12 @@ class Model:
             upper = upper.chunk(self.chunk)
             var = var.chunk(self.chunk)
 
-        self._merge_inplace("variables", var, name, fill_value=-1)
+        self._merge_inplace("variables", var, fill_value=-1)
         if not binary:
-            self._merge_inplace("variables_lower_bound", lower, name)
-            self._merge_inplace("variables_upper_bound", upper, name)
+            self._merge_inplace("variables_lower_bound", lower)
+            self._merge_inplace("variables_upper_bound", upper)
 
-        return Variable(var)
+        return Variable(var, model=self)
 
     def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
@@ -272,13 +271,13 @@ class Model:
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
-        sign = DataArray(sign)
-        rhs = DataArray(rhs)
+        sign = DataArray(sign, name=name)
+        rhs = DataArray(rhs, name=name)
 
         if (sign == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        con = (lhs.vars.chunk() + rhs).sum("_term").assign_attrs(name=name)
+        con = (lhs.vars.chunk() + rhs).sum("_term").rename(name)
 
         check_force_dim_names(self, con)
 
@@ -299,12 +298,12 @@ class Model:
             rhs = rhs.chunk(self.chunk)
             con = con.chunk(self.chunk)
 
-        # assign everything
-        self._merge_inplace("constraints", con, name, fill_value=-1)
-        self._merge_inplace("constraints_lhs_coeffs", lhs.coeffs, name)
-        self._merge_inplace("constraints_lhs_vars", lhs.vars, name)
-        self._merge_inplace("constraints_sign", sign, name)
-        self._merge_inplace("constraints_rhs", rhs, name)
+        # assign everything, note all must have the same name
+        self._merge_inplace("constraints", con, fill_value=-1)
+        self._merge_inplace("constraints_lhs_coeffs", lhs.coeffs.rename(name))
+        self._merge_inplace("constraints_lhs_vars", lhs.vars.rename(name))
+        self._merge_inplace("constraints_sign", sign)
+        self._merge_inplace("constraints_rhs", rhs)
 
         return con
 
@@ -787,6 +786,7 @@ class Variable(DataArray):
     can be applied to it. However most arithmetic operations are overwritten.
     Like this one can easily combine variables into a linear expression.
 
+
     Examples
     --------
     >>> m = Model()
@@ -833,9 +833,10 @@ class Variable(DataArray):
 
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable")
+    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
 
     def __init__(self, *args, **kwargs):
+        self.model = kwargs.pop("model", None)
         super().__init__(*args, **kwargs)
 
     # We have to set the _reduce_method to None, in order to overwrite basic
@@ -853,7 +854,12 @@ class Variable(DataArray):
     def __repr__(self):
         """Get the string representation of the variables."""
         data_string = "Variables:\n" + self.to_array().__repr__().split("\n", 1)[1]
-        return f"Variable container:\n" f"-------------------\n\n{data_string}"
+        extend_line = "-" * len(self.name)
+        return (
+            f"Variable container '{self.name}':\n"
+            f"----------------------{extend_line}\n\n"
+            f"{data_string}"
+        )
 
     def _repr_html_(self):
         """Get the html representation of the variables."""
@@ -914,6 +920,16 @@ class Variable(DataArray):
 
         """
         return self.to_linexpr().group_terms(group)
+
+    def upper_bound(self):
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.variables_upper_bound[self.name]
+
+    def lower_bound(self):
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.variables_lower_bound[self.name]
 
     def sum(self, dims=None, keep_coords=False):
         """
