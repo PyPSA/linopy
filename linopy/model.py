@@ -7,7 +7,9 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
+from dataclasses import dataclass
 from tempfile import NamedTemporaryFile, gettempdir
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -21,14 +23,6 @@ from .io import to_file, to_netcdf
 from .solvers import available_solvers
 
 logger = logging.getLogger(__name__)
-
-
-var_attrs = [f"variables{s}" for s in ["", "_lower_bound", "_upper_bound"]]
-con_attrs = [
-    f"constraints{s}" for s in ["", "_lhs_coeffs", "_lhs_vars", "_sign", "_rhs"]
-]
-array_attrs = var_attrs + con_attrs + ["parameters", "solution", "dual", "objective"]
-obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
 
 
 class Model:
@@ -46,6 +40,9 @@ class Model:
     The model supports different solvers (see `linopy.available_solvers`) for
     the optimization process.
     """
+
+    array_attrs = ["parameters", "solution", "dual"]
+    obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
 
     def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
         """
@@ -82,7 +79,10 @@ class Model:
         self.objective_value = np.nan
         self.force_dim_names = force_dim_names
 
-        for attr in array_attrs:
+        self.variables = Variables(model=self)
+        self.constraints = Constraints(model=self)
+
+        for attr in self.array_attrs:
             setattr(self, attr, Dataset())
 
         self.objective = LinearExpression()
@@ -92,9 +92,9 @@ class Model:
 
     def __repr__(self):
         """Return a string representation of the linopy model."""
-        var_string = self.variables.__repr__().split("\n", 1)[1]
+        var_string = self.variables.defs.__repr__().split("\n", 1)[1]
         var_string = var_string.replace("Data variables:\n", "Data:\n")
-        con_string = self.constraints.__repr__().split("\n", 1)[1]
+        con_string = self.constraints.defs.__repr__().split("\n", 1)[1]
         con_string = con_string.replace("Data variables:\n", "Data:\n")
         return (
             f"Linopy model\n============\n\n"
@@ -106,16 +106,6 @@ class Model:
     def __getitem__(self, key):
         """Get a model variable by the name."""
         return Variable(self.variables[key])
-
-    def _merge_inplace(self, attr, da, **kwargs):
-        """
-        Assign a new variable to the dataset `attr` by merging.
-
-        This takes care of all coordinate alignments, instead of a direct
-        assignment like self.variables[name] = var
-        """
-        ds = merge([getattr(self, attr), da], **kwargs)
-        setattr(self, attr, ds)
 
     def add_variables(
         self, lower=-inf, upper=inf, coords=None, name=None, mask=None, binary=False
@@ -187,13 +177,12 @@ class Model:
             name = "var" + str(next(self._varnameCounter))
 
         assert (
-            name not in self.variables
+            name not in self.variables.defs
         ), f"Variable '{name}' already assigned to model"
 
         if not binary:
-            lower = DataArray(lower, name=name)
-            upper = DataArray(upper, name=name)
-
+            lower = DataArray(lower)
+            upper = DataArray(upper)
             if coords is None:
                 # only a lazy calculation for extracting coords, shape and size
                 broadcasted = lower.chunk() + upper.chunk()
@@ -203,30 +192,31 @@ class Model:
                         "Both `lower` and `upper` have missing coordinates"
                         " while the broadcasted array is of size > 1."
                     )
-        var = DataArray(coords=coords, name=name).assign_attrs(binary=binary)
+        else:
+            lower = DataArray()
+            upper = DataArray()
 
-        check_force_dim_names(self, var)
+        defs = DataArray(coords=coords).assign_attrs(binary=binary)
+
+        check_force_dim_names(self, defs)
 
         start = self._xCounter
-        var.data = np.arange(start, start + var.size).reshape(var.shape)
-        self._xCounter += var.size
+        defs.data = np.arange(start, start + defs.size).reshape(defs.shape)
+        self._xCounter += defs.size
 
         if mask is not None:
-            # assert var.broadcast_equals(mask), (
+            # assert defs.broadcast_equals(mask), (
             #     "The variable and the mask do not have the same coordinates.")
-            var = var.where(mask, -1)
+            defs = defs.where(mask, -1)
 
         if self.chunk:
+            defs = defs.chunk(self.chunk)
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
-            var = var.chunk(self.chunk)
 
-        self._merge_inplace("variables", var, fill_value=-1)
-        if not binary:
-            self._merge_inplace("variables_lower_bound", lower)
-            self._merge_inplace("variables_upper_bound", upper)
+        self.variables.add(name, defs, lower, upper)
 
-        return Variable(var, model=self)
+        return Variable(defs, name=name, model=self)
 
     def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
@@ -256,14 +246,14 @@ class Model:
 
         Returns
         -------
-        con : xarray.DataArray
+        defs : linopy.model.Constraint
             Array containing the labels of the added constraints.
 
         """
         if name is None:
             name = "con" + str(next(self._connameCounter))
 
-        assert name not in self.constraints
+        assert name not in self.constraints.defs
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
@@ -271,24 +261,24 @@ class Model:
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
-        sign = DataArray(sign, name=name)
-        rhs = DataArray(rhs, name=name)
+        sign = DataArray(sign)
+        rhs = DataArray(rhs)
 
         if (sign == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        con = (lhs.vars.chunk() + rhs).sum("_term").rename(name)
+        defs = (lhs.vars.chunk() + rhs).sum("_term")
 
-        check_force_dim_names(self, con)
+        check_force_dim_names(self, defs)
 
         start = self._cCounter
-        con.data = np.arange(start, start + con.size).reshape(con.shape)
-        self._cCounter += con.size
+        defs.data = np.arange(start, start + defs.size).reshape(defs.shape)
+        self._cCounter += defs.size
 
         if mask is not None:
-            # assert con.broadcast_equals(mask), (
+            # assert defs.broadcast_equals(mask), (
             #     "The constraint and the mask do not have the same coordinates.")
-            con = con.where(mask, -1)
+            defs = defs.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
 
@@ -296,16 +286,11 @@ class Model:
             lhs = lhs.chunk(self.chunk)
             sign = sign.chunk(self.chunk)
             rhs = rhs.chunk(self.chunk)
-            con = con.chunk(self.chunk)
+            defs = defs.chunk(self.chunk)
 
-        # assign everything, note all must have the same name
-        self._merge_inplace("constraints", con, fill_value=-1)
-        self._merge_inplace("constraints_lhs_coeffs", lhs.coeffs.rename(name))
-        self._merge_inplace("constraints_lhs_vars", lhs.vars.rename(name))
-        self._merge_inplace("constraints_sign", sign)
-        self._merge_inplace("constraints_rhs", rhs)
+        self.constraints.add(name, defs, lhs.coeffs, lhs.vars, sign, rhs)
 
-        return con
+        return Constraint(defs, name=name, model=self)
 
     def add_objective(self, expr, overwrite=False):
         """
@@ -356,14 +341,12 @@ class Model:
         None.
 
         """
-        labels = self.variables[name]
-        for attr in var_attrs:
-            setattr(self, attr, getattr(self, attr).drop_vars(name))
+        labels = self.variables.defs[name]
+        self.variables.remove(name)
 
-        remove_b = self.constraints_lhs_vars.isin(labels).any()
+        remove_b = self.constraints.vars.isin(labels).any()
         names = [name for name, remove in remove_b.items() if remove.item()]
-        for attr in con_attrs:
-            setattr(self, attr, getattr(self, attr).drop_vars(names))
+        self.constraints.remove(names)
 
         self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
 
@@ -382,8 +365,7 @@ class Model:
         None.
 
         """
-        for attr in con_attrs:
-            setattr(self, attr, getattr(self, attr).drop_vars(name))
+        self.constraints.remove(name)
 
     @property
     def _binary_variables(self):
@@ -442,7 +424,7 @@ class Model:
         kwargs.setdefault("engine", "python")
         resolvers = kwargs.pop("resolvers", None)
         kwargs["level"] = kwargs.pop("level", 0) + 1
-        resolvers = [self.variables, self.parameters]
+        resolvers = [self.variables.defs, self.parameters]
         kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
         return pd_eval(expr, inplace=False, **kwargs)
 
@@ -577,7 +559,7 @@ class Model:
         """
         eval_kw["level"] = eval_kw.pop("level", 1) + 1
 
-        (lhs, sign, rhs), kw = Expr(expr).to_constraint_keywords()
+        (lhs, sign, rhs), kw = Expr(expr).to_constraint_args_kwargs()
         lhs = [(self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in lhs]
         lhs = self.linexpr(*lhs)
         rhs = self._eval(rhs)
@@ -778,6 +760,17 @@ def check_force_dim_names(model, ds):
             )
 
 
+def _merge_inplace(self, attr, da, name, **kwargs):
+    """
+    Assign a new dataarray to the dataset `attr` by merging.
+
+    This takes care of all coordinate alignments, instead of a direct
+    assignment like self.variables[name] = var
+    """
+    ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
+    setattr(self, attr, ds)
+
+
 class Variable(DataArray):
     """
     Variable Container for storing variable labels.
@@ -921,6 +914,7 @@ class Variable(DataArray):
         """
         return self.to_linexpr().group_terms(group)
 
+    # would like to have this as a property, but this does not work apparently
     def upper_bound(self):
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
@@ -951,9 +945,190 @@ class Variable(DataArray):
         -------
         linopy.LinearExpression
             Summed expression.
-
         """
         return self.to_linexpr().sum(dims, keep_coords)
+
+
+@dataclass
+class Variables:
+    defs: Dataset = Dataset()
+    lower: Dataset = Dataset()
+    upper: Dataset = Dataset()
+    model: Model = None
+
+    data_attrs = ["defs", "lower", "upper"]
+    data_attr_names = ["Variables References", "Lower bounds", "Upper bounds"]
+
+    def __getitem__(
+        self, names: Union[str, Sequence[str]]
+    ) -> Union[Variable, "Variables"]:
+        if isinstance(names, str):
+            return Variable(self.defs[names], model=self.model)
+
+        return self.__class__(
+            self.defs[names], self.lower[names], self.upper[names], self.model
+        )
+
+    def __repr__(self):
+        """Return a string representation of the linopy model."""
+        r = "linopy.model.Variables"
+        line = "=" * len(r)
+        r += f"\n{line}\n\n"
+        for (k, K) in zip(self.data_attrs, self.data_attr_names):
+            s = getattr(self, k).__repr__().split("\n", 1)[1]
+            s = s.replace("Data variables:\n", "Data:\n")
+            line = "-" * (len(K) + 1)
+            r += f"{K}:\n{line}\n{s}\n\n"
+        return r
+
+    _merge_inplace = _merge_inplace
+
+    def add(self, name, defs: DataArray, lower: DataArray, upper: DataArray):
+        self._merge_inplace("defs", defs, name, fill_value=-1)
+        self._merge_inplace("lower", lower, name)
+        self._merge_inplace("upper", upper, name)
+
+    def remove(self, name):
+        for attr in self.data_attrs:
+            ds = getattr(self, attr)
+            if name in ds:
+                setattr(self, attr, ds.drop(name))
+
+
+class Constraint(DataArray):
+    """
+    Constraint Container for storing constraint labels.
+    The Constraint class is a subclass of xr.DataArray hence most xarray functions
+    can be applied to it.
+    """
+
+    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
+
+    def __init__(self, *args, **kwargs):
+        self.model = kwargs.pop("model", None)
+        super().__init__(*args, **kwargs)
+
+    # We have to set the _reduce_method to None, in order to overwrite basic
+    # reduction functions as `sum`. There might be a better solution (?).
+    _reduce_method = None
+
+    def __repr__(self):
+        """Get the string representation of the constraints."""
+        data_string = "Constraints:\n" + self.to_array().__repr__().split("\n", 1)[1]
+        extend_line = "-" * len(self.name)
+        return (
+            f"Variable container '{self.name}':\n"
+            f"----------------------{extend_line}\n\n"
+            f"{data_string}"
+        )
+
+    def _repr_html_(self):
+        """Get the html representation of the variables."""
+        # return self.__repr__()
+        data_string = self.to_array()._repr_html_()
+        data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
+        return data_string
+
+    def to_array(self):
+        """Convert the variable array to a xarray.DataArray."""
+        return DataArray(self)
+
+
+@dataclass
+class Constraints:
+    """
+    A slightly more helpful representation of all constraints in a model
+    which aims at providing easy block writing methods for the constraints.
+    """
+
+    defs: Dataset = Dataset()
+    coeffs: Dataset = Dataset()
+    vars: Dataset = Dataset()
+    sign: Dataset = Dataset()
+    rhs: Dataset = Dataset()
+    model: Model = None
+
+    data_attrs = ["defs", "coeffs", "vars", "sign", "rhs"]
+    data_attr_names = [
+        "Constraints References",
+        "Left-hand-side Coefficients",
+        "Left-hand-side Variables",
+        "Signs",
+        "Right-hand-side Constants",
+    ]
+
+    def __repr__(self):
+        """Return a string representation of the linopy model."""
+        r = "linopy.model.Constraints"
+        line = "=" * len(r)
+        r += f"\n{line}\n\n"
+        for (k, K) in zip(self.data_attrs, self.data_attr_names):
+            s = getattr(self, k).__repr__().split("\n", 1)[1]
+            s = s.replace("Data variables:\n", "Data:\n")
+            line = "-" * (len(K) + 1)
+            r += f"{K}:\n{line}\n{s}\n\n"
+        return r
+
+    def __getitem__(
+        self, names: Union[str, Sequence[str]]
+    ) -> Union[Constraint, "Constraints"]:
+        if isinstance(names, str):
+            return Constraint(self.defs[names], self.model)
+
+        return self.__class__(
+            self.defs[names],
+            self.coeffs[names],
+            self.vars[names],
+            self.sign[names],
+            self.rhs[names],
+            self.model,
+        )
+
+    _merge_inplace = _merge_inplace
+
+    def add(
+        self,
+        name,
+        defs: DataArray,
+        coeffs: DataArray,
+        vars: DataArray,
+        sign: DataArray,
+        rhs: DataArray,
+    ):
+        self._merge_inplace("defs", defs, name, fill_value=-1)
+        self._merge_inplace("coeffs", coeffs, name)
+        self._merge_inplace("vars", vars, name)
+        self._merge_inplace("sign", sign, name)
+        self._merge_inplace("rhs", rhs, name)
+
+    def remove(self, name):
+        for attr in self.data_attrs:
+            setattr(self, attr, getattr(self, attr).drop(name))
+
+    @property
+    def inequalities(self):
+        return self[[n for n, s in self.sign.items() if s in ("<=", ">=")]]
+
+    @property
+    def equalities(self):
+        return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
+
+    def block_sizes(self, num_blocks, block_map) -> np.ndarray:
+        sizes = np.zeros(num_blocks + 1, dtype=int)
+        for name in self.defs:
+            sizes += self[name].block_sizes(num_blocks, block_map)
+        return sizes
+
+
+def _merge_inplace(self, attr, da, **kwargs):
+    """
+    Assign a new dataarray to the dataset `attr` by merging.
+
+    This takes care of all coordinate alignments, instead of a direct
+    assignment like self.variables[name] = var
+    """
+    ds = merge([getattr(self, attr), da], **kwargs)
+    setattr(self, attr, ds)
 
 
 class LinearExpression(Dataset):
