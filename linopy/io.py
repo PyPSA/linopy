@@ -58,24 +58,24 @@ def objective_to_file(m, f):
 def constraints_to_file(m, f):
     """Write out the constraints of a model to a lp file."""
     f.write("\n\ns.t.\n\n")
-    con = m.constraints
-    coef = m.constraints_lhs_coeffs
-    var = m.constraints_lhs_vars
-    sign = m.constraints_sign
-    rhs = m.constraints_rhs
+    defs = m.constraints.defs
+    vars = m.constraints.vars
+    coeffs = m.constraints.coeffs
+    sign = m.constraints.sign
+    rhs = m.constraints.rhs
 
-    term_names = [f"{n}_term" for n in con]
+    term_names = [f"{n}_term" for n in defs]
 
-    nonnans = coef.notnull() & (var != -1)
-    join = [to_float_str(coef), " x", to_int_str(var), "\n"]
+    nonnans = coeffs.notnull() & (vars != -1)
+    join = [to_float_str(coeffs), " x", to_int_str(vars), "\n"]
     lhs_str = join_str_arrays(join).where(nonnans, "").reduce(np.sum, term_names)
     # .sum() does not work
 
-    nonnans = nonnans.any(term_names) & (con != -1) & sign.notnull() & rhs.notnull()
+    nonnans = nonnans.any(term_names) & (defs != -1) & sign.notnull() & rhs.notnull()
 
     join = [
         "c",
-        to_int_str(con),
+        to_int_str(defs),
         ": \n",
         lhs_str,
         sign,
@@ -90,12 +90,19 @@ def constraints_to_file(m, f):
 def bounds_to_file(m, f):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
-    lb = m.variables_lower_bound[m._non_binary_variables]
-    v = m.variables[m._non_binary_variables]
-    ub = m.variables_upper_bound[m._non_binary_variables]
+    lower = m.variables.lower[m._non_binary_variables]
+    defs = m.variables.defs[m._non_binary_variables]
+    upper = m.variables.upper[m._non_binary_variables]
 
-    nonnans = lb.notnull() & ub.notnull() & (v != -1)
-    join = [to_float_str(lb), " <= x", to_int_str(v), " <= ", to_float_str(ub), "\n"]
+    nonnans = lower.notnull() & upper.notnull() & (defs != -1)
+    join = [
+        to_float_str(lower),
+        " <= x",
+        to_int_str(defs),
+        " <= ",
+        to_float_str(upper),
+        "\n",
+    ]
     bounds_str = join_str_arrays(join).where(nonnans, "")
     str_array_to_file(bounds_str, f).compute()
 
@@ -104,13 +111,10 @@ def binaries_to_file(m, f):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
 
-    v = m.binaries
-    nonnans = v != -1
-    binaries_str = join_str_arrays(["x", to_int_str(m.binaries), "\n"]).where(
-        nonnans, ""
-    )
+    defs = m.binaries.defs
+    nonnans = defs != -1
+    binaries_str = join_str_arrays(["x", to_int_str(defs), "\n"]).where(nonnans, "")
     str_array_to_file(binaries_str, f).compute()
-    f.write("end\n")
 
 
 def to_file(m, fn):
@@ -126,6 +130,7 @@ def to_file(m, fn):
         constraints_to_file(m, f)
         bounds_to_file(m, f)
         binaries_to_file(m, f)
+        f.write("end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
@@ -144,14 +149,22 @@ def to_netcdf(m, *args, **kwargs):
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
     """
-    from .model import array_attrs, obj_attrs  # avoid cyclic imports
 
-    def get_and_rename(m, attr):
+    def get_and_rename(m, attr, prefix=""):
         ds = getattr(m, attr)
-        return ds.rename({v: attr + "-" + v for v in ds})
+        return ds.rename({v: prefix + attr + "-" + v for v in ds})
 
-    ds = xr.merge([get_and_rename(m, d) for d in array_attrs])
-    ds = ds.assign_attrs({k: getattr(m, k) for k in obj_attrs})
+    vars = [
+        get_and_rename(m.variables, attr, "variables_")
+        for attr in m.variables.dataset_attrs
+    ]
+    cons = [
+        get_and_rename(m.constraints, attr, "constraints_")
+        for attr in m.constraints.dataset_attrs
+    ]
+    others = [get_and_rename(m, d) for d in m.dataset_attrs + ["objective"]]
+    scalars = {k: getattr(m, k) for k in m.scalar_attrs}
+    ds = xr.merge(vars + cons + others).assign_attrs(scalars)
 
     ds.to_netcdf(*args, **kwargs)
 
@@ -172,23 +185,28 @@ def read_netcdf(path, **kwargs):
     m : linopy.Model
 
     """
-    from .model import (  # avoid cyclic imports
-        LinearExpression,
-        Model,
-        array_attrs,
-        obj_attrs,
-    )
+    from .model import Constraints, LinearExpression, Model, Variables
 
     m = Model()
     all_ds = xr.load_dataset(path, **kwargs)
 
-    for attr in array_attrs:
-        keys = [k for k in all_ds if k.startswith(attr + "-")]
-        ds = all_ds[keys].rename({k: k[len(attr) + 1 :] for k in keys})
-        setattr(m, attr, ds)
+    def get_and_rename(ds, attr, prefix=""):
+        keys = [k for k in ds if k.startswith(prefix + attr + "-")]
+        return ds[keys].rename({k: k[len(prefix + attr) + 1 :] for k in keys})
+
+    attrs = Variables.dataset_attrs
+    kwargs = {attr: get_and_rename(all_ds, attr, "variables_") for attr in attrs}
+    m.variables = Variables(**kwargs, model=m)
+
+    attrs = Constraints.dataset_attrs
+    kwargs = {attr: get_and_rename(all_ds, attr, "constraints_") for attr in attrs}
+    m.constraints = Constraints(**kwargs, model=m)
+
+    for attr in m.dataset_attrs + ["objective"]:
+        setattr(m, attr, get_and_rename(all_ds, attr))
     m.objective = LinearExpression(m.objective)
 
-    for k in obj_attrs:
-        setattr(m, k, ds.attrs.pop(k))
+    for k in m.scalar_attrs:
+        setattr(m, k, all_ds.attrs.pop(k))
 
     return m

@@ -41,8 +41,8 @@ class Model:
     the optimization process.
     """
 
-    array_attrs = ["parameters", "solution", "dual"]
-    obj_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
+    dataset_attrs = ["parameters", "solution", "dual"]
+    scalar_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
 
     def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
         """
@@ -82,7 +82,7 @@ class Model:
         self.variables = Variables(model=self)
         self.constraints = Constraints(model=self)
 
-        for attr in self.array_attrs:
+        for attr in self.dataset_attrs:
             setattr(self, attr, Dataset())
 
         self.objective = LinearExpression()
@@ -176,9 +176,8 @@ class Model:
         if name is None:
             name = "var" + str(next(self._varnameCounter))
 
-        assert (
-            name not in self.variables.defs
-        ), f"Variable '{name}' already assigned to model"
+        if name in self.variables:
+            raise ValueError(f"Variable '{name}' already assigned to model")
 
         if not binary:
             lower = DataArray(lower)
@@ -253,7 +252,8 @@ class Model:
         if name is None:
             name = "con" + str(next(self._connameCounter))
 
-        assert name not in self.constraints.defs
+        if name in self.constraints:
+            raise ValueError(f"Constraint '{name}' already assigned to model")
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
@@ -773,7 +773,7 @@ def _merge_inplace(self, attr, da, name, **kwargs):
 
 class Variable(DataArray):
     """
-    Variable Container for storing variable labels.
+    Variable container for storing variable labels.
 
     The Variable class is a subclass of xr.DataArray hence most xarray functions
     can be applied to it. However most arithmetic operations are overwritten.
@@ -846,11 +846,13 @@ class Variable(DataArray):
 
     def __repr__(self):
         """Get the string representation of the variables."""
-        data_string = "Variables:\n" + self.to_array().__repr__().split("\n", 1)[1]
+        data_string = (
+            "Variable labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
+        )
         extend_line = "-" * len(self.name)
         return (
-            f"Variable container '{self.name}':\n"
-            f"----------------------{extend_line}\n\n"
+            f"Variable '{self.name}':\n"
+            f"------------{extend_line}\n\n"
             f"{data_string}"
         )
 
@@ -915,15 +917,23 @@ class Variable(DataArray):
         return self.to_linexpr().group_terms(group)
 
     # would like to have this as a property, but this does not work apparently
-    def upper_bound(self):
+    def get_upper_bound(self):
+        """
+        Get the upper bounds of the variables.
+        The function raises an error in case no model is set as a reference.
+        """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
-        return self.model.variables_upper_bound[self.name]
+        return self.model.variables.upper[self.name]
 
-    def lower_bound(self):
+    def get_lower_bound(self):
+        """
+        Get the lower bounds of the variables.
+        The function raises an error in case no model is set as a reference.
+        """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
-        return self.model.variables_lower_bound[self.name]
+        return self.model.variables.lower[self.name]
 
     def sum(self, dims=None, keep_coords=False):
         """
@@ -951,13 +961,17 @@ class Variable(DataArray):
 
 @dataclass
 class Variables:
+    """
+    A variables container used for storing multiple variable arrays.
+    """
+
     defs: Dataset = Dataset()
     lower: Dataset = Dataset()
     upper: Dataset = Dataset()
     model: Model = None
 
-    data_attrs = ["defs", "lower", "upper"]
-    data_attr_names = ["Variables References", "Lower bounds", "Upper bounds"]
+    dataset_attrs = ["defs", "lower", "upper"]
+    dataset_names = ["Variables labels", "Lower bounds", "Upper bounds"]
 
     def __getitem__(
         self, names: Union[str, Sequence[str]]
@@ -974,12 +988,15 @@ class Variables:
         r = "linopy.model.Variables"
         line = "=" * len(r)
         r += f"\n{line}\n\n"
-        for (k, K) in zip(self.data_attrs, self.data_attr_names):
+        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
             s = getattr(self, k).__repr__().split("\n", 1)[1]
             s = s.replace("Data variables:\n", "Data:\n")
             line = "-" * (len(K) + 1)
             r += f"{K}:\n{line}\n{s}\n\n"
         return r
+
+    def __iter__(self):
+        return self.defs.__iter__()
 
     _merge_inplace = _merge_inplace
 
@@ -989,15 +1006,16 @@ class Variables:
         self._merge_inplace("upper", upper, name)
 
     def remove(self, name):
-        for attr in self.data_attrs:
+        for attr in self.dataset_attrs:
             ds = getattr(self, attr)
             if name in ds:
-                setattr(self, attr, ds.drop(name))
+                setattr(self, attr, ds.drop_vars(name))
 
 
 class Constraint(DataArray):
     """
-    Constraint Container for storing constraint labels.
+    Constraint container for storing constraint labels.
+
     The Constraint class is a subclass of xr.DataArray hence most xarray functions
     can be applied to it.
     """
@@ -1014,11 +1032,13 @@ class Constraint(DataArray):
 
     def __repr__(self):
         """Get the string representation of the constraints."""
-        data_string = "Constraints:\n" + self.to_array().__repr__().split("\n", 1)[1]
+        data_string = (
+            "Constraint labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
+        )
         extend_line = "-" * len(self.name)
         return (
-            f"Variable container '{self.name}':\n"
-            f"----------------------{extend_line}\n\n"
+            f"Constraint '{self.name}':\n"
+            f"--------------{extend_line}\n\n"
             f"{data_string}"
         )
 
@@ -1033,12 +1053,48 @@ class Constraint(DataArray):
         """Convert the variable array to a xarray.DataArray."""
         return DataArray(self)
 
+    # would like to have this as a property, but this does not work apparently
+    def get_coeffs(self):
+        """
+        Get the left-hand-side coefficients of the constraint.
+        The function raises an error in case no model is set as a reference.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.constraints.coeffs[self.name]
+
+    def get_vars(self):
+        """
+        Get the left-hand-side variables of the constraint.
+        The function raises an error in case no model is set as a reference.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.constraints.vars[self.name]
+
+    def get_sign(self):
+        """
+        Get the sign of the constraint.
+        The function raises an error in case no model is set as a reference.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.constraints.sign[self.name]
+
+    def get_rhs(self):
+        """
+        Get the right-hand-side constant of the constraint.
+        The function raises an error in case no model is set as a reference.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        return self.model.constraints.rhs[self.name]
+
 
 @dataclass
 class Constraints:
     """
-    A slightly more helpful representation of all constraints in a model
-    which aims at providing easy block writing methods for the constraints.
+    A constraint container used for storing multiple constraint arrays.
     """
 
     defs: Dataset = Dataset()
@@ -1048,13 +1104,13 @@ class Constraints:
     rhs: Dataset = Dataset()
     model: Model = None
 
-    data_attrs = ["defs", "coeffs", "vars", "sign", "rhs"]
-    data_attr_names = [
-        "Constraints References",
-        "Left-hand-side Coefficients",
-        "Left-hand-side Variables",
+    dataset_attrs = ["defs", "coeffs", "vars", "sign", "rhs"]
+    dataset_names = [
+        "Constraint labels",
+        "Left-hand-side coefficients",
+        "Left-hand-side variables",
         "Signs",
-        "Right-hand-side Constants",
+        "Right-hand-side constants",
     ]
 
     def __repr__(self):
@@ -1062,7 +1118,7 @@ class Constraints:
         r = "linopy.model.Constraints"
         line = "=" * len(r)
         r += f"\n{line}\n\n"
-        for (k, K) in zip(self.data_attrs, self.data_attr_names):
+        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
             s = getattr(self, k).__repr__().split("\n", 1)[1]
             s = s.replace("Data variables:\n", "Data:\n")
             line = "-" * (len(K) + 1)
@@ -1073,7 +1129,7 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return Constraint(self.defs[names], self.model)
+            return Constraint(self.defs[names], model=self.model)
 
         return self.__class__(
             self.defs[names],
@@ -1083,6 +1139,9 @@ class Constraints:
             self.rhs[names],
             self.model,
         )
+
+    def __iter__(self):
+        return self.defs.__iter__()
 
     _merge_inplace = _merge_inplace
 
@@ -1102,8 +1161,8 @@ class Constraints:
         self._merge_inplace("rhs", rhs, name)
 
     def remove(self, name):
-        for attr in self.data_attrs:
-            setattr(self, attr, getattr(self, attr).drop(name))
+        for attr in self.dataset_attrs:
+            setattr(self, attr, getattr(self, attr).drop_vars(name))
 
     @property
     def inequalities(self):
@@ -1118,17 +1177,6 @@ class Constraints:
         for name in self.defs:
             sizes += self[name].block_sizes(num_blocks, block_map)
         return sizes
-
-
-def _merge_inplace(self, attr, da, **kwargs):
-    """
-    Assign a new dataarray to the dataset `attr` by merging.
-
-    This takes care of all coordinate alignments, instead of a direct
-    assignment like self.variables[name] = var
-    """
-    ds = merge([getattr(self, attr), da], **kwargs)
-    setattr(self, attr, ds)
 
 
 class LinearExpression(Dataset):

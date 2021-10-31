@@ -14,7 +14,6 @@ from xarray.testing import assert_allclose, assert_equal
 
 from linopy import LinearExpression, Model, available_solvers, read_netcdf
 from linopy.io import to_int_str
-from linopy.model import array_attrs, obj_attrs
 
 
 def test_str_arrays():
@@ -61,10 +60,10 @@ def test_to_netcdf():
     m.to_netcdf("test.nc")
     p = read_netcdf("test.nc")
 
-    for k in obj_attrs:
+    for k in m.scalar_attrs:
         if k != "objective_value":
             assert getattr(m, k) == getattr(p, k)
-    for k in array_attrs:
+    for k in m.dataset_attrs:
         assert_equal(getattr(m, k), getattr(p, k))
 
 
