@@ -92,9 +92,9 @@ class Model:
 
     def __repr__(self):
         """Return a string representation of the linopy model."""
-        var_string = self.variables.defs.__repr__().split("\n", 1)[1]
+        var_string = self.variables.labels.__repr__().split("\n", 1)[1]
         var_string = var_string.replace("Data variables:\n", "Data:\n")
-        con_string = self.constraints.defs.__repr__().split("\n", 1)[1]
+        con_string = self.constraints.labels.__repr__().split("\n", 1)[1]
         con_string = con_string.replace("Data variables:\n", "Data:\n")
         return (
             f"Linopy model\n============\n\n"
@@ -195,27 +195,27 @@ class Model:
             lower = DataArray()
             upper = DataArray()
 
-        defs = DataArray(coords=coords).assign_attrs(binary=binary)
+        labels = DataArray(coords=coords).assign_attrs(binary=binary)
 
-        check_force_dim_names(self, defs)
+        check_force_dim_names(self, labels)
 
         start = self._xCounter
-        defs.data = np.arange(start, start + defs.size).reshape(defs.shape)
-        self._xCounter += defs.size
+        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        self._xCounter += labels.size
 
         if mask is not None:
-            # assert defs.broadcast_equals(mask), (
+            # assert labels.broadcast_equals(mask), (
             #     "The variable and the mask do not have the same coordinates.")
-            defs = defs.where(mask, -1)
+            labels = labels.where(mask, -1)
 
         if self.chunk:
-            defs = defs.chunk(self.chunk)
+            labels = labels.chunk(self.chunk)
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
 
-        self.variables.add(name, defs, lower, upper)
+        self.variables.add(name, labels, lower, upper)
 
-        return Variable(defs, name=name, model=self)
+        return Variable(labels, name=name, model=self)
 
     def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
@@ -245,7 +245,7 @@ class Model:
 
         Returns
         -------
-        defs : linopy.model.Constraint
+        labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
 
         """
@@ -267,18 +267,18 @@ class Model:
         if (sign == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
 
-        defs = (lhs.vars.chunk() + rhs).sum("_term")
+        labels = (lhs.vars.chunk() + rhs).sum("_term")
 
-        check_force_dim_names(self, defs)
+        check_force_dim_names(self, labels)
 
         start = self._cCounter
-        defs.data = np.arange(start, start + defs.size).reshape(defs.shape)
-        self._cCounter += defs.size
+        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        self._cCounter += labels.size
 
         if mask is not None:
-            # assert defs.broadcast_equals(mask), (
+            # assert labels.broadcast_equals(mask), (
             #     "The constraint and the mask do not have the same coordinates.")
-            defs = defs.where(mask, -1)
+            labels = labels.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
 
@@ -286,11 +286,11 @@ class Model:
             lhs = lhs.chunk(self.chunk)
             sign = sign.chunk(self.chunk)
             rhs = rhs.chunk(self.chunk)
-            defs = defs.chunk(self.chunk)
+            labels = labels.chunk(self.chunk)
 
-        self.constraints.add(name, defs, lhs.coeffs, lhs.vars, sign, rhs)
+        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
-        return Constraint(defs, name=name, model=self)
+        return Constraint(labels, name=name, model=self)
 
     def add_objective(self, expr, overwrite=False):
         """
@@ -341,7 +341,7 @@ class Model:
         None.
 
         """
-        labels = self.variables.defs[name]
+        labels = self.variables.labels[name]
         self.variables.remove(name)
 
         remove_b = self.constraints.vars.isin(labels).any()
@@ -424,7 +424,7 @@ class Model:
         kwargs.setdefault("engine", "python")
         resolvers = kwargs.pop("resolvers", None)
         kwargs["level"] = kwargs.pop("level", 0) + 1
-        resolvers = [self.variables.defs, self.parameters]
+        resolvers = [self.variables.labels, self.parameters]
         kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
         return pd_eval(expr, inplace=False, **kwargs)
 
@@ -965,22 +965,22 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    defs: Dataset = Dataset()
+    labels: Dataset = Dataset()
     lower: Dataset = Dataset()
     upper: Dataset = Dataset()
     model: Model = None
 
-    dataset_attrs = ["defs", "lower", "upper"]
+    dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Variables labels", "Lower bounds", "Upper bounds"]
 
     def __getitem__(
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
         if isinstance(names, str):
-            return Variable(self.defs[names], model=self.model)
+            return Variable(self.labels[names], model=self.model)
 
         return self.__class__(
-            self.defs[names], self.lower[names], self.upper[names], self.model
+            self.labels[names], self.lower[names], self.upper[names], self.model
         )
 
     def __repr__(self):
@@ -996,12 +996,12 @@ class Variables:
         return r
 
     def __iter__(self):
-        return self.defs.__iter__()
+        return self.labels.__iter__()
 
     _merge_inplace = _merge_inplace
 
-    def add(self, name, defs: DataArray, lower: DataArray, upper: DataArray):
-        self._merge_inplace("defs", defs, name, fill_value=-1)
+    def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
+        self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("lower", lower, name)
         self._merge_inplace("upper", upper, name)
 
@@ -1097,14 +1097,14 @@ class Constraints:
     A constraint container used for storing multiple constraint arrays.
     """
 
-    defs: Dataset = Dataset()
+    labels: Dataset = Dataset()
     coeffs: Dataset = Dataset()
     vars: Dataset = Dataset()
     sign: Dataset = Dataset()
     rhs: Dataset = Dataset()
     model: Model = None
 
-    dataset_attrs = ["defs", "coeffs", "vars", "sign", "rhs"]
+    dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
         "Constraint labels",
         "Left-hand-side coefficients",
@@ -1129,10 +1129,10 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return Constraint(self.defs[names], model=self.model)
+            return Constraint(self.labels[names], model=self.model)
 
         return self.__class__(
-            self.defs[names],
+            self.labels[names],
             self.coeffs[names],
             self.vars[names],
             self.sign[names],
@@ -1141,20 +1141,20 @@ class Constraints:
         )
 
     def __iter__(self):
-        return self.defs.__iter__()
+        return self.labels.__iter__()
 
     _merge_inplace = _merge_inplace
 
     def add(
         self,
         name,
-        defs: DataArray,
+        labels: DataArray,
         coeffs: DataArray,
         vars: DataArray,
         sign: DataArray,
         rhs: DataArray,
     ):
-        self._merge_inplace("defs", defs, name, fill_value=-1)
+        self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("coeffs", coeffs, name)
         self._merge_inplace("vars", vars, name)
         self._merge_inplace("sign", sign, name)
@@ -1174,7 +1174,7 @@ class Constraints:
 
     def block_sizes(self, num_blocks, block_map) -> np.ndarray:
         sizes = np.zeros(num_blocks + 1, dtype=int)
-        for name in self.defs:
+        for name in self.labels:
             sizes += self[name].block_sizes(num_blocks, block_map)
         return sizes
 

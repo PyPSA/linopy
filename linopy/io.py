@@ -58,24 +58,24 @@ def objective_to_file(m, f):
 def constraints_to_file(m, f):
     """Write out the constraints of a model to a lp file."""
     f.write("\n\ns.t.\n\n")
-    defs = m.constraints.defs
+    labels = m.constraints.labels
     vars = m.constraints.vars
     coeffs = m.constraints.coeffs
     sign = m.constraints.sign
     rhs = m.constraints.rhs
 
-    term_names = [f"{n}_term" for n in defs]
+    term_names = [f"{n}_term" for n in labels]
 
     nonnans = coeffs.notnull() & (vars != -1)
     join = [to_float_str(coeffs), " x", to_int_str(vars), "\n"]
     lhs_str = join_str_arrays(join).where(nonnans, "").reduce(np.sum, term_names)
     # .sum() does not work
 
-    nonnans = nonnans.any(term_names) & (defs != -1) & sign.notnull() & rhs.notnull()
+    nonnans = nonnans.any(term_names) & (labels != -1) & sign.notnull() & rhs.notnull()
 
     join = [
         "c",
-        to_int_str(defs),
+        to_int_str(labels),
         ": \n",
         lhs_str,
         sign,
@@ -91,14 +91,14 @@ def bounds_to_file(m, f):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
     lower = m.variables.lower[m._non_binary_variables]
-    defs = m.variables.defs[m._non_binary_variables]
+    labels = m.variables.labels[m._non_binary_variables]
     upper = m.variables.upper[m._non_binary_variables]
 
-    nonnans = lower.notnull() & upper.notnull() & (defs != -1)
+    nonnans = lower.notnull() & upper.notnull() & (labels != -1)
     join = [
         to_float_str(lower),
         " <= x",
-        to_int_str(defs),
+        to_int_str(labels),
         " <= ",
         to_float_str(upper),
         "\n",
@@ -111,9 +111,9 @@ def binaries_to_file(m, f):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
 
-    defs = m.binaries.defs
-    nonnans = defs != -1
-    binaries_str = join_str_arrays(["x", to_int_str(defs), "\n"]).where(nonnans, "")
+    labels = m.binaries.labels
+    nonnans = labels != -1
+    binaries_str = join_str_arrays(["x", to_int_str(labels), "\n"]).where(nonnans, "")
     str_array_to_file(binaries_str, f).compute()
 
 

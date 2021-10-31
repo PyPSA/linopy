@@ -21,7 +21,7 @@ target_shape = (10, 10)
 def test_scalar_variable_assignment():
     m = Model()
     m.add_variables(-5, 10, name="x")
-    assert "x" in m.variables.defs
+    assert "x" in m.variables.labels
 
 
 def test_scalar_variable_assignment_default():
@@ -51,7 +51,7 @@ def test_array_variable_assignment():
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_broadcasted():
@@ -60,7 +60,7 @@ def test_array_variable_assignment_broadcasted():
     lower = xr.DataArray(np.zeros((10)), coords=[range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_no_coords():
@@ -69,7 +69,7 @@ def test_array_variable_assignment_no_coords():
     lower = xr.DataArray(np.zeros((10)))
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_pd_index():
@@ -78,7 +78,7 @@ def test_array_variable_assignment_pd_index():
     lower = xr.DataArray(np.zeros((10)), coords=[pd.Index(range(10))])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_by_coords():
@@ -88,7 +88,7 @@ def test_array_variable_assignment_by_coords():
     upper = 1
     coords = [pd.Index(range(10)), pd.Index(range(10))]
     m.add_variables(lower, upper, coords=coords, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_with_dataframes():
@@ -97,7 +97,7 @@ def test_array_variable_assignment_with_dataframes():
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.DataFrame(np.ones((10, 10)))
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_with_dataframe_and_series():
@@ -106,7 +106,7 @@ def test_array_variable_assignment_with_dataframe_and_series():
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.Series(np.ones((10)))
     m.add_variables(lower, upper, name="x")
-    assert m.variables.defs.x.shape == target_shape
+    assert m.variables.labels.x.shape == target_shape
 
 
 def test_array_variable_assignment_different_coords():
@@ -120,10 +120,10 @@ def test_array_variable_assignment_different_coords():
     lower = pd.DataFrame(np.zeros((20, 10)))
     upper = pd.Series(np.ones((20)))
     m.add_variables(lower, upper, name="y")
-    assert m.variables.defs.y.shape == (20, 10)
+    assert m.variables.labels.y.shape == (20, 10)
     # x should now be aligned to new coords and contain 100 nans
-    assert m.variables.defs.x.shape == (20, 10)
-    assert (m.variables.defs.x != -1).sum() == 100
+    assert m.variables.labels.x.shape == (20, 10)
+    assert (m.variables.labels.x != -1).sum() == 100
 
 
 def test_wrong_variable_assignment_non_broadcastable():
@@ -148,7 +148,7 @@ def test_masked_variables():
     upper = pd.Series(np.ones((10)))
     mask = [True] * 5 + [False] * 5
     m.add_variables(lower, upper, mask=mask)
-    assert m.variables.defs.var0[-1, -1].item() == -1
+    assert m.variables.labels.var0[-1, -1].item() == -1
 
 
 def test_variable_merging():
@@ -163,14 +163,14 @@ def test_variable_merging():
 
     upper = pd.Series(np.ones((12)))
     m.add_variables(upper)
-    assert m.variables.defs.var0[-1].item() == -1
+    assert m.variables.labels.var0[-1].item() == -1
 
 
 def test_variable_bound_accessor():
     m = Model()
     x = m.add_variables(0, 10)
-    assert x.upper_bound().item() == 10
-    assert x.lower_bound().item() == 0
+    assert x.get_upper_bound().item() == 10
+    assert x.get_lower_bound().item() == 0
 
 
 def test_binaries():
@@ -179,7 +179,7 @@ def test_binaries():
     coords = [pd.Index(range(10)), pd.Index(range(10))]
     m.add_variables(coords=coords, binary=True)
 
-    assert m.variables.defs.var0.shape == target_shape
+    assert m.variables.labels.var0.shape == target_shape
 
 
 def test_linexpr():
@@ -209,8 +209,8 @@ def test_constraints():
     for attr in m.constraints.dataset_attrs:
         assert "con0" in getattr(m.constraints, attr)
 
-    assert m.constraints.defs.con0.shape == (10, 10)
-    assert m.constraints.defs.con0.dtype == int
+    assert m.constraints.labels.con0.shape == (10, 10)
+    assert m.constraints.labels.con0.dtype == int
     assert m.constraints.coeffs.con0.dtype in (int, float)
     assert m.constraints.vars.con0.dtype in (int, float)
     assert m.constraints.rhs.con0.dtype in (int, float)
@@ -237,8 +237,8 @@ def test_masked_constraints():
 
     mask = [True] * 5 + [False] * 5
     m.add_constraints(1 * x + 10 * y, "=", 0, mask=mask)
-    assert (m.constraints.defs.con0[:, 0:5] != -1).all()
-    assert (m.constraints.defs.con0[:, 5:10] == -1).all()
+    assert (m.constraints.labels.con0[:, 0:5] != -1).all()
+    assert (m.constraints.labels.con0[:, 5:10] == -1).all()
 
 
 def test_objective():
@@ -271,6 +271,6 @@ def test_remove_variable():
     for attr in m.constraints.dataset_attrs:
         assert "x" not in getattr(m.constraints, attr)
 
-    assert "con0" not in m.constraints.defs
+    assert "con0" not in m.constraints.labels
 
     assert not m.objective.vars.isin(x).any()
