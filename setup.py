@@ -47,7 +47,7 @@ setup(
             "nbsphinx",
             "nbsphinx-link",
         ],
-        "dev": ["pytest", "pre-commit"],
+        "dev": ["pytest", "pytest-cov", "pre-commit"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
