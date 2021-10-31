@@ -10,3 +10,4 @@
     :skip: gettempdir
     :skip: merge
     :skip: Expr
+    :skip: dataclass
