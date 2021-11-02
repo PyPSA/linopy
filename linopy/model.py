@@ -89,6 +89,8 @@ class Model:
 
         if solver_dir is None:
             self.solver_dir = gettempdir()
+        else:
+            self.solver_dir = solver_dir
 
     def __repr__(self):
         """Return a string representation of the linopy model."""
@@ -428,7 +430,7 @@ class Model:
         kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
         return pd_eval(expr, inplace=False, **kwargs)
 
-    def vareval(self, expr: str, eval_kw={}, **kwargs):
+    def vareval(self, expr: str, eval_kw=None, **kwargs):
         """
         Define a variable based a string expression (experimental).
 
@@ -465,8 +467,19 @@ class Model:
         >>> m.add_variables(lower, upper, name="x")
 
         """
+        if eval_kw is None:
+            eval_kw = {}
 
-    def lineval(self, expr: str, eval_kw={}, **kwargs):
+        eval_kw["level"] = eval_kw.pop("level", 1) + 1
+
+        kw = Expr(expr).to_variable_kwargs()
+        for k in ["lower", "upper"]:
+            if k in kw:
+                kw[k] = self._eval(kw[k])
+
+        return self.add_variables(**kw, **kwargs)
+
+    def lineval(self, expr: str, eval_kw=None, **kwargs):
         """
         Evaluate linear expressions given as a string (experimental).
 
@@ -506,6 +519,9 @@ class Model:
         >>> m.linexpr((c, "x"), (-1, "y"))
 
         """
+        if eval_kw is None:
+            eval_kw = {}
+
         eval_kw["level"] = eval_kw.pop("level", 1) + 1
 
         tuples = Expr(expr).to_string_tuples()
@@ -514,7 +530,7 @@ class Model:
         ]
         return self.linexpr(*tuples, **kwargs)
 
-    def coneval(self, expr: str, eval_kw={}, **kwargs):
+    def coneval(self, expr: str, eval_kw=None, **kwargs):
         """
         Define a constraint determined by a string expression (experimental).
 
@@ -557,12 +573,15 @@ class Model:
         >>> m.add_constraints(lhs, "<=", 5)
 
         """
+        if eval_kw is None:
+            eval_kw = {}
+
         eval_kw["level"] = eval_kw.pop("level", 1) + 1
 
         (lhs, sign, rhs), kw = Expr(expr).to_constraint_args_kwargs()
         lhs = [(self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in lhs]
         lhs = self.linexpr(*lhs)
-        rhs = self._eval(rhs)
+        rhs = self._eval(rhs, **eval_kw)
         return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
 
     @property
