@@ -135,6 +135,11 @@ def to_file(m, fn):
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
+def non_bool_dict(d):
+    """Convert bool to int for netCDF4 storing"""
+    return {k: v if not isinstance(v, bool) else int(v) for k, v in d.items()}
+
+
 def to_netcdf(m, *args, **kwargs):
     """
     Write out the model to a netcdf file.
@@ -165,6 +170,9 @@ def to_netcdf(m, *args, **kwargs):
     others = [get_and_rename(m, d) for d in m.dataset_attrs + ["objective"]]
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + others).assign_attrs(scalars)
+
+    for k in ds:
+        ds[k].attrs = non_bool_dict(ds[k].attrs)
 
     ds.to_netcdf(*args, **kwargs)
 
