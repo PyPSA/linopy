@@ -71,6 +71,9 @@ def test_expr_to_constraint_args_kwargs():
     assert rhs == "2"
     assert kwargs["name"] == "con"
 
+    with pytest.raises(ValueError):
+        Expr("a + b").to_constraint_args_kwargs()
+
 
 def test_expr_to_variable_kwargs():
     kwargs = Expr("x >= 5").to_variable_kwargs()
@@ -104,7 +107,38 @@ def test_model_eval(model):
     assert model["x"].equals(model._eval("x"))
 
 
+def test_var_eval(model):
+    model.vareval("z <= 0")
+    assert "z" in model.variables
+    assert model.variables["z"].get_upper_bound().item() == 0
+
+    model.vareval("a <= 0", eval_kw={})
+    assert "a" in model.variables
+
+
 def test_lin_eval(model):
     c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
     target = model.linexpr((c, model["x"]), (-1, model["y"]))
     assert model.lineval("@c * x - y").equals(target)
+    model.lineval("@c * x - y", eval_kw={})
+
+
+def test_con_eval(model):
+    c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
+    model.coneval("@c * x - y >= 0")
+    assert len(model.constraints.labels)
+
+
+def test_con_eval_repeated(model):
+    c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
+    model.coneval("@c * x - y >= 0")
+    model.coneval("@c * x - y >= 0")
+    assert len(model.constraints.labels)
+
+    model.coneval("@c * x - y >= 0", eval_kw={})
+
+
+def test_con_eval_with_name(model):
+    c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
+    model.coneval("Con1: @c * x - y >= 0")
+    assert "Con1" in model.constraints

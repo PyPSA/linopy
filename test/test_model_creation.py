@@ -6,6 +6,9 @@ Created on Wed Mar 10 11:23:13 2021
 @author: fabulous
 """
 
+from tempfile import gettempdir
+
+import dask
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,6 +19,23 @@ from linopy import Model
 # Test model functions
 
 target_shape = (10, 10)
+
+
+def test_model_repr():
+    m = Model()
+    m.__repr__()
+
+
+def test_model_force_dims_names():
+    m = Model(force_dim_names=True)
+    with pytest.raises(ValueError):
+        m.add_variables([-5], [10])
+
+
+def test_model_solver_dir():
+    d = gettempdir()
+    m = Model(solver_dir=d)
+    assert m.solver_dir == d
 
 
 def test_scalar_variable_assignment():
@@ -109,6 +129,16 @@ def test_array_variable_assignment_with_dataframe_and_series():
     assert m.variables.labels.x.shape == target_shape
 
 
+def test_array_variable_assignment_chunked():
+    # setting bounds with one pd.DataFrame and one pd.Series
+    m = Model(chunk=5)
+    lower = pd.DataFrame(np.zeros((10, 10)))
+    upper = pd.Series(np.ones((10)))
+    m.add_variables(lower, upper, name="x")
+    assert m.variables.labels.x.shape == target_shape
+    assert isinstance(m.variables.labels.x.data, dask.array.core.Array)
+
+
 def test_array_variable_assignment_different_coords():
     # set a variable with different set of coordinates, this should be properly
     # merged
@@ -166,14 +196,7 @@ def test_variable_merging():
     assert m.variables.labels.var0[-1].item() == -1
 
 
-def test_variable_bound_accessor():
-    m = Model()
-    x = m.add_variables(0, 10)
-    assert x.get_upper_bound().item() == 10
-    assert x.get_lower_bound().item() == 0
-
-
-def test_binaries():
+def test_binary_assigment():
     m = Model()
 
     coords = [pd.Index(range(10)), pd.Index(range(10))]
@@ -196,7 +219,7 @@ def test_linexpr():
     assert (expr == 1 * x + 10 * y).all().to_array().all()
 
 
-def test_constraints():
+def test_constraint_assignment():
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -216,15 +239,58 @@ def test_constraints():
     assert m.constraints.rhs.con0.dtype in (int, float)
 
 
-def test_constraint_accessor():
+def test_coefficient_range():
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper)
     y = m.add_variables()
+
     m.add_constraints(1 * x + 10 * y, "=", 0)
-    assert m.constraints["con0"].shape == (10, 10)
+    assert m.coefficientrange["min"].con0 == 1
+    assert m.coefficientrange["max"].con0 == 10
+
+
+def test_constraint_assignment_with_tuples():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+
+    m.add_constraints([(1, x), (10, y)], "=", 0, name="c")
+    for attr in m.constraints.dataset_attrs:
+        assert "c" in getattr(m.constraints, attr)
+    assert m.constraints.labels.c.shape == (10, 10)
+
+
+def test_constraint_assignment_chunked():
+    # setting bounds with one pd.DataFrame and one pd.Series
+    m = Model(chunk=5)
+    lower = pd.DataFrame(np.zeros((10, 10)))
+    upper = pd.Series(np.ones((10)))
+    x = m.add_variables(lower, upper)
+    m.add_constraints(x, ">=", 0, name="c")
+    assert m.constraints.coeffs.c.data.shape == target_shape + (1,)
+    assert isinstance(m.constraints.coeffs.c.data, dask.array.core.Array)
+
+
+def test_wrong_constraint_assignment_wrong_sign():
+    m = Model()
+    x = m.add_variables()
+    with pytest.raises(ValueError):
+        m.add_constraints(x, "==", 0)
+
+
+def test_wrong_constraint_assignment_repeated():
+    # repeated variable assignment is forbidden
+    m = Model()
+    x = m.add_variables()
+    m.add_constraints(x, "<=", 0, name="con")
+    with pytest.raises(ValueError):
+        m.add_constraints(x, "<=", 0, name="con")
 
 
 def test_masked_constraints():
@@ -253,6 +319,14 @@ def test_objective():
     m.add_objective(obj)
     assert m.objective.vars.size == 200
 
+    # test overwriting
+    obj = (2 * x).sum()
+    m.add_objective(obj, overwrite=True)
+
+    # test Tuple
+    obj = [(2, x)]
+    m.add_objective(obj, overwrite=True)
+
 
 def test_remove_variable():
     m = Model()
@@ -274,3 +348,12 @@ def test_remove_variable():
     assert "con0" not in m.constraints.labels
 
     assert not m.objective.vars.isin(x).any()
+
+
+def test_remove_constraint():
+    m = Model()
+
+    x = m.add_variables()
+    m.add_constraints(x, "=", 0, name="x")
+    m.remove_constraints("x")
+    assert not len(m.constraints.labels)

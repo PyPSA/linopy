@@ -48,8 +48,7 @@ def test_str_arrays_with_nans():
     assert da.dtype == object
 
 
-@pytest.fixture(scope="session")
-def test_to_netcdf():
+def test_to_netcdf(tmp_path):
     m = Model()
 
     x = m.add_variables(4, pd.Series([8, 10]))
@@ -57,8 +56,9 @@ def test_to_netcdf():
     m.add_constraints(x + y, "<=", 10)
     m.add_objective(2 * x + 3 * y)
 
-    m.to_netcdf("test.nc")
-    p = read_netcdf("test.nc")
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
 
     for k in m.scalar_attrs:
         if k != "objective_value":
@@ -67,10 +67,9 @@ def test_to_netcdf():
         assert_equal(getattr(m, k), getattr(p, k))
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not available")
-@pytest.fixture(scope="session")
-def test_to_file():
-    import gurobi
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file(tmp_path):
+    import gurobipy
 
     m = Model()
 
@@ -80,6 +79,8 @@ def test_to_file():
     m.add_constraints(x + y, "<=", 10)
 
     m.add_objective(2 * x + 3 * y)
-    m.to_file("test.lp")
 
-    gm = gurobi.read("test.lp")
+    fn = tmp_path / "test.lp"
+    m.to_file(fn)
+
+    gurobipy.read(str(fn))

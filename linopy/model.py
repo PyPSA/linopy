@@ -441,7 +441,8 @@ class Model:
         Parameters
         ----------
         expr : str
-            Valid string to be compiled as a variable definition (lower and upper bounds!).
+            Valid string to be compiled as a variable definition
+            (lower and upper bounds!).
         eval_kw : dict
             Keyword arguments to be passed to `pandas.eval`.
         **kwargs :
@@ -475,7 +476,7 @@ class Model:
         kw = Expr(expr).to_variable_kwargs()
         for k in ["lower", "upper"]:
             if k in kw:
-                kw[k] = self._eval(kw[k])
+                kw[k] = self._eval(kw[k], **eval_kw)
 
         return self.add_variables(**kw, **kwargs)
 
@@ -584,12 +585,13 @@ class Model:
         rhs = self._eval(rhs, **eval_kw)
         return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
 
+    # TODO: move to constraints class
     @property
     def coefficientrange(self):
         """Coefficient range of the constraints in the model."""
         return (
             xr.concat(
-                [self.constraints_lhs_coeffs.min(), self.constraints_lhs_coeffs.max()],
+                [self.constraints.coeffs.min(), self.constraints.coeffs.max()],
                 dim=pd.Index(["min", "max"]),
             )
             .to_dataframe()

@@ -100,7 +100,7 @@ class Expr(str):
             # assume that one bound is given, variable comes first
             if exprs[1] == ">=":
                 return dict(name=exprs[0], lower=exprs[2])
-            elif exprs[1] == "<=":
+            else:
                 return dict(name=exprs[0], upper=exprs[2])
         elif len(exprs) == 5:
             return dict(lower=exprs[0], name=exprs[2], upper=exprs[4])
