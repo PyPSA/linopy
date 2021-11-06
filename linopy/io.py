@@ -193,7 +193,7 @@ def read_netcdf(path, **kwargs):
     m : linopy.Model
 
     """
-    from .model import Constraints, LinearExpression, Model, Variables
+    from linopy.model import Constraints, LinearExpression, Model, Variables
 
     m = Model()
     all_ds = xr.load_dataset(path, **kwargs)

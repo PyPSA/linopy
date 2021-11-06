@@ -5,6 +5,10 @@ Upcoming Release
 ----------------
 
 
+**Package Design**
+The definitions of variables, constraints and linearexpression were moved to dedicated modules: ``linopy.variables``, ``linopy.constraints`` and ``linopy.expressions``.
+
+
 **Internal/Data handling**
 
 Most of the following changes are dedicated to data handling within the `Model` class. Users which rely on the internal structure have to expect some breaking changes.

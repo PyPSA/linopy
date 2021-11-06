@@ -12,6 +12,10 @@ repos:
     rev: v0.3.4
     hooks:
       - id: blackdoc
+-   repo: https://github.com/MarcoGorelli/absolufy-imports
+    rev: v0.3.0
+    hooks:
+    -   id: absolufy-imports
 -   repo: https://github.com/PyCQA/isort
     rev: 5.9.3
     hooks:

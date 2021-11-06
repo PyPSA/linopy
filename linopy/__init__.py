@@ -6,6 +6,6 @@ Created on Wed Mar 10 11:03:06 2021
 @author: fabulous
 """
 
-from . import model
-from .io import read_netcdf
-from .model import LinearExpression, Model, Variable, available_solvers
+from linopy import model
+from linopy.io import read_netcdf
+from linopy.model import LinearExpression, Model, Variable, available_solvers
