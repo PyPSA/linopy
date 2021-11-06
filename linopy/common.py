@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Linopy module.
+Linopy common module.
 This module contains commonly used functions.
 """
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Linopy model module.
+Linopy constraints module.
 This module contains implementations for the Constraint{s} class.
 """
 
@@ -92,7 +92,7 @@ class Constraint(DataArray):
         return self.model.constraints.rhs[self.name]
 
 
-@dataclass
+@dataclass(repr=False)
 class Constraints:
     """
     A constraint container used for storing multiple constraint arrays.

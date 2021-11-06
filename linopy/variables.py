@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Linopy model module.
+Linopy variables module.
 This module contains variable related definitions of the package.
 """
 
 from dataclasses import dataclass
 from typing import Sequence, Union
 
-import numpy as np
-import xarray as xr
 from xarray import DataArray, Dataset
 
 import linopy.expressions as expressions
 from linopy.common import _merge_inplace
-from linopy.model import Model
 
 
 class Variable(DataArray):
@@ -204,7 +201,7 @@ class Variable(DataArray):
         return self.to_linexpr().sum(dims, keep_coords)
 
 
-@dataclass
+@dataclass(repr=False)
 class Variables:
     """
     A variables container used for storing multiple variable arrays.

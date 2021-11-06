@@ -8,6 +8,4 @@
     :skip: to_file
     :skip: NamedTemporaryFile
     :skip: gettempdir
-    :skip: merge
     :skip: Expr
-    :skip: dataclass

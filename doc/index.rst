@@ -92,6 +92,10 @@ This package is published under license GNU Public License GPLv3
    :caption: API Reference
 
    api-model
+   api-variables
+   api-expressions
+   api-constraints
+   api-common
    api-solvers
    api-io
    api-eval

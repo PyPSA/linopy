@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Linopy expression module.
+Linopy expressions module.
 This module contains definition related to affine expressions.
 """
 
