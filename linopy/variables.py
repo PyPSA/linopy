@@ -5,7 +5,7 @@ This module contains variable related definitions of the package.
 """
 
 from dataclasses import dataclass
-from typing import Sequence, Union
+from typing import Any, Sequence, Union
 
 from xarray import DataArray, Dataset
 
@@ -211,7 +211,7 @@ class Variables:
     labels: Dataset = Dataset()
     lower: Dataset = Dataset()
     upper: Dataset = Dataset()
-    model: "Model" = None
+    model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Variables labels", "Lower bounds", "Upper bounds"]

@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess as sub
+from pathlib import Path
 
 import pandas as pd
 
@@ -47,6 +48,11 @@ def set_int_index(series):
     """Convert string index to int index."""
     series.index = series.index.str[1:].astype(int)
     return series
+
+
+def maybe_convert_path(path):
+    """Convert a pathlib.Path to a string."""
+    return str(path.resolve()) if isinstance(path, Path) else path
 
 
 def run_cbc(
@@ -195,7 +201,7 @@ def run_glpk(
         status = "warning"
 
     if termination_condition != "optimal":
-        return status, termination_condition, None, None, None
+        return dict(status=status, termination_condition=termination_condition)
 
     dual_ = io.StringIO("".join(read_until_break(f))[:-2])
     dual_ = pd.read_fwf(dual_)[1:].set_index("Row name")
@@ -203,7 +209,7 @@ def run_glpk(
         dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=dual_.index)
+        dual = pd.Series(index=dual_.index, dtype=float).pipe(set_int_index)
 
     solution = io.StringIO("".join(read_until_break(f))[:-2])
     solution = (
@@ -322,21 +328,26 @@ def run_gurobi(
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
-    m = gurobipy.read(problem_fn)
+    _problem_fn = maybe_convert_path(problem_fn)
+    _log_fn = maybe_convert_path(log_fn)
+    _warmstart_fn = maybe_convert_path(warmstart_fn)
+    _basis_fn = maybe_convert_path(basis_fn)
+
+    m = gurobipy.read(_problem_fn)
     if solver_options is not None:
         for key, value in solver_options.items():
             m.setParam(key, value)
     if log_fn is not None:
-        m.setParam("logfile", log_fn)
+        m.setParam("logfile", _log_fn)
 
-    if warmstart_fn:
-        m.read(warmstart_fn)
+    if _warmstart_fn:
+        m.read(_warmstart_fn)
     m.optimize()
     logging.disable(1)
 
-    if basis_fn:
+    if _basis_fn:
         try:
-            m.write(basis_fn)
+            m.write(_basis_fn)
         except gurobipy.GurobiError as err:
             logger.info("No model basis stored. Raised error: ", err)
 
@@ -349,8 +360,6 @@ def run_gurobi(
     if termination_condition == "optimal":
         status = "ok"
     elif termination_condition == "suboptimal":
-        status = "warning"
-    elif termination_condition == "infeasible":
         status = "warning"
     elif termination_condition == "inf_or_unbd":
         status = "warning"
@@ -370,7 +379,7 @@ def run_gurobi(
         dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
     except AttributeError:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=[c.ConstrName for c in m.getConstrs()])
+        dual = pd.Series(index=[c.ConstrName for c in m.getConstrs()], dtype=float)
     dual = set_int_index(dual)
 
     return dict(
@@ -404,20 +413,25 @@ def run_xpress(
     """
     m = xpress.problem()
 
-    m.read(problem_fn)
+    _problem_fn = maybe_convert_path(problem_fn)
+    _log_fn = maybe_convert_path(log_fn)
+    _warmstart_fn = maybe_convert_path(warmstart_fn)
+    _basis_fn = maybe_convert_path(basis_fn)
+
+    m.read(_problem_fn)
     m.setControl(solver_options)
 
-    if log_fn is not None:
-        m.setlogfile(log_fn)
+    if _log_fn is not None:
+        m.setlogfile(_log_fn)
 
-    if warmstart_fn:
-        m.readbasis(warmstart_fn)
+    if _warmstart_fn:
+        m.readbasis(_warmstart_fn)
 
     m.solve()
 
-    if basis_fn:
+    if _basis_fn:
         try:
-            m.writebasis(basis_fn)
+            m.writebasis(_basis_fn)
         except Exception as err:
             logger.info("No model basis stored. Raised error: ", err)
 
@@ -431,8 +445,10 @@ def run_xpress(
         or termination_condition == "mip_infeasible"
         or termination_condition == "lp_unbounded"
         or termination_condition == "lp_infeasible"
+        or termination_condition == "lp_infeas"
     ):
-        status = "infeasible or unbounded"
+        status = "warning"
+        termination_condition = "infeasible or unbounded"
     else:
         status = "warning"
 

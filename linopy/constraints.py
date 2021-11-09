@@ -5,7 +5,7 @@ This module contains implementations for the Constraint{s} class.
 """
 
 from dataclasses import dataclass
-from typing import Sequence, Union
+from typing import Any, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -106,7 +106,7 @@ class Constraints:
     vars: Dataset = Dataset()
     sign: Dataset = Dataset()
     rhs: Dataset = Dataset()
-    model: "Model" = None
+    model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
