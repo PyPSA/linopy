@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021
 """
 
 import pandas as pd
+import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
@@ -18,6 +19,12 @@ x = m.add_variables(pd.Series([0, 0]), 1, name="x")
 y = m.add_variables(4, pd.Series([8, 10]), name="y")
 z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
 v = m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
+
+
+def test_repr():
+    expr = m.linexpr((10, "x"), (1, "y"))
+    expr.__repr__()
+    expr._repr_html_()
 
 
 def test_values():
@@ -70,10 +77,15 @@ def test_add():
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.notnull().all().to_array().all()
 
+    with pytest.raises(TypeError):
+        expr + 10
+    with pytest.raises(TypeError):
+        expr - 10
+
 
 def test_sub():
     expr = 10 * x + y
-    other = 2 * y + z
+    other = 2 * y - z
     res = expr - other
 
     assert res.nterm == expr.nterm + other.nterm
@@ -93,6 +105,17 @@ def test_sum():
     assert res.size == expr.size
     assert res.nterm == expr.size
     assert res.notnull().all().to_array().all()
+
+    assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+
+
+def test_mul():
+    expr = 10 * x + y + z
+    mexpr = expr * 10
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
+
+    mexpr = 10 * expr
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
 
 
 def test_group_terms():

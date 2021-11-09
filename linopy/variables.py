@@ -73,6 +73,7 @@ class Variable(DataArray):
     def __init__(self, *args, **kwargs):
         self.model = kwargs.pop("model", None)
         super().__init__(*args, **kwargs)
+        assert self.name is not None, "Variable data does not have a name."
 
     # We have to set the _reduce_method to None, in order to overwrite basic
     # reduction functions as `sum`. There might be a better solution (?).
