@@ -327,6 +327,10 @@ def test_objective():
     obj = [(2, x)]
     m.add_objective(obj, overwrite=True)
 
+    # test objective range
+    assert m.objectiverange.min() == 2
+    assert m.objectiverange.max() == 2
+
 
 def test_remove_variable():
     m = Model()

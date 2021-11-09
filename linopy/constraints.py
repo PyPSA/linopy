@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Sequence, Union
 
 import numpy as np
+import pandas as pd
+import xarray as xr
 from xarray import DataArray, Dataset
 
 from linopy.common import _merge_inplace
@@ -165,6 +167,18 @@ class Constraints:
     def remove(self, name):
         for attr in self.dataset_attrs:
             setattr(self, attr, getattr(self, attr).drop_vars(name))
+
+    @property
+    def coefficientrange(self):
+        """Coefficient range of the constraint."""
+        return (
+            xr.concat(
+                [self.coeffs.min(), self.coeffs.max()],
+                dim=pd.Index(["min", "max"]),
+            )
+            .to_dataframe()
+            .T
+        )
 
     @property
     def inequalities(self):

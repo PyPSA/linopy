@@ -46,6 +46,9 @@ def test_variable_to_linexpr():
     assert expr.nterm == 1
     assert len(expr.vars.dim_0) == x.shape[0]
 
+    expr = x * 1
+    assert isinstance(expr, LinearExpression)
+
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((10, "x"), (1, "y")))
@@ -66,8 +69,17 @@ def test_variable_to_linexpr():
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
+    expr = x.sum()
+    assert isinstance(expr, LinearExpression)
+
+    with pytest.raises(TypeError):
+        x + 10
+    with pytest.raises(TypeError):
+        x - 10
+
 
 def test_add():
+
     expr = 10 * x + y
     other = 2 * y + z
     res = expr + other
@@ -76,6 +88,9 @@ def test_add():
     assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.notnull().all().to_array().all()
+
+    assert isinstance(x - expr, LinearExpression)
+    assert isinstance(x + expr, LinearExpression)
 
     with pytest.raises(TypeError):
         expr + 10
