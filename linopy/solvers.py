@@ -89,6 +89,7 @@ def run_cbc(
     else:
         log_f = open(log_fn, "w")
         p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
+        p.wait()
 
     with open(solution_fn, "r") as f:
         data = f.readline()
@@ -166,6 +167,8 @@ def run_glpk(
         for line in iter(p.stdout.readline, b""):
             print(line.decode(), end="")
         p.stdout.close()
+        p.wait()
+    else:
         p.wait()
 
     f = open(solution_fn)
