@@ -110,6 +110,37 @@ class Model:
         """Get a model variable by the name."""
         return Variable(self.variables[key])
 
+    def check_force_dim_names(self, ds):
+        """
+        Ensure that the added data does not lead to unintended broadcasting.
+
+        Parameters
+        ----------
+        model : linopy.Model
+        ds : xr.DataArray/Variable/LinearExpression
+            Data that should be added to the model.
+
+        Raises
+        ------
+        ValueError
+            If broadcasted data leads to unspecified dimension names.
+
+        Returns
+        -------
+        None.
+
+        """
+        contains_default_dims = any(
+            bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims
+        )
+        if self.force_dim_names and contains_default_dims:
+            raise ValueError(
+                "Added data contains non-customized dimension names. This is not "
+                "allowed when setting `force_dim_names` to True."
+            )
+        else:
+            return
+
     def add_variables(
         self, lower=-inf, upper=inf, coords=None, name=None, mask=None, binary=False
     ):
@@ -200,7 +231,7 @@ class Model:
 
         labels = DataArray(coords=coords).assign_attrs(binary=binary)
 
-        check_force_dim_names(self, labels)
+        self.check_force_dim_names(labels)
 
         start = self._xCounter
         labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
@@ -272,7 +303,7 @@ class Model:
 
         labels = (lhs.vars.chunk() + rhs).sum("_term")
 
-        check_force_dim_names(self, labels)
+        self.check_force_dim_names(labels)
 
         start = self._cCounter
         labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
@@ -590,22 +621,15 @@ class Model:
     @property
     def coefficientrange(self):
         """Coefficient range of the constraints in the model."""
-        return (
-            xr.concat(
-                [self.constraints.coeffs.min(), self.constraints.coeffs.max()],
-                dim=pd.Index(["min", "max"]),
-            )
-            .to_dataframe()
-            .T
-        )
+        return self.constraints.coefficientrange
 
     @property
     def objectiverange(self):
         """Objective range of the objective in the model."""
         return pd.Series(
             [
-                self.objective.coefficients.min().item(),
-                self.objective.coefficients.max().item(),
+                self.objective.coeffs.min().item(),
+                self.objective.coeffs.max().item(),
             ],
             index=["min", "max"],
         )
@@ -692,11 +716,10 @@ class Model:
             )
 
         finally:
-            if not keep_files:
-                if os.path.exists(problem_fn):
-                    os.remove(problem_fn)
-                if os.path.exists(solution_fn):
-                    os.remove(solution_fn)
+            if os.path.exists(problem_fn) and not keep_files:
+                os.remove(problem_fn)
+            if os.path.exists(solution_fn) and not keep_files:
+                os.remove(solution_fn)
 
         status = res.pop("status")
         termination_condition = res.pop("termination_condition")
@@ -710,8 +733,8 @@ class Model:
             )
         else:
             logger.warning(
-                f"Optimization failed with status {status} and "
-                f"termination condition {termination_condition}"
+                f"Optimization failed with status `{status}` and "
+                f"termination condition `{termination_condition}`."
             )
             return status, termination_condition
 
@@ -752,31 +775,3 @@ def counter():
     while True:
         yield num
         num += 1
-
-
-def check_force_dim_names(model, ds):
-    """
-    Ensure that the added data does not lead to unintended broadcasting.
-
-    Parameters
-    ----------
-    model : linopy.Model
-    ds : xr.DataArray/Variable/LinearExpression
-        Data that should be added to the model.
-
-    Raises
-    ------
-    ValueError
-        If broadcasted data leads to unspecified dimension names.
-
-    Returns
-    -------
-    None.
-
-    """
-    if model.force_dim_names:
-        if any(bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims):
-            raise ValueError(
-                "Added data contains non-customized dimension names. This is not "
-                "allowed when setting `force_dim_names` to True."
-            )
