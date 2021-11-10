@@ -16,8 +16,10 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get install coinor-cbc
+        sudo apt-get install -y glpk-utils
         python -m pip install --upgrade pip
         pip install -e .[dev]
+        pip install -e cplex xpress gurobipy
     - name: Lint with flake8
       run: |
         pip install flake8
