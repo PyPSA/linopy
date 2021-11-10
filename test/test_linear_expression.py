@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021
 """
 
 import pandas as pd
+import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
@@ -17,6 +18,13 @@ m = Model()
 x = m.add_variables(pd.Series([0, 0]), 1, name="x")
 y = m.add_variables(4, pd.Series([8, 10]), name="y")
 z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
+v = m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
+
+
+def test_repr():
+    expr = m.linexpr((10, "x"), (1, "y"))
+    expr.__repr__()
+    expr._repr_html_()
 
 
 def test_values():
@@ -38,6 +46,9 @@ def test_variable_to_linexpr():
     assert expr.nterm == 1
     assert len(expr.vars.dim_0) == x.shape[0]
 
+    expr = x * 1
+    assert isinstance(expr, LinearExpression)
+
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((10, "x"), (1, "y")))
@@ -58,17 +69,17 @@ def test_variable_to_linexpr():
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
+    expr = x.sum()
+    assert isinstance(expr, LinearExpression)
 
-def test_term_labels():
-    "Test that the _term dimension is named after the variables."
-    expr = 10 * x + y
-    other = m.linexpr((2, "y"), (1, "z"))
-
-    assert (expr._term == [0, 1]).all()
-    assert (other._term == [0, 1]).all()
+    with pytest.raises(TypeError):
+        x + 10
+    with pytest.raises(TypeError):
+        x - 10
 
 
 def test_add():
+
     expr = 10 * x + y
     other = 2 * y + z
     res = expr + other
@@ -78,10 +89,18 @@ def test_add():
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.notnull().all().to_array().all()
 
+    assert isinstance(x - expr, LinearExpression)
+    assert isinstance(x + expr, LinearExpression)
+
+    with pytest.raises(TypeError):
+        expr + 10
+    with pytest.raises(TypeError):
+        expr - 10
+
 
 def test_sub():
     expr = 10 * x + y
-    other = 2 * y + z
+    other = 2 * y - z
     res = expr - other
 
     assert res.nterm == expr.nterm + other.nterm
@@ -102,10 +121,29 @@ def test_sum():
     assert res.nterm == expr.size
     assert res.notnull().all().to_array().all()
 
+    assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
 
-def test_groupby():
+
+def test_mul():
     expr = 10 * x + y + z
-    group = xr.DataArray([1, 1, 2], dims="dim_1")
-    expr = expr.groupby(group).sum()
-    assert "group" in expr.dims
-    assert (expr.group == [1, 2]).all()
+    mexpr = expr * 10
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
+
+    mexpr = 10 * expr
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
+
+
+def test_group_terms():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.to_linexpr().group_terms(groups)
+    assert "group" in grouped.dims
+    assert (grouped.group == [1, 2]).all()
+    assert grouped._term.size == 10
+
+
+def test_group_terms_variable():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.group_terms(groups)
+    assert "group" in grouped.dims
+    assert (grouped.group == [1, 2]).all()
+    assert grouped._term.size == 10

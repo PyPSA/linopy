@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess as sub
+from pathlib import Path
 
 import pandas as pd
 
@@ -49,6 +50,11 @@ def set_int_index(series):
     return series
 
 
+def maybe_convert_path(path):
+    """Convert a pathlib.Path to a string."""
+    return str(path.resolve()) if isinstance(path, Path) else path
+
+
 def run_cbc(
     problem_fn,
     log_fn,
@@ -89,6 +95,7 @@ def run_cbc(
     else:
         log_f = open(log_fn, "w")
         p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
+        p.wait()
 
     with open(solution_fn, "r") as f:
         data = f.readline()
@@ -109,7 +116,7 @@ def run_cbc(
     objective = float(data[len("Optimal - objective value ") :])
 
     with open(solution_fn, "rb") as f:
-        trimmed_sol_fn = re.sub(b"\*\*\s+", b"", f.read())
+        trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
 
     data = pd.read_csv(
         io.BytesIO(trimmed_sol_fn),
@@ -167,6 +174,8 @@ def run_glpk(
             print(line.decode(), end="")
         p.stdout.close()
         p.wait()
+    else:
+        p.wait()
 
     f = open(solution_fn)
 
@@ -180,7 +189,7 @@ def run_glpk(
     info = io.StringIO("".join(read_until_break(f))[:-2])
     info = pd.read_csv(info, sep=":", index_col=0, header=None)[1]
     termination_condition = info.Status.lower().strip()
-    objective = float(re.sub("[^0-9\.\+\-e]+", "", info.Objective))
+    objective = float(re.sub(r"[^0-9\.\+\-e]+", "", info.Objective))
 
     if termination_condition in ["optimal", "integer optimal"]:
         status = "ok"
@@ -192,7 +201,7 @@ def run_glpk(
         status = "warning"
 
     if termination_condition != "optimal":
-        return status, termination_condition, None, None, None
+        return dict(status=status, termination_condition=termination_condition)
 
     dual_ = io.StringIO("".join(read_until_break(f))[:-2])
     dual_ = pd.read_fwf(dual_)[1:].set_index("Row name")
@@ -200,7 +209,7 @@ def run_glpk(
         dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=dual_.index)
+        dual = pd.Series(index=dual_.index, dtype=float).pipe(set_int_index)
 
     solution = io.StringIO("".join(read_until_break(f))[:-2])
     solution = (
@@ -240,6 +249,12 @@ def run_cplex(
     i.e. `**{'aa.bb.cc' : x}`.
     """
     m = cplex.Cplex()
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
     if log_fn is not None:
         log_f = open(log_fn, "w")
         m.set_results_stream(log_f)
@@ -270,6 +285,7 @@ def run_cplex(
         termination_condition = "optimal"
     else:
         status = "warning"
+        return dict(status=status, termination_condition=termination_condition)
 
     if (status == "ok") and basis_fn and is_lp:
         try:
@@ -286,7 +302,7 @@ def run_cplex(
         dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=m.linear_constraints.get_names())
+        dual = pd.Series(index=m.linear_constraints.get_names(), dtype=float)
     dual = set_int_index(dual)
 
     return dict(
@@ -319,6 +335,11 @@ def run_gurobi(
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
     m = gurobipy.read(problem_fn)
     if solver_options is not None:
         for key, value in solver_options.items():
@@ -347,8 +368,6 @@ def run_gurobi(
         status = "ok"
     elif termination_condition == "suboptimal":
         status = "warning"
-    elif termination_condition == "infeasible":
-        status = "warning"
     elif termination_condition == "inf_or_unbd":
         status = "warning"
         termination_condition = "infeasible or unbounded"
@@ -367,7 +386,7 @@ def run_gurobi(
         dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
     except AttributeError:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=[c.ConstrName for c in m.getConstrs()])
+        dual = pd.Series(index=[c.ConstrName for c in m.getConstrs()], dtype=float)
     dual = set_int_index(dual)
 
     return dict(
@@ -401,6 +420,11 @@ def run_xpress(
     """
     m = xpress.problem()
 
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
     m.read(problem_fn)
     m.setControl(solver_options)
 
@@ -428,8 +452,10 @@ def run_xpress(
         or termination_condition == "mip_infeasible"
         or termination_condition == "lp_unbounded"
         or termination_condition == "lp_infeasible"
+        or termination_condition == "lp_infeas"
     ):
-        status = "infeasible or unbounded"
+        status = "warning"
+        termination_condition = "infeasible or unbounded"
     else:
         status = "warning"
 

@@ -21,7 +21,7 @@ setup(
     description="Linear optimization with N-D labeled arrays in Python",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    # url='https://github.com/PyPSA/linopy',
+    url="https://github.com/PyPSA/linopy",
     license="GPLv3",
     packages=find_packages(exclude=["doc", "test"]),
     include_package_data=True,
@@ -34,12 +34,12 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "cplex",
         "xarray>=0.16",
         "dask>=0.18.0",
     ],
     extras_require={
         "docs": [
+            "ipython",
             "numpydoc",
             "sphinx-automodapi",
             "sphinx",
@@ -47,7 +47,7 @@ setup(
             "nbsphinx",
             "nbsphinx-link",
         ],
-        "dev": ["pytest", "pre-commit"],
+        "dev": ["pytest", "pytest-cov", "pre-commit"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
