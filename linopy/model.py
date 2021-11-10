@@ -239,8 +239,6 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
-            # assert labels.broadcast_equals(mask), (
-            #     "The variable and the mask do not have the same coordinates.")
             labels = labels.where(mask, -1)
 
         if self.chunk:
@@ -311,8 +309,6 @@ class Model:
         self._cCounter += labels.size
 
         if mask is not None:
-            # assert labels.broadcast_equals(mask), (
-            #     "The constraint and the mask do not have the same coordinates.")
             labels = labels.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
@@ -624,7 +620,6 @@ class Model:
         rhs = self._eval(rhs, **eval_kw)
         return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
 
-    # TODO: move to constraints class
     @property
     def coefficientrange(self):
         """Coefficient range of the constraints in the model."""
