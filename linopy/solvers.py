@@ -116,7 +116,7 @@ def run_cbc(
     objective = float(data[len("Optimal - objective value ") :])
 
     with open(solution_fn, "rb") as f:
-        trimmed_sol_fn = re.sub(b"\*\*\s+", b"", f.read())
+        trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
 
     data = pd.read_csv(
         io.BytesIO(trimmed_sol_fn),
@@ -189,7 +189,7 @@ def run_glpk(
     info = io.StringIO("".join(read_until_break(f))[:-2])
     info = pd.read_csv(info, sep=":", index_col=0, header=None)[1]
     termination_condition = info.Status.lower().strip()
-    objective = float(re.sub("[^0-9\.\+\-e]+", "", info.Objective))
+    objective = float(re.sub(r"[^0-9\.\+\-e]+", "", info.Objective))
 
     if termination_condition in ["optimal", "integer optimal"]:
         status = "ok"
@@ -249,6 +249,12 @@ def run_cplex(
     i.e. `**{'aa.bb.cc' : x}`.
     """
     m = cplex.Cplex()
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
     if log_fn is not None:
         log_f = open(log_fn, "w")
         m.set_results_stream(log_f)
@@ -279,6 +285,7 @@ def run_cplex(
         termination_condition = "optimal"
     else:
         status = "warning"
+        return dict(status=status, termination_condition=termination_condition)
 
     if (status == "ok") and basis_fn and is_lp:
         try:
@@ -295,7 +302,7 @@ def run_cplex(
         dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=m.linear_constraints.get_names())
+        dual = pd.Series(index=m.linear_constraints.get_names(), dtype=float)
     dual = set_int_index(dual)
 
     return dict(
@@ -328,26 +335,26 @@ def run_gurobi(
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
-    _problem_fn = maybe_convert_path(problem_fn)
-    _log_fn = maybe_convert_path(log_fn)
-    _warmstart_fn = maybe_convert_path(warmstart_fn)
-    _basis_fn = maybe_convert_path(basis_fn)
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
 
-    m = gurobipy.read(_problem_fn)
+    m = gurobipy.read(problem_fn)
     if solver_options is not None:
         for key, value in solver_options.items():
             m.setParam(key, value)
     if log_fn is not None:
-        m.setParam("logfile", _log_fn)
+        m.setParam("logfile", log_fn)
 
-    if _warmstart_fn:
-        m.read(_warmstart_fn)
+    if warmstart_fn:
+        m.read(warmstart_fn)
     m.optimize()
     logging.disable(1)
 
-    if _basis_fn:
+    if basis_fn:
         try:
-            m.write(_basis_fn)
+            m.write(basis_fn)
         except gurobipy.GurobiError as err:
             logger.info("No model basis stored. Raised error: ", err)
 
@@ -413,25 +420,25 @@ def run_xpress(
     """
     m = xpress.problem()
 
-    _problem_fn = maybe_convert_path(problem_fn)
-    _log_fn = maybe_convert_path(log_fn)
-    _warmstart_fn = maybe_convert_path(warmstart_fn)
-    _basis_fn = maybe_convert_path(basis_fn)
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
 
-    m.read(_problem_fn)
+    m.read(problem_fn)
     m.setControl(solver_options)
 
-    if _log_fn is not None:
-        m.setlogfile(_log_fn)
+    if log_fn is not None:
+        m.setlogfile(log_fn)
 
-    if _warmstart_fn:
-        m.readbasis(_warmstart_fn)
+    if warmstart_fn:
+        m.readbasis(warmstart_fn)
 
     m.solve()
 
-    if _basis_fn:
+    if basis_fn:
         try:
-            m.writebasis(_basis_fn)
+            m.writebasis(basis_fn)
         except Exception as err:
             logger.info("No model basis stored. Raised error: ", err)
 
