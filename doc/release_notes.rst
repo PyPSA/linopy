@@ -5,6 +5,10 @@ Upcoming Release
 ----------------
 
 
+Version 0.0.4
+-------------
+
+
 **Package Design**
 
 The definitions of variables, constraints and linearexpression were moved to dedicated modules: ``linopy.variables``, ``linopy.constraints`` and ``linopy.expressions``.
