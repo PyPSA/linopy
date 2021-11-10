@@ -190,6 +190,7 @@ class Model:
 
         Examples
         --------
+
         >>> m = linopy.Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
@@ -440,6 +441,7 @@ class Model:
 
         Examples
         --------
+
         >>> m = Model()
         >>> m.add_variables(pd.Series([0, 0]), 1, name="x")
         >>> m.add_variables(4, pd.Series([8, 10]), name="y")
@@ -497,6 +499,7 @@ class Model:
         >>> m.vareval("@lower <= x <= @upper")
 
         This is the same as
+
         >>> m.add_variables(lower, upper, name="x")
 
         """
@@ -546,9 +549,11 @@ class Model:
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the linear expression
+
         >>> m.lineval("@c * x - y")
 
         This is the same as
+
         >>> m.linexpr((c, "x"), (-1, "y"))
 
         """
@@ -599,9 +604,11 @@ class Model:
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the constraint:
+
         >>> m.coneval("@c * x - y <= 5 ")
 
         This is the same as
+
         >>> lhs = m.linexpr((c, "x"), (-1, "y"))
         >>> m.add_constraints(lhs, "<=", 5)
 
