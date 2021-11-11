@@ -28,6 +28,7 @@ Most of the following changes are dedicated to data handling within the `Model` 
 
 **New Features**
 
+* Add HiGHS open source solver which can be 10x faster than cbc and glpk, see https://github.com/PyPSA/PyPSA/pull/308
 * The ``Variable`` class now has a accessor to get lower and upper bounds, ``get_lower_bound()`` and ``get_upper_bound()``.
 * A new ``Constraint`` class was added which enables a better visual representation of the constraints. The class also has getter function to get coefficients, variables, signs and rhs constants. The new return type of the ``Model.add_constraints`` function is ``Constraint``.
 * ``add_variables`` and ``add_constraints`` now accept a new argument ``mask``. The mask, which should be an boolean array, defines whether a variable/constraint is active (True) or should be ignored (False).
