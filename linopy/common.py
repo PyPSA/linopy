@@ -5,7 +5,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from xarray import merge
+from xarray import apply_ufunc, merge
 
 
 def _merge_inplace(self, attr, da, name, **kwargs):
@@ -17,3 +17,12 @@ def _merge_inplace(self, attr, da, name, **kwargs):
     """
     ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
     setattr(self, attr, ds)
+
+
+def _remap(array, mapping):
+    return mapping[array.ravel()].reshape(array.shape)
+
+
+def replace_by_map(ds, mapping):
+    "Replace values in a DataArray by a one-dimensional mapping."
+    return apply_ufunc(_remap, ds, kwargs=dict(mapping=mapping), dask="allowed")

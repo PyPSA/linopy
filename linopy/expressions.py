@@ -65,6 +65,8 @@ class LinearExpression(Dataset):
     def __init__(self, dataset=None):
         if dataset is not None:
             assert set(dataset) == {"coeffs", "vars"}
+            if np.issubdtype(dataset.vars, np.floating):
+                dataset["vars"] = dataset.vars.fillna(-1).astype(int)
             (dataset,) = xr.broadcast(dataset)
             dataset = dataset.transpose(..., "_term")
         else:

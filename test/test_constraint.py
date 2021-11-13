@@ -68,3 +68,13 @@ def test_constraint_getter_without_model():
         c.get_sign()
     with pytest.raises(AttributeError):
         c.get_rhs()
+
+
+def test_constraint_matrix():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+    m.add_constraints(1 * x + 10 * y, "=", 0)

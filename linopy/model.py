@@ -248,7 +248,7 @@ class Model:
 
         self.variables.add(name, labels, lower, upper)
 
-        return Variable(labels, name=name, model=self)
+        return self.variables[name]
 
     def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
@@ -313,8 +313,6 @@ class Model:
 
         lhs = lhs.rename({"_term": f"{name}_term"})
 
-        lhs = lhs.rename({"_term": f"{name}_term"})
-
         if self.chunk:
             lhs = lhs.chunk(self.chunk)
             sign = sign.chunk(self.chunk)
@@ -323,7 +321,7 @@ class Model:
 
         self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
-        return Constraint(labels, name=name, model=self)
+        return self.constraints[name]
 
     def add_objective(self, expr, overwrite=False):
         """
@@ -410,7 +408,18 @@ class Model:
 
     @property
     def binaries(self):
+        "Get all binary variables."
         return self.variables[self._binary_variables]
+
+    @property
+    def nvars(self):
+        "Get the total number of variables."
+        return self._xCounter
+
+    @property
+    def ncons(self):
+        "Get the total number of constraints."
+        return self._cCounter
 
     def linexpr(self, *tuples):
         """

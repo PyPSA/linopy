@@ -7,7 +7,8 @@ This module contains variable related definitions of the package.
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
-from xarray import DataArray, Dataset
+import numpy as np
+from xarray import DataArray, Dataset, zeros_like
 
 import linopy.expressions as expressions
 from linopy.common import _merge_inplace
@@ -71,6 +72,13 @@ class Variable(DataArray):
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
 
     def __init__(self, *args, **kwargs):
+
+        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
+        if isinstance(args[0], DataArray):
+            da = args[0]
+            args = (da.data, da.coords)
+            kwargs.update({"attrs": da.attrs, "name": da.name})
+
         self.model = kwargs.pop("model", None)
         super().__init__(*args, **kwargs)
         assert self.name is not None, "Variable data does not have a name."
@@ -253,3 +261,28 @@ class Variables:
             ds = getattr(self, attr)
             if name in ds:
                 setattr(self, attr, ds.drop_vars(name))
+
+    def get_block_map(self, blocks: DataArray):
+        "Get a one-dimensional numpy array mapping the variables to blocks."
+        assert len(blocks.dims) == 1
+        dim = blocks.dims[0]
+        # non-assigned variables are assumed to be masked, insert -1
+        block_map = -np.ones(self.model.nvars + 1, dtype=int)
+        for name, variable in self.labels.items():
+            if dim in variable.dims:
+                block_map[np.ravel(variable)] = np.ravel(
+                    blocks.broadcast_like(variable)
+                )
+            else:
+                block_map[np.ravel(variable)] = 0
+        block_map[-1] = -1
+        return block_map
+
+    def get_xblock_map(self, blocks: DataArray):
+        "Get a dataset of same shape as variables.labels indicating the blocks."
+        dim = blocks.dims[0]
+        block_map = zeros_like(self.labels)
+        for name, variable in self.labels.items():
+            if dim in variable.dims:
+                block_map[name] = blocks.broadcast_like(variable)
+        return block_map.where(self.labels != -1, -1)
