@@ -12,9 +12,9 @@ import pandas as pd
 import xarray as xr
 from numpy import asarray
 from scipy.sparse import coo_matrix
-from xarray import DataArray, Dataset, full_like
+from xarray import DataArray, Dataset
 
-from linopy.common import _merge_inplace, replace_by_map, to_map
+from linopy.common import _merge_inplace, replace_by_map
 
 
 class Constraint(DataArray):
@@ -202,10 +202,6 @@ class Constraints:
     def equalities(self):
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
-    def to_map(self, key, fill_value=-1, **kwargs):
-        "Convert the DataArray `key` to a 1d-map with labels as indexes."
-        return to_map(self, key, self.ncons, fill_value=fill_value, **kwargs)
-
     def get_blocks(self, block_map):
         """
         Get a dataset of same shape as constraints.labels with block values.
@@ -228,7 +224,6 @@ class Constraints:
 
             not_zero = entries != 0
             not_missing = entries != -1
-
             for n in range(N + 1):
                 not_n = entries != n
                 mask = not_n & not_zero & not_missing
@@ -240,10 +235,13 @@ class Constraints:
         self.blocks = res
         return self.blocks
 
-    def ravel(self, key, broadcast_like="labels"):
+    def ravel(self, key, broadcast_like="labels", filter_missings=False):
         res = []
         for name, values in getattr(self, broadcast_like).items():
-            res.append(getattr(self, key)[name].broadcast_like(values).data.ravel())
+            flat = getattr(self, key)[name].broadcast_like(values).data.ravel()
+            if filter_missings:
+                flat = flat[values.data.ravel() != -1]
+            res.append(flat)
         return np.concatenate(res)
 
     def to_matrix(self):

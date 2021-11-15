@@ -271,10 +271,13 @@ class Variables:
     def chunks(self):
         return self.model.chunk
 
-    def ravel(self, key):
+    def ravel(self, key, filter_missings=False):
         res = []
         for name, labels in self.labels.items():
-            res.append(getattr(self, key)[name].broadcast_like(labels).data.ravel())
+            flat = getattr(self, key)[name].broadcast_like(labels).data.ravel()
+            if filter_missings:
+                flat = flat[labels.data.ravel() != -1]
+            res.append(flat)
         return np.concatenate(res)
 
     def get_blocks(self, blocks: DataArray):
