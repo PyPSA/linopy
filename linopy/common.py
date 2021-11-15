@@ -5,6 +5,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
+import numpy as np
 from xarray import apply_ufunc, merge
 
 
@@ -25,4 +26,16 @@ def _remap(array, mapping):
 
 def replace_by_map(ds, mapping):
     "Replace values in a DataArray by a one-dimensional mapping."
-    return apply_ufunc(_remap, ds, kwargs=dict(mapping=mapping), dask="allowed")
+    return apply_ufunc(
+        _remap,
+        ds,
+        kwargs=dict(mapping=mapping),
+        dask="parallelized",
+        output_dtypes=[mapping.dtype],
+    )
+
+
+def best_int(max_value):
+    for t in (np.int8, np.int16, np.int32, np.int64):
+        if max_value <= np.iinfo(t).max:
+            return t

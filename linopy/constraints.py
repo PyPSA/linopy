@@ -10,10 +10,11 @@ from typing import Any, Sequence, Union
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.sparse import coo_matrix, csr_matrix, vstack
-from xarray import DataArray, Dataset
+from numpy import asarray
+from scipy.sparse import coo_matrix
+from xarray import DataArray, Dataset, full_like
 
-from linopy.common import _merge_inplace, replace_by_map
+from linopy.common import _merge_inplace, replace_by_map, to_map
 
 
 class Constraint(DataArray):
@@ -102,55 +103,6 @@ class Constraint(DataArray):
             raise AttributeError("No reference model is assigned to the variable.")
         return self.model.constraints.rhs[self.name]
 
-    def block_indicator(self, block_map, nblocks=None):
-        """
-        Constructs the block_indicator for this set of constraints
-
-        The block_indicator is a nblocks x dim1 x dim2 boolean array, where
-        indicator[block, d1, d2] indicates that for constraint `name` d1, d2 is part of
-        block. The same constraint is normally part of several blocks.
-
-        TODO
-        ----
-        Unclear whether it fits into dask here, maybe pull out of class. I think it does,
-        the best dask way in my mind would be to make use of xarray's high-level map_blocks
-        method, which wraps the different dask blocks into DataArrays again, so that indices
-        are available. The involved overhead is probably necessary.
-        """
-        if nblocks is None:
-            nblocks = block_map.max().item() + 2
-        vars = self.get_vars()
-        constr_block_map = block_map[
-            vars.transpose(f"{self.name}_term", *self.dims).values
-        ]
-        indicator = np.zeros((nblocks,) + self.shape, dtype=bool)
-        indicator[
-            (constr_block_map,)
-            + tuple(np.ogrid[tuple(slice(None, s) for s in self.shape)])
-        ] = True
-        return indicator
-
-    def block_sizes(self, block_map, nblocks=None):
-        """ "
-        TODO
-        ----
-        Unclear whether it fits into dask here, maybe pull out of class
-        """
-        if nblocks is None:
-            nblocks = block_map.max().item() + 2
-        sizes = np.zeros(nblocks + 1, dtype=int)
-        indicator = self.block_indicator(block_map, nblocks)
-
-        num_of_nonzero_blocks = indicator[1:].sum(axis=0)
-        sizes[0] += (num_of_nonzero_blocks == 0).sum()
-
-        onlyone_b = num_of_nonzero_blocks == 1
-        if onlyone_b.any():
-            sizes[1:nblocks] = indicator[1:, onlyone_b].sum(axis=1)
-
-        sizes[nblocks] += (num_of_nonzero_blocks > 1).sum()
-        return sizes
-
 
 @dataclass(repr=False)
 class Constraints:
@@ -163,6 +115,7 @@ class Constraints:
     vars: Dataset = Dataset()
     sign: Dataset = Dataset()
     rhs: Dataset = Dataset()
+    blocks: Dataset = Dataset()
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
@@ -238,6 +191,10 @@ class Constraints:
         )
 
     @property
+    def ncons(self):
+        return self.model.ncons
+
+    @property
     def inequalities(self):
         return self[[n for n, s in self.sign.items() if s in ("<=", ">=")]]
 
@@ -245,55 +202,59 @@ class Constraints:
     def equalities(self):
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
-    def get_xblock_map(self, block_map):
-        "Get a dataset of same shape as constraints.labels with block values."
-        global_block = block_map.max() + 1
+    def to_map(self, key, fill_value=-1, **kwargs):
+        "Convert the DataArray `key` to a 1d-map with labels as indexes."
+        return to_map(self, key, self.ncons, fill_value=fill_value, **kwargs)
+
+    def get_blocks(self, block_map):
+        """
+        Get a dataset of same shape as constraints.labels with block values.
+
+        Let N be the number of blocks.
+        The following cases are considered:
+            * where are all vars are -1, the block is -1
+            * where are all vars are 0, the block is 0
+            * where all vars are n, the block is n
+            * where vars are n or 0 (both present), the block is n
+            * N+1 otherwise
+
+        """
+        N = block_map.max()
         block_entries = replace_by_map(self.vars, block_map)
+        res = xr.full_like(self.labels, N + 1, dtype=block_map.dtype)
+
         for name, entries in block_entries.items():
             term_dim = f"{name}_term"
-            first_block = entries.isel({term_dim: 0})
-            linking = (entries != first_block).any(term_dim)
-            masked = (entries == -1).any(term_dim)
-            block_entries[name] = first_block.where(~linking, global_block).where(
-                ~masked, -1
-            )
-        return block_entries
 
-    def get_block_map(self, var_block_map):
-        "Get a one-dimensional numpy array mapping the constraints to blocks."
-        block_map = np.empty(self.model.ncons + 1, dtype=int)
-        cblocks = self.get_xblock_map(var_block_map)
+            not_zero = entries != 0
+            not_missing = entries != -1
 
-        for name, blocks in cblocks.items():
-            constraint = self.labels[name]
-            block_map[np.ravel(constraint)] = np.ravel(blocks)
-        block_map[-1] = -1
-        return block_map
+            for n in range(N + 1):
+                not_n = entries != n
+                mask = not_n & not_zero & not_missing
+                res[name] = res[name].where(mask.any(term_dim), n)
+
+            res[name] = res[name].where(not_missing.any(term_dim), -1)
+            res[name] = res[name].where(not_zero.any(term_dim), 0)
+
+        self.blocks = res
+        return self.blocks
+
+    def ravel(self, key, broadcast_like="labels"):
+        res = []
+        for name, values in getattr(self, broadcast_like).items():
+            res.append(getattr(self, key)[name].broadcast_like(values).data.ravel())
+        return np.concatenate(res)
 
     def to_matrix(self):
         "Construct a constraint matrix."
-        data = []
-        rows = []
-        cols = []
-        for name, labels in self.labels.items():
-            dims = labels.dims + (f"{name}_term",)
-            coeffs = self.coeffs[name].transpose(*dims)
-            vars = self.vars[name].transpose(*dims)
-
-            d = np.ravel(coeffs)
-            r = np.ravel(labels.broadcast_like(coeffs))
-            c = np.ravel(vars)
-
-            nonzero = (c != -1) & (r != -1)
-            data.append(d[nonzero])
-            rows.append(r[nonzero])
-            cols.append(c[nonzero])
-
-        data = np.concatenate(data)
-        rows = np.concatenate(rows)
-        cols = np.concatenate(cols)
-
         shape = (self.model.ncons, self.model.nvars)
+        keys = ["coeffs", "labels", "vars"]
+        data, rows, cols = [self.ravel(k, broadcast_like="vars") for k in keys]
+        non_missing = (rows != -1) & (cols != -1)
+        data = asarray(data[non_missing])
+        rows = asarray(rows[non_missing])
+        cols = asarray(cols[non_missing])
         return coo_matrix((data, (rows, cols)), shape=shape)
 
     def to_inequality_rhs(self):

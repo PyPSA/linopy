@@ -16,7 +16,8 @@ from numpy import inf
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.constraints import Constraint, Constraints
+from linopy.common import best_int, replace_by_map
+from linopy.constraints import Constraints
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression
 from linopy.io import to_file, to_netcdf
@@ -420,6 +421,22 @@ class Model:
     def ncons(self):
         "Get the total number of constraints."
         return self._cCounter
+
+    def calulate_block_maps(self, blocks):
+        "Calculate the matrix block mappings based on dimensional blocks."
+
+        dtype = best_int(blocks.max() + 1)
+        blocks = blocks.astype(dtype)
+        if self.chunk is not None:
+            blocks = blocks.chunk(self.chunk)
+
+        self.variables.blocks = self.variables.get_blocks(blocks)
+        block_map = self.variables.blocks_to_blockmap(self.variables.blocks, dtype)
+
+        self.constraints.blocks = self.constraints.get_blocks(block_map)
+        self.objective_blocks = replace_by_map(self.objective.vars, block_map)
+
+        return self.variables.blocks, self.constraints.blocks, self.objective_blocks
 
     def linexpr(self, *tuples):
         """

@@ -7,6 +7,7 @@ This module contains definition related to affine expressions.
 
 import numpy as np
 import xarray as xr
+from numpy import array
 from xarray import DataArray, Dataset
 
 from linopy import variables
@@ -70,7 +71,12 @@ class LinearExpression(Dataset):
             (dataset,) = xr.broadcast(dataset)
             dataset = dataset.transpose(..., "_term")
         else:
-            dataset = xr.Dataset({"coeffs": DataArray([]), "vars": DataArray([])})
+            dataset = xr.Dataset(
+                {
+                    "coeffs": DataArray(array([])),
+                    "vars": DataArray(array([], dtype=int)),
+                }
+            )
             dataset = dataset.assign_coords(_term=[])
         super().__init__(dataset)
 

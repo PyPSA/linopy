@@ -219,6 +219,7 @@ class Variables:
     labels: Dataset = Dataset()
     lower: Dataset = Dataset()
     upper: Dataset = Dataset()
+    blocks: Dataset = Dataset()
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
@@ -262,27 +263,36 @@ class Variables:
             if name in ds:
                 setattr(self, attr, ds.drop_vars(name))
 
-    def get_block_map(self, blocks: DataArray):
-        "Get a one-dimensional numpy array mapping the variables to blocks."
+    @property
+    def nvars(self):
+        return self.model.nvars
+
+    @property
+    def chunks(self):
+        return self.model.chunk
+
+    def ravel(self, key):
+        res = []
+        for name, labels in self.labels.items():
+            res.append(getattr(self, key)[name].broadcast_like(labels).data.ravel())
+        return np.concatenate(res)
+
+    def get_blocks(self, blocks: DataArray):
+        "Get a dataset of same shape as variables.labels indicating the blocks."
         assert len(blocks.dims) == 1
         dim = blocks.dims[0]
-        # non-assigned variables are assumed to be masked, insert -1
-        block_map = -np.ones(self.model.nvars + 1, dtype=int)
-        for name, variable in self.labels.items():
-            if dim in variable.dims:
-                block_map[np.ravel(variable)] = np.ravel(
-                    blocks.broadcast_like(variable)
-                )
-            else:
-                block_map[np.ravel(variable)] = 0
-        block_map[-1] = -1
-        return block_map
 
-    def get_xblock_map(self, blocks: DataArray):
-        "Get a dataset of same shape as variables.labels indicating the blocks."
-        dim = blocks.dims[0]
-        block_map = zeros_like(self.labels)
+        block_map = zeros_like(self.labels, dtype=blocks.dtype)
         for name, variable in self.labels.items():
             if dim in variable.dims:
                 block_map[name] = blocks.broadcast_like(variable)
         return block_map.where(self.labels != -1, -1)
+
+    def blocks_to_blockmap(self, block_map, dtype=np.int8):
+        "Get a one-dimensional array mapping the variables to blocks."
+        # non-assigned variables are assumed to be masked, insert -1
+        res = np.full(self.nvars + 1, -1, dtype=dtype)
+        for name, labels in self.labels.items():
+            res[np.ravel(labels)] = np.ravel(block_map[name])
+        res[-1] = -1
+        return res
