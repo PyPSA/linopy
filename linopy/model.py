@@ -7,7 +7,7 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
-from tempfile import NamedTemporaryFile, gettempdir
+from tempfile import NamedTemporaryFile, TemporaryDirectory, gettempdir
 
 import numpy as np
 import pandas as pd
@@ -20,8 +20,8 @@ from linopy.common import best_int, replace_by_map
 from linopy.constraints import Constraints
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression
-from linopy.io import to_file, to_netcdf
-from linopy.solvers import available_solvers
+from linopy.io import to_block_files, to_file, to_netcdf
+from linopy.solvers import available_solvers, io_structure
 from linopy.variables import Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ class Model:
         self._cCounter = 0
         self._varnameCounter = counter()
         self._connameCounter = counter()
+        self._blocks = None
 
         self.chunk = chunk
         self.status = "initialized"
@@ -422,21 +423,41 @@ class Model:
         "Get the total number of constraints."
         return self._cCounter
 
-    def calulate_block_maps(self, blocks):
-        "Calculate the matrix block mappings based on dimensional blocks."
+    @property
+    def blocks(self):
+        """
+        Blocks used as a basis to split the variables and constraint matrix.
+        """
+        return self._blocks
 
-        dtype = best_int(blocks.max() + 1)
+    @blocks.setter
+    def blocks(self, blocks):
+        if not isinstance(blocks, DataArray):
+            raise TypeError("Blocks must be of type DataArray")
+        assert len(blocks.dims) == 1
+
+        dtype = best_int(int(blocks.max()) + 1)
         blocks = blocks.astype(dtype)
+
         if self.chunk is not None:
             blocks = blocks.chunk(self.chunk)
 
-        self.variables.blocks = self.variables.get_blocks(blocks)
+        self._blocks = blocks
+
+    def calculate_block_maps(self):
+        """
+        Calculate the matrix block mappings based on dimensional blocks.
+        """
+        assert self.blocks is not None, "Blocks are not defined."
+
+        dtype = self.blocks.dtype
+        self.variables.blocks = self.variables.get_blocks(self.blocks)
         block_map = self.variables.blocks_to_blockmap(self.variables.blocks, dtype)
 
         self.constraints.blocks = self.constraints.get_blocks(block_map)
-        self.objective_blocks = replace_by_map(self.objective.vars, block_map)
 
-        return self.variables.blocks, self.constraints.blocks, self.objective_blocks
+        blocks = replace_by_map(self.objective.vars, block_map)
+        self.objective = self.objective.assign(blocks=blocks)
 
     def linexpr(self, *tuples):
         """
@@ -687,8 +708,8 @@ class Model:
             Name of the solver to use, this must be in `linopy.available_solvers`.
             The default is 'gurobi'.
         problem_fn : path_like, optional
-            Path of the lp file which is written out during the process. The
-            default None results in a temporary file.
+            Path of the lp file or output file/directory which is written out
+            during the process. The default None results in a temporary file.
         solution_fn : path_like, optional
             Path of the solution file which is written out during the process.
             The default None results in a temporary file.
@@ -720,21 +741,32 @@ class Model:
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         tmp_kwargs = dict(mode="w", delete=False, dir=self.solver_dir)
+
         if problem_fn is None:
-            with NamedTemporaryFile(
-                suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
-            ) as f:
-                problem_fn = f.name
+            if solver_name in io_structure["lp_file"]:
+                with NamedTemporaryFile(
+                    suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
+                ) as f:
+                    problem_fn = f.name
+            elif solver_name in io_structure["blocks"]:
+                problem_fn = TemporaryDirectory(
+                    prefix="linopy-problem-", dir=self.solver_dir
+                ).name
+
         if solution_fn is None:
             with NamedTemporaryFile(
                 suffix=".sol", prefix="linopy-solve-", **tmp_kwargs
             ) as f:
                 solution_fn = f.name
+
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
 
         try:
-            self.to_file(problem_fn)
+            if solver_name in io_structure["lp_file"]:
+                self.to_file(problem_fn)
+            elif solver_name in io_structure["blocks"]:
+                self.to_block_files(problem_fn)
             solve = getattr(solvers, f"run_{solver_name}")
             res = solve(
                 problem_fn,
@@ -789,6 +821,8 @@ class Model:
     to_netcdf = to_netcdf
 
     to_file = to_file
+
+    to_block_files = to_block_files
 
 
 def counter():

@@ -7,6 +7,7 @@ This module contains implementations for the Constraint{s} class.
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
+import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -168,6 +169,7 @@ class Constraints:
         sign: DataArray,
         rhs: DataArray,
     ):
+        """Add constraint `name`."""
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("coeffs", coeffs, name)
         self._merge_inplace("vars", vars, name, fill_value=-1)
@@ -175,6 +177,7 @@ class Constraints:
         self._merge_inplace("rhs", rhs, name)
 
     def remove(self, name):
+        """Remove constraint `name` from the constraints."""
         for attr in self.dataset_attrs:
             setattr(self, attr, getattr(self, attr).drop_vars(name))
 
@@ -192,14 +195,20 @@ class Constraints:
 
     @property
     def ncons(self):
+        """
+        Get the number all constraints which were at some point added to the model.
+        These also include constraints with missing labels.
+        """
         return self.model.ncons
 
     @property
     def inequalities(self):
+        "Get the subset of constraints which are purely inequalities."
         return self[[n for n, s in self.sign.items() if s in ("<=", ">=")]]
 
     @property
     def equalities(self):
+        "Get the subset of constraints which are purely equalities."
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
     def get_blocks(self, block_map):
@@ -216,10 +225,10 @@ class Constraints:
 
         """
         N = block_map.max()
-        block_entries = replace_by_map(self.vars, block_map)
+        var_blocks = replace_by_map(self.vars, block_map)
         res = xr.full_like(self.labels, N + 1, dtype=block_map.dtype)
 
-        for name, entries in block_entries.items():
+        for name, entries in var_blocks.items():
             term_dim = f"{name}_term"
 
             not_zero = entries != 0
@@ -233,19 +242,86 @@ class Constraints:
             res[name] = res[name].where(not_zero.any(term_dim), 0)
 
         self.blocks = res
+        self.var_blocks = var_blocks
         return self.blocks
 
-    def ravel(self, key, broadcast_like="labels", filter_missings=False):
-        res = []
+    def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
+        """
+        Create an generator which iterates over all arrays in `key` and flattens them.
+
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `broadcast_like` data is -1.
+            The default is False.
+
+
+        Yields
+        ------
+        flat : np.array/dask.array
+
+        """
+        if isinstance(key, str):
+            ds = getattr(self, key)
+        elif isinstance(key, xr.Dataset):
+            ds = key
+        else:
+            raise TypeError("Argument `key` must be of type string or xarray.Dataset")
+
         for name, values in getattr(self, broadcast_like).items():
-            flat = getattr(self, key)[name].broadcast_like(values).data.ravel()
+
+            broadcasted = ds[name].broadcast_like(values)
+            if values.chunks is not None:
+                broadcasted = broadcasted.chunk(values.chunks)
+
+            flat = broadcasted.data.ravel()
             if filter_missings:
                 flat = flat[values.data.ravel() != -1]
-            res.append(flat)
-        return np.concatenate(res)
+            yield flat
+
+    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=False):
+        """
+        Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
+
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `broadcast_like` data is -1.
+            The default is False.
+        compute : bool, optional
+            Whether to compute lazy data. The default is False.
+
+        Returns
+        -------
+        flat
+            One dimensional data with all values in `key`.
+
+        """
+        res = list(self.iter_ravel(key, broadcast_like, filter_missings))
+        res = np.concatenate(res)
+        if compute:
+            return dask.compute(res)[0]
+        else:
+            return res
 
     def to_matrix(self):
-        "Construct a constraint matrix."
+        """
+        Construct a constraint matrix in sparse format.
+
+        Missing values, i.e. -1 in labels and vars, are ignored filtered out.
+        """
         shape = (self.model.ncons, self.model.nvars)
         keys = ["coeffs", "labels", "vars"]
         data, rows, cols = [self.ravel(k, broadcast_like="vars") for k in keys]
@@ -254,39 +330,3 @@ class Constraints:
         rows = asarray(rows[non_missing])
         cols = asarray(cols[non_missing])
         return coo_matrix((data, (rows, cols)), shape=shape)
-
-    def to_inequality_rhs(self):
-        lo = []
-        hi = []
-        for name, labels in self.labels.items():
-            dims = labels.dims
-            data = np.ravel(self.rhs[name].broadcast_like(labels).transpose(*dims))
-            s = self.sign[name].item()
-            if s == "<=":
-                lo.append(np.full_like(data, -np.inf, dtype=float))
-                hi.append(data)
-            elif s == ">=":
-                lo.append(data)
-                hi.append(np.full_like(data, np.inf, dtype=float))
-
-        return np.concatenate(lo), np.concatenate(hi)
-
-    def to_equality_rhs(self, vars, rhs):
-        r = []
-        for name, labels in self.labels.items():
-            dims = labels.dims
-            data = np.ravel(self.rhs[name].broadcast_like(labels).transpose(*dims))
-            s = self.sign[name].item()
-            if s == "==":
-                r.append(data)
-
-        return np.concatenate(r)
-
-    def to_rhs(self, vars, rhs):
-        r = []
-        for name, labels in self.labels.items():
-            dims = labels.dims
-            data = np.ravel(self.rhs[name].broadcast_like(labels).transpose(*dims))
-            r.append(data)
-
-        return np.concatenate(r)

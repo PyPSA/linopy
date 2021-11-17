@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-available_solvers = []
+available_solvers = ["pips"]
 
 
 if sub.run(["which", "glpsol"], stdout=sub.DEVNULL).returncode == 0:
@@ -42,6 +42,11 @@ except ModuleNotFoundError:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+io_structure = dict(
+    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex"}, blocks={"pips"}
+)
 
 
 def set_int_index(series):
@@ -484,3 +489,17 @@ def run_xpress(
         objective=objective,
         model=m,
     )
+
+
+def run_pips(
+    problem_fn,
+    log_fn,
+    solution_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the PIPS solver.
+
+    """

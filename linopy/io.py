@@ -3,11 +3,15 @@
 """Module containing all import/export functionalities."""
 import logging
 import os
+import shutil
 import time
 from functools import partial, reduce
+from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import numpy as np
 import xarray as xr
+from tqdm import tqdm
 from xarray import apply_ufunc
 
 logger = logging.getLogger(__name__)
@@ -34,9 +38,6 @@ def join_str_arrays(arraylist):
 
 def str_array_to_file(array, fn):
     """Elementwise writing out string values to a file."""
-    # TODO try to find out if we are possibly creating race conditions here!!!
-    # the writing order of each chunk might be random if called from multiple
-    # processes
     return xr.apply_ufunc(
         fn.write,
         array,
@@ -122,6 +123,13 @@ def binaries_to_file(m, f):
 
 def to_file(m, fn):
     """Write out a model to a lp file."""
+    if fn is None:
+        fn = NamedTemporaryFile(
+            suffix=".lp",
+            prefix="linopy-problem-",
+            dir=m.solver_dir,
+        ).name
+
     if os.path.exists(fn):
         os.remove(fn)  # ensure a clear file
 
@@ -136,6 +144,90 @@ def to_file(m, fn):
         f.write("end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+    return fn
+
+
+def to_block_files(m, fn):
+    "Write out the linopy model to a block structured output."
+    if fn is None:
+        fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
+
+    path = Path(fn)
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(exist_ok=True)
+
+    m.calculate_block_maps()
+
+    nblocks = int(m.blocks.max())
+    for n in range(nblocks):
+        (path / f"block{n}").mkdir()
+
+    vars = m.variables
+    cons = m.constraints
+
+    # Write out variables
+    blocks = vars.ravel("blocks", filter_missings=True, compute=True)
+    for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
+        arr = vars.ravel(key, filter_missings=True, compute=True)
+        for n in tqdm(range(nblocks), desc=f"Write variable {key}"):
+            arr[blocks == n].tofile(path / f"block{n}" / suffix)
+
+    # Write out objective (uses variable blocks from above)
+    coeffs = np.zeros_like(blocks)
+    coeffs[np.asarray(m.objective.vars)] = np.asarray(m.objective.coeffs)
+    for n in tqdm(range(nblocks), desc="Write objective"):
+        coeffs[blocks == n].tofile(path / f"block{n}" / "c")
+
+    # Write out rhs
+    blocks = cons.ravel("blocks", filter_missings=True, compute=True)
+    rhs = cons.ravel("rhs", filter_missings=True, compute=True)
+    is_equality = cons.ravel(cons.sign == "==", filter_missings=True, compute=True)
+    is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True, compute=True)
+
+    for n in tqdm(range(nblocks), desc="Write RHS"):
+        is_blockn = blocks == n
+
+        rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b")
+
+        not_equality = is_blockn & ~is_equality
+        is_lower_bound_sub = is_lower_bound[not_equality]
+        rhs_sub = rhs[not_equality]
+
+        lower_bound = np.where(is_lower_bound_sub, rhs_sub, -np.inf)
+        lower_bound.tofile(path / f"block{n}" / "dl")
+
+        upper_bound = np.where(~is_lower_bound_sub, rhs_sub, np.inf)
+        upper_bound.tofile(path / f"block{n}" / "du")
+
+    # Write out constraints
+    conblocks = cons.ravel("blocks", "vars", filter_missings=True, compute=True)
+    varblocks = cons.ravel("var_blocks", "vars", filter_missings=True, compute=True)
+    is_equality = cons.ravel(
+        cons.sign == "==", "vars", filter_missings=True, compute=True
+    )
+
+    is_varblock_0 = varblocks == 0
+    is_conblock_L = conblocks == nblocks
+
+    for key, suffix in zip(["labels", "coeffs", "vars"], ["row", "data", "col"]):
+        arr = cons.ravel(key, "vars", filter_missings=True, compute=True)
+        for n in tqdm(range(nblocks), desc=f"Write constraint {key}"):
+            is_conblock_n = conblocks == n
+            is_varblock_n = varblocks == n
+
+            mask = is_conblock_n & is_varblock_n
+            arr[mask & is_equality].tofile(path / f"block{n}" / f"B_{suffix}")
+            arr[mask & ~is_equality].tofile(path / f"block{n}" / f"D_{suffix}")
+
+            mask = is_conblock_n & is_varblock_0
+            arr[mask & is_equality].tofile(path / f"block{n}" / f"A_{suffix}")
+            arr[mask & ~is_equality].tofile(path / f"block{n}" / f"C_{suffix}")
+
+            mask = is_conblock_L & is_varblock_n
+            arr[mask & is_equality].tofile(path / f"block{n}" / f"BL_{suffix}")
+            arr[mask & ~is_equality].tofile(path / f"block{n}" / f"DL_{suffix}")
 
 
 def non_bool_dict(d):

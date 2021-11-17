@@ -7,6 +7,7 @@ This module contains variable related definitions of the package.
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
+import dask
 import numpy as np
 from xarray import DataArray, Dataset, zeros_like
 
@@ -253,11 +254,13 @@ class Variables:
     _merge_inplace = _merge_inplace
 
     def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
+        """Add variable `name`."""
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("lower", lower, name)
         self._merge_inplace("upper", upper, name)
 
     def remove(self, name):
+        """Remove variable `name` from the variables."""
         for attr in self.dataset_attrs:
             ds = getattr(self, attr)
             if name in ds:
@@ -265,25 +268,88 @@ class Variables:
 
     @property
     def nvars(self):
+        """
+        Get the number all variables which were at some point added to the model.
+        These also include variables with missing labels.
+        """
         return self.model.nvars
 
-    @property
-    def chunks(self):
-        return self.model.chunk
+    def iter_ravel(self, key, filter_missings=False):
+        """
+        Create an generator which iterates over all arrays in `key` and flattens them.
 
-    def ravel(self, key, filter_missings=False):
-        res = []
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `broadcast_like` data is -1.
+            The default is False.
+
+
+        Yields
+        ------
+        flat : np.array/dask.array
+
+        """
+        if isinstance(key, str):
+            ds = getattr(self, key)
+        elif isinstance(key, Dataset):
+            ds = key
+        else:
+            raise TypeError("Argument `key` must be of type string or xarray.Dataset")
+
         for name, labels in self.labels.items():
-            flat = getattr(self, key)[name].broadcast_like(labels).data.ravel()
+
+            broadcasted = ds[name].broadcast_like(labels)
+            if labels.chunks is not None:
+                broadcasted = broadcasted.chunk(labels.chunks)
+
+            flat = broadcasted.data.ravel()
             if filter_missings:
                 flat = flat[labels.data.ravel() != -1]
-            res.append(flat)
-        return np.concatenate(res)
+            yield flat
+
+    def ravel(self, key, filter_missings=False, compute=False):
+        """
+        Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
+
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `broadcast_like` data is -1.
+            The default is False.
+        compute : bool, optional
+            Whether to compute lazy data. The default is False.
+
+        Returns
+        -------
+        flat
+            One dimensional data with all values in `key`.
+
+        """
+        res = np.concatenate(list(self.iter_ravel(key, filter_missings)))
+        if compute:
+            return dask.compute(res)[0]
+        else:
+            return res
 
     def get_blocks(self, blocks: DataArray):
-        "Get a dataset of same shape as variables.labels indicating the blocks."
-        assert len(blocks.dims) == 1
+        """
+        Get a dataset of same shape as variables.labels indicating the blocks.
+        """
         dim = blocks.dims[0]
+        assert dim in self.labels.dims, "Block dimension not in variables."
 
         block_map = zeros_like(self.labels, dtype=blocks.dtype)
         for name, variable in self.labels.items():
@@ -292,7 +358,9 @@ class Variables:
         return block_map.where(self.labels != -1, -1)
 
     def blocks_to_blockmap(self, block_map, dtype=np.int8):
-        "Get a one-dimensional array mapping the variables to blocks."
+        """
+        Get a one-dimensional array mapping the variables to blocks.
+        """
         # non-assigned variables are assumed to be masked, insert -1
         res = np.full(self.nvars + 1, -1, dtype=dtype)
         for name, labels in self.labels.items():
