@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-available_solvers = ["pips"]
+available_solvers = []
 
 
 if sub.run(["which", "glpsol"], stdout=sub.DEVNULL).returncode == 0:
