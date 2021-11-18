@@ -350,6 +350,9 @@ class Model:
             expr = self.linexpr(*expr)
         assert isinstance(expr, LinearExpression)
 
+        if self.chunk is not None:
+            expr = expr.chunk(self.chunk)
+
         if expr.vars.ndim > 1:
             expr = expr.sum()
         self.objective = expr
@@ -629,10 +632,7 @@ class Model:
     def objectiverange(self):
         """Objective range of the objective in the model."""
         return pd.Series(
-            [
-                self.objective.coeffs.min().item(),
-                self.objective.coeffs.max().item(),
-            ],
+            [self.objective.coeffs.min().item(), self.objective.coeffs.max().item(),],
             index=["min", "max"],
         )
 
