@@ -39,11 +39,7 @@ def join_str_arrays(arraylist):
 def str_array_to_file(array, fn):
     """Elementwise writing out string values to a file."""
     return xr.apply_ufunc(
-        fn.write,
-        array,
-        dask="parallelized",
-        vectorize=True,
-        output_dtypes=[int],
+        fn.write, array, dask="parallelized", vectorize=True, output_dtypes=[int],
     )
 
 
@@ -125,9 +121,7 @@ def to_file(m, fn):
     """Write out a model to a lp file."""
     if fn is None:
         fn = NamedTemporaryFile(
-            suffix=".lp",
-            prefix="linopy-problem-",
-            dir=m.solver_dir,
+            suffix=".lp", prefix="linopy-problem-", dir=m.solver_dir,
         ).name
 
     if os.path.exists(fn):
@@ -160,8 +154,8 @@ def to_block_files(m, fn):
 
     m.calculate_block_maps()
 
-    nblocks = int(m.blocks.max())
-    for n in range(nblocks):
+    N = int(m.blocks.max())
+    for n in range(N + 1):
         (path / f"block{n}").mkdir()
 
     vars = m.variables
@@ -171,13 +165,13 @@ def to_block_files(m, fn):
     blocks = vars.ravel("blocks", filter_missings=True, compute=True)
     for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
         arr = vars.ravel(key, filter_missings=True, compute=True)
-        for n in tqdm(range(nblocks), desc=f"Write variable {key}"):
+        for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
             arr[blocks == n].tofile(path / f"block{n}" / suffix)
 
     # Write out objective (uses variable blocks from above)
     coeffs = np.zeros_like(blocks)
     coeffs[np.asarray(m.objective.vars)] = np.asarray(m.objective.coeffs)
-    for n in tqdm(range(nblocks), desc="Write objective"):
+    for n in tqdm(range(N + 1), desc="Write objective"):
         coeffs[blocks == n].tofile(path / f"block{n}" / "c")
 
     # Write out rhs
@@ -186,7 +180,7 @@ def to_block_files(m, fn):
     is_equality = cons.ravel(cons.sign == "==", filter_missings=True, compute=True)
     is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True, compute=True)
 
-    for n in tqdm(range(nblocks), desc="Write RHS"):
+    for n in tqdm(range(N + 1), desc="Write RHS"):
         is_blockn = blocks == n
 
         rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b")
@@ -209,11 +203,11 @@ def to_block_files(m, fn):
     )
 
     is_varblock_0 = varblocks == 0
-    is_conblock_L = conblocks == nblocks
+    is_conblock_L = conblocks == N
 
     for key, suffix in zip(["labels", "coeffs", "vars"], ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True, compute=True)
-        for n in tqdm(range(nblocks), desc=f"Write constraint {key}"):
+        for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
             is_conblock_n = conblocks == n
             is_varblock_n = varblocks == n
 
