@@ -8,12 +8,16 @@ from functools import partial, reduce
 
 import numpy as np
 import xarray as xr
-from xarray import apply_ufunc
+from numpy import dtype
+from xarray import apply_ufunc, full_like, concat
 
 logger = logging.getLogger(__name__)
 
 
-ufunc_kwargs = dict(dask="parallelized", vectorize=True, output_dtypes=[object])
+ufunc_kwargs = dict(dask="parallelized", vectorize=True)
+concat_dim = "_concat_dim"
+concat_kwargs = dict(dim=concat_dim, coords="minimal")
+
 
 # IO functions
 def to_float_str(da):
@@ -26,21 +30,28 @@ def to_int_str(da, nonnans=None):
     return xr.apply_ufunc(lambda d: "%d" % d, da.fillna(0), **ufunc_kwargs)
 
 
-def join_str_arrays(arraylist):
+def sum_strings(da, dim=None):
+    """
+    Sum all values in the terms dimension. This function is needed in order
+    to prevent numpy to change the dtype to unicode. This happens when strings
+    of a one-dimensional array is concatenated (good question why...).
+    """
+    assert len(da.dims) > 1, "Dimensions must be more than one."
+    if dim is None:
+        dim = [dim for dim in da.dims if "_term" in dim].pop()
+    return da.reduce(np.sum, dim)
+
+
+def join_str(*arraylist):
     """Join string array together (elementwise concatenation of strings)."""
     func = partial(np.add, dtype=object)  # np.core.defchararray.add
     return reduce(func, arraylist, "")
 
 
-def str_array_to_file(array, fn):
+def array_to_file(array, fn):
     """Elementwise writing out string values to a file."""
-    return xr.apply_ufunc(
-        lambda x: fn.write(x),
-        array,
-        dask="parallelized",
-        vectorize=True,
-        output_dtypes=[int],
-    )
+    write = np.vectorize(fn.write)
+    write(array.data.ravel())
 
 
 def objective_to_file(m, f):
@@ -50,9 +61,15 @@ def objective_to_file(m, f):
     var = m.objective.vars
 
     nonnans = coef.notnull() & (var != -1)
-    join = [to_float_str(coef), " x", to_int_str(var), "\n"]
-    objective_str = join_str_arrays(join).where(nonnans, "")
-    str_array_to_file(objective_str, f).compute()
+    objective = [
+        to_float_str(coef),
+        full_like(coef, " x", dtype=dtype("<U9")),
+        to_int_str(var),
+        full_like(coef, "\n", dtype=dtype("<U9")),
+    ]
+    objective = concat(objective, **concat_kwargs).where(nonnans, "")
+    objective = objective.transpose(..., concat_dim)
+    array_to_file(objective, f)
 
 
 def constraints_to_file(m, f):
@@ -64,27 +81,42 @@ def constraints_to_file(m, f):
     sign = m.constraints.sign
     rhs = m.constraints.rhs
 
-    term_names = [f"{n}_term" for n in labels]
+    nonnans_terms = coeffs.notnull() & (vars != -1)
+    nonnans = (labels != -1) & sign.notnull() & rhs.notnull()
 
-    nonnans = coeffs.notnull() & (vars != -1)
-    join = [to_float_str(coeffs), " x", to_int_str(vars), "\n"]
-    lhs_str = join_str_arrays(join).where(nonnans, "").reduce(np.sum, term_names)
-    # .sum() does not work
+    breakpoint()
+    for k in labels:
 
-    nonnans = nonnans.any(term_names) & (labels != -1) & sign.notnull() & rhs.notnull()
+        term_dim = f"{k}_term"
 
-    join = [
-        "c",
-        to_int_str(labels),
-        ": \n",
-        lhs_str,
-        sign,
-        "\n",
-        to_float_str(rhs),
-        "\n\n",
-    ]
-    constraints_str = join_str_arrays(join).where(nonnans, "")
-    str_array_to_file(constraints_str, f).compute()
+        lhs = [
+            to_float_str(coeffs[k]).where(nonnans_terms[k], ""),
+            full_like(coeffs[k], " x", dtype=dtype("<U9")).where(nonnans_terms[k], ""),
+            to_int_str(vars[k]).where(nonnans_terms[k], ""),
+            full_like(vars[k], "\n", dtype=dtype("<U9")).where(nonnans_terms[k], ""),
+        ]
+
+        lhs = concat(lhs, **concat_kwargs)
+        lhs = lhs.stack(_=[term_dim, concat_dim]).drop("_").rename(_=term_dim)
+        lhs
+
+        newline = full_like(labels[k], "\n", dtype=dtype("<U9"))
+
+        constraints = [
+            full_like(labels[k], "c", dtype=dtype("<U9")),
+            to_int_str(labels[k]),
+            full_like(labels[k], ":\n", dtype=dtype("<U9")),
+            lhs,
+            sign[k],
+            newline,
+            to_float_str(rhs[k]),
+            newline,
+            newline,
+        ]
+
+        constraints = concat(constraints, term_dim, coords="minimal")
+        constraints = constraints.where(nonnans[k], "").transpose(..., term_dim)
+        array_to_file(constraints, fn=f)
 
 
 def bounds_to_file(m, f):
@@ -95,26 +127,41 @@ def bounds_to_file(m, f):
     upper = m.variables.upper[m._non_binary_variables]
 
     nonnans = lower.notnull() & upper.notnull() & (labels != -1)
-    join = [
-        to_float_str(lower),
-        " <= x",
-        to_int_str(labels),
-        " <= ",
-        to_float_str(upper),
-        "\n",
-    ]
-    bounds_str = join_str_arrays(join).where(nonnans, "")
-    str_array_to_file(bounds_str, f).compute()
+
+    # iterate over dataarray to reduce memory usage
+    for k in labels:
+        bounds = [
+            to_float_str(lower[k]),
+            full_like(labels[k], " <= x", dtype=dtype("<U9")),
+            to_int_str(labels[k]),
+            full_like(labels[k], " <= ", dtype=dtype("<U9")),
+            to_float_str(upper[k]),
+            full_like(labels[k], "\n", dtype=dtype("<U9")),
+        ]
+
+        bounds = concat(bounds, **concat_kwargs).where(nonnans[k], "")
+        bounds = bounds.transpose(..., concat_dim)
+        array_to_file(bounds, fn=f)
 
 
 def binaries_to_file(m, f):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
-
     labels = m.binaries.labels
+
     nonnans = labels != -1
-    binaries_str = join_str_arrays(["x", to_int_str(labels), "\n"]).where(nonnans, "")
-    str_array_to_file(binaries_str, f).compute()
+
+    # iterate over dataarray to reduce memory usage
+    for k in labels:
+        binaries = [
+            full_like(labels[k], "x", dtype=dtype("<U9")),
+            to_int_str(labels[k]),
+            full_like(labels[k], "\n", dtype=dtype("<U9")),
+        ]
+
+        binaries = concat(binaries, **concat_kwargs).where(nonnans[k], "")
+        binaries = binaries.transpose(..., concat_dim)
+        array_to_file(binaries, fn=f)
 
 
 def to_file(m, fn):
