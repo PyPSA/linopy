@@ -84,9 +84,7 @@ def constraints_to_file(m, f):
     nonnans_terms = coeffs.notnull() & (vars != -1)
     nonnans = (labels != -1) & sign.notnull() & rhs.notnull()
 
-    breakpoint()
     for k in labels:
-
         term_dim = f"{k}_term"
 
         lhs = [
@@ -98,7 +96,6 @@ def constraints_to_file(m, f):
 
         lhs = concat(lhs, **concat_kwargs)
         lhs = lhs.stack(_=[term_dim, concat_dim]).drop("_").rename(_=term_dim)
-        lhs
 
         newline = full_like(labels[k], "\n", dtype=dtype("<U9"))
 
