@@ -29,6 +29,20 @@ def model():
 
 
 @pytest.fixture
+def model_chunked():
+    m = Model(chunk="auto")
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x + 6 * y, ">=", 10)
+    m.add_constraints(4 * x + 2 * y, ">=", 3)
+
+    m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.fixture
 def milp_model():
     m = Model()
 
@@ -77,6 +91,13 @@ def masked_constraint_model():
 @pytest.mark.parametrize("solver", available_solvers)
 def test_default_setting(model, solver):
     status, condition = model.solve(solver)
+    assert status == "ok"
+    assert np.isclose(model.objective_value, 3.3)
+
+
+@pytest.mark.parametrize("solver", available_solvers)
+def test_default_settings_chunked(model_chunked, solver):
+    status, condition = model_chunked.solve(solver)
     assert status == "ok"
     assert np.isclose(model.objective_value, 3.3)
 
