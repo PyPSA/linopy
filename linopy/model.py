@@ -248,7 +248,7 @@ class Model:
 
         self.variables.add(name, labels, lower, upper)
 
-        return Variable(labels, name=name, model=self)
+        return self.variables[name]
 
     def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
         """
@@ -321,7 +321,7 @@ class Model:
 
         self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
-        return Constraint(labels, name=name, model=self)
+        return self.constraints[name]
 
     def add_objective(self, expr, overwrite=False):
         """

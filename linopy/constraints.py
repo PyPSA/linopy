@@ -26,6 +26,13 @@ class Constraint(DataArray):
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
 
     def __init__(self, *args, **kwargs):
+
+        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
+        if isinstance(args[0], DataArray):
+            da = args[0]
+            args = (da.data, da.coords)
+            kwargs.update({"attrs": da.attrs, "name": da.name})
+
         self.model = kwargs.pop("model", None)
         super().__init__(*args, **kwargs)
         assert self.name is not None, "Constraint data does not have a name."
@@ -173,8 +180,7 @@ class Constraints:
         """Coefficient range of the constraint."""
         return (
             xr.concat(
-                [self.coeffs.min(), self.coeffs.max()],
-                dim=pd.Index(["min", "max"]),
+                [self.coeffs.min(), self.coeffs.max()], dim=pd.Index(["min", "max"]),
             )
             .to_dataframe()
             .T
