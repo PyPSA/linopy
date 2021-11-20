@@ -9,7 +9,7 @@ from functools import partial, reduce
 import numpy as np
 import xarray as xr
 from numpy import dtype
-from xarray import apply_ufunc, full_like, concat
+from xarray import DataArray, apply_ufunc, concat, full_like
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +60,13 @@ def objective_to_file(m, f):
     coef = m.objective.coeffs
     var = m.objective.vars
 
-    nonnans = coef.notnull() & (var != -1)
     objective = [
         to_float_str(coef),
-        full_like(coef, " x", dtype=dtype("<U9")),
+        DataArray(" x").astype(dtype("<U9")),
         to_int_str(var),
-        full_like(coef, "\n", dtype=dtype("<U9")),
+        DataArray("\n").astype(dtype("<U9")),
     ]
+    nonnans = coef.notnull() & (var != -1)
     objective = concat(objective, **concat_kwargs).where(nonnans, "")
     objective = objective.transpose(..., concat_dim)
     array_to_file(objective, f)
@@ -75,88 +75,68 @@ def objective_to_file(m, f):
 def constraints_to_file(m, f):
     """Write out the constraints of a model to a lp file."""
     f.write("\n\ns.t.\n\n")
-    labels = m.constraints.labels
-    vars = m.constraints.vars
-    coeffs = m.constraints.coeffs
-    sign = m.constraints.sign
-    rhs = m.constraints.rhs
+    for name, labels in m.constraints.labels.items():
 
-    nonnans_terms = coeffs.notnull() & (vars != -1)
-    nonnans = (labels != -1) & sign.notnull() & rhs.notnull()
-
-    for k in labels:
-        term_dim = f"{k}_term"
+        dim = f"{name}_term"
 
         lhs = [
-            to_float_str(coeffs[k]).where(nonnans_terms[k], ""),
-            full_like(coeffs[k], " x", dtype=dtype("<U9")).where(nonnans_terms[k], ""),
-            to_int_str(vars[k]).where(nonnans_terms[k], ""),
-            full_like(vars[k], "\n", dtype=dtype("<U9")).where(nonnans_terms[k], ""),
+            to_float_str(m.constraints.coeffs[name]),
+            DataArray(" x").astype(dtype("<U9")),
+            to_int_str(m.constraints.vars[name]),
+            DataArray("\n").astype(dtype("<U9")),
         ]
 
-        lhs = concat(lhs, **concat_kwargs)
-        lhs = lhs.stack(_=[term_dim, concat_dim]).drop("_").rename(_=term_dim)
-
-        newline = full_like(labels[k], "\n", dtype=dtype("<U9"))
+        nonnans_terms = m.constraints.vars[name] != -1
+        lhs = concat(lhs, **concat_kwargs).where(nonnans_terms, "")
+        lhs = lhs.stack(_=[dim, concat_dim]).drop("_").rename(_=dim)
 
         constraints = [
-            full_like(labels[k], "c", dtype=dtype("<U9")),
-            to_int_str(labels[k]),
-            full_like(labels[k], ":\n", dtype=dtype("<U9")),
+            DataArray("c").astype(dtype("<U9")),
+            to_int_str(labels),
+            DataArray(":\n").astype(dtype("<U9")),
             lhs,
-            sign[k],
-            newline,
-            to_float_str(rhs[k]),
-            newline,
-            newline,
+            m.constraints.sign[name],
+            DataArray("\n").astype(dtype("<U9")),
+            to_float_str(m.constraints.rhs[name]),
+            DataArray("\n\n").astype(dtype("<U9")),
         ]
 
-        constraints = concat(constraints, term_dim, coords="minimal")
-        constraints = constraints.where(nonnans[k], "").transpose(..., term_dim)
-        array_to_file(constraints, fn=f)
+        da = concat(constraints, dim=dim, coords="minimal")
+        da = da.where(labels != -1, "").transpose(..., dim)
+        array_to_file(da, fn=f)
 
 
 def bounds_to_file(m, f):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
-    lower = m.variables.lower[m._non_binary_variables]
-    labels = m.variables.labels[m._non_binary_variables]
-    upper = m.variables.upper[m._non_binary_variables]
+    for name, labels in m.variables.labels[m._non_binary_variables].items():
 
-    nonnans = lower.notnull() & upper.notnull() & (labels != -1)
-
-    # iterate over dataarray to reduce memory usage
-    for k in labels:
         bounds = [
-            to_float_str(lower[k]),
-            full_like(labels[k], " <= x", dtype=dtype("<U9")),
-            to_int_str(labels[k]),
-            full_like(labels[k], " <= ", dtype=dtype("<U9")),
-            to_float_str(upper[k]),
-            full_like(labels[k], "\n", dtype=dtype("<U9")),
+            to_float_str(m.variables.lower[name]),
+            DataArray(" <= x").astype(dtype("<U9")),
+            to_int_str(labels),
+            DataArray(" <= ").astype(dtype("<U9")),
+            to_float_str(m.variables.upper[name]),
+            DataArray("\n").astype(dtype("<U9")),
         ]
 
-        bounds = concat(bounds, **concat_kwargs).where(nonnans[k], "")
+        bounds = concat(bounds, **concat_kwargs).where(labels != -1, "")
         bounds = bounds.transpose(..., concat_dim)
-        array_to_file(bounds, fn=f)
+        array_to_file(bounds, f)
 
 
 def binaries_to_file(m, f):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
-    labels = m.binaries.labels
+    for name, labels in m.binaries.labels.items():
 
-    nonnans = labels != -1
-
-    # iterate over dataarray to reduce memory usage
-    for k in labels:
         binaries = [
-            full_like(labels[k], "x", dtype=dtype("<U9")),
-            to_int_str(labels[k]),
-            full_like(labels[k], "\n", dtype=dtype("<U9")),
+            DataArray("x").astype(dtype("<U9")),
+            to_int_str(labels),
+            DataArray("\n").astype(dtype("<U9")),
         ]
 
-        binaries = concat(binaries, **concat_kwargs).where(nonnans[k], "")
+        binaries = concat(binaries, **concat_kwargs).where(labels != -1, "")
         binaries = binaries.transpose(..., concat_dim)
         array_to_file(binaries, fn=f)
 
