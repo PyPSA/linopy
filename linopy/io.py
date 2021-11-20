@@ -4,17 +4,16 @@
 import logging
 import os
 import time
-from functools import partial, reduce
 
 import numpy as np
 import xarray as xr
 from numpy import dtype
-from xarray import DataArray, apply_ufunc, concat, full_like
+from xarray import DataArray, apply_ufunc, concat
 
 logger = logging.getLogger(__name__)
 
 
-ufunc_kwargs = dict(dask="parallelized", vectorize=True)
+ufunc_kwargs = dict(vectorize=True)
 concat_dim = "_concat_dim"
 concat_kwargs = dict(dim=concat_dim, coords="minimal")
 
@@ -22,36 +21,31 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 # IO functions
 def to_float_str(da):
     """Convert a float array to a string array with lp like format for coefficients."""
-    return apply_ufunc(lambda f: "%+f" % f, da.fillna(0), **ufunc_kwargs)
+    return apply_ufunc(
+        lambda f: "%+f" % f,
+        da.fillna(0).compute(),
+        **ufunc_kwargs,
+    )
 
 
 def to_int_str(da, nonnans=None):
     """Convert a int array to a string array."""
-    return xr.apply_ufunc(lambda d: "%d" % d, da.fillna(0), **ufunc_kwargs)
-
-
-def sum_strings(da, dim=None):
-    """
-    Sum all values in the terms dimension. This function is needed in order
-    to prevent numpy to change the dtype to unicode. This happens when strings
-    of a one-dimensional array is concatenated (good question why...).
-    """
-    assert len(da.dims) > 1, "Dimensions must be more than one."
-    if dim is None:
-        dim = [dim for dim in da.dims if "_term" in dim].pop()
-    return da.reduce(np.sum, dim)
-
-
-def join_str(*arraylist):
-    """Join string array together (elementwise concatenation of strings)."""
-    func = partial(np.add, dtype=object)  # np.core.defchararray.add
-    return reduce(func, arraylist, "")
+    return xr.apply_ufunc(lambda d: "%d" % d, da.fillna(0).compute(), **ufunc_kwargs)
 
 
 def array_to_file(array, fn):
     """Elementwise writing out string values to a file."""
-    write = np.vectorize(fn.write)
-    write(array.data.ravel())
+    write = np.frompyfunc(fn.write, 1, 1)
+
+    def func(data):
+        return write(data.ravel()).reshape(data.shape)
+
+    return xr.apply_ufunc(
+        func,
+        array,
+        dask="parallelized",
+        output_dtypes=[int],
+    )
 
 
 def objective_to_file(m, f):
@@ -69,7 +63,7 @@ def objective_to_file(m, f):
     nonnans = coef.notnull() & (var != -1)
     objective = concat(objective, **concat_kwargs).where(nonnans, "")
     objective = objective.transpose(..., concat_dim)
-    array_to_file(objective, f)
+    array_to_file(objective.compute(), f)
 
 
 def constraints_to_file(m, f):
@@ -103,7 +97,7 @@ def constraints_to_file(m, f):
 
         da = concat(constraints, dim=dim, coords="minimal")
         da = da.where(labels != -1, "").transpose(..., dim)
-        array_to_file(da, fn=f)
+        array_to_file(da.compute(), fn=f)
 
 
 def bounds_to_file(m, f):
@@ -122,7 +116,7 @@ def bounds_to_file(m, f):
 
         bounds = concat(bounds, **concat_kwargs).where(labels != -1, "")
         bounds = bounds.transpose(..., concat_dim)
-        array_to_file(bounds, f)
+        array_to_file(bounds.compute(), f)
 
 
 def binaries_to_file(m, f):
@@ -138,7 +132,7 @@ def binaries_to_file(m, f):
 
         binaries = concat(binaries, **concat_kwargs).where(labels != -1, "")
         binaries = binaries.transpose(..., concat_dim)
-        array_to_file(binaries, fn=f)
+        array_to_file(binaries.compute(), fn=f)
 
 
 def to_file(m, fn):

@@ -99,7 +99,7 @@ def test_default_setting(model, solver):
 def test_default_settings_chunked(model_chunked, solver):
     status, condition = model_chunked.solve(solver)
     assert status == "ok"
-    assert np.isclose(model.objective_value, 3.3)
+    assert np.isclose(model_chunked.objective_value, 3.3)
 
 
 @pytest.mark.parametrize("solver", available_solvers)
