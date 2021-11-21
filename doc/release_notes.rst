@@ -4,6 +4,8 @@ Release Notes
 Upcoming Release
 ----------------
 
+* The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
+
 
 Version 0.0.4
 -------------
