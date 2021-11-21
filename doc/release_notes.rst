@@ -6,6 +6,9 @@ Upcoming Release
 
 * The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
 
+**Breaking changes**
+
+* The low level IO function ``linopy.io.str_array_to_file`` was renamed to ``linopy.io.array_to_file``, the function ``linopy.io.join_str_arrays`` was removed.
 
 Version 0.0.4
 -------------
