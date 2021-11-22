@@ -18,6 +18,7 @@ from linopy import Model
 
 def test_constraint_repr():
     m = Model()
+
     x = m.add_variables()
     c = m.add_constraints(x, ">=", 0)
     c.__repr__()
@@ -26,8 +27,9 @@ def test_constraint_repr():
 
 def test_constraints_repr():
     m = Model()
+    m.constraints.__repr__()
     x = m.add_variables()
-    c = m.add_constraints(x, ">=", 0)
+    m.add_constraints(x, ">=", 0)
     m.constraints.__repr__()
 
 

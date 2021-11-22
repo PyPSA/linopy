@@ -4,6 +4,7 @@ Linopy variables module.
 This module contains variable related definitions of the package.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
@@ -221,7 +222,7 @@ class Variables:
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
-    dataset_names = ["Variables labels", "Lower bounds", "Upper bounds"]
+    dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
     def __getitem__(
         self, names: Union[str, Sequence[str]]
@@ -236,13 +237,17 @@ class Variables:
     def __repr__(self):
         """Return a string representation of the linopy model."""
         r = "linopy.model.Variables"
-        line = "=" * len(r)
+        line = "-" * len(r)
         r += f"\n{line}\n\n"
+        # matches string between "Data variables" and "Attributes"/end of string
+        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:\n)"
+        datapattern = r"(?s)(?<=Data variables:\n).*?(?=($|\nAttributes))"
         for (k, K) in zip(self.dataset_attrs, self.dataset_names):
-            s = getattr(self, k).__repr__().split("\n", 1)[1]
-            s = s.replace("Data variables:\n", "Data:\n")
-            line = "-" * (len(K) + 1)
-            r += f"{K}:\n{line}\n{s}\n\n"
+            orig = getattr(self, k).__repr__()
+            if k == "labels":
+                r += re.search(coordspattern, orig).group() + "\n"
+            data = re.search(datapattern, orig).group()
+            r += f"{K}:\n{data}\n\n"
         return r
 
     def __iter__(self):

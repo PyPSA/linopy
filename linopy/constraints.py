@@ -4,6 +4,7 @@ Linopy constraints module.
 This module contains implementations for the Constraint{s} class.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
@@ -117,7 +118,7 @@ class Constraints:
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
-        "Constraint labels",
+        "Labels",
         "Left-hand-side coefficients",
         "Left-hand-side variables",
         "Signs",
@@ -127,13 +128,18 @@ class Constraints:
     def __repr__(self):
         """Return a string representation of the linopy model."""
         r = "linopy.model.Constraints"
-        line = "=" * len(r)
+        line = "-" * len(r)
         r += f"\n{line}\n\n"
+        # matches string between "Data variables" and "Attributes"/end of string
+        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:\n)"
+        datapattern = r"(?s)(?<=Data variables:\n).*?(?=($|\nAttributes))"
         for (k, K) in zip(self.dataset_attrs, self.dataset_names):
-            s = getattr(self, k).__repr__().split("\n", 1)[1]
-            s = s.replace("Data variables:\n", "Data:\n")
+            orig = getattr(self, k).__repr__()
+            if k == "labels":
+                r += re.search(coordspattern, orig).group() + "\n"
+            data = re.search(datapattern, orig).group()
             line = "-" * (len(K) + 1)
-            r += f"{K}:\n{line}\n{s}\n\n"
+            r += f"{K}:\n{data}\n\n"
         return r
 
     def __getitem__(
@@ -180,7 +186,8 @@ class Constraints:
         """Coefficient range of the constraint."""
         return (
             xr.concat(
-                [self.coeffs.min(), self.coeffs.max()], dim=pd.Index(["min", "max"]),
+                [self.coeffs.min(), self.coeffs.max()],
+                dim=pd.Index(["min", "max"]),
             )
             .to_dataframe()
             .T
