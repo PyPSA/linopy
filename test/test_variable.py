@@ -17,9 +17,17 @@ from linopy import LinearExpression, Model
 
 def test_variable_repr():
     m = Model()
+    m.variables.__repr__()
+
     x = m.add_variables()
     x.__repr__()
     x._repr_html_()
+
+    m.variables.__repr__()
+
+    y = m.add_variables(coords=[pd.Index([1, 2, 3], name="time")], name="y")
+    y.__repr__()
+    y._repr_html_()
 
     m.variables.__repr__()
 
