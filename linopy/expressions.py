@@ -62,6 +62,8 @@ class LinearExpression(Dataset):
 
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable")
 
+    fill_value = {"vars": -1, "coeffs": np.nan}
+
     def __init__(self, dataset=None):
         if dataset is not None:
             assert set(dataset) == {"coeffs", "vars"}
@@ -102,7 +104,10 @@ class LinearExpression(Dataset):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
-        res = LinearExpression(xr.concat([self, other], dim="_term"))
+        fill_value = {"vars": -1, "coeffs": np.nan}
+        res = LinearExpression(
+            xr.concat([self, other], dim="_term", fill_value=fill_value)
+        )
         return res
 
     def __sub__(self, other):
@@ -115,7 +120,10 @@ class LinearExpression(Dataset):
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
-        res = LinearExpression(xr.concat([self, other], dim="_term"))
+        fill_value = {"vars": -1, "coeffs": np.nan}
+        res = LinearExpression(
+            xr.concat([self, other], dim="_term", fill_value=fill_value)
+        )
         return res
 
     def __neg__(self):
@@ -224,7 +232,7 @@ class LinearExpression(Dataset):
 
         """
         groups = self.groupby(group)
-        return groups.map(lambda ds: ds.sum(groups._group_dim))
+        return self.__class__(groups.map(lambda ds: ds.sum(groups._group_dim)))
 
     @property
     def nterm(self):
