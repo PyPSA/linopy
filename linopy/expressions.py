@@ -144,7 +144,7 @@ class LinearExpression(Dataset):
         """Convert the expression to a xarray.Dataset."""
         return Dataset(self)
 
-    def sum(self, dims=None, keep_coords=False):
+    def sum(self, dims=None, drop_zeros=False):
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -174,6 +174,9 @@ class LinearExpression(Dataset):
             .stack(_term=["_stacked_term"] + dims)
             .reset_index("_term", drop=True)
         )
+        if drop_zeros:
+            ds = ds.densify_terms()
+
         return LinearExpression(ds)
 
     def from_tuples(*tuples, chunk=None):
@@ -254,3 +257,34 @@ class LinearExpression(Dataset):
     def empty(self):
         """Get whether the linear expression is empty."""
         return self.shape == (0,)
+
+    def densify_terms(self):
+        """
+        Move all non-zero term entries to the front and cut off all-zero
+        entries in the term-axis.
+        """
+        self = self.transpose(..., "_term")
+
+        data = self.coeffs.data
+        axis = data.ndim - 1
+        nnz = np.nonzero(data)
+        nterm = (data != 0).sum(axis).max()
+
+        mod_nnz = list(nnz)
+        mod_nnz.pop(axis)
+
+        remaining_axes = np.vstack(mod_nnz).T
+        _, idx = np.unique(remaining_axes, axis=0, return_inverse=True)
+        idx = list(idx)
+        new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
+        mod_nnz.insert(axis, new_index)
+
+        vdata = np.full_like(data, -1)
+        vdata[tuple(mod_nnz)] = self.vars.data[nnz]
+        self.vars.data = vdata
+
+        cdata = np.zeros_like(data)
+        cdata[tuple(mod_nnz)] = self.coeffs.data[nnz]
+        self.coeffs.data = cdata
+
+        return self.sel(_term=slice(0, nterm))

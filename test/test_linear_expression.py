@@ -124,6 +124,28 @@ def test_sum():
     assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
 
 
+def test_sum_drop_zeros():
+    coeff = xr.zeros_like(z)
+    coeff[1, 0] = 3
+    coeff[0, 2] = 5
+    expr = coeff * z
+
+    res = expr.sum("dim_0", drop_zeros=True)
+    assert res.nterm == 1
+
+    res = expr.sum("dim_1", drop_zeros=True)
+    assert res.nterm == 1
+
+    coeff[1, 2] = 4
+    res = expr.sum()
+
+    res = expr.sum("dim_0", drop_zeros=True)
+    assert res.nterm == 2
+
+    res = expr.sum("dim_1", drop_zeros=True)
+    assert res.nterm == 2
+
+
 def test_mul():
     expr = 10 * x + y + z
     mexpr = expr * 10
