@@ -62,7 +62,7 @@ def masked_variable_model():
 
     lower = pd.Series(0, range(10))
     x = m.add_variables(lower, name="x")
-    mask = [True] * 8 + [False, False]
+    mask = pd.Series([True] * 8 + [False, False])
     y = m.add_variables(lower, name="y", mask=mask)
 
     m.add_constraints(x + y, ">=", 10)
@@ -79,7 +79,7 @@ def masked_constraint_model():
     x = m.add_variables(lower, name="x")
     y = m.add_variables(lower, name="y")
 
-    mask = [True] * 8 + [False, False]
+    mask = pd.Series([True] * 8 + [False, False])
     m.add_constraints(x + y, ">=", 10, mask=mask)
     # for the last two entries only the following constraint will be active
     m.add_constraints(x + y, ">=", 5)

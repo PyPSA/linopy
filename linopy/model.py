@@ -239,6 +239,10 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
+            mask = DataArray(mask)
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         if self.chunk:
@@ -309,6 +313,10 @@ class Model:
         self._cCounter += labels.size
 
         if mask is not None:
+            mask = DataArray(mask)
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
@@ -632,7 +640,10 @@ class Model:
     def objectiverange(self):
         """Objective range of the objective in the model."""
         return pd.Series(
-            [self.objective.coeffs.min().item(), self.objective.coeffs.max().item(),],
+            [
+                self.objective.coeffs.min().item(),
+                self.objective.coeffs.max().item(),
+            ],
             index=["min", "max"],
         )
 
