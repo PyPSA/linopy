@@ -240,13 +240,15 @@ class Variables:
         line = "-" * len(r)
         r += f"\n{line}\n\n"
         # matches string between "Data variables" and "Attributes"/end of string
-        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:\n)"
-        datapattern = r"(?s)(?<=Data variables:\n).*?(?=($|\nAttributes))"
+        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
+        datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
         for (k, K) in zip(self.dataset_attrs, self.dataset_names):
             orig = getattr(self, k).__repr__()
             if k == "labels":
                 r += re.search(coordspattern, orig).group() + "\n"
             data = re.search(datapattern, orig).group()
+            # drop first line which includes counter for long ds
+            data = data.split("\n", 1)[1]
             r += f"{K}:\n{data}\n\n"
         return r
 
