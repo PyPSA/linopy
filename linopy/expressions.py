@@ -70,8 +70,9 @@ class LinearExpression(Dataset):
             (dataset,) = xr.broadcast(dataset)
             dataset = dataset.transpose(..., "_term")
         else:
-            dataset = xr.Dataset({"coeffs": DataArray([]), "vars": DataArray([])})
-            dataset = dataset.assign_coords(_term=[])
+            vars = DataArray(np.array([], dtype=int), dims="_term")
+            coeffs = DataArray(np.array([], dtype=float), dims="_term")
+            dataset = xr.Dataset({"coeffs": coeffs, "vars": vars})
         super().__init__(dataset)
 
     # We have to set the _reduce_method to None, in order to overwrite basic
@@ -162,22 +163,27 @@ class LinearExpression(Dataset):
             Summed expression.
 
         """
-        if dims:
-            dims = list(np.atleast_1d(dims))
-        else:
-            dims = [...]
-        if "_term" in dims:
-            dims.remove("_term")
+        if dims is None:
+            vars = DataArray(self.vars.data.ravel(), dims="_term")
+            coeffs = DataArray(self.coeffs.data.ravel(), dims="_term")
+            ds = xr.Dataset({"vars": vars, "coeffs": coeffs})
 
-        ds = (
-            self.rename(_term="_stacked_term")
-            .stack(_term=["_stacked_term"] + dims)
-            .reset_index("_term", drop=True)
-        )
+        else:
+            dims = list(np.atleast_1d(dims))
+
+            if "_term" in dims:
+                dims.remove("_term")
+
+            ds = (
+                self.reset_index(dims, drop=True)
+                .rename(_term="_stacked_term")
+                .stack(_term=["_stacked_term"] + dims)
+                .reset_index("_term", drop=True)
+            )
         if drop_zeros:
             ds = ds.densify_terms()
 
-        return LinearExpression(ds)
+        return self.__class__(ds)
 
     def from_tuples(*tuples, chunk=None):
         """
