@@ -737,6 +737,7 @@ class Model:
         status = res.pop("status")
         termination_condition = res.pop("termination_condition")
         obj = res.pop("objective", None)
+        self.solver_model = res.pop("model", None)
 
         if status == "ok" and termination_condition == "optimal":
             logger.info(f" Optimization successful. Objective value: {obj:.2e}")
@@ -752,7 +753,6 @@ class Model:
             return status, termination_condition
 
         self.objective_value = obj
-        self.solver_model = res.pop("model", None)
         self.status = termination_condition
 
         res["solution"].loc[-1] = np.nan
