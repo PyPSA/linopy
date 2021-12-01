@@ -41,7 +41,15 @@ def test_variable_bound_accessor():
 
 def test_variable_sum():
     m = Model()
-    x = m.add_variables(0, 10)
+    x = m.add_variables(coords=[range(10)])
+    res = x.sum()
+    assert res.nterm == 10
+
+
+def test_variable_where():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+    x.where([True] * 4 + [False] * 6)
 
 
 def test_constraint_getter_without_model():
@@ -52,4 +60,5 @@ def test_constraint_getter_without_model():
     with pytest.raises(AttributeError):
         v.get_upper_bound()
     with pytest.raises(AttributeError):
+        v.get_lower_bound()
         v.get_lower_bound()

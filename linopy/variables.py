@@ -186,7 +186,7 @@ class Variable(DataArray):
             raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.lower[self.name]
 
-    def sum(self, dims=None, keep_coords=False):
+    def sum(self, dims=None):
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -198,16 +198,37 @@ class Variable(DataArray):
         dims : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
-        keep_coords : bool, optional
-            Whether to keep the coordinates of the stacked dimensions in a
-            MultiIndex. The default is False.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        return self.to_linexpr().sum(dims, keep_coords)
+        return self.to_linexpr().sum(dims)
+
+    def where(self, cond, other=-1, **kwargs):
+        """
+        Filter variables based on a condition.
+
+        This opereration call ``xarray.DataArray.where`` but sets the default
+        fill value to -1 and ensures preserving the linopy.Variable type.
+
+        Parameters
+        ----------
+        cond : DataArray or callable
+            Locations at which to preserve this object's values. dtype must be `bool`.
+            If a callable, it must expect this object as its only parameter.
+        other : scalar, DataArray, Variable, optional
+            Value to use for locations in this object where ``cond`` is False.
+            By default, these locations filled with -1.
+        **kwargs :
+            Keyword arguments passed to ``xarray.DataArray.where``
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        return self.__class__(DataArray.where(self, cond, other, **kwargs))
 
 
 @dataclass(repr=False)

@@ -9,10 +9,12 @@ Upcoming Release
 * The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
 * Dimensions of masks passed to `add_variables` and `add_constraints` now have to be a subset of the resulting labels dimensions.
 * A new high-level function `merge` was added to concatenate multiple linear expressions.
+* The ``Variable.where`` function now has -1 as default fill value.
 
 **Breaking changes**
 
 * The low level IO function ``linopy.io.str_array_to_file`` was renamed to ``linopy.io.array_to_file``, the function ``linopy.io.join_str_arrays`` was removed.
+* The `keep_coords` flag in ``LinearExpression.sum`` and ``Variable.sum`` was dropped.
 
 Version 0.0.4
 -------------
