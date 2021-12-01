@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model
+from linopy import LinearExpression, Model, merge
 
 m = Model()
 
@@ -122,6 +122,17 @@ def test_sum():
     assert res.notnull().all().to_array().all()
 
     assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+
+
+def test_merge():
+    expr1 = (10 * x + y).sum("dim_0")
+    expr2 = z.sum("dim_0")
+
+    res = merge(expr1, expr2)
+    assert res._term.size == 6
+
+    res = merge([expr1, expr2])
+    assert res._term.size == 6
 
 
 def test_sum_drop_zeros():

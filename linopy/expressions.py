@@ -294,3 +294,31 @@ class LinearExpression(Dataset):
         self.coeffs.data = cdata
 
         return self.sel(_term=slice(0, nterm))
+
+
+def merge(*exprs, dim="_term"):
+    """
+    Merge multiple linear expression together.
+
+    This function is a bit faster than summing over multiple linear expressions.
+
+    Parameters
+    ----------
+    *exprs : tuple/list
+        List of linear expressions to merge.
+    dim : str
+        Dimension along which the expressions should be concatenated.
+
+    Returns
+    -------
+    None.
+
+    """
+
+    if len(exprs) == 1:
+        exprs = exprs[0]  # assume one list of mergeable objects is given
+    else:
+        exprs = list(exprs)
+
+    fill_value = LinearExpression.fill_value
+    return LinearExpression(xr.concat(exprs, dim, fill_value=fill_value))

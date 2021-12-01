@@ -8,6 +8,7 @@ Upcoming Release
 * When summing over one or multiple axes in a LinearExpression, terms with coefficient of zeros can now be dropped automatically.
 * The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
 * Dimensions of masks passed to `add_variables` and `add_constraints` now have to be a subset of the resulting labels dimensions.
+* A new high-level function `merge` was added to concatenate multiple linear expressions.
 
 **Breaking changes**
 
