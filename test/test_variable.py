@@ -49,7 +49,30 @@ def test_variable_sum():
 def test_variable_where():
     m = Model()
     x = m.add_variables(coords=[range(10)])
-    x.where([True] * 4 + [False] * 6)
+    x = x.where([True] * 4 + [False] * 6)
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.loc[9].item() == -1
+
+
+def test_variable_sanitize():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+    # convert intentionally to float with nans
+    x = x.where([True] * 4 + [False] * 6, np.nan)
+    x = x.sanitize()
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.loc[9].item() == -1
+
+
+def test_variable_type_preservation():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+
+    assert isinstance(x.bfill("dim_0"), linopy.variables.Variable)
+    assert isinstance(x.broadcast_like(x.to_array()), linopy.variables.Variable)
+    assert isinstance(x.clip(max=20), linopy.variables.Variable)
+    assert isinstance(x.ffill("dim_0"), linopy.variables.Variable)
+    assert isinstance(x.fillna(-1), linopy.variables.Variable)
 
 
 def test_constraint_getter_without_model():

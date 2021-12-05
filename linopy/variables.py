@@ -4,14 +4,24 @@ Linopy variables module.
 This module contains variable related definitions of the package.
 """
 
+import functools
 import re
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
+from numpy import floating, issubdtype
 from xarray import DataArray, Dataset
 
 import linopy.expressions as expressions
 from linopy.common import _merge_inplace
+
+
+def varwrap(method):
+    @functools.wraps(method)
+    def _varwrap(*args, **kwargs):
+        return Variable(method(*args, **kwargs))
+
+    return _varwrap
 
 
 class Variable(DataArray):
@@ -229,6 +239,31 @@ class Variable(DataArray):
         linopy.Variable
         """
         return self.__class__(DataArray.where(self, cond, other, **kwargs))
+
+    def sanitize(self):
+        """
+        Sanitize variable by ensuring int dtype with fill value of -1.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        if issubdtype(self.dtype, floating):
+            return self.fillna(-1).astype(int)
+        return self
+
+    # Wrapped function which would convert variable to dataarray
+    astype = varwrap(DataArray.astype)
+
+    bfill = varwrap(DataArray.bfill)
+
+    broadcast_like = varwrap(DataArray.broadcast_like)
+
+    clip = varwrap(DataArray.clip)
+
+    ffill = varwrap(DataArray.ffill)
+
+    fillna = varwrap(DataArray.fillna)
 
 
 @dataclass(repr=False)

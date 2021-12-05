@@ -135,6 +135,12 @@ def test_infeasible_model(model, solver):
     assert status == "warning"
     assert "infeasible" in condition
 
+    if solver == "gurobi":
+        model.compute_set_of_infeasible_constraints()
+    else:
+        with pytest.raises(NotImplementedError):
+            model.compute_set_of_infeasible_constraints()
+
 
 @pytest.mark.parametrize("solver", available_solvers)
 def test_milp_model(milp_model, solver):

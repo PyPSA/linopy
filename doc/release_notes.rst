@@ -10,6 +10,9 @@ Upcoming Release
 * Dimensions of masks passed to `add_variables` and `add_constraints` now have to be a subset of the resulting labels dimensions.
 * A new high-level function `merge` was added to concatenate multiple linear expressions.
 * The ``Variable.where`` function now has -1 as default fill value.
+* The return value of most Variable functions built on xarray functions now preserve the Variable type.
+* The variable labels in linear expression which are added to a model are ensured to be stored as integers.
+* A preliminary function to print out the subset of infeasible constraints was added (only available for Gurobi, based on https://www.gurobi.com/documentation/9.5/refman/py_model_computeiis.html)
 
 **Breaking changes**
 

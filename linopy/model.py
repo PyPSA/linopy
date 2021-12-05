@@ -16,7 +16,7 @@ from numpy import inf
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.constraints import Constraint, Constraints
+from linopy.constraints import Constraints
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression
 from linopy.io import to_file, to_netcdf
@@ -298,6 +298,7 @@ class Model:
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
+        lhs = lhs.sanitize()
         sign = DataArray(sign)
         rhs = DataArray(rhs)
 
@@ -768,6 +769,24 @@ class Model:
             self.dual[c] = xr.DataArray(du, self.constraints[c].coords)
 
         return status, termination_condition
+
+    def compute_set_of_infeasible_constraints(self):
+        """
+        Print out the infeasible subset of constraints.
+
+        This is a prelimary function and is only implemented for gurobi so far.
+        """
+        import gurobipy
+
+        solver_model = getattr(self, "solver_model")
+
+        if not isinstance(solver_model, gurobipy.Model):
+            raise NotImplementedError("Solver model must be a Gurobi Model.")
+
+        solver_model.computeIIS()
+        with NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-") as f:
+            solver_model.write(f.name)
+            print(f.read().decode())
 
     to_netcdf = to_netcdf
 

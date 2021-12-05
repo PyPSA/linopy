@@ -8,6 +8,7 @@ This module contains definition related to affine expressions.
 import numpy as np
 import xarray as xr
 from xarray import DataArray, Dataset
+from xarray.core.groupby import _maybe_reorder, peek_at
 
 from linopy import variables
 
@@ -241,7 +242,23 @@ class LinearExpression(Dataset):
 
         """
         groups = self.groupby(group)
-        return self.__class__(groups.map(lambda ds: ds.sum(groups._group_dim)))
+
+        def func(ds):
+            ds = ds.sum(groups._group_dim)
+            return ds.assign_coords(_term=np.arange(ds.nterm))
+
+        # mostly taken from xarray/core/groupby.py
+        applied = (func(ds) for ds in groups._iter_grouped())
+        applied_example, applied = peek_at(applied)
+        coord, dim, positions = groups._infer_concat_args(applied_example)
+        combined = xr.concat(applied, dim, fill_value=self.fill_value)
+        combined = _maybe_reorder(combined, dim, positions)
+        # assign coord when the applied function does not return that coord
+        if coord is not None and dim not in applied_example.dims:
+            combined[coord.name] = coord
+        combined = groups._maybe_restore_empty_groups(combined)
+        res = groups._maybe_unstack(combined).reset_index("_term", drop=True)
+        return self.__class__(res)
 
     @property
     def nterm(self):
@@ -295,6 +312,19 @@ class LinearExpression(Dataset):
 
         return self.sel(_term=slice(0, nterm))
 
+    def sanitize(self):
+        """
+        Sanitize LinearExpression by ensuring int dtype for variables.
+
+        Returns
+        -------
+        linopy.LinearExpression
+        """
+
+        if not np.issubdtype(self.vars.dtype, np.integer):
+            return self.assign(vars=self.vars.fillna(-1).astype(int))
+        return self
+
 
 def merge(*exprs, dim="_term"):
     """
@@ -320,5 +350,12 @@ def merge(*exprs, dim="_term"):
     else:
         exprs = list(exprs)
 
+    if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
+        exprs = [expr.assign_coords(_term=np.arange(expr.nterm)) for expr in exprs]
+
     fill_value = LinearExpression.fill_value
-    return LinearExpression(xr.concat(exprs, dim, fill_value=fill_value))
+    res = LinearExpression(xr.concat(exprs, dim, fill_value=fill_value))
+    if "_term" in res.coords:
+        res = res.reset_index("_term", drop=True)
+
+    return res

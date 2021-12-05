@@ -175,7 +175,7 @@ class Constraints:
     ):
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("coeffs", coeffs, name)
-        self._merge_inplace("vars", vars, name)
+        self._merge_inplace("vars", vars, name, fill_value=-1)
         self._merge_inplace("sign", sign, name)
         self._merge_inplace("rhs", rhs, name)
 
@@ -202,9 +202,3 @@ class Constraints:
     @property
     def equalities(self):
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
-
-    def block_sizes(self, num_blocks, block_map) -> np.ndarray:
-        sizes = np.zeros(num_blocks + 1, dtype=int)
-        for name in self.labels:
-            sizes += self[name].block_sizes(num_blocks, block_map)
-        return sizes
