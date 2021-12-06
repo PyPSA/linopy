@@ -21,14 +21,10 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 # IO functions
 def to_float_str(da):
     """Convert a float array to a string array with lp like format for coefficients."""
-    return apply_ufunc(
-        lambda f: "%+f" % f,
-        da.fillna(0).compute(),
-        **ufunc_kwargs,
-    )
+    return apply_ufunc(lambda f: "%+f" % f, da.fillna(0).compute(), **ufunc_kwargs)
 
 
-def to_int_str(da, nonnans=None):
+def to_int_str(da):
     """Convert a int array to a string array."""
     return xr.apply_ufunc(lambda d: "%d" % d, da.fillna(0).compute(), **ufunc_kwargs)
 
@@ -40,12 +36,7 @@ def array_to_file(array, fn):
     def func(data):
         return write(data.ravel()).reshape(data.shape)
 
-    return xr.apply_ufunc(
-        func,
-        array,
-        dask="parallelized",
-        output_dtypes=[int],
-    )
+    return xr.apply_ufunc(func, array)
 
 
 def objective_to_file(m, f):
