@@ -380,7 +380,7 @@ def run_gurobi(
         status = "warning"
 
     if termination_condition not in ["optimal", "suboptimal"]:
-        return dict(status=status, termination_condition=termination_condition)
+        return dict(status=status, termination_condition=termination_condition, model=m)
 
     objective = m.ObjVal
 

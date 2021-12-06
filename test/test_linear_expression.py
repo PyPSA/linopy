@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model
+from linopy import LinearExpression, Model, merge
 
 m = Model()
 
@@ -124,6 +124,54 @@ def test_sum():
     assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
 
 
+def test_merge():
+    expr1 = (10 * x + y).sum("dim_0")
+    expr2 = z.sum("dim_0")
+
+    res = merge(expr1, expr2)
+    assert res._term.size == 6
+
+    res = merge([expr1, expr2])
+    assert res._term.size == 6
+
+    # now concat with same length of terms
+    expr1 = z.sel(dim_0=0).sum("dim_1")
+    expr2 = z.sel(dim_0=1).sum("dim_1")
+
+    res = merge(expr1, expr2, dim="dim_1")
+    assert res.nterm == 3
+
+    # now with different length of terms
+    expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
+    expr2 = z.sel(dim_0=1).sum("dim_1")
+
+    res = merge(expr1, expr2, dim="dim_1")
+    assert res.nterm == 3
+    assert res.sel(dim_1=0, _term=2).vars.item() == -1
+
+
+def test_sum_drop_zeros():
+    coeff = xr.zeros_like(z)
+    coeff[1, 0] = 3
+    coeff[0, 2] = 5
+    expr = coeff * z
+
+    res = expr.sum("dim_0", drop_zeros=True)
+    assert res.nterm == 1
+
+    res = expr.sum("dim_1", drop_zeros=True)
+    assert res.nterm == 1
+
+    coeff[1, 2] = 4
+    res = expr.sum()
+
+    res = expr.sum("dim_0", drop_zeros=True)
+    assert res.nterm == 2
+
+    res = expr.sum("dim_1", drop_zeros=True)
+    assert res.nterm == 2
+
+
 def test_mul():
     expr = 10 * x + y + z
     mexpr = expr * 10
@@ -133,12 +181,28 @@ def test_mul():
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
 
 
+def test_sanitize():
+    expr = 10 * x + y + z
+    assert isinstance(expr.sanitize(), LinearExpression)
+
+
 def test_group_terms():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.to_linexpr().group_terms(groups)
     assert "group" in grouped.dims
     assert (grouped.group == [1, 2]).all()
     assert grouped._term.size == 10
+
+    # now asymetric groups which result in different nterms
+    groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
+    grouped = v.to_linexpr().group_terms(groups)
+    assert "group" in grouped.dims
+    # first group must be full with vars
+    assert (grouped.sel(group=1) > 0).all()
+    # the last 4 entries of the second group must be empty, i.e. -1
+    assert (grouped.sel(group=2).isel(_term=slice(None, -4)) >= 0).all()
+    assert (grouped.sel(group=2).isel(_term=slice(-4, None)) == -1).all()
+    assert grouped._term.size == 12
 
 
 def test_group_terms_variable():

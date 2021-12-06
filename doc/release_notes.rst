@@ -4,6 +4,20 @@ Release Notes
 Upcoming Release
 ----------------
 
+* LinearExpression has a new function `densify_terms` which reduces the `_term` axis to a minimal length while containing all non-zero coefficient values.
+* When summing over one or multiple axes in a LinearExpression, terms with coefficient of zeros can now be dropped automatically.
+* The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
+* Dimensions of masks passed to `add_variables` and `add_constraints` now have to be a subset of the resulting labels dimensions.
+* A new high-level function `merge` was added to concatenate multiple linear expressions.
+* The ``Variable.where`` function now has -1 as default fill value.
+* The return value of most Variable functions built on xarray functions now preserve the Variable type.
+* The variable labels in linear expression which are added to a model are ensured to be stored as integers.
+* A preliminary function to print out the subset of infeasible constraints was added (only available for Gurobi, based on https://www.gurobi.com/documentation/9.5/refman/py_model_computeiis.html)
+
+**Breaking changes**
+
+* The low level IO function ``linopy.io.str_array_to_file`` was renamed to ``linopy.io.array_to_file``, the function ``linopy.io.join_str_arrays`` was removed.
+* The `keep_coords` flag in ``LinearExpression.sum`` and ``Variable.sum`` was dropped.
 
 Version 0.0.4
 -------------

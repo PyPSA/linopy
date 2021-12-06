@@ -241,6 +241,10 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
+            mask = DataArray(mask)
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         if self.chunk:
@@ -296,6 +300,7 @@ class Model:
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
+        lhs = lhs.sanitize()
         sign = DataArray(sign)
         rhs = DataArray(rhs)
 
@@ -311,6 +316,10 @@ class Model:
         self._cCounter += labels.size
 
         if mask is not None:
+            mask = DataArray(mask)
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         lhs = lhs.rename({"_term": f"{name}_term"})
@@ -351,6 +360,9 @@ class Model:
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         assert isinstance(expr, LinearExpression)
+
+        if self.chunk is not None:
+            expr = expr.chunk(self.chunk)
 
         if expr.vars.ndim > 1:
             expr = expr.sum()
@@ -786,6 +798,7 @@ class Model:
         status = res.pop("status")
         termination_condition = res.pop("termination_condition")
         obj = res.pop("objective", None)
+        self.solver_model = res.pop("model", None)
 
         if status == "ok" and termination_condition == "optimal":
             logger.info(f" Optimization successful. Objective value: {obj:.2e}")
@@ -801,7 +814,6 @@ class Model:
             return status, termination_condition
 
         self.objective_value = obj
-        self.solver_model = res.pop("model", None)
         self.status = termination_condition
 
         res["solution"].loc[-1] = np.nan
@@ -817,6 +829,24 @@ class Model:
             self.dual[c] = xr.DataArray(du, self.constraints[c].coords)
 
         return status, termination_condition
+
+    def compute_set_of_infeasible_constraints(self):
+        """
+        Print out the infeasible subset of constraints.
+
+        This is a prelimary function and is only implemented for gurobi so far.
+        """
+        import gurobipy
+
+        solver_model = getattr(self, "solver_model")
+
+        if not isinstance(solver_model, gurobipy.Model):
+            raise NotImplementedError("Solver model must be a Gurobi Model.")
+
+        solver_model.computeIIS()
+        with NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-") as f:
+            solver_model.write(f.name)
+            print(f.read().decode())
 
     to_netcdf = to_netcdf
 

@@ -176,7 +176,7 @@ def test_masked_variables():
 
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.Series(np.ones((10)))
-    mask = [True] * 5 + [False] * 5
+    mask = pd.Series([True] * 5 + [False] * 5)
     m.add_variables(lower, upper, mask=mask)
     assert m.variables.labels.var0[-1, -1].item() == -1
 
@@ -301,10 +301,10 @@ def test_masked_constraints():
     x = m.add_variables(lower, upper)
     y = m.add_variables()
 
-    mask = [True] * 5 + [False] * 5
+    mask = pd.Series([True] * 5 + [False] * 5)
     m.add_constraints(1 * x + 10 * y, "=", 0, mask=mask)
-    assert (m.constraints.labels.con0[:, 0:5] != -1).all()
-    assert (m.constraints.labels.con0[:, 5:10] == -1).all()
+    assert (m.constraints.labels.con0[0:5, :] != -1).all()
+    assert (m.constraints.labels.con0[5:10, :] == -1).all()
 
 
 def test_objective():

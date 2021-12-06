@@ -23,7 +23,7 @@ def test_str_arrays():
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
 
     da = to_int_str(x)
-    assert da.dtype == object
+    assert da.dtype.type is np.str_
 
 
 def test_str_arrays_chunked():
@@ -33,7 +33,7 @@ def test_str_arrays_chunked():
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
 
     da = to_int_str(y).compute()
-    assert da.dtype == object
+    assert da.dtype.type is np.str_
 
 
 def test_str_arrays_with_nans():
@@ -45,7 +45,7 @@ def test_str_arrays_with_nans():
     assert m["x"][-1].item() == -1
 
     da = to_int_str(m["x"])
-    assert da.dtype == object
+    assert da.dtype.type is np.str_
 
 
 def test_to_netcdf(tmp_path):

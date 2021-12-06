@@ -4,15 +4,26 @@ Linopy variables module.
 This module contains variable related definitions of the package.
 """
 
+import functools
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
+from numpy import floating, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
 import linopy.expressions as expressions
 from linopy.common import _merge_inplace
+
+
+def varwrap(method):
+    @functools.wraps(method)
+    def _varwrap(*args, **kwargs):
+        return Variable(method(*args, **kwargs))
+
+    return _varwrap
 
 
 class Variable(DataArray):
@@ -187,7 +198,7 @@ class Variable(DataArray):
             raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.lower[self.name]
 
-    def sum(self, dims=None, keep_coords=False):
+    def sum(self, dims=None):
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -199,16 +210,62 @@ class Variable(DataArray):
         dims : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
-        keep_coords : bool, optional
-            Whether to keep the coordinates of the stacked dimensions in a
-            MultiIndex. The default is False.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        return self.to_linexpr().sum(dims, keep_coords)
+        return self.to_linexpr().sum(dims)
+
+    def where(self, cond, other=-1, **kwargs):
+        """
+        Filter variables based on a condition.
+
+        This opereration call ``xarray.DataArray.where`` but sets the default
+        fill value to -1 and ensures preserving the linopy.Variable type.
+
+        Parameters
+        ----------
+        cond : DataArray or callable
+            Locations at which to preserve this object's values. dtype must be `bool`.
+            If a callable, it must expect this object as its only parameter.
+        other : scalar, DataArray, Variable, optional
+            Value to use for locations in this object where ``cond`` is False.
+            By default, these locations filled with -1.
+        **kwargs :
+            Keyword arguments passed to ``xarray.DataArray.where``
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        return self.__class__(DataArray.where(self, cond, other, **kwargs))
+
+    def sanitize(self):
+        """
+        Sanitize variable by ensuring int dtype with fill value of -1.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        if issubdtype(self.dtype, floating):
+            return self.fillna(-1).astype(int)
+        return self
+
+    # Wrapped function which would convert variable to dataarray
+    astype = varwrap(DataArray.astype)
+
+    bfill = varwrap(DataArray.bfill)
+
+    broadcast_like = varwrap(DataArray.broadcast_like)
+
+    clip = varwrap(DataArray.clip)
+
+    ffill = varwrap(DataArray.ffill)
+
+    fillna = varwrap(DataArray.fillna)
 
 
 @dataclass(repr=False)
@@ -224,7 +281,7 @@ class Variables:
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
-    dataset_names = ["Variables labels", "Lower bounds", "Upper bounds"]
+    dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
     def __getitem__(
         self, names: Union[str, Sequence[str]]
@@ -239,13 +296,19 @@ class Variables:
     def __repr__(self):
         """Return a string representation of the linopy model."""
         r = "linopy.model.Variables"
-        line = "=" * len(r)
+        line = "-" * len(r)
         r += f"\n{line}\n\n"
+        # matches string between "Data variables" and "Attributes"/end of string
+        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
+        datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
         for (k, K) in zip(self.dataset_attrs, self.dataset_names):
-            s = getattr(self, k).__repr__().split("\n", 1)[1]
-            s = s.replace("Data variables:\n", "Data:\n")
-            line = "-" * (len(K) + 1)
-            r += f"{K}:\n{line}\n{s}\n\n"
+            orig = getattr(self, k).__repr__()
+            if k == "labels":
+                r += re.search(coordspattern, orig).group() + "\n"
+            data = re.search(datapattern, orig).group()
+            # drop first line which includes counter for long ds
+            data = data.split("\n", 1)[1]
+            r += f"{K}:\n{data}\n\n"
         return r
 
     def __iter__(self):

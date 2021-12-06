@@ -29,6 +29,20 @@ def model():
 
 
 @pytest.fixture
+def model_chunked():
+    m = Model(chunk="auto")
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x + 6 * y, ">=", 10)
+    m.add_constraints(4 * x + 2 * y, ">=", 3)
+
+    m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.fixture
 def milp_model():
     m = Model()
 
@@ -48,7 +62,7 @@ def masked_variable_model():
 
     lower = pd.Series(0, range(10))
     x = m.add_variables(lower, name="x")
-    mask = [True] * 8 + [False, False]
+    mask = pd.Series([True] * 8 + [False, False])
     y = m.add_variables(lower, name="y", mask=mask)
 
     m.add_constraints(x + y, ">=", 10)
@@ -65,7 +79,7 @@ def masked_constraint_model():
     x = m.add_variables(lower, name="x")
     y = m.add_variables(lower, name="y")
 
-    mask = [True] * 8 + [False, False]
+    mask = pd.Series([True] * 8 + [False, False])
     m.add_constraints(x + y, ">=", 10, mask=mask)
     # for the last two entries only the following constraint will be active
     m.add_constraints(x + y, ">=", 5)
@@ -79,6 +93,13 @@ def test_default_setting(model, solver):
     status, condition = model.solve(solver)
     assert status == "ok"
     assert np.isclose(model.objective_value, 3.3)
+
+
+@pytest.mark.parametrize("solver", available_solvers)
+def test_default_settings_chunked(model_chunked, solver):
+    status, condition = model_chunked.solve(solver)
+    assert status == "ok"
+    assert np.isclose(model_chunked.objective_value, 3.3)
 
 
 @pytest.mark.parametrize("solver", available_solvers)
@@ -113,6 +134,12 @@ def test_infeasible_model(model, solver):
     status, condition = model.solve(solver)
     assert status == "warning"
     assert "infeasible" in condition
+
+    if solver == "gurobi":
+        model.compute_set_of_infeasible_constraints()
+    else:
+        with pytest.raises(NotImplementedError):
+            model.compute_set_of_infeasible_constraints()
 
 
 @pytest.mark.parametrize("solver", available_solvers)
