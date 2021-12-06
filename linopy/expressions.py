@@ -7,7 +7,6 @@ This module contains definition related to affine expressions.
 
 import numpy as np
 import xarray as xr
-from numpy import array
 from xarray import DataArray, Dataset
 from xarray.core.groupby import _maybe_reorder, peek_at
 
