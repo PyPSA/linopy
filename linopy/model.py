@@ -21,7 +21,7 @@ from linopy.constraints import Constraints
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
-from linopy.solvers import available_solvers, io_structure
+from linopy.solvers import available_solvers, io_structure, solve_via_lp_file
 from linopy.variables import Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -752,83 +752,21 @@ class Model:
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
-        tmp_kwargs = dict(mode="w", delete=False, dir=self.solver_dir)
-
-        if problem_fn is None:
-            if solver_name in io_structure["lp_file"]:
-                with NamedTemporaryFile(
-                    suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
-                ) as f:
-                    problem_fn = f.name
-            elif solver_name in io_structure["blocks"]:
-                problem_fn = TemporaryDirectory(
-                    prefix="linopy-problem-", dir=self.solver_dir
-                ).name
-
-        if solution_fn is None:
-            with NamedTemporaryFile(
-                suffix=".sol", prefix="linopy-solve-", **tmp_kwargs
-            ) as f:
-                solution_fn = f.name
-
-        if log_fn is not None:
-            logger.info(f"Solver logs written to `{log_fn}`.")
-
-        try:
-            if solver_name in io_structure["lp_file"]:
-                self.to_file(problem_fn)
-            elif solver_name in io_structure["blocks"]:
-                self.to_block_files(problem_fn)
-            solve = getattr(solvers, f"run_{solver_name}")
-            res = solve(
+        if solver_name in io_structure["lp_file"]:
+            return solve_via_lp_file(
+                self,
+                solver_name,
                 problem_fn,
-                log_fn,
                 solution_fn,
+                log_fn,
                 warmstart_fn,
                 basis_fn,
+                keep_files,
                 **solver_options,
             )
-
-        finally:
-            if os.path.exists(problem_fn) and not keep_files:
-                os.remove(problem_fn)
-            if os.path.exists(solution_fn) and not keep_files:
-                os.remove(solution_fn)
-
-        status = res.pop("status")
-        termination_condition = res.pop("termination_condition")
-        obj = res.pop("objective", None)
-        self.solver_model = res.pop("model", None)
-
-        if status == "ok" and termination_condition == "optimal":
-            logger.info(f" Optimization successful. Objective value: {obj:.2e}")
-        elif status == "warning" and termination_condition == "suboptimal":
-            logger.warning(
-                f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
-            )
         else:
-            logger.warning(
-                f"Optimization failed with status `{status}` and "
-                f"termination condition `{termination_condition}`."
-            )
-            return status, termination_condition
-
-        self.objective_value = obj
-        self.status = termination_condition
-
-        res["solution"].loc[-1] = np.nan
-        for v in self.variables:
-            idx = np.ravel(self.variables[v])
-            sol = res["solution"][idx].values.reshape(self.variables[v].shape)
-            self.solution[v] = xr.DataArray(sol, self.variables[v].coords)
-
-        res["dual"].loc[-1] = np.nan
-        for c in self.constraints:
-            idx = np.ravel(self.constraints[c])
-            du = res["dual"][idx].values.reshape(self.constraints[c].shape)
-            self.dual[c] = xr.DataArray(du, self.constraints[c].coords)
-
-        return status, termination_condition
+            func = getattr(solvers, solver_name)
+            return func(self, **solver_options)
 
     def compute_set_of_infeasible_constraints(self):
         """

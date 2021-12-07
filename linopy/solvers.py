@@ -7,8 +7,11 @@ import os
 import re
 import subprocess as sub
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
+import numpy as np
 import pandas as pd
+import xarray as xr
 
 available_solvers = []
 
@@ -491,6 +494,92 @@ def run_xpress(
     )
 
 
+def solve_via_lp_file(
+    m,
+    solver_name,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    **solver_options,
+):
+    """
+    Communicate with with solver via LP file.
+    """
+
+    tmp_kwargs = dict(mode="w", delete=False, dir=m.solver_dir)
+
+    if problem_fn is None:
+        with NamedTemporaryFile(
+            suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
+        ) as f:
+            problem_fn = f.name
+
+    if solution_fn is None:
+        with NamedTemporaryFile(
+            suffix=".sol", prefix="linopy-solve-", **tmp_kwargs
+        ) as f:
+            solution_fn = f.name
+
+    if log_fn is not None:
+        logger.info(f"Solver logs written to `{log_fn}`.")
+
+    try:
+        m.to_file(problem_fn)
+        solve = eval(f"run_{solver_name}")
+        res = solve(
+            problem_fn,
+            log_fn,
+            solution_fn,
+            warmstart_fn,
+            basis_fn,
+            **solver_options,
+        )
+
+    finally:
+        if os.path.exists(problem_fn) and not keep_files:
+            os.remove(problem_fn)
+        if os.path.exists(solution_fn) and not keep_files:
+            os.remove(solution_fn)
+
+    status = res.pop("status")
+    termination_condition = res.pop("termination_condition")
+    obj = res.pop("objective", None)
+    m.solver_model = res.pop("model", None)
+
+    if status == "ok" and termination_condition == "optimal":
+        logger.info(f" Optimization successful. Objective value: {obj:.2e}")
+    elif status == "warning" and termination_condition == "suboptimal":
+        logger.warning(
+            f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
+        )
+    else:
+        logger.warning(
+            f"Optimization failed with status `{status}` and "
+            f"termination condition `{termination_condition}`."
+        )
+        return status, termination_condition
+
+    m.objective_value = obj
+    m.status = termination_condition
+
+    res["solution"].loc[-1] = np.nan
+    for v in m.variables:
+        idx = np.ravel(m.variables[v])
+        sol = res["solution"][idx].values.reshape(m.variables[v].shape)
+        m.solution[v] = xr.DataArray(sol, m.variables[v].coords)
+
+    res["dual"].loc[-1] = np.nan
+    for c in m.constraints:
+        idx = np.ravel(m.constraints[c])
+        du = res["dual"][idx].values.reshape(m.constraints[c].shape)
+        m.dual[c] = xr.DataArray(du, m.constraints[c].coords)
+
+    return status, termination_condition
+
+
 def run_pips(
     problem_fn,
     log_fn,
@@ -503,3 +592,4 @@ def run_pips(
     Solve a linear problem using the PIPS solver.
 
     """
+    raise NotImplementedError("The PIPS++ solver interface is not yet implemented.")
