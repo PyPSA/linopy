@@ -74,9 +74,54 @@ def test_constraint_getter_without_model():
 
 def test_constraint_matrix():
     m = Model()
-
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    x = m.add_variables(lower, upper)
+    x = m.add_variables(coords=[range(10)])
     y = m.add_variables()
-    m.add_constraints(1 * x + 10 * y, "=", 0)
+    m.add_constraints(x, "=", 0)
+    A = m.constraints.to_matrix()
+    assert A.shape == (10, 11)
+
+
+def test_constraint_matrix_masked_variables():
+    """
+    Test constraint matrix with missing variables.
+
+    In this case the variables that are used in the constraints are missing.
+    However the constraint matrix still gives those rows out as they have
+    explicitely defined constraint labels.
+    """
+    # now with missing variables
+    m = Model()
+    mask = pd.Series([False] * 5 + [True] * 5)
+    x = m.add_variables(coords=[range(10)], mask=mask)
+    m.add_variables()
+    m.add_constraints(x, "=", 0)
+    A = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (10, 6)
+
+
+def test_constraint_matrix_masked_constraints():
+    """
+    Test constraint matrix with missing constraints.
+    """
+    # now with missing variables
+    m = Model()
+    mask = pd.Series([False] * 5 + [True] * 5)
+    x = m.add_variables(coords=[range(10)])
+    m.add_variables()
+    m.add_constraints(x, "=", 0, mask=mask)
+    A = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (5, 11)
+
+
+def test_constraint_matrix_masked_constraints_and_variables():
+    """
+    Test constraint matrix with missing constraints.
+    """
+    # now with missing variables
+    m = Model()
+    mask = pd.Series([False] * 5 + [True] * 5)
+    x = m.add_variables(coords=[range(10)], mask=mask)
+    m.add_variables()
+    m.add_constraints(x, "=", 0, mask=mask)
+    A = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (5, 6)

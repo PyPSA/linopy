@@ -46,6 +46,16 @@ def test_variable_sum():
     assert res.nterm == 10
 
 
+def test_nvars():
+    m = Model()
+    m.add_variables(coords=[range(10)])
+    assert m.variables.nvars == 10
+
+    mask = pd.Series([True] * 5 + [False] * 5)
+    m.add_variables(coords=[range(10)], mask=mask)
+    assert m.variables.nvars == 15
+
+
 def test_variable_where():
     m = Model()
     x = m.add_variables(coords=[range(10)])

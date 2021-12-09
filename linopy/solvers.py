@@ -7,11 +7,10 @@ import os
 import re
 import subprocess as sub
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import numpy as np
 import pandas as pd
-import xarray as xr
+from xarray import DataArray, Dataset
 
 available_solvers = []
 
@@ -54,7 +53,8 @@ io_structure = dict(
 
 def set_int_index(series):
     """Convert string index to int index."""
-    series.index = series.index.str[1:].astype(int)
+    func = np.frompyfunc(lambda s: int(s[1:]), 1, 1)
+    series.index = func(series.index)
     return series
 
 
@@ -64,11 +64,13 @@ def maybe_convert_path(path):
 
 
 def run_cbc(
-    problem_fn,
-    log_fn,
+    Model,
+    problem_fn=None,
     solution_fn=None,
+    log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
+    keep_files=False,
     **solver_options,
 ):
     """
@@ -79,6 +81,8 @@ def run_cbc(
     constraint dual values.
     For more information on the solver options, run 'cbc' in your shell
     """
+    problem_fn = Model.to_file(problem_fn)
+
     # printingOptions is about what goes in solution file
     command = f"cbc -printingOptions all -import {problem_fn} "
 
@@ -149,11 +153,13 @@ def run_cbc(
 
 
 def run_glpk(
-    problem_fn,
-    log_fn,
+    Model,
+    problem_fn=None,
     solution_fn=None,
+    log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
+    keep_files=False,
     **solver_options,
 ):
     """
@@ -166,6 +172,8 @@ def run_glpk(
     For more information on the glpk solver options:
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
+    problem_fn = Model.to_file(problem_fn)
+
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --lp {problem_fn} --output {solution_fn}"
     if log_fn is not None:
@@ -217,7 +225,7 @@ def run_glpk(
         dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=dual_.index, dtype=float).pipe(set_int_index)
+        dual = None
 
     solution = io.StringIO("".join(read_until_break(f))[:-2])
     solution = (
@@ -238,11 +246,13 @@ def run_glpk(
 
 
 def run_cplex(
-    problem_fn,
-    log_fn,
+    Model,
+    problem_fn=None,
     solution_fn=None,
+    log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
+    keep_files=False,
     **solver_options,
 ):
     """
@@ -256,6 +266,8 @@ def run_cplex(
     layered parameters, use a dot as a separator here,
     i.e. `**{'aa.bb.cc' : x}`.
     """
+    Model.to_file(problem_fn)
+
     m = cplex.Cplex()
 
     problem_fn = maybe_convert_path(problem_fn)
@@ -310,8 +322,7 @@ def run_cplex(
         dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=m.linear_constraints.get_names(), dtype=float)
-    dual = set_int_index(dual)
+        dual = None
 
     return dict(
         status=status,
@@ -324,31 +335,66 @@ def run_cplex(
 
 
 def run_gurobi(
-    problem_fn,
-    log_fn,
+    Model,
+    problem_fn=None,
     solution_fn=None,
+    log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
+    keep_files=False,
     **solver_options,
 ):
     """
     Solve a linear problem using the gurobi solver.
 
-    This function reads the linear problem file and passes it to the gurobi
-    solver. If the solution is successful it returns variable solutions and
-    constraint dual values. Gurobipy must be installed for using this function
-    For more information on solver options:
-    https://www.gurobi.com/documentation/{gurobi_version}/refman/parameter_descriptions.html
+    This function communicates with gurobi using the gurubipy package.
     """
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
-    problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    m = gurobipy.read(problem_fn)
+    if io is None or io == "lp":
+        problem_fn = Model.to_file(problem_fn)
+        problem_fn = maybe_convert_path(problem_fn)
+        m = gurobipy.read(problem_fn)
+
+    else:
+        problem_fn = None
+        m = gurobipy.Model()
+
+        lower = Model.variables.ravel("lower", filter_missings=True)
+        upper = Model.variables.ravel("upper", filter_missings=True)
+        xlabels = Model.variables.ravel("labels", filter_missings=True)
+        names = "v" + xlabels.astype(str).astype(object)
+        kwargs = {}
+        if len(Model.binaries.labels):
+            specs = {
+                name: "B" if name in Model.binaries else "C" for name in Model.variables
+            }
+            specs = Dataset({k: DataArray(v) for k, v in specs.items()})
+            kwargs["vtype"] = Model.variables.ravel(specs, filter_missings=True)
+
+        x = m.addMVar(xlabels.shape, lower, upper, name=list(names), **kwargs)
+
+        coeffs = np.zeros(Model._xCounter)
+        coeffs[np.asarray(Model.objective.vars)] = np.asarray(Model.objective.coeffs)
+        m.setObjective(coeffs[xlabels] @ x)
+
+        A = Model.constraints.to_matrix(filter_missings=True)
+        sense = Model.constraints.ravel("sign", filter_missings=True).astype(
+            np.dtype("<U1")
+        )
+        b = Model.constraints.ravel("rhs", filter_missings=True)
+        clabels = Model.constraints.ravel("labels", filter_missings=True)
+        names = "c" + clabels.astype(str).astype(object)
+        c = m.addMConstr(A, x, sense, b)
+        c.setAttr("ConstrName", list(names))
+
+        m.update()
+
     if solver_options is not None:
         for key, value in solver_options.items():
             m.setParam(key, value)
@@ -383,7 +429,11 @@ def run_gurobi(
         status = "warning"
 
     if termination_condition not in ["optimal", "suboptimal"]:
-        return dict(status=status, termination_condition=termination_condition, model=m)
+        return dict(
+            status=status,
+            termination_condition=termination_condition,
+            model=m,
+        )
 
     objective = m.ObjVal
 
@@ -392,10 +442,10 @@ def run_gurobi(
 
     try:
         dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
+        dual = set_int_index(dual)
     except AttributeError:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=[c.ConstrName for c in m.getConstrs()], dtype=float)
-    dual = set_int_index(dual)
+        dual = None
 
     return dict(
         status=status,
@@ -408,11 +458,13 @@ def run_gurobi(
 
 
 def run_xpress(
-    problem_fn,
-    log_fn,
+    Model,
+    problem_fn=None,
     solution_fn=None,
+    log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
+    keep_files=False,
     **solver_options,
 ):
     """
@@ -426,6 +478,8 @@ def run_xpress(
     For more information on solver options:
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
+    problem_fn = Model.to_file(problem_fn)
+
     m = xpress.problem()
 
     problem_fn = maybe_convert_path(problem_fn)
@@ -473,16 +527,17 @@ def run_xpress(
     objective = m.getObjVal()
 
     var = [str(v) for v in m.getVariable()]
+
     solution = pd.Series(m.getSolution(var), index=var)
     solution = set_int_index(solution)
 
     try:
         dual = [str(d) for d in m.getConstraint()]
         dual = pd.Series(m.getDual(dual), index=dual)
+        dual = set_int_index(dual)
     except xpress.SolverError:
         logger.warning("Shadow prices of MILP couldn't be parsed")
-        dual = pd.Series(index=dual)
-    dual = set_int_index(dual)
+        dual = None
 
     return dict(
         status=status,
@@ -494,98 +549,14 @@ def run_xpress(
     )
 
 
-def solve_via_lp_file(
-    m,
-    solver_name,
+def run_pips(
+    Model,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
-    **solver_options,
-):
-    """
-    Communicate with with solver via LP file.
-    """
-
-    tmp_kwargs = dict(mode="w", delete=False, dir=m.solver_dir)
-
-    if problem_fn is None:
-        with NamedTemporaryFile(
-            suffix=".lp", prefix="linopy-problem-", **tmp_kwargs
-        ) as f:
-            problem_fn = f.name
-
-    if solution_fn is None:
-        with NamedTemporaryFile(
-            suffix=".sol", prefix="linopy-solve-", **tmp_kwargs
-        ) as f:
-            solution_fn = f.name
-
-    if log_fn is not None:
-        logger.info(f"Solver logs written to `{log_fn}`.")
-
-    try:
-        m.to_file(problem_fn)
-        solve = eval(f"run_{solver_name}")
-        res = solve(
-            problem_fn,
-            log_fn,
-            solution_fn,
-            warmstart_fn,
-            basis_fn,
-            **solver_options,
-        )
-
-    finally:
-        if os.path.exists(problem_fn) and not keep_files:
-            os.remove(problem_fn)
-        if os.path.exists(solution_fn) and not keep_files:
-            os.remove(solution_fn)
-
-    status = res.pop("status")
-    termination_condition = res.pop("termination_condition")
-    obj = res.pop("objective", None)
-    m.solver_model = res.pop("model", None)
-
-    if status == "ok" and termination_condition == "optimal":
-        logger.info(f" Optimization successful. Objective value: {obj:.2e}")
-    elif status == "warning" and termination_condition == "suboptimal":
-        logger.warning(
-            f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
-        )
-    else:
-        logger.warning(
-            f"Optimization failed with status `{status}` and "
-            f"termination condition `{termination_condition}`."
-        )
-        return status, termination_condition
-
-    m.objective_value = obj
-    m.status = termination_condition
-
-    res["solution"].loc[-1] = np.nan
-    for v in m.variables:
-        idx = np.ravel(m.variables[v])
-        sol = res["solution"][idx].values.reshape(m.variables[v].shape)
-        m.solution[v] = xr.DataArray(sol, m.variables[v].coords)
-
-    res["dual"].loc[-1] = np.nan
-    for c in m.constraints:
-        idx = np.ravel(m.constraints[c])
-        du = res["dual"][idx].values.reshape(m.constraints[c].shape)
-        m.dual[c] = xr.DataArray(du, m.constraints[c].coords)
-
-    return status, termination_condition
-
-
-def run_pips(
-    problem_fn,
-    log_fn,
-    solution_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
     **solver_options,
 ):
     """

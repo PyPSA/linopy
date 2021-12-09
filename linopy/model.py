@@ -21,7 +21,7 @@ from linopy.constraints import Constraints
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
-from linopy.solvers import available_solvers, io_structure, solve_via_lp_file
+from linopy.solvers import available_solvers
 from linopy.variables import Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -229,8 +229,9 @@ class Model:
                         " while the broadcasted array is of size > 1."
                     )
         else:
-            lower = DataArray()
-            upper = DataArray()
+            # for general compatibility when ravelling all values set non-nan
+            lower = DataArray(-inf)
+            upper = DataArray(inf)
 
         labels = DataArray(coords=coords).assign_attrs(binary=binary)
 
@@ -413,27 +414,24 @@ class Model:
         self.constraints.remove(name)
 
     @property
-    def _binary_variables(self):
-        return [v for v in self.variables if self.variables[v].attrs["binary"]]
-
-    @property
-    def _non_binary_variables(self):
-        return [v for v in self.variables if not self.variables[v].attrs["binary"]]
-
-    @property
     def binaries(self):
         "Get all binary variables."
-        return self.variables[self._binary_variables]
+        return self.variables.binaries
+
+    @property
+    def non_binaries(self):
+        "Get all non-binary variables."
+        return self.variables.non_binaries
 
     @property
     def nvars(self):
         "Get the total number of variables."
-        return self._xCounter
+        return self.variables.nvars
 
     @property
     def ncons(self):
         "Get the total number of constraints."
-        return self._cCounter
+        return self.constraints.ncons
 
     @property
     def blocks(self):
@@ -697,9 +695,40 @@ class Model:
             index=["min", "max"],
         )
 
+    def get_solution_file(self, solution_fn=None):
+        """Get a fresh created solution file if solution file is None."""
+        if solution_fn is None:
+            kwargs = dict(
+                prefix="linopy-solve-",
+                suffix=".sol",
+                mode="w",
+                dir=self.solver_dir,
+                delete=False,
+            )
+            with NamedTemporaryFile(**kwargs) as f:
+                return f.name
+        else:
+            return solution_fn
+
+    def get_problem_file(self, problem_fn=None):
+        """Get a fresh created problem file if problem file is None."""
+        if problem_fn is None:
+            kwargs = dict(
+                prefix="linopy-problem-",
+                suffix=".lp",
+                mode="w",
+                dir=self.solver_dir,
+                delete=False,
+            )
+            with NamedTemporaryFile(**kwargs) as f:
+                return f.name
+        else:
+            return problem_fn
+
     def solve(
         self,
         solver_name="gurobi",
+        io=None,
         problem_fn=None,
         solution_fn=None,
         log_fn=None,
@@ -719,6 +748,12 @@ class Model:
         solver_name : str, optional
             Name of the solver to use, this must be in `linopy.available_solvers`.
             The default is 'gurobi'.
+        io : str, optional
+            Api to use for communicating with the solver, must be one of
+            {'lp', 'direct'}. If set to 'lp' the problem is written to an
+            LP file which is then read by the solver. If set to
+            'direct' the problem is communicated to the solver via the solver
+            specific API, e.g. gurobipy. This may lead to faster run times.
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -752,10 +787,22 @@ class Model:
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
-        if solver_name in io_structure["lp_file"]:
-            return solve_via_lp_file(
+        # reset result
+        self.solution = xr.Dataset()
+        self.dual = xr.Dataset()
+
+        if log_fn is not None:
+            logger.info(f"Solver logs written to `{log_fn}`.")
+
+        problem_fn = self.get_problem_file(problem_fn)
+        solution_fn = self.get_solution_file(solution_fn)
+
+        self.constraints.sanitize_missings()
+
+        try:
+            func = getattr(solvers, f"run_{solver_name}")
+            res = func(
                 self,
-                solver_name,
                 problem_fn,
                 solution_fn,
                 log_fn,
@@ -764,9 +811,52 @@ class Model:
                 keep_files,
                 **solver_options,
             )
+        finally:
+            for fn in (problem_fn, solution_fn):
+                if fn is not None:
+                    if os.path.exists(fn) and not keep_files:
+                        os.remove(fn)
+
+        status = res.pop("status")
+        termination_condition = res.pop("termination_condition")
+        obj = res.pop("objective", None)
+        self.solver_model = res.pop("model", None)
+
+        if status == "ok" and termination_condition == "optimal":
+            logger.info(f" Optimization successful. Objective value: {obj:.2e}")
+        elif status == "warning" and termination_condition == "suboptimal":
+            logger.warning(
+                f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
+            )
         else:
-            func = getattr(solvers, solver_name)
-            return func(self, **solver_options)
+            logger.warning(
+                f"Optimization failed with status `{status}` and "
+                f"termination condition `{termination_condition}`."
+            )
+            return status, termination_condition
+
+        self.objective_value = obj
+        self.status = termination_condition
+
+        # map solution and dual to original shape which includes missing values
+        sol = res["solution"]
+        sol.loc[-1] = np.nan
+
+        for name, labels in self.variables.labels.items():
+            idx = np.ravel(labels)
+            vals = sol[idx].values.reshape(labels.shape)
+            self.solution[name] = xr.DataArray(vals, labels.coords)
+
+        if res["dual"] is not None:
+            dual = res["dual"]
+            dual.loc[-1] = np.nan
+
+            for name, labels in self.constraints.labels.items():
+                idx = np.ravel(labels)
+                vals = dual[idx].values.reshape(labels.shape)
+                self.dual[name] = xr.DataArray(vals, labels.coords)
+
+        return status, termination_condition
 
     def compute_set_of_infeasible_constraints(self):
         """

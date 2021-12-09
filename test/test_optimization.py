@@ -57,6 +57,20 @@ def milp_model():
 
 
 @pytest.fixture
+def milp_model_r():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(coords=[lower.index], name="x", binary=True)
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, ">=", 10)
+
+    m.add_objective(2 * x + y)
+    return m
+
+
+@pytest.fixture
 def masked_variable_model():
     m = Model()
 
@@ -66,6 +80,8 @@ def masked_variable_model():
     y = m.add_variables(lower, name="y", mask=mask)
 
     m.add_constraints(x + y, ">=", 10)
+    # TODO: This fails:
+    m.add_constraints(y, ">=", 0)
 
     m.add_objective(2 * x + y)
     return m
@@ -147,6 +163,13 @@ def test_milp_model(milp_model, solver):
     status, condition = milp_model.solve(solver)
     assert condition == "optimal"
     assert ((milp_model.solution.y == 1) | (milp_model.solution.y == 0)).all()
+
+
+@pytest.mark.parametrize("solver", available_solvers)
+def test_milp_model_r(milp_model_r, solver):
+    status, condition = milp_model_r.solve(solver)
+    assert condition == "optimal"
+    assert ((milp_model_r.solution.x == 1) | (milp_model_r.solution.x == 0)).all()
 
 
 @pytest.mark.parametrize("solver", available_solvers)

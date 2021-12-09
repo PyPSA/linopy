@@ -77,7 +77,7 @@ def constraints_to_file(m, f):
 
         nonnans_terms = m.constraints.vars[name] != -1
         lhs = concat(lhs, **concat_kwargs).where(nonnans_terms, "")
-        lhs = lhs.stack(_=[dim, concat_dim]).drop("_").rename(_=dim)
+        lhs = lhs.stack(_=[dim, concat_dim]).drop_vars("_").rename(_=dim)
 
         constraints = [
             DataArray("c").astype(dtype("<U9")),
@@ -98,7 +98,7 @@ def constraints_to_file(m, f):
 def bounds_to_file(m, f):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
-    for name, labels in m.variables.labels[m._non_binary_variables].items():
+    for name, labels in m.non_binaries.labels.items():
 
         bounds = [
             to_float_str(m.variables.lower[name]),
@@ -132,12 +132,7 @@ def binaries_to_file(m, f):
 
 def to_file(m, fn):
     """Write out a model to a lp file."""
-    if fn is None:
-        fn = NamedTemporaryFile(
-            suffix=".lp",
-            prefix="linopy-problem-",
-            dir=m.solver_dir,
-        ).name
+    fn = m.get_problem_file(fn)
 
     if os.path.exists(fn):
         os.remove(fn)  # ensure a clear file

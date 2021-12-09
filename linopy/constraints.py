@@ -207,7 +207,7 @@ class Constraints:
         Get the number all constraints which were at some point added to the model.
         These also include constraints with missing labels.
         """
-        return self.model.ncons
+        return self.ravel("labels", filter_missings=True).shape[0]
 
     @property
     def inequalities(self):
@@ -218,6 +218,13 @@ class Constraints:
     def equalities(self):
         "Get the subset of constraints which are purely equalities."
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
+
+    def sanitize_missings(self):
+        """Set constraints labels to -1 if all references vars are missing."""
+        for name in self:
+            term_dim = name + "_term"
+            has_no_missing_vars = (self.vars[name] != -1).any(term_dim)
+            self.labels[name] = self.labels[name].where(has_no_missing_vars, -1)
 
     def get_blocks(self, block_map):
         """
@@ -290,10 +297,10 @@ class Constraints:
 
             flat = broadcasted.data.ravel()
             if filter_missings:
-                flat = flat[values.data.ravel() != -1]
+                flat = flat[values.compute().data.ravel() != -1]
             yield flat
 
-    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=False):
+    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
         """
         Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
 
@@ -324,17 +331,37 @@ class Constraints:
         else:
             return res
 
-    def to_matrix(self):
+    def to_matrix(self, filter_missings=False):
         """
         Construct a constraint matrix in sparse format.
 
         Missing values, i.e. -1 in labels and vars, are ignored filtered out.
         """
-        shape = (self.model.ncons, self.model.nvars)
         keys = ["coeffs", "labels", "vars"]
-        data, rows, cols = [self.ravel(k, broadcast_like="vars") for k in keys]
+        data, rows, cols = [
+            self.ravel(k, broadcast_like="vars", compute=True) for k in keys
+        ]
         non_missing = (rows != -1) & (cols != -1)
         data = asarray(data[non_missing])
         rows = asarray(rows[non_missing])
         cols = asarray(cols[non_missing])
+        shape = (self.model._cCounter, self.model._xCounter)
+
+        if filter_missings:
+            # We have to map the variables to the filtered layout
+            clabels = self.ravel("labels", filter_missings=True)
+            ncons = clabels.shape[0]
+            cmap = np.empty(self.model._cCounter)
+            cmap[clabels] = np.arange(clabels.shape[0])
+            rows = cmap[rows]
+
+            variables = self.model.variables
+            vlabels = variables.ravel("labels", filter_missings=True)
+            nvars = vlabels.shape[0]
+            vmap = np.empty(self.model._xCounter)
+            vmap[vlabels] = np.arange(nvars)
+            cols = vmap[cols]
+
+            shape = (ncons, nvars)  # same as model.nvars/ncons but already there
+
         return coo_matrix((data, (rows, cols)), shape=shape)

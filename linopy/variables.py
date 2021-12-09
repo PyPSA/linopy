@@ -11,7 +11,7 @@ from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
-from numpy import floating, issubdtype
+from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
 import linopy.expressions as expressions
@@ -319,8 +319,8 @@ class Variables:
     def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
         """Add variable `name`."""
         self._merge_inplace("labels", labels, name, fill_value=-1)
-        self._merge_inplace("lower", lower, name)
-        self._merge_inplace("upper", upper, name)
+        self._merge_inplace("lower", lower, name, fill_value=-inf)
+        self._merge_inplace("upper", upper, name, fill_value=inf)
 
     def remove(self, name):
         """Remove variable `name` from the variables."""
@@ -335,7 +335,25 @@ class Variables:
         Get the number all variables which were at some point added to the model.
         These also include variables with missing labels.
         """
-        return self.model.nvars
+        return self.ravel("labels", filter_missings=True).shape[0]
+
+    @property
+    def _binary_variables(self):
+        return [v for v in self if self[v].attrs["binary"]]
+
+    @property
+    def _non_binary_variables(self):
+        return [v for v in self if not self[v].attrs["binary"]]
+
+    @property
+    def binaries(self):
+        "Get all binary variables."
+        return self[self._binary_variables]
+
+    @property
+    def non_binaries(self):
+        "Get all non-binary variables."
+        return self[self._non_binary_variables]
 
     def iter_ravel(self, key, filter_missings=False):
         """
@@ -377,7 +395,7 @@ class Variables:
                 flat = flat[labels.data.ravel() != -1]
             yield flat
 
-    def ravel(self, key, filter_missings=False, compute=False):
+    def ravel(self, key, filter_missings=False, compute=True):
         """
         Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
 
@@ -425,7 +443,7 @@ class Variables:
         Get a one-dimensional array mapping the variables to blocks.
         """
         # non-assigned variables are assumed to be masked, insert -1
-        res = np.full(self.nvars + 1, -1, dtype=dtype)
+        res = np.full(self._xCounter + 1, -1, dtype=dtype)
         for name, labels in self.labels.items():
             res[np.ravel(labels)] = np.ravel(block_map[name])
         res[-1] = -1
