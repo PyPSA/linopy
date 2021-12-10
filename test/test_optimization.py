@@ -13,6 +13,10 @@ import pytest
 from linopy import Model
 from linopy.solvers import available_solvers
 
+params = [(name, "lp") for name in available_solvers]
+if "gurobi" in available_solvers:
+    params.append(("gurobi", "diret"))
+
 
 @pytest.fixture
 def model():
@@ -104,24 +108,25 @@ def masked_constraint_model():
     return m
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_default_setting(model, solver):
-    status, condition = model.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model.objective_value, 3.3)
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_default_settings_chunked(model_chunked, solver):
-    status, condition = model_chunked.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_default_settings_chunked(model_chunked, solver, io_api):
+    status, condition = model_chunked.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model_chunked.objective_value, 3.3)
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_set_files(tmp_path, model, solver):
+@pytest.mark.parametrize("solver,io_api", params)
+def test_set_files(tmp_path, model, solver, io_api):
     status, condition = model.solve(
         solver,
+        io_api=io_api,
         problem_fn=tmp_path / "problem.lp",
         solution_fn=tmp_path / "solution.sol",
         log_fn=tmp_path / "logging.log",
@@ -130,8 +135,8 @@ def test_set_files(tmp_path, model, solver):
     assert status == "ok"
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_set_files_and_keep_files(tmp_path, model, solver):
+@pytest.mark.parametrize("solver,io_api", params)
+def test_set_files_and_keep_files(tmp_path, model, solver, io_api):
     status, condition = model.solve(
         solver,
         problem_fn=tmp_path / "problem.lp",
@@ -142,12 +147,12 @@ def test_set_files_and_keep_files(tmp_path, model, solver):
     assert status == "ok"
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_infeasible_model(model, solver):
+@pytest.mark.parametrize("solver,io_api", params)
+def test_infeasible_model(model, solver, io_api):
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 
-    status, condition = model.solve(solver)
+    status, condition = model.solve(solver, io_api=io_api)
     assert status == "warning"
     assert "infeasible" in condition
 
@@ -158,38 +163,38 @@ def test_infeasible_model(model, solver):
             model.compute_set_of_infeasible_constraints()
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_milp_model(milp_model, solver):
-    status, condition = milp_model.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_milp_model(milp_model, solver, io_api):
+    status, condition = milp_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert ((milp_model.solution.y == 1) | (milp_model.solution.y == 0)).all()
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_milp_model_r(milp_model_r, solver):
-    status, condition = milp_model_r.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_milp_model_r(milp_model_r, solver, io_api):
+    status, condition = milp_model_r.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert ((milp_model_r.solution.x == 1) | (milp_model_r.solution.x == 0)).all()
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_masked_variable_model(masked_variable_model, solver):
-    masked_variable_model.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_masked_variable_model(masked_variable_model, solver, io_api):
+    masked_variable_model.solve(solver, io_api=io_api)
     assert masked_variable_model.solution.y[-2:].isnull().all()
     assert masked_variable_model.solution.y[:-2].notnull().all()
     assert masked_variable_model.solution.x.notnull().all()
     assert (masked_variable_model.solution.x[-2:] == 10).all()
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_masked_constraint_model(masked_constraint_model, solver):
-    masked_constraint_model.solve(solver)
+@pytest.mark.parametrize("solver,io_api", params)
+def test_masked_constraint_model(masked_constraint_model, solver, io_api):
+    masked_constraint_model.solve(solver, io_api=io_api)
     assert (masked_constraint_model.solution.y[:-2] == 10).all()
     assert (masked_constraint_model.solution.y[-2:] == 5).all()
 
 
-@pytest.mark.parametrize("solver", available_solvers)
-def test_basis_and_warmstart(tmp_path, model, solver):
+@pytest.mark.parametrize("solver,io_api", params)
+def test_basis_and_warmstart(tmp_path, model, solver, io_api):
     basis_fn = tmp_path / "basis.bas"
     model.solve(solver, basis_fn=basis_fn)
     model.solve(solver, warmstart_fn=basis_fn)
