@@ -15,7 +15,8 @@ Upcoming Release
 * A preliminary function to print out the subset of infeasible constraints was added (only available for Gurobi, based on https://www.gurobi.com/documentation/9.5/refman/py_model_computeiis.html)
 * Constraints with only missing variables labels are now sanitized are receive a label -1.
 * Binary variables now also have a non-nan lower and upper value due compatibility.
-
+* Models can now be created using the `gurobipy` API, this can lead to faster total solving times.
+* `.solve` has a new argument `io_api`. If set to 'direct' the io solving will be performed using the python API's. Currently only available for gurobi.
 
 **Breaking changes**
 
