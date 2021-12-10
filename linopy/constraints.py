@@ -281,7 +281,8 @@ class Constraints:
             The default is "labels".
         filter_missings : bool, optional
             Filter out values where `labels` data is -1. If broadcast is `vars`
-            also values where `vars` is -1 are filtered. The default is False.
+            also values where `vars` is -1 are filtered. When enabled, the
+            data is load into memory. The default is False.
 
 
         Yields
@@ -304,15 +305,15 @@ class Constraints:
             if values.chunks is not None:
                 broadcasted = broadcasted.chunk(values.chunks)
 
-            flat = broadcasted.data.ravel()
             if filter_missings:
-                mask = values.compute().data.ravel() != -1
+                flat = np.ravel(broadcasted)
+                mask = np.ravel(values) != -1
                 if broadcast_like != "labels":
-                    labels = (
-                        self.labels[name].broadcast_like(values).compute().data.ravel()
-                    )
+                    labels = np.ravel(self.labels[name].broadcast_like(values))
                     mask &= labels != -1
                 flat = flat[mask]
+            else:
+                flat = broadcasted.data.ravel()
             yield flat
 
     def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
