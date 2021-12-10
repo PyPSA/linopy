@@ -13,11 +13,16 @@ Upcoming Release
 * The return value of most Variable functions built on xarray functions now preserve the Variable type.
 * The variable labels in linear expression which are added to a model are ensured to be stored as integers.
 * A preliminary function to print out the subset of infeasible constraints was added (only available for Gurobi, based on https://www.gurobi.com/documentation/9.5/refman/py_model_computeiis.html)
+* Constraints with only missing variables labels are now sanitized are receive a label -1.
+* Binary variables now also have a non-nan lower and upper value due compatibility.
+
 
 **Breaking changes**
 
 * The low level IO function ``linopy.io.str_array_to_file`` was renamed to ``linopy.io.array_to_file``, the function ``linopy.io.join_str_arrays`` was removed.
 * The `keep_coords` flag in ``LinearExpression.sum`` and ``Variable.sum`` was dropped.
+* The `run_` functions in `linopy.solvers` now have a new set of arguments and keyword argument, in order to make solving io more flexible.
+* `ncons` and `nvars` now count only non-missing constraints and variables.
 
 Version 0.0.4
 -------------
