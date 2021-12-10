@@ -6,7 +6,7 @@ Upcoming Release
 
 * LinearExpression has a new function `densify_terms` which reduces the `_term` axis to a minimal length while containing all non-zero coefficient values.
 * When summing over one or multiple axes in a LinearExpression, terms with coefficient of zeros can now be dropped automatically.
-* The export of LP files was restructured and is now using Unicode dtype under the hook to ensure performant export of long constraints.
+* The export of LP files was restructured and is flat arrays under the hook to ensure performant export of long constraints.
 * Dimensions of masks passed to `add_variables` and `add_constraints` now have to be a subset of the resulting labels dimensions.
 * A new high-level function `merge` was added to concatenate multiple linear expressions.
 * The ``Variable.where`` function now has -1 as default fill value.
