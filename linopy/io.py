@@ -9,9 +9,9 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import numpy as np
-import tqdm
 import xarray as xr
 from numpy import dtype
+from tqdm import tqdm
 from xarray import DataArray, apply_ufunc, concat
 
 logger = logging.getLogger(__name__)
@@ -43,11 +43,13 @@ def array_to_file(array, fn):
     return xr.apply_ufunc(func, array)
 
 
-def objective_to_file(m, f):
+def objective_to_file(m, f, log):
     """Write out the objective of a model to a lp file."""
     f.write("min\nobj:\n")
     coef = m.objective.coeffs
     var = m.objective.vars
+
+    logger.info("Writing objective.")
 
     objective = [
         to_float_str(coef),
@@ -61,10 +63,17 @@ def objective_to_file(m, f):
     array_to_file(objective.compute(), f)
 
 
-def constraints_to_file(m, f):
+def constraints_to_file(m, f, log=False):
     """Write out the constraints of a model to a lp file."""
     f.write("\n\ns.t.\n\n")
-    for name, labels in m.constraints.labels.items():
+
+    m.constraints.sanitize_missings()
+
+    iterate = m.constraints.labels.items()
+    if log:
+        iterate = tqdm(iterate, "Writing constraints.")
+
+    for name, labels in iterate:
 
         dim = f"{name}_term"
 
@@ -95,10 +104,15 @@ def constraints_to_file(m, f):
         array_to_file(da.compute(), fn=f)
 
 
-def bounds_to_file(m, f):
+def bounds_to_file(m, f, log=False):
     """Write out variables of a model to a lp file."""
     f.write("\nbounds\n")
-    for name, labels in m.non_binaries.labels.items():
+
+    iterate = m.non_binaries.labels.items()
+    if log:
+        iterate = tqdm(iterate, "Writing variables.")
+
+    for name, labels in iterate:
 
         bounds = [
             to_float_str(m.variables.lower[name]),
@@ -114,10 +128,15 @@ def bounds_to_file(m, f):
         array_to_file(bounds.compute(), f)
 
 
-def binaries_to_file(m, f):
+def binaries_to_file(m, f, log=False):
     """Write out binaries of a model to a lp file."""
     f.write("\nbinary\n")
-    for name, labels in m.binaries.labels.items():
+
+    iterate = m.binaries.labels.items()
+    if log:
+        iterate = tqdm(iterate, "Writing binaries.")
+
+    for name, labels in iterate:
 
         binaries = [
             DataArray("x").astype(dtype("<U9")),
@@ -137,14 +156,16 @@ def to_file(m, fn):
     if os.path.exists(fn):
         os.remove(fn)  # ensure a clear file
 
+    log = m._xCounter > 1000
+
     with open(fn, mode="w") as f:
 
         start = time.time()
 
-        objective_to_file(m, f)
-        constraints_to_file(m, f)
-        bounds_to_file(m, f)
-        binaries_to_file(m, f)
+        objective_to_file(m, f, log)
+        constraints_to_file(m, f, log)
+        bounds_to_file(m, f, log)
+        binaries_to_file(m, f, log)
         f.write("end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")

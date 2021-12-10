@@ -220,11 +220,18 @@ class Constraints:
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
     def sanitize_missings(self):
-        """Set constraints labels to -1 if all references vars are missing."""
+        """
+        Set constraints labels to -1 if either rhs, coeffs or vars are missing.
+        Also set vars to -1 where labels are -1.
+        """
         for name in self:
             term_dim = name + "_term"
-            has_no_missing_vars = (self.vars[name] != -1).any(term_dim)
-            self.labels[name] = self.labels[name].where(has_no_missing_vars, -1)
+            no_missing_vars = (self.vars[name] != -1).any(term_dim)
+            no_missing_coeffs = self.coeffs[name].notnull().any(term_dim)
+            no_missing_rhs = self.rhs[name].notnull()
+            no_missing = no_missing_vars & no_missing_coeffs & no_missing_rhs
+
+            self.labels[name] = self.labels[name].where(no_missing, -1)
 
     def get_blocks(self, block_map):
         """
@@ -268,13 +275,13 @@ class Constraints:
         ----------
         key : str/Dataset
             Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
+            broadcastable to `broadcast_like`. Must be on of 'labels', 'vars'.
         broadcast_like : str, optional
             Name of the dataset to which the input data in `key` is aligned to.
             The default is "labels".
         filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1.
-            The default is False.
+            Filter out values where `labels` data is -1. If broadcast is `vars`
+            also values where `vars` is -1 are filtered. The default is False.
 
 
         Yields
@@ -289,6 +296,8 @@ class Constraints:
         else:
             raise TypeError("Argument `key` must be of type string or xarray.Dataset")
 
+        assert broadcast_like in ["labels", "vars"]
+
         for name, values in getattr(self, broadcast_like).items():
 
             broadcasted = ds[name].broadcast_like(values)
@@ -297,7 +306,13 @@ class Constraints:
 
             flat = broadcasted.data.ravel()
             if filter_missings:
-                flat = flat[values.compute().data.ravel() != -1]
+                mask = values.compute().data.ravel() != -1
+                if broadcast_like != "labels":
+                    labels = (
+                        self.labels[name].broadcast_like(values).compute().data.ravel()
+                    )
+                    mask &= labels != -1
+                flat = flat[mask]
             yield flat
 
     def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
@@ -336,15 +351,20 @@ class Constraints:
         Construct a constraint matrix in sparse format.
 
         Missing values, i.e. -1 in labels and vars, are ignored filtered out.
+
+        If filter_missings is set to True, the index of the rows and columns
+        correspond to the constraint and variable labels stored in the model.
+        If set to False, the rows correspond to the constraints given by
+        `m.constraints.ravel('labels', filter_missings=True)` and columns to
+        `m.variables.ravel('labels', filter_missings=True)` where `m` is the
+        underlying model. The matrix has then a shape of (`m.ncons`, `m.nvars`).
         """
+        self.sanitize_missings()
+
         keys = ["coeffs", "labels", "vars"]
         data, rows, cols = [
-            self.ravel(k, broadcast_like="vars", compute=True) for k in keys
+            self.ravel(k, broadcast_like="vars", filter_missings=True) for k in keys
         ]
-        non_missing = (rows != -1) & (cols != -1)
-        data = asarray(data[non_missing])
-        rows = asarray(rows[non_missing])
-        cols = asarray(cols[non_missing])
         shape = (self.model._cCounter, self.model._xCounter)
 
         if filter_missings:

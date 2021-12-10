@@ -364,9 +364,6 @@ class Variables:
         key : str/Dataset
             Key to be iterated over. Optionally pass a dataset which is
             broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            The default is "labels".
         filter_missings : bool, optional
             Filter out values where `broadcast_like` data is -1.
             The default is False.

@@ -798,8 +798,6 @@ class Model:
         problem_fn = self.get_problem_file(problem_fn)
         solution_fn = self.get_solution_file(solution_fn)
 
-        self.constraints.sanitize_missings()
-
         try:
             func = getattr(solvers, f"run_{solver_name}")
             res = func(

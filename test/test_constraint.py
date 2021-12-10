@@ -86,8 +86,8 @@ def test_constraint_matrix_masked_variables():
     Test constraint matrix with missing variables.
 
     In this case the variables that are used in the constraints are missing.
-    However the constraint matrix still gives those rows out as they have
-    explicitely defined constraint labels.
+    The matrix shoud not be built for constraints which have variables which
+    are missing.
     """
     # now with missing variables
     m = Model()
@@ -96,7 +96,11 @@ def test_constraint_matrix_masked_variables():
     m.add_variables()
     m.add_constraints(x, "=", 0)
     A = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (10, 6)
+    assert A.shape == (5, 6)
+    assert A.shape == (m.ncons, m.nvars)
+
+    A = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m._cCounter, m._xCounter)
 
 
 def test_constraint_matrix_masked_constraints():
@@ -111,6 +115,10 @@ def test_constraint_matrix_masked_constraints():
     m.add_constraints(x, "=", 0, mask=mask)
     A = m.constraints.to_matrix(filter_missings=True)
     assert A.shape == (5, 11)
+    assert A.shape == (m.ncons, m.nvars)
+
+    A = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m._cCounter, m._xCounter)
 
 
 def test_constraint_matrix_masked_constraints_and_variables():
@@ -125,3 +133,7 @@ def test_constraint_matrix_masked_constraints_and_variables():
     m.add_constraints(x, "=", 0, mask=mask)
     A = m.constraints.to_matrix(filter_missings=True)
     assert A.shape == (5, 6)
+    assert A.shape == (m.ncons, m.nvars)
+
+    A = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m._cCounter, m._xCounter)
