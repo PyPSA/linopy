@@ -53,8 +53,7 @@ io_structure = dict(
 
 def set_int_index(series):
     """Convert string index to int index."""
-    func = np.frompyfunc(lambda s: int(s[1:]), 1, 1)
-    series.index = func(series.index)
+    series.index = series.index.str[1:].astype(int)
     return series
 
 
@@ -65,6 +64,7 @@ def maybe_convert_path(path):
 
 def run_cbc(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
@@ -81,6 +81,12 @@ def run_cbc(
     constraint dual values.
     For more information on the solver options, run 'cbc' in your shell
     """
+    if io_api is not None and (io_api != "lp"):
+        logger.warning(
+            f"IO setting '{io_api}' not available for cbc solver. "
+            "Falling back to `lp`."
+        )
+
     problem_fn = Model.to_file(problem_fn)
 
     # printingOptions is about what goes in solution file
@@ -154,6 +160,7 @@ def run_cbc(
 
 def run_glpk(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
@@ -172,6 +179,12 @@ def run_glpk(
     For more information on the glpk solver options:
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
+    if io_api is not None and (io_api != "lp"):
+        logger.warning(
+            f"IO setting '{io_api}' not available for glpk solver. "
+            "Falling back to `lp`."
+        )
+
     problem_fn = Model.to_file(problem_fn)
 
     # TODO use --nopresol argument for non-optimal solution output
@@ -247,6 +260,7 @@ def run_glpk(
 
 def run_cplex(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
@@ -266,6 +280,12 @@ def run_cplex(
     layered parameters, use a dot as a separator here,
     i.e. `**{'aa.bb.cc' : x}`.
     """
+    if io_api is not None and (io_api != "lp"):
+        logger.warning(
+            f"IO setting '{io_api}' not available for cplex solver. "
+            "Falling back to `lp`."
+        )
+
     Model.to_file(problem_fn)
 
     m = cplex.Cplex()
@@ -320,6 +340,7 @@ def run_cplex(
 
     if is_lp:
         dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
+        dual = set_int_index(dual)
     else:
         logger.warning("Shadow prices of MILP couldn't be parsed")
         dual = None
@@ -336,6 +357,7 @@ def run_cplex(
 
 def run_gurobi(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
@@ -356,7 +378,7 @@ def run_gurobi(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io is None or io == "lp":
+    if io_api is None or (io_api == "lp"):
         problem_fn = Model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
         m = gurobipy.read(problem_fn)
@@ -459,6 +481,7 @@ def run_gurobi(
 
 def run_xpress(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,
@@ -478,6 +501,12 @@ def run_xpress(
     For more information on solver options:
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
+    if io_api is not None and (io_api != "lp"):
+        logger.warning(
+            f"IO setting '{io_api}' not available for xpress solver. "
+            "Falling back to `lp`."
+        )
+
     problem_fn = Model.to_file(problem_fn)
 
     m = xpress.problem()
@@ -551,6 +580,7 @@ def run_xpress(
 
 def run_pips(
     Model,
+    io_api=None,
     problem_fn=None,
     solution_fn=None,
     log_fn=None,

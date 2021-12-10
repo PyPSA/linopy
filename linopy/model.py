@@ -728,7 +728,7 @@ class Model:
     def solve(
         self,
         solver_name="gurobi",
-        io=None,
+        io_api=None,
         problem_fn=None,
         solution_fn=None,
         log_fn=None,
@@ -748,12 +748,13 @@ class Model:
         solver_name : str, optional
             Name of the solver to use, this must be in `linopy.available_solvers`.
             The default is 'gurobi'.
-        io : str, optional
+        io_api : str, optional
             Api to use for communicating with the solver, must be one of
             {'lp', 'direct'}. If set to 'lp' the problem is written to an
             LP file which is then read by the solver. If set to
             'direct' the problem is communicated to the solver via the solver
             specific API, e.g. gurobipy. This may lead to faster run times.
+            The default is set to 'lp' if available.
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -803,6 +804,7 @@ class Model:
             func = getattr(solvers, f"run_{solver_name}")
             res = func(
                 self,
+                io_api,
                 problem_fn,
                 solution_fn,
                 log_fn,
