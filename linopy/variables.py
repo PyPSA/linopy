@@ -365,8 +365,8 @@ class Variables:
             Key to be iterated over. Optionally pass a dataset which is
             broadcastable to `broadcast_like`.
         filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1.
-            The default is False.
+            Filter out values where `broadcast_like` data is -1. When enabled, the
+            data is load into memory. The default is False.
 
 
         Yields
@@ -387,9 +387,11 @@ class Variables:
             if labels.chunks is not None:
                 broadcasted = broadcasted.chunk(labels.chunks)
 
-            flat = broadcasted.data.ravel()
             if filter_missings:
-                flat = flat[labels.data.ravel() != -1]
+                flat = np.ravel(broadcasted)
+                flat = flat[np.ravel(labels) != -1]
+            else:
+                flat = broadcasted.data.ravel()
             yield flat
 
     def ravel(self, key, filter_missings=False, compute=True):
