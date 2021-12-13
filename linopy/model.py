@@ -73,8 +73,8 @@ class Model:
         """
         self._xCounter = 0
         self._cCounter = 0
-        self._varnameCounter = counter()
-        self._connameCounter = counter()
+        self._varnameCounter = 0
+        self._connameCounter = 0
         self._blocks = None
 
         self.chunk = chunk
@@ -211,7 +211,8 @@ class Model:
 
         """
         if name is None:
-            name = "var" + str(next(self._varnameCounter))
+            name = "var" + str(self._varnameCounter)
+            self._varnameCounter += 1
 
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
@@ -290,7 +291,8 @@ class Model:
 
         """
         if name is None:
-            name = "con" + str(next(self._connameCounter))
+            name = "con" + str(self._connameCounter)
+            self._connameCounter += 1
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
@@ -881,19 +883,3 @@ class Model:
     to_file = to_file
 
     to_block_files = to_block_files
-
-
-def counter():
-    """
-    Create a counter generator that counts from 0 on upwards.
-
-    Yields
-    ------
-    num : int
-        Current counting.
-
-    """
-    num = 0
-    while True:
-        yield num
-        num += 1
