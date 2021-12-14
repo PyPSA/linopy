@@ -7,12 +7,13 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
-from tempfile import NamedTemporaryFile, TemporaryDirectory, gettempdir
+from pathlib import Path
+from tempfile import NamedTemporaryFile, gettempdir
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import inf
+from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
@@ -43,8 +44,29 @@ class Model:
     the optimization process.
     """
 
-    dataset_attrs = ["parameters", "solution", "dual"]
-    scalar_attrs = ["objective_value", "status", "_xCounter", "_cCounter"]
+    __slots__ = (
+        # containers
+        "_variables",
+        "_constraints",
+        "_objective",
+        "_parameters",
+        "_solution",
+        "_dual",
+        # hidden attributes
+        "_status",
+        "_termination_condition",
+        "_xCounter",
+        "_cCounter",
+        "_varnameCounter",
+        "_connameCounter",
+        "_blocks",
+        "_objective_value",
+        # TODO: check if these should not be mutable
+        "_chunk",
+        "_force_dim_names",
+        "_solver_dir",
+        "solver_model",
+    )
 
     def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
         """
@@ -71,29 +93,166 @@ class Model:
         linopy.Model
 
         """
+        self._variables = Variables(model=self)
+        self._constraints = Constraints(model=self)
+        self._objective = LinearExpression()
+        self._parameters = Dataset()
+
+        self._solution = Dataset()
+        self._dual = Dataset()
+        self._objective_value = nan
+
+        self._status = "initialized"
         self._xCounter = 0
         self._cCounter = 0
         self._varnameCounter = 0
         self._connameCounter = 0
         self._blocks = None
 
-        self.chunk = chunk
-        self.status = "initialized"
-        self.objective_value = np.nan
-        self.force_dim_names = force_dim_names
+        self._chunk = chunk
+        self._force_dim_names = bool(force_dim_names)
+        self._solver_dir = gettempdir() if solver_dir is None else solver_dir
 
-        self.variables = Variables(model=self)
-        self.constraints = Constraints(model=self)
+    @property
+    def variables(self):
+        "Variables assigned to the model."
+        return self._variables
 
-        for attr in self.dataset_attrs:
-            setattr(self, attr, Dataset())
+    @property
+    def constraints(self):
+        "Constraints assigned to the model."
+        return self._constraints
 
-        self.objective = LinearExpression()
+    @property
+    def objective(self):
+        "Objective assigned to the model."
+        return self._objective
 
-        if solver_dir is None:
-            self.solver_dir = gettempdir()
-        else:
-            self.solver_dir = solver_dir
+    @objective.setter
+    def objective(self, value) -> LinearExpression:
+        self.add_objective(value, overwrite=True)
+
+    @property
+    def parameters(self):
+        """
+        Parameters assigned to the model.
+
+        The parameters serve as an expta field where additional data may be
+        stored.
+        """
+        return self._parameters
+
+    @parameters.setter
+    def parameters(self, value):
+        self._parameters = Dataset(value)
+
+    @property
+    def solution(self):
+        "Solution calculated by the optimization."
+        return self._solution
+
+    @solution.setter
+    def solution(self, value):
+        self._solution = Dataset(value)
+
+    @property
+    def dual(self):
+        "Dual values calculated by the optimization."
+        return self._dual
+
+    @dual.setter
+    def dual(self, value):
+        self._dual = Dataset(value)
+
+    @property
+    def status(self):
+        "Status of the model."
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        assert value in ["initialized", "ok", "warning"]
+        self._status = value
+
+    @property
+    def termination_condition(self):
+        "Termination condition of the model."
+        return self._termination_condition
+
+    @termination_condition.setter
+    def termination_condition(self, value):
+        self._termination_condition = str(value)
+
+    @property
+    def objective_value(self):
+        "Objective value of the model."
+        return self._objective_value
+
+    @objective_value.setter
+    def objective_value(self, value):
+        self._objective_value = float(value)
+
+    @property
+    def chunk(self):
+        "Chunk sizes of the model."
+        return self._chunk
+
+    @chunk.setter
+    def chunk(self, value):
+        if not isinstance(value, [int, dict]) and (value != "auto"):
+            raise TypeError("Chunks must int, dict, or 'auto'.")
+        self._chunk = value
+
+    @property
+    def blocks(self):
+        "Blocks of the model."
+        return self._blocks
+
+    @blocks.setter
+    def blocks(self, value):
+        self._blocks = DataArray(value)
+
+    @property
+    def force_dim_names(self):
+        """
+        Whether assigned variables, constraints and data should always have
+        custom dimension names, i.e. not matching dimension names "dim_0",
+        "dim_1" and so on. These helps to avoid unintended broadcasting
+        over dimension. Especially the use of pandas DataFrames and Series
+        may become safer.
+        """
+        return self._force_dim_names
+
+    @force_dim_names.setter
+    def force_dim_names(self, value):
+        self._force_dim_names = bool(value)
+
+    @property
+    def solver_dir(self):
+        "Solver directory of the model."
+        return self._solver_dir
+
+    @solver_dir.setter
+    def solver_dir(self, value):
+        if not isinstance(value, [str, Path]):
+            raise TypeError("'solver_dir' must path-like.")
+        self._solver_dir = value
+
+    @property
+    def dataset_attrs(self):
+        return ["parameters", "solution", "dual"]
+
+    @property
+    def scalar_attrs(self):
+        return [
+            "objective_value",
+            "status",
+            "_xCounter",
+            "_cCounter",
+            "_varnameCounter",
+            "_connameCounter",
+            "force_dim_names",
+        ]
 
     def __repr__(self):
         """Return a string representation of the linopy model."""
@@ -254,7 +413,7 @@ class Model:
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
 
-        self.variables.add(name, labels, lower, upper)
+        self._variables.add(name, labels, lower, upper)
 
         return self.variables[name]
 
@@ -333,7 +492,7 @@ class Model:
             rhs = rhs.chunk(self.chunk)
             labels = labels.chunk(self.chunk)
 
-        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
+        self._constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
         return self.constraints[name]
 
@@ -362,6 +521,8 @@ class Model:
 
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
+        elif isinstance(expr, DataArray):
+            expr = LinearExpression(expr)
         assert isinstance(expr, LinearExpression)
 
         if self.chunk is not None:
@@ -369,8 +530,8 @@ class Model:
 
         if expr.vars.ndim > 1:
             expr = expr.sum()
-        self.objective = expr
-        return self.objective
+        self._objective = expr
+        return self._objective
 
     def remove_variables(self, name):
         """
@@ -838,11 +999,12 @@ class Model:
             return status, termination_condition
 
         self.objective_value = obj
-        self.status = termination_condition
+        self.status = status
+        self.termination_condition = termination_condition
 
         # map solution and dual to original shape which includes missing values
         sol = res["solution"]
-        sol.loc[-1] = np.nan
+        sol.loc[-1] = nan
 
         for name, labels in self.variables.labels.items():
             idx = np.ravel(labels)
@@ -851,7 +1013,7 @@ class Model:
 
         if res["dual"] is not None:
             dual = res["dual"]
-            dual.loc[-1] = np.nan
+            dual.loc[-1] = nan
 
             for name, labels in self.constraints.labels.items():
                 idx = np.ravel(labels)

@@ -261,7 +261,7 @@ def to_netcdf(m, *args, **kwargs):
     ]
     others = [get_and_rename(m, d) for d in m.dataset_attrs + ["objective"]]
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + others).assign_attrs(scalars)
+    ds = xr.merge(vars + cons + others).assign_attrs(non_bool_dict(scalars))
 
     for k in ds:
         ds[k].attrs = non_bool_dict(ds[k].attrs)
@@ -296,15 +296,15 @@ def read_netcdf(path, **kwargs):
 
     attrs = Variables.dataset_attrs
     kwargs = {attr: get_and_rename(all_ds, attr, "variables_") for attr in attrs}
-    m.variables = Variables(**kwargs, model=m)
+    m._variables = Variables(**kwargs, model=m)
 
     attrs = Constraints.dataset_attrs
     kwargs = {attr: get_and_rename(all_ds, attr, "constraints_") for attr in attrs}
-    m.constraints = Constraints(**kwargs, model=m)
+    m._constraints = Constraints(**kwargs, model=m)
 
-    for attr in m.dataset_attrs + ["objective"]:
+    for attr in m.dataset_attrs:
         setattr(m, attr, get_and_rename(all_ds, attr))
-    m.objective = LinearExpression(m.objective)
+    m._objective = LinearExpression(get_and_rename(all_ds, "objective"))
 
     for k in m.scalar_attrs:
         setattr(m, k, all_ds.attrs.pop(k))
