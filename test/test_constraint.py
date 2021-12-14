@@ -36,11 +36,47 @@ def test_constraints_repr():
 def test_constraint_accessor():
     m = Model()
     x = m.add_variables()
+    y = m.add_variables()
     c = m.add_constraints(x, ">=", 0)
-    assert c.get_rhs().item() == 0
-    assert c.get_vars().item() == 0
-    assert c.get_coeffs().item() == 1
-    assert c.get_sign().item() == ">="
+    assert c.rhs.item() == 0
+    assert c.vars.item() == 0
+    assert c.coeffs.item() == 1
+    assert c.sign.item() == ">="
+
+    c.rhs = 2
+    assert c.rhs.item() == 2
+
+    c.vars = y
+    assert c.vars.item() == 1
+
+    c.coeffs = 3
+    assert c.coeffs.item() == 3
+
+    c.sign = "=="
+    assert c.sign.item() == "=="
+
+
+def test_constraint_accessor_M():
+    m = Model()
+    lower = pd.Series(range(10), range(10))
+    upper = pd.Series(range(10, 20), range(10))
+    x = m.add_variables(lower, upper)
+    y = m.add_variables(lower, upper)
+    c = m.add_constraints(x, ">=", 0)
+    assert c.rhs.item() == 0
+    assert (c.rhs == 0).all()
+
+    assert c.vars.shape == (10, 1)
+    assert c.coeffs.shape == (10, 1)
+
+    assert c.sign.item() == ">="
+
+    c.rhs = 2
+    assert c.rhs.item() == 2
+
+    c.lhs = 3 * y
+    assert (c.vars.squeeze() == y.data).all()
+    assert (c.coeffs == 3).all()
 
 
 def test_constraints_accessor():
@@ -63,13 +99,13 @@ def test_constraint_getter_without_model():
     c = linopy.constraints.Constraint(data)
 
     with pytest.raises(AttributeError):
-        c.get_coeffs()
+        c.coeffs
     with pytest.raises(AttributeError):
-        c.get_vars()
+        c.vars
     with pytest.raises(AttributeError):
-        c.get_sign()
+        c.sign
     with pytest.raises(AttributeError):
-        c.get_rhs()
+        c.rhs
 
 
 def test_constraint_matrix():

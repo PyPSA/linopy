@@ -37,6 +37,7 @@ setup(
         "xarray>=0.16",
         "dask>=0.18.0",
         "tqdm",
+        "deprecation",
     ],
     extras_require={
         "docs": [

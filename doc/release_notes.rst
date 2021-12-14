@@ -17,6 +17,8 @@ Upcoming Release
 * Binary variables now also have a non-nan lower and upper value due compatibility.
 * Models can now be created using the `gurobipy` API, this can lead to faster total solving times.
 * `.solve` has a new argument `io_api`. If set to 'direct' the io solving will be performed using the python API's. Currently only available for gurobi.
+* The `Variable` class now has a `lower` and `upper` accessor, which allows to inspect and modify the lower and upper bounds of a assigned variable.
+* The `Constraint` class now has a `lhs`, `vars`, `coeffs`, `rhs` and `sign` accessor, which allows to inspect and modify the left-hand-side, the signs and right-hand-side of a assigned constraint.
 
 **Breaking changes**
 

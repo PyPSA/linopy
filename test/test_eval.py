@@ -110,7 +110,7 @@ def test_model_eval(model):
 def test_var_eval(model):
     model.vareval("z <= 0")
     assert "z" in model.variables
-    assert model.variables["z"].get_upper_bound().item() == 0
+    assert model.variables["z"].upper.item() == 0
 
     model.vareval("a <= 0", eval_kw={})
     assert "a" in model.variables

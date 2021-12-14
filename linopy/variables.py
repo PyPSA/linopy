@@ -11,6 +11,7 @@ from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
+from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
@@ -179,8 +180,8 @@ class Variable(DataArray):
         """
         return self.to_linexpr().group_terms(group)
 
-    # would like to have this as a property, but this does not work apparently
-    def get_upper_bound(self):
+    @property
+    def upper(self):
         """
         Get the upper bounds of the variables.
         The function raises an error in case no model is set as a reference.
@@ -189,7 +190,25 @@ class Variable(DataArray):
             raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.upper[self.name]
 
-    def get_lower_bound(self):
+    @upper.setter
+    def upper(self, value):
+        """
+        Set the upper bounds of the variables.
+        The function raises an error in case no model is set as a reference.
+        """
+
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        labels = self.model.variables.labels
+        value = DataArray(value)
+        assert set(value.dims).issubset(
+            labels.dims
+        ), "Dimensions of new values not a subset of labels dimensions."
+
+        self.model.variables.upper[self.name] = value
+
+    @property
+    def lower(self):
         """
         Get the lower bounds of the variables.
         The function raises an error in case no model is set as a reference.
@@ -197,6 +216,30 @@ class Variable(DataArray):
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.lower[self.name]
+
+    @lower.setter
+    def lower(self, value):
+        """
+        Set the lower bounds of the variables.
+        The function raises an error in case no model is set as a reference.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        labels = self.model.variables.labels
+        value = DataArray(value)
+        assert set(value.dims).issubset(
+            labels.dims
+        ), "Dimensions of new values not a subset of labels dimensions."
+
+        self.model.variables.lower[self.name] = value
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `lower` accessor instead.")
+    def get_lower_bound(self):
+        return self.lower
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `upper` accessor instead.")
+    def get_upper_bound(self):
+        return self.upper
 
     def sum(self, dims=None):
         """
