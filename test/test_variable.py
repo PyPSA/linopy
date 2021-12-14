@@ -35,8 +35,35 @@ def test_variable_repr():
 def test_variable_bound_accessor():
     m = Model()
     x = m.add_variables(0, 10)
-    assert x.get_upper_bound().item() == 10
-    assert x.get_lower_bound().item() == 0
+    assert x.upper.item() == 10
+    assert x.lower.item() == 0
+
+
+def test_variable_modification():
+    m = Model()
+    x = m.add_variables(0, 10)
+    x.upper = 20
+    assert x.upper.item() == 20
+
+    x.lower = 8
+    assert x.lower == 8
+
+
+def test_variable_modification_M():
+    m = Model()
+    lower = pd.Series(0, index=range(10))
+    upper = pd.Series(range(10, 20), index=range(10))
+    x = m.add_variables(lower, upper)
+
+    new_upper = pd.Series(range(25, 35), index=range(10))
+    x.upper = new_upper
+    assert isinstance(x.upper, xr.DataArray)
+    assert (x.upper == new_upper).all()
+
+    new_lower = pd.Series(range(15, 25), index=range(10))
+    x.lower = new_lower
+    assert isinstance(x.lower, xr.DataArray)
+    assert (x.lower == new_lower).all()
 
 
 def test_variable_sum():
@@ -91,7 +118,6 @@ def test_constraint_getter_without_model():
     v = linopy.variables.Variable(data)
 
     with pytest.raises(AttributeError):
-        v.get_upper_bound()
+        v.upper
     with pytest.raises(AttributeError):
-        v.get_lower_bound()
-        v.get_lower_bound()
+        v.lower

@@ -12,11 +12,12 @@ import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import asarray
+from deprecation import deprecated
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
 
 from linopy.common import _merge_inplace, replace_by_map
+from linopy.expressions import LinearExpression
 
 
 class Constraint(DataArray):
@@ -68,42 +69,131 @@ class Constraint(DataArray):
         """Convert the variable array to a xarray.DataArray."""
         return DataArray(self)
 
-    # would like to have this as a property, but this does not work apparently
-    def get_coeffs(self):
+    @property
+    def coeffs(self):
         """
         Get the left-hand-side coefficients of the constraint.
         The function raises an error in case no model is set as a reference.
         """
         if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
+            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.coeffs[self.name]
 
-    def get_vars(self):
+    @coeffs.setter
+    def coeffs(self, value):
+        labels = self.model.constraints.labels
+        value = DataArray(value)
+        term_dim = self.name + "_term"
+
+        if term_dim not in value.dims:
+            value = value.expand_dims(term_dim)
+
+        assert (set(value.dims) - {term_dim}).issubset(labels.dims), (
+            "Dimensions of new values not a subset of labels dimensions, "
+            "therefore the new coefficients cannot be aligned with the existing labels."
+        )
+
+        self.model.constraints.coeffs[self.name] = value
+
+    @property
+    def vars(self):
         """
         Get the left-hand-side variables of the constraint.
         The function raises an error in case no model is set as a reference.
         """
         if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
+            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.vars[self.name]
 
-    def get_sign(self):
+    @vars.setter
+    def vars(self, value):
+        labels = self.model.constraints.labels
+        value = DataArray(value)
+        term_dim = self.name + "_term"
+
+        if term_dim not in value.dims:
+            value = value.expand_dims(term_dim)
+
+        assert (set(value.dims) - {term_dim}).issubset(labels.dims), (
+            "Dimensions of new values not a subset of labels dimensions, "
+            "therefore the new variables cannot be aligned with the existing labels."
+        )
+
+        self.model.constraints.vars[self.name] = value
+
+    @property
+    def lhs(self):
         """
-        Get the sign of the constraint.
+        Get the left-hand-side linear expression of the constraint.
+        The function raises an error in case no model is set as a reference.
+        """
+        return LinearExpression(Dataset({"coeffs": self.coeffs, "vars": self.vars}))
+
+    @lhs.setter
+    def lhs(self, value):
+        if not isinstance(value, LinearExpression):
+            raise TypeError("Assigned lhs must be a LinearExpression.")
+
+        value = value.rename(_term=self.name + "_term")
+        self.coeffs = value.coeffs
+        self.vars = value.vars
+
+    @property
+    def sign(self):
+        """
+        Get the signs of the constraint.
         The function raises an error in case no model is set as a reference.
         """
         if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
+            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.sign[self.name]
 
-    def get_rhs(self):
+    @sign.setter
+    def sign(self, value):
+        labels = self.model.constraints.labels
+        value = DataArray(value)
+        assert set(value.dims).issubset(labels.dims), (
+            "Dimensions of new values not a subset of labels dimensions, "
+            "therefore the new signs cannot be aligned with the existing labels."
+        )
+        self.model.constraints.sign[self.name] = value
+
+    @property
+    def rhs(self):
         """
-        Get the right-hand-side constant of the constraint.
+        Get the right hand side constants of the constraint.
         The function raises an error in case no model is set as a reference.
         """
         if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
+            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.rhs[self.name]
+
+    @rhs.setter
+    def rhs(self, value):
+        labels = self.model.constraints.labels
+        value = DataArray(value)
+        assert set(value.dims).issubset(labels.dims), (
+            "Dimensions of new values not a subset of labels dimensions, "
+            "therefore the new right-hand-side cannot be aligned with the existing labels."
+        )
+
+        self.model.constraints.rhs[self.name] = value
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `coeffs` accessor instead.")
+    def get_coeffs(self):
+        return self.coeffs
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `vars` accessor instead.")
+    def get_vars(self):
+        return self.vars
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `sign` accessor instead.")
+    def get_sign(self):
+        return self.sign
+
+    @deprecated("0.0.5", "0.0.6", details="Use the `rhs` accessor instead.")
+    def get_rhs(self):
+        return self.rhs
 
 
 @dataclass(repr=False)
