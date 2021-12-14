@@ -144,6 +144,15 @@ class LinearExpression(Dataset):
         """Right-multiply the expr by a factor."""
         return self.__mul__(other)
 
+    def __le__(self, rhs):
+        return AnonymousConstraint(self, "<=", rhs)
+
+    def __ge__(self, rhs):
+        return AnonymousConstraint(self, "<=", rhs)
+
+    def __eq__(self, rhs):
+        return AnonymousConstraint(self, "=", rhs)
+
     def to_dataset(self):
         """Convert the expression to a xarray.Dataset."""
         return Dataset(self)
@@ -361,3 +370,32 @@ def merge(*exprs, dim="_term"):
         res = res.reset_index("_term", drop=True)
 
     return res
+
+
+class AnonymousConstraint:
+    """
+    A constraint container used for storing multiple constraint arrays.
+    """
+
+    def __init__(self, lhs, sign, rhs):
+        """Initialize a anonymous constraint."""
+        self.lhs, self.rhs = xr.align(lhs, DataArray(rhs))
+        self.sign = DataArray(sign)
+
+    def __repr__(self):
+        """Get the string representation of the expression."""
+        lhs_string = self.lhs.to_dataset().__repr__()  # .split("\n", 1)[1]
+        lhs_string = lhs_string.split("Data variables:\n", 1)[1]
+        lhs_string = lhs_string.replace("    coeffs", "coeffs")
+        lhs_string = lhs_string.replace("    vars", "vars")
+        if self.rhs.size == 1:
+            rhs_string = self.rhs.item()
+        else:
+            rhs_string = self.rhs.__repr__().split("\n", 1)[1]
+        return (
+            f"Anonymous Constraint:\n"
+            f"---------------------\n"
+            f"\n{lhs_string}"
+            f"\n{self.sign.item()}"
+            f"\n{rhs_string}"
+        )
