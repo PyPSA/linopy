@@ -78,6 +78,14 @@ def test_variable_to_linexpr():
         x - 10
 
 
+def test_expr_to_anonymous_constraint():
+    expr = 10 * x + y
+    con = expr <= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "<="
+    assert con.rhs.item() == 10
+
+
 def test_add():
 
     expr = 10 * x + y
@@ -200,8 +208,8 @@ def test_group_terms():
     # first group must be full with vars
     assert (grouped.sel(group=1) > 0).all()
     # the last 4 entries of the second group must be empty, i.e. -1
-    assert (grouped.sel(group=2).isel(_term=slice(None, -4)) >= 0).all()
-    assert (grouped.sel(group=2).isel(_term=slice(-4, None)) == -1).all()
+    assert (grouped.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
+    assert (grouped.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
     assert grouped._term.size == 12
 
 
