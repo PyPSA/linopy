@@ -8,6 +8,7 @@ Created on Thu Mar 18 09:03:35 2021
 
 import pandas as pd
 import pytest
+import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import Model, available_solvers, read_netcdf
@@ -82,3 +83,20 @@ def test_to_file(tmp_path):
     m.to_file(fn)
 
     gurobipy.read(str(fn))
+
+
+def test_to_blocks(tmp_path):
+    m = Model()
+
+    lower = pd.Series(range(20))
+    upper = pd.Series(range(30, 50))
+    x = m.add_variables(lower, upper)
+    y = m.add_variables(lower, upper)
+
+    m.add_constraints(x + y, "<=", 10)
+
+    m.add_objective(2 * x + 3 * y)
+
+    m.blocks = xr.DataArray([1] * 10 + [2] * 10)
+
+    m.to_block_files(tmp_path)

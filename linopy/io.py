@@ -165,23 +165,25 @@ def to_block_files(m, fn):
     cons = m.constraints
 
     # Write out variables
-    blocks = vars.ravel("blocks", filter_missings=True, compute=True)
+    blocks = vars.ravel("blocks", filter_missings=True)
     for key, suffix in zip(["labels", "lower", "upper"], ["x", "xl", "xu"]):
-        arr = vars.ravel(key, filter_missings=True, compute=True)
+        arr = vars.ravel(key, filter_missings=True)
         for n in tqdm(range(N + 1), desc=f"Write variable {key}"):
             arr[blocks == n].tofile(path / f"block{n}" / suffix)
 
     # Write out objective (uses variable blocks from above)
-    coeffs = np.zeros_like(blocks)
+    coeffs = np.zeros(m._xCounter)
     coeffs[np.asarray(m.objective.vars)] = np.asarray(m.objective.coeffs)
+    # reorder like non-missing variables
+    coeffs = coeffs[vars.ravel("labels", filter_missings=True)]
     for n in tqdm(range(N + 1), desc="Write objective"):
         coeffs[blocks == n].tofile(path / f"block{n}" / "c")
 
     # Write out rhs
-    blocks = cons.ravel("blocks", filter_missings=True, compute=True)
-    rhs = cons.ravel("rhs", filter_missings=True, compute=True)
-    is_equality = cons.ravel(cons.sign == "==", filter_missings=True, compute=True)
-    is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True, compute=True)
+    blocks = cons.ravel("blocks", filter_missings=True)
+    rhs = cons.ravel("rhs", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == "==", filter_missings=True)
+    is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True)
 
     for n in tqdm(range(N + 1), desc="Write RHS"):
         is_blockn = blocks == n
@@ -199,17 +201,15 @@ def to_block_files(m, fn):
         upper_bound.tofile(path / f"block{n}" / "du")
 
     # Write out constraints
-    conblocks = cons.ravel("blocks", "vars", filter_missings=True, compute=True)
-    varblocks = cons.ravel("var_blocks", "vars", filter_missings=True, compute=True)
-    is_equality = cons.ravel(
-        cons.sign == "==", "vars", filter_missings=True, compute=True
-    )
+    conblocks = cons.ravel("blocks", "vars", filter_missings=True)
+    varblocks = cons.ravel("var_blocks", "vars", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == "==", "vars", filter_missings=True)
 
     is_varblock_0 = varblocks == 0
     is_conblock_L = conblocks == N
 
     for key, suffix in zip(["labels", "coeffs", "vars"], ["row", "data", "col"]):
-        arr = cons.ravel(key, "vars", filter_missings=True, compute=True)
+        arr = cons.ravel(key, "vars", filter_missings=True)
         for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
             is_conblock_n = conblocks == n
             is_varblock_n = varblocks == n

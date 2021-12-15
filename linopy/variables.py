@@ -485,7 +485,7 @@ class Variables:
         Get a one-dimensional array mapping the variables to blocks.
         """
         # non-assigned variables are assumed to be masked, insert -1
-        res = np.full(self._xCounter + 1, -1, dtype=dtype)
+        res = np.full(self.model._xCounter + 1, -1, dtype=dtype)
         for name, labels in self.labels.items():
             res[np.ravel(labels)] = np.ravel(block_map[name])
         res[-1] = -1
