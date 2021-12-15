@@ -215,8 +215,9 @@ def test_linexpr():
 
     # select a variable by a scalar and broadcast if over another variable array
     expr = m.linexpr((1, "x"), (10, "y"))
+    target = 1 * x + 10 * y
     # assert (expr._term == ['x', 'y']).all()
-    assert (expr == 1 * x + 10 * y).all().to_array().all()
+    assert (expr.to_dataset() == target.to_dataset()).all().to_array().all()
 
 
 def test_constraint_assignment():
@@ -228,6 +229,26 @@ def test_constraint_assignment():
     y = m.add_variables()
 
     m.add_constraints(1 * x + 10 * y, "=", 0)
+
+    for attr in m.constraints.dataset_attrs:
+        assert "con0" in getattr(m.constraints, attr)
+
+    assert m.constraints.labels.con0.shape == (10, 10)
+    assert m.constraints.labels.con0.dtype == int
+    assert m.constraints.coeffs.con0.dtype in (int, float)
+    assert m.constraints.vars.con0.dtype in (int, float)
+    assert m.constraints.rhs.con0.dtype in (int, float)
+
+
+def test_anonymous_constraint_assignment():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+    con = 1 * x + 10 * y == 0
+    m.add_constraints(con)
 
     for attr in m.constraints.dataset_attrs:
         assert "con0" in getattr(m.constraints, attr)

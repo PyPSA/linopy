@@ -20,7 +20,7 @@ from linopy import solvers
 from linopy.common import best_int, replace_by_map
 from linopy.constraints import Constraints
 from linopy.eval import Expr
-from linopy.expressions import LinearExpression
+from linopy.expressions import AnonymousConstraint, LinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
 from linopy.solvers import available_solvers
 from linopy.variables import Variable, Variables
@@ -417,7 +417,7 @@ class Model:
 
         return self.variables[name]
 
-    def add_constraints(self, lhs, sign, rhs, name=None, mask=None):
+    def add_constraints(self, lhs, sign=None, rhs=None, name=None, mask=None):
         """
         Assign a new, possibly multi-dimensional array of constraints to the model.
 
@@ -428,8 +428,10 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression
-            Left hand side of the constraint(s).
+        lhs : linopy.LinearExpression/linopy.AnonynousConstraint
+            Left hand side of the constraint(s) or optionally full constraint.
+            In case a linear expression is passed, `sign` and `rhs` must not be
+            None.
         sign : str/array_like
             Relation between the lhs and rhs, valid values are {'=', '>=', '<='}.
         rhs : int/float/array_like
@@ -455,6 +457,22 @@ class Model:
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
+
+        if isinstance(lhs, AnonymousConstraint):
+            if sign is not None or rhs is not None:
+                raise ValueError(
+                    "Passing arguments `sign` and `rhs` together with a constraint"
+                    " is ambiguous."
+                )
+            sign = lhs.sign
+            rhs = lhs.rhs
+            lhs = lhs.lhs
+        else:
+            if sign is None or rhs is None:
+                raise ValueError(
+                    "Argument `sign` and `rhs` must not be None if first argument "
+                    " is an expression."
+                )
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
@@ -851,10 +869,7 @@ class Model:
     def objectiverange(self):
         """Objective range of the objective in the model."""
         return pd.Series(
-            [
-                self.objective.coeffs.min().item(),
-                self.objective.coeffs.max().item(),
-            ],
+            [self.objective.coeffs.min().item(), self.objective.coeffs.max().item()],
             index=["min", "max"],
         )
 
