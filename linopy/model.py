@@ -111,7 +111,7 @@ class Model:
 
         self._chunk = chunk
         self._force_dim_names = bool(force_dim_names)
-        self._solver_dir = gettempdir() if solver_dir is None else solver_dir
+        self._solver_dir = Path(gettempdir() if solver_dir is None else solver_dir)
 
     @property
     def variables(self):
@@ -236,7 +236,7 @@ class Model:
     def solver_dir(self, value):
         if not isinstance(value, [str, Path]):
             raise TypeError("'solver_dir' must path-like.")
-        self._solver_dir = value
+        self._solver_dir = Path(value)
 
     @property
     def dataset_attrs(self):

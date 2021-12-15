@@ -6,6 +6,7 @@ Created on Wed Mar 10 11:23:13 2021
 @author: fabulous
 """
 
+from pathlib import Path
 from tempfile import gettempdir
 
 import dask
@@ -35,7 +36,7 @@ def test_model_force_dims_names():
 def test_model_solver_dir():
     d = gettempdir()
     m = Model(solver_dir=d)
-    assert m.solver_dir == d
+    assert m.solver_dir == Path(d)
 
 
 def test_scalar_variable_assignment():
