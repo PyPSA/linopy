@@ -9,6 +9,11 @@ repos:
     rev: 21.9b0
     hooks:
     -   id: black
+-   repo: https://github.com/myint/docformatter
+    rev: v1.3.1
+    hooks:
+    -   id: docformatter
+        args: [--in-place, --make-summary-multi-line, --pre-summary-newline]
 -   repo: https://github.com/keewis/blackdoc
     rev: v0.3.4
     hooks:
