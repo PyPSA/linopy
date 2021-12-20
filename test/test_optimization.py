@@ -15,7 +15,7 @@ from linopy.solvers import available_solvers
 
 params = [(name, "lp") for name in available_solvers]
 if "gurobi" in available_solvers:
-    params.append(("gurobi", "diret"))
+    params.append(("gurobi", "direct"))
 
 
 @pytest.fixture

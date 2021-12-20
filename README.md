@@ -34,6 +34,7 @@ pip install linopy
 
 * [Cbc](https://projects.coin-or.org/Cbc)
 * [GLPK](https://www.gnu.org/software/glpk/)
+* [HiGHS](https://www.maths.ed.ac.uk/hall/HiGHS/)
 * [Gurobi](https://www.gurobi.com/)
 * [Xpress](https://www.fico.com/en/products/fico-xpress-solver)
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
