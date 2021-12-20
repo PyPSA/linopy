@@ -4,6 +4,10 @@ Release Notes
 Upcoming Release
 ----------------
 
+
+Version 0.0.5
+-------------
+
 * LinearExpression has a new function `densify_terms` which reduces the `_term` axis to a minimal length while containing all non-zero coefficient values.
 * When summing over one or multiple axes in a LinearExpression, terms with coefficient of zeros can now be dropped automatically.
 * The export of LP files was restructured and is flat arrays under the hook to ensure performant export of long constraints.
