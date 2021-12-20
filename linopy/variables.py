@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Linopy variables module.
+
 This module contains variable related definitions of the package.
 """
 
@@ -79,7 +80,6 @@ class Variable(DataArray):
 
 
     Further operations like taking the negative and subtracting are supported.
-
     """
 
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
@@ -101,15 +101,21 @@ class Variable(DataArray):
     _reduce_method = None
 
     def to_array(self):
-        """Convert the variable array to a xarray.DataArray."""
+        """
+        Convert the variable array to a xarray.DataArray.
+        """
         return DataArray(self)
 
     def to_linexpr(self, coefficient=1):
-        """Create a linear exprssion from the variables."""
+        """
+        Create a linear exprssion from the variables.
+        """
         return expressions.LinearExpression.from_tuples((coefficient, self))
 
     def __repr__(self):
-        """Get the string representation of the variables."""
+        """
+        Get the string representation of the variables.
+        """
         data_string = (
             "Variable labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
         )
@@ -121,26 +127,36 @@ class Variable(DataArray):
         )
 
     def _repr_html_(self):
-        """Get the html representation of the variables."""
+        """
+        Get the html representation of the variables.
+        """
         # return self.__repr__()
         data_string = self.to_array()._repr_html_()
         data_string = data_string.replace("xarray.DataArray", "linopy.Variable")
         return data_string
 
     def __neg__(self):
-        """Calculate the negative of the variables (converts coefficients only)."""
+        """
+        Calculate the negative of the variables (converts coefficients only).
+        """
         return self.to_linexpr(-1)
 
     def __mul__(self, coefficient):
-        """Multiply variables with a coefficient."""
+        """
+        Multiply variables with a coefficient.
+        """
         return self.to_linexpr(coefficient)
 
     def __rmul__(self, coefficient):
-        """Right-multiply variables with a coefficient."""
+        """
+        Right-multiply variables with a coefficient.
+        """
         return self.to_linexpr(coefficient)
 
     def __add__(self, other):
-        """Add variables to linear expressions or other variables."""
+        """
+        Add variables to linear expressions or other variables.
+        """
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, expressions.LinearExpression):
@@ -151,7 +167,9 @@ class Variable(DataArray):
             )
 
     def __sub__(self, other):
-        """Subtract linear expressions or other variables from the variables."""
+        """
+        Subtract linear expressions or other variables from the variables.
+        """
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (-1, other))
         elif isinstance(other, expressions.LinearExpression):
@@ -176,7 +194,6 @@ class Variable(DataArray):
         Returns
         -------
         Grouped linear expression.
-
         """
         return self.to_linexpr().group_terms(group)
 
@@ -184,7 +201,9 @@ class Variable(DataArray):
     def upper(self):
         """
         Get the upper bounds of the variables.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
@@ -194,7 +213,9 @@ class Variable(DataArray):
     def upper(self, value):
         """
         Set the upper bounds of the variables.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
 
         if self.model is None:
@@ -211,7 +232,9 @@ class Variable(DataArray):
     def lower(self):
         """
         Get the lower bounds of the variables.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
@@ -221,7 +244,9 @@ class Variable(DataArray):
     def lower(self, value):
         """
         Set the lower bounds of the variables.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the variable.")
@@ -337,7 +362,9 @@ class Variables:
         )
 
     def __repr__(self):
-        """Return a string representation of the linopy model."""
+        """
+        Return a string representation of the linopy model.
+        """
         r = "linopy.model.Variables"
         line = "-" * len(r)
         r += f"\n{line}\n\n"
@@ -360,13 +387,17 @@ class Variables:
     _merge_inplace = _merge_inplace
 
     def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
-        """Add variable `name`."""
+        """
+        Add variable `name`.
+        """
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("lower", lower, name, fill_value=-inf)
         self._merge_inplace("upper", upper, name, fill_value=inf)
 
     def remove(self, name):
-        """Remove variable `name` from the variables."""
+        """
+        Remove variable `name` from the variables.
+        """
         for attr in self.dataset_attrs:
             ds = getattr(self, attr)
             if name in ds:
@@ -375,7 +406,9 @@ class Variables:
     @property
     def nvars(self):
         """
-        Get the number all variables which were at some point added to the model.
+        Get the number all variables which were at some point added to the
+        model.
+
         These also include variables with missing labels.
         """
         return self.ravel("labels", filter_missings=True).shape[0]
@@ -390,17 +423,22 @@ class Variables:
 
     @property
     def binaries(self):
-        "Get all binary variables."
+        """
+        Get all binary variables.
+        """
         return self[self._binary_variables]
 
     @property
     def non_binaries(self):
-        "Get all non-binary variables."
+        """
+        Get all non-binary variables.
+        """
         return self[self._non_binary_variables]
 
     def iter_ravel(self, key, filter_missings=False):
         """
-        Create an generator which iterates over all arrays in `key` and flattens them.
+        Create an generator which iterates over all arrays in `key` and
+        flattens them.
 
         Parameters
         ----------
@@ -415,7 +453,6 @@ class Variables:
         Yields
         ------
         flat : np.array/dask.array
-
         """
         if isinstance(key, str):
             ds = getattr(self, key)
@@ -439,7 +476,8 @@ class Variables:
 
     def ravel(self, key, filter_missings=False, compute=True):
         """
-        Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
+        Ravel and concate all arrays in `key` while aligning to
+        `broadcast_like`.
 
         Parameters
         ----------
@@ -459,7 +497,6 @@ class Variables:
         -------
         flat
             One dimensional data with all values in `key`.
-
         """
         res = np.concatenate(list(self.iter_ravel(key, filter_missings)))
         if compute:

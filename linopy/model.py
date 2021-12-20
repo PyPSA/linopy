@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Linopy model module.
+
 This module contains frontend implementations of the package.
 """
 
@@ -91,7 +92,6 @@ class Model:
         Returns
         -------
         linopy.Model
-
         """
         self._variables = Variables(model=self)
         self._constraints = Constraints(model=self)
@@ -115,17 +115,23 @@ class Model:
 
     @property
     def variables(self):
-        "Variables assigned to the model."
+        """
+        Variables assigned to the model.
+        """
         return self._variables
 
     @property
     def constraints(self):
-        "Constraints assigned to the model."
+        """
+        Constraints assigned to the model.
+        """
         return self._constraints
 
     @property
     def objective(self):
-        "Objective assigned to the model."
+        """
+        Objective assigned to the model.
+        """
         return self._objective
 
     @objective.setter
@@ -137,8 +143,8 @@ class Model:
         """
         Parameters assigned to the model.
 
-        The parameters serve as an expta field where additional data may be
-        stored.
+        The parameters serve as an expta field where additional data may
+        be stored.
         """
         return self._parameters
 
@@ -148,7 +154,9 @@ class Model:
 
     @property
     def solution(self):
-        "Solution calculated by the optimization."
+        """
+        Solution calculated by the optimization.
+        """
         return self._solution
 
     @solution.setter
@@ -157,7 +165,9 @@ class Model:
 
     @property
     def dual(self):
-        "Dual values calculated by the optimization."
+        """
+        Dual values calculated by the optimization.
+        """
         return self._dual
 
     @dual.setter
@@ -166,7 +176,9 @@ class Model:
 
     @property
     def status(self):
-        "Status of the model."
+        """
+        Status of the model.
+        """
         return self._status
 
     @status.setter
@@ -176,7 +188,9 @@ class Model:
 
     @property
     def termination_condition(self):
-        "Termination condition of the model."
+        """
+        Termination condition of the model.
+        """
         return self._termination_condition
 
     @termination_condition.setter
@@ -185,7 +199,9 @@ class Model:
 
     @property
     def objective_value(self):
-        "Objective value of the model."
+        """
+        Objective value of the model.
+        """
         return self._objective_value
 
     @objective_value.setter
@@ -194,7 +210,9 @@ class Model:
 
     @property
     def chunk(self):
-        "Chunk sizes of the model."
+        """
+        Chunk sizes of the model.
+        """
         return self._chunk
 
     @chunk.setter
@@ -205,7 +223,9 @@ class Model:
 
     @property
     def blocks(self):
-        "Blocks of the model."
+        """
+        Blocks of the model.
+        """
         return self._blocks
 
     @blocks.setter
@@ -217,9 +237,11 @@ class Model:
         """
         Whether assigned variables, constraints and data should always have
         custom dimension names, i.e. not matching dimension names "dim_0",
-        "dim_1" and so on. These helps to avoid unintended broadcasting
-        over dimension. Especially the use of pandas DataFrames and Series
-        may become safer.
+        "dim_1" and so on.
+
+        These helps to avoid unintended broadcasting over dimension.
+        Especially the use of pandas DataFrames and Series may become
+        safer.
         """
         return self._force_dim_names
 
@@ -229,7 +251,9 @@ class Model:
 
     @property
     def solver_dir(self):
-        "Solver directory of the model."
+        """
+        Solver directory of the model.
+        """
         return self._solver_dir
 
     @solver_dir.setter
@@ -255,7 +279,9 @@ class Model:
         ]
 
     def __repr__(self):
-        """Return a string representation of the linopy model."""
+        """
+        Return a string representation of the linopy model.
+        """
         var_string = self.variables.labels.__repr__().split("\n", 1)[1]
         var_string = var_string.replace("Data variables:\n", "Data:\n")
         con_string = self.constraints.labels.__repr__().split("\n", 1)[1]
@@ -268,7 +294,9 @@ class Model:
         )
 
     def __getitem__(self, key):
-        """Get a model variable by the name."""
+        """
+        Get a model variable by the name.
+        """
         return Variable(self.variables[key])
 
     def check_force_dim_names(self, ds):
@@ -289,7 +317,6 @@ class Model:
         Returns
         -------
         None.
-
         """
         contains_default_dims = any(
             bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims
@@ -306,7 +333,8 @@ class Model:
         self, lower=-inf, upper=inf, coords=None, name=None, mask=None, binary=False
     ):
         """
-        Assign a new, possibly multi-dimensional array of variables to the model.
+        Assign a new, possibly multi-dimensional array of variables to the
+        model.
 
         Variables may be added with lower and/or upper bounds. Unless a
         `coords` argument is provided, the shape of the lower and upper bounds
@@ -367,7 +395,6 @@ class Model:
                 * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
             Attributes:
                 name:     x
-
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -419,7 +446,8 @@ class Model:
 
     def add_constraints(self, lhs, sign=None, rhs=None, name=None, mask=None):
         """
-        Assign a new, possibly multi-dimensional array of constraints to the model.
+        Assign a new, possibly multi-dimensional array of constraints to the
+        model.
 
         Constraints are added by defining a left hand side (lhs), the sign and
         the right hand side (rhs). The lhs has to be a linopy.LinearExpression
@@ -449,7 +477,6 @@ class Model:
         -------
         labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
-
         """
         if name is None:
             name = "con" + str(self._connameCounter)
@@ -529,7 +556,6 @@ class Model:
         -------
         linopy.LinearExpression
             The objective function assigned to the model.
-
         """
         if not overwrite:
             assert self.objective.empty(), (
@@ -566,7 +592,6 @@ class Model:
         Returns
         -------
         None.
-
         """
         labels = self.variables.labels[name]
         self.variables.remove(name)
@@ -579,7 +604,8 @@ class Model:
 
     def remove_constraints(self, name):
         """
-        Remove all constraints stored under reference name `name` from the model.
+        Remove all constraints stored under reference name `name` from the
+        model.
 
         Parameters
         ----------
@@ -590,28 +616,35 @@ class Model:
         Returns
         -------
         None.
-
         """
         self.constraints.remove(name)
 
     @property
     def binaries(self):
-        "Get all binary variables."
+        """
+        Get all binary variables.
+        """
         return self.variables.binaries
 
     @property
     def non_binaries(self):
-        "Get all non-binary variables."
+        """
+        Get all non-binary variables.
+        """
         return self.variables.non_binaries
 
     @property
     def nvars(self):
-        "Get the total number of variables."
+        """
+        Get the total number of variables.
+        """
         return self.variables.nvars
 
     @property
     def ncons(self):
-        "Get the total number of constraints."
+        """
+        Get the total number of constraints.
+        """
         return self.constraints.ncons
 
     @property
@@ -682,7 +715,6 @@ class Model:
         >>> m.add_variables(pd.Series([0, 0]), 1, name="x")
         >>> m.add_variables(4, pd.Series([8, 10]), name="y")
         >>> expr = m.linexpr((10, "x"), (1, "y"))
-
         """
         tuples = [
             (c, self.variables[v]) if isinstance(v, str) else (c, v)
@@ -737,7 +769,6 @@ class Model:
         This is the same as
 
         >>> m.add_variables(lower, upper, name="x")
-
         """
         if eval_kw is None:
             eval_kw = {}
@@ -791,7 +822,6 @@ class Model:
         This is the same as
 
         >>> m.linexpr((c, "x"), (-1, "y"))
-
         """
         if eval_kw is None:
             eval_kw = {}
@@ -847,7 +877,6 @@ class Model:
 
         >>> lhs = m.linexpr((c, "x"), (-1, "y"))
         >>> m.add_constraints(lhs, "<=", 5)
-
         """
         if eval_kw is None:
             eval_kw = {}
@@ -862,19 +891,25 @@ class Model:
 
     @property
     def coefficientrange(self):
-        """Coefficient range of the constraints in the model."""
+        """
+        Coefficient range of the constraints in the model.
+        """
         return self.constraints.coefficientrange
 
     @property
     def objectiverange(self):
-        """Objective range of the objective in the model."""
+        """
+        Objective range of the objective in the model.
+        """
         return pd.Series(
             [self.objective.coeffs.min().item(), self.objective.coeffs.max().item()],
             index=["min", "max"],
         )
 
     def get_solution_file(self, solution_fn=None):
-        """Get a fresh created solution file if solution file is None."""
+        """
+        Get a fresh created solution file if solution file is None.
+        """
         if solution_fn is None:
             kwargs = dict(
                 prefix="linopy-solve-",
@@ -889,7 +924,9 @@ class Model:
             return solution_fn
 
     def get_problem_file(self, problem_fn=None):
-        """Get a fresh created problem file if problem file is None."""
+        """
+        Get a fresh created problem file if problem file is None.
+        """
         if problem_fn is None:
             kwargs = dict(
                 prefix="linopy-problem-",
@@ -961,7 +998,6 @@ class Model:
         -------
         linopy.Model
             Optimized model.
-
         """
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
@@ -1041,7 +1077,8 @@ class Model:
         """
         Print out the infeasible subset of constraints.
 
-        This is a prelimary function and is only implemented for gurobi so far.
+        This is a prelimary function and is only implemented for gurobi
+        so far.
         """
         import gurobipy
 

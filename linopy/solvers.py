@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Linopy module for solving lp files with different solvers."""
+"""
+Linopy module for solving lp files with different solvers.
+"""
 import io
 import logging
 import os
@@ -55,13 +57,17 @@ io_structure = dict(
 
 
 def set_int_index(series):
-    """Convert string index to int index."""
+    """
+    Convert string index to int index.
+    """
     series.index = series.index.str[1:].astype(int)
     return series
 
 
 def maybe_convert_path(path):
-    """Convert a pathlib.Path to a string."""
+    """
+    Convert a pathlib.Path to a string.
+    """
     return str(path.resolve()) if isinstance(path, Path) else path
 
 
@@ -80,9 +86,9 @@ def run_cbc(
     Solve a linear problem using the cbc solver.
 
     The function reads the linear problem file and passes it to the cbc
-    solver. If the solution is successful it returns variable solutions and
-    constraint dual values.
-    For more information on the solver options, run 'cbc' in your shell
+    solver. If the solution is successful it returns variable solutions
+    and constraint dual values. For more information on the solver
+    options, run 'cbc' in your shell
     """
     if io_api is not None and (io_api != "lp"):
         logger.warning(
@@ -273,11 +279,11 @@ def run_highs(
     **solver_options,
 ):
     """
-    Highs solver function. Reads a linear problem file and passes it to the highs
-    solver. If the solution is feasible the function returns the objective,
-    solution and dual constraint variables. Highs must be installed for usage.
-    Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/ .
-    The full list of solver options is documented at
+    Highs solver function. Reads a linear problem file and passes it to the
+    highs solver. If the solution is feasible the function returns the
+    objective, solution and dual constraint variables. Highs must be installed
+    for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/
+    . The full list of solver options is documented at
     https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set .
 
     Some examplary options are:
@@ -700,6 +706,5 @@ def run_pips(
 ):
     """
     Solve a linear problem using the PIPS solver.
-
     """
     raise NotImplementedError("The PIPS++ solver interface is not yet implemented.")

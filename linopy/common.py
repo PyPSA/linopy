@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Linopy common module.
+
 This module contains commonly used functions.
 """
 
@@ -25,7 +26,9 @@ def _remap(array, mapping):
 
 
 def replace_by_map(ds, mapping):
-    "Replace values in a DataArray by a one-dimensional mapping."
+    """
+    Replace values in a DataArray by a one-dimensional mapping.
+    """
     return apply_ufunc(
         _remap,
         ds,
@@ -36,7 +39,9 @@ def replace_by_map(ds, mapping):
 
 
 def best_int(max_value):
-    "Get the minimal int dtype for storing values <= max_value."
+    """
+    Get the minimal int dtype for storing values <= max_value.
+    """
     for t in (np.int8, np.int16, np.int32, np.int64):
         if max_value <= np.iinfo(t).max:
             return t

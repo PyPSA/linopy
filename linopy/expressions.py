@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Linopy expressions module.
+
 This module contains definition related to affine expressions.
 """
 
@@ -58,7 +59,6 @@ class LinearExpression(Dataset):
         Data:
             coeffs   (_term) int64 3 3
             vars     (_term) int64 1 2
-
     """
 
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable")
@@ -83,7 +83,9 @@ class LinearExpression(Dataset):
     _reduce_method = None
 
     def __repr__(self):
-        """Get the string representation of the expression."""
+        """
+        Get the string representation of the expression.
+        """
         ds_string = self.to_dataset().__repr__().split("\n", 1)[1]
         ds_string = ds_string.replace("Data variables:\n", "Data:\n")
         nterm = getattr(self, "nterm", 0)
@@ -93,7 +95,9 @@ class LinearExpression(Dataset):
         )
 
     def _repr_html_(self):
-        """Get the html representation of the expression."""
+        """
+        Get the html representation of the expression.
+        """
         # return self.__repr__()
         ds_string = self.to_dataset()._repr_html_()
         ds_string = ds_string.replace("Data variables:\n", "Data:\n")
@@ -101,7 +105,9 @@ class LinearExpression(Dataset):
         return ds_string
 
     def __add__(self, other):
-        """Add a expression to others."""
+        """
+        Add a expression to others.
+        """
         if isinstance(other, variables.Variable):
             other = LinearExpression.from_tuples((1, other))
         if not isinstance(other, LinearExpression):
@@ -115,7 +121,9 @@ class LinearExpression(Dataset):
         return res
 
     def __sub__(self, other):
-        """Subtract others form expression."""
+        """
+        Subtract others form expression.
+        """
         if isinstance(other, variables.Variable):
             other = LinearExpression.from_tuples((-1, other))
         elif isinstance(other, LinearExpression):
@@ -131,17 +139,23 @@ class LinearExpression(Dataset):
         return res
 
     def __neg__(self):
-        """Get the negative of the expression."""
+        """
+        Get the negative of the expression.
+        """
         return LinearExpression(self.assign(coeffs=-self.coeffs))
 
     def __mul__(self, other):
-        """Multiply the expr by a factor."""
+        """
+        Multiply the expr by a factor.
+        """
         coeffs = other * self.coeffs
         assert coeffs.shape == self.coeffs.shape
         return LinearExpression(self.assign(coeffs=coeffs))
 
     def __rmul__(self, other):
-        """Right-multiply the expr by a factor."""
+        """
+        Right-multiply the expr by a factor.
+        """
         return self.__mul__(other)
 
     def __le__(self, rhs):
@@ -154,7 +168,9 @@ class LinearExpression(Dataset):
         return AnonymousConstraint(self, "=", rhs)
 
     def to_dataset(self):
-        """Convert the expression to a xarray.Dataset."""
+        """
+        Convert the expression to a xarray.Dataset.
+        """
         return Dataset(self)
 
     def sum(self, dims=None, drop_zeros=False):
@@ -173,7 +189,6 @@ class LinearExpression(Dataset):
         -------
         linopy.LinearExpression
             Summed expression.
-
         """
         if dims is None:
             vars = DataArray(self.vars.data.ravel(), dims="_term")
@@ -199,7 +214,8 @@ class LinearExpression(Dataset):
 
     def from_tuples(*tuples, chunk=None):
         """
-        Create a linear expression by using tuples of coefficients and variables.
+        Create a linear expression by using tuples of coefficients and
+        variables.
 
         Parameters
         ----------
@@ -250,7 +266,6 @@ class LinearExpression(Dataset):
         Returns
         -------
         Grouped linear expression.
-
         """
         groups = self.groupby(group)
 
@@ -273,23 +288,31 @@ class LinearExpression(Dataset):
 
     @property
     def nterm(self):
-        """Get the number of terms in the linear expression."""
+        """
+        Get the number of terms in the linear expression.
+        """
         return len(self._term)
 
     @property
     def shape(self):
-        """Get the total shape of the linear expression."""
+        """
+        Get the total shape of the linear expression.
+        """
         assert self.vars.shape == self.coeffs.shape
         return self.vars.shape
 
     @property
     def size(self):
-        """Get the total size of the linear expression."""
+        """
+        Get the total size of the linear expression.
+        """
         assert self.vars.size == self.coeffs.size
         return self.vars.size
 
     def empty(self):
-        """Get whether the linear expression is empty."""
+        """
+        Get whether the linear expression is empty.
+        """
         return self.shape == (0,)
 
     def densify_terms(self):
@@ -353,7 +376,6 @@ def merge(*exprs, dim="_term"):
     Returns
     -------
     None.
-
     """
 
     if len(exprs) == 1:
@@ -380,12 +402,16 @@ class AnonymousConstraint:
     __slots__ = ("lhs", "sign", "rhs")
 
     def __init__(self, lhs, sign, rhs):
-        """Initialize a anonymous constraint."""
+        """
+        Initialize a anonymous constraint.
+        """
         self.lhs, self.rhs = xr.align(lhs, DataArray(rhs))
         self.sign = DataArray(sign)
 
     def __repr__(self):
-        """Get the string representation of the expression."""
+        """
+        Get the string representation of the expression.
+        """
         lhs_string = self.lhs.to_dataset().__repr__()  # .split("\n", 1)[1]
         lhs_string = lhs_string.split("Data variables:\n", 1)[1]
         lhs_string = lhs_string.replace("    coeffs", "coeffs")

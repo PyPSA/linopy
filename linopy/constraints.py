@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Linopy constraints module.
+
 This module contains implementations for the Constraint{s} class.
 """
 
@@ -24,8 +25,8 @@ class Constraint(DataArray):
     """
     Constraint container for storing constraint labels.
 
-    The Constraint class is a subclass of xr.DataArray hence most xarray functions
-    can be applied to it.
+    The Constraint class is a subclass of xr.DataArray hence most xarray
+    functions can be applied to it.
     """
 
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
@@ -47,7 +48,9 @@ class Constraint(DataArray):
     _reduce_method = None
 
     def __repr__(self):
-        """Get the string representation of the constraints."""
+        """
+        Get the string representation of the constraints.
+        """
         data_string = (
             "Constraint labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
         )
@@ -59,21 +62,27 @@ class Constraint(DataArray):
         )
 
     def _repr_html_(self):
-        """Get the html representation of the variables."""
+        """
+        Get the html representation of the variables.
+        """
         # return self.__repr__()
         data_string = self.to_array()._repr_html_()
         data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
         return data_string
 
     def to_array(self):
-        """Convert the variable array to a xarray.DataArray."""
+        """
+        Convert the variable array to a xarray.DataArray.
+        """
         return DataArray(self)
 
     @property
     def coeffs(self):
         """
         Get the left-hand-side coefficients of the constraint.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the constraint.")
@@ -99,7 +108,9 @@ class Constraint(DataArray):
     def vars(self):
         """
         Get the left-hand-side variables of the constraint.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the constraint.")
@@ -125,7 +136,9 @@ class Constraint(DataArray):
     def lhs(self):
         """
         Get the left-hand-side linear expression of the constraint.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         return LinearExpression(Dataset({"coeffs": self.coeffs, "vars": self.vars}))
 
@@ -142,7 +155,9 @@ class Constraint(DataArray):
     def sign(self):
         """
         Get the signs of the constraint.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the constraint.")
@@ -162,7 +177,9 @@ class Constraint(DataArray):
     def rhs(self):
         """
         Get the right hand side constants of the constraint.
-        The function raises an error in case no model is set as a reference.
+
+        The function raises an error in case no model is set as a
+        reference.
         """
         if self.model is None:
             raise AttributeError("No reference model is assigned to the constraint.")
@@ -220,7 +237,9 @@ class Constraints:
     ]
 
     def __repr__(self):
-        """Return a string representation of the linopy model."""
+        """
+        Return a string representation of the linopy model.
+        """
         r = "linopy.model.Constraints"
         line = "-" * len(r)
         r += f"\n{line}\n\n"
@@ -267,7 +286,9 @@ class Constraints:
         sign: DataArray,
         rhs: DataArray,
     ):
-        """Add constraint `name`."""
+        """
+        Add constraint `name`.
+        """
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("coeffs", coeffs, name)
         self._merge_inplace("vars", vars, name, fill_value=-1)
@@ -275,13 +296,17 @@ class Constraints:
         self._merge_inplace("rhs", rhs, name)
 
     def remove(self, name):
-        """Remove constraint `name` from the constraints."""
+        """
+        Remove constraint `name` from the constraints.
+        """
         for attr in self.dataset_attrs:
             setattr(self, attr, getattr(self, attr).drop_vars(name))
 
     @property
     def coefficientrange(self):
-        """Coefficient range of the constraint."""
+        """
+        Coefficient range of the constraint.
+        """
         return (
             xr.concat(
                 [self.coeffs.min(), self.coeffs.max()],
@@ -294,24 +319,31 @@ class Constraints:
     @property
     def ncons(self):
         """
-        Get the number all constraints which were at some point added to the model.
+        Get the number all constraints which were at some point added to the
+        model.
+
         These also include constraints with missing labels.
         """
         return self.ravel("labels", filter_missings=True).shape[0]
 
     @property
     def inequalities(self):
-        "Get the subset of constraints which are purely inequalities."
+        """
+        Get the subset of constraints which are purely inequalities.
+        """
         return self[[n for n, s in self.sign.items() if s in ("<=", ">=")]]
 
     @property
     def equalities(self):
-        "Get the subset of constraints which are purely equalities."
+        """
+        Get the subset of constraints which are purely equalities.
+        """
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
     def sanitize_missings(self):
         """
         Set constraints labels to -1 if either rhs, coeffs or vars are missing.
+
         Also set vars to -1 where labels are -1.
         """
         for name in self:
@@ -329,12 +361,12 @@ class Constraints:
 
         Let N be the number of blocks.
         The following cases are considered:
+
             * where are all vars are -1, the block is -1
             * where are all vars are 0, the block is 0
             * where all vars are n, the block is n
             * where vars are n or 0 (both present), the block is n
             * N+1 otherwise
-
         """
         N = block_map.max()
         var_blocks = replace_by_map(self.vars, block_map)
@@ -359,7 +391,8 @@ class Constraints:
 
     def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
         """
-        Create an generator which iterates over all arrays in `key` and flattens them.
+        Create an generator which iterates over all arrays in `key` and
+        flattens them.
 
         Parameters
         ----------
@@ -378,7 +411,6 @@ class Constraints:
         Yields
         ------
         flat : np.array/dask.array
-
         """
         if isinstance(key, str):
             ds = getattr(self, key)
@@ -408,7 +440,8 @@ class Constraints:
 
     def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
         """
-        Ravel and concate all arrays in `key` while aligning to `broadcast_like`.
+        Ravel and concate all arrays in `key` while aligning to
+        `broadcast_like`.
 
         Parameters
         ----------
@@ -428,7 +461,6 @@ class Constraints:
         -------
         flat
             One dimensional data with all values in `key`.
-
         """
         res = list(self.iter_ravel(key, broadcast_like, filter_missings))
         res = np.concatenate(res)

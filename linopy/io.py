@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Module containing all import/export functionalities."""
+"""
+Module containing all import/export functionalities.
+"""
 import logging
 import os
 import shutil
@@ -23,24 +25,33 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 
 # IO functions
 def as_str(arr):
-    "Convert numpy array to str typed array."
+    """
+    Convert numpy array to str typed array.
+    """
     return arr.astype(str).astype(object)
 
 
 def with_sign(arr):
-    "Convert a numpy array of dtype float to str typed array with +/- signs."
+    """
+    Convert a numpy array of dtype float to str typed array with +/- signs.
+    """
     return np.where(arr >= 0, "+", "").astype(object) + as_str(arr)
 
 
 def fill_by(target_shape, where, fill, other=""):
-    "Create array of `target_shape` with values from `fill` where `where` is True."
+    """
+    Create array of `target_shape` with values from `fill` where `where` is
+    True.
+    """
     res = np.full(target_shape, other).astype(object)
     res[where] = fill
     return res
 
 
 def objective_to_file(m, f, log=False):
-    """Write out the objective of a model to a lp file."""
+    """
+    Write out the objective of a model to a lp file.
+    """
     if log:
         logger.info("Writing objective.")
 
@@ -55,7 +66,9 @@ def objective_to_file(m, f, log=False):
 
 
 def constraints_to_file(m, f, log=False):
-    """Write out the constraints of a model to a lp file."""
+    """
+    Write out the constraints of a model to a lp file.
+    """
     f.write("\n\ns.t.\n\n")
     m.constraints.sanitize_missings()
     kwargs = dict(broadcast_like="vars", filter_missings=True)
@@ -87,7 +100,9 @@ def constraints_to_file(m, f, log=False):
 
 
 def bounds_to_file(m, f, log=False):
-    """Write out variables of a model to a lp file."""
+    """
+    Write out variables of a model to a lp file.
+    """
     f.write("\n\nbounds\n\n")
     lower = m.non_binaries.iter_ravel("lower", filter_missings=True)
     upper = m.non_binaries.iter_ravel("upper", filter_missings=True)
@@ -104,7 +119,9 @@ def bounds_to_file(m, f, log=False):
 
 
 def binaries_to_file(m, f, log=False):
-    """Write out binaries of a model to a lp file."""
+    """
+    Write out binaries of a model to a lp file.
+    """
     f.write("\n\nbinary\n\n")
     labels = m.binaries.iter_ravel("labels", filter_missings=True)
 
@@ -122,7 +139,9 @@ def binaries_to_file(m, f, log=False):
 
 
 def to_file(m, fn):
-    """Write out a model to a lp file."""
+    """
+    Write out a model to a lp file.
+    """
     fn = m.get_problem_file(fn)
 
     if os.path.exists(fn):
@@ -146,7 +165,9 @@ def to_file(m, fn):
 
 
 def to_block_files(m, fn):
-    "Write out the linopy model to a block structured output."
+    """
+    Write out the linopy model to a block structured output.
+    """
     if fn is None:
         fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
 
@@ -228,7 +249,9 @@ def to_block_files(m, fn):
 
 
 def non_bool_dict(d):
-    """Convert bool to int for netCDF4 storing"""
+    """
+    Convert bool to int for netCDF4 storing.
+    """
     return {k: v if not isinstance(v, bool) else int(v) for k, v in d.items()}
 
 
@@ -244,7 +267,6 @@ def to_netcdf(m, *args, **kwargs):
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
-
     """
 
     def get_and_rename(m, attr, prefix=""):
@@ -283,7 +305,6 @@ def read_netcdf(path, **kwargs):
     Returns
     -------
     m : linopy.Model
-
     """
     from linopy.model import Constraints, LinearExpression, Model, Variables
 
