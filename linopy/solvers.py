@@ -21,6 +21,9 @@ if sub.run(["which", "glpsol"], stdout=sub.DEVNULL).returncode == 0:
 if sub.run(["which", "cbc"], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append("cbc")
 
+if sub.run(["which", "highs"], stdout=sub.DEVNULL).returncode == 0:
+    available_solvers.append("highs")
+
 try:
     import gurobipy
 
@@ -253,6 +256,112 @@ def run_glpk(
         status=status,
         termination_condition=termination_condition,
         solution=solution,
+        dual=dual,
+        objective=objective,
+    )
+
+
+def run_highs(
+    Model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    **solver_options,
+):
+    """
+    Highs solver function. Reads a linear problem file and passes it to the highs
+    solver. If the solution is feasible the function returns the objective,
+    solution and dual constraint variables. Highs must be installed for usage.
+    Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/ .
+    The full list of solver options is documented at
+    https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set .
+
+    Some examplary options are:
+
+        * presolve : "choose" by default - "on"/"off" are alternatives.
+        * solver :"choose" by default - "simplex"/"ipm" are alternatives.
+        * parallel : "choose" by default - "on"/"off" are alternatives.
+        * time_limit : inf by default.
+
+    Returns
+    -------
+    status : string,
+        "ok" or "warning"
+    termination_condition : string,
+        Contains "optimal", "infeasible",
+    variables_sol : series
+    constraints_dual : series
+    objective : float
+    """
+    Model.to_file(problem_fn)
+
+    options_fn = Model.solver_dir / "highs_options.txt"
+    hard_coded_options = {
+        "solution_file": solution_fn,
+        "write_solution_to_file": True,
+        "write_solution_style": 1,
+    }
+    solver_options.update(hard_coded_options)
+
+    if log_fn is not None:
+        solver_options["log_file"] = log_fn
+
+    method = solver_options.pop("method", "ipm")
+
+    with open(options_fn, "w") as fn:
+        fn.write("\n".join([f"{k} = {v}" for k, v in solver_options.items()]))
+
+    command = f"highs --model_file {problem_fn} "
+    if warmstart_fn:
+        logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
+    command += f"--solver {method} --options_file {options_fn}"
+
+    p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
+    for line in iter(p.stdout.readline, b""):
+        line = line.decode()
+
+        if line.startswith("Model   status"):
+            model_status = line[len("Model   status      : ") : -1].lower()
+            if "optimal" in model_status:
+                status = "ok"
+                termination_condition = model_status
+            elif "infeasible" in model_status:
+                status = "warning"
+                termination_condition = model_status
+            else:
+                status = "warning"
+                termination_condition = model_status
+
+        if line.startswith("Objective value"):
+            objective = float(line[len("Objective value     :  ") :])
+
+        print(line, end="")
+
+    p.stdout.close()
+    p.wait()
+
+    os.remove(options_fn)
+
+    f = open(solution_fn, "rb")
+    f.readline()
+    trimmed = re.sub(rb"\*\*\s+", b"", f.read())
+    sol, sentinel, dual = trimmed.partition(bytes("Rows\n", "utf-8"))
+    f.close()
+
+    sol = pd.read_fwf(io.BytesIO(sol))
+    sol = sol.set_index("Name")["Primal"].pipe(set_int_index)
+
+    dual = pd.read_fwf(io.BytesIO(dual))["Dual"]
+    dual.index = Model.constraints.ravel("labels", filter_missings=True)
+
+    return dict(
+        status=status,
+        termination_condition=termination_condition,
+        solution=sol,
         dual=dual,
         objective=objective,
     )
