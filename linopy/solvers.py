@@ -283,6 +283,7 @@ def run_highs(
     highs solver. If the solution is feasible the function returns the
     objective, solution and dual constraint variables. Highs must be installed
     for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/
+
     . The full list of solver options is documented at
     https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set .
 
@@ -305,16 +306,17 @@ def run_highs(
     """
     Model.to_file(problem_fn)
 
+    if log_fn is None:
+        log_fn = Model.solver_dir / "highs.log"
+
     options_fn = Model.solver_dir / "highs_options.txt"
     hard_coded_options = {
         "solution_file": solution_fn,
         "write_solution_to_file": True,
         "write_solution_style": 1,
+        "log_file": log_fn,
     }
     solver_options.update(hard_coded_options)
-
-    if log_fn is not None:
-        solver_options["log_file"] = log_fn
 
     method = solver_options.pop("method", "ipm")
 
