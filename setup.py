@@ -47,6 +47,7 @@ setup(
             "nbsphinx-link",
             "gurobipy",
             "ipykernel",
+            "matplotlib",
         ],
         "dev": ["pytest", "pytest-cov", "pre-commit"],
     },
