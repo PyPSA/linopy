@@ -25,10 +25,7 @@ author = "Fabian Hofmann"
 version = pkg_resources.get_distribution("linopy").version
 if "dev" in version:
     # remove the dev description and reduce by minor one release
-    release = version.split(".dev")[0]
-    ids = release.split(".")
-    ids[2] = str(int(ids[2]) - 1)
-    release = ".".join(ids)
+    release = "master"
 else:
     release = version
 
