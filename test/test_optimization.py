@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Mar 18 08:49:08 2021
+Created on Thu Mar 18 08:49:08 2021.
 
 @author: fabian
 """
@@ -9,6 +9,7 @@ Created on Thu Mar 18 08:49:08 2021
 import numpy as np
 import pandas as pd
 import pytest
+from xarray.testing import assert_equal
 
 from linopy import Model
 from linopy.solvers import available_solvers
@@ -27,6 +28,20 @@ def model():
 
     m.add_constraints(2 * x + 6 * y, ">=", 10)
     m.add_constraints(4 * x + 2 * y, ">=", 3)
+
+    m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.fixture
+def model_anonymous_constraint():
+    m = Model(chunk=None)
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x + 6 * y >= 10)
+    m.add_constraints(4 * x + 2 * y >= 3)
 
     m.add_objective(2 * y + x)
     return m
@@ -130,6 +145,16 @@ def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model.objective_value, 3.3)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api):
+    status, condition = model_anonymous_constraint.solve(solver, io_api=io_api)
+    assert status == "ok"
+    assert np.isclose(model_anonymous_constraint.objective_value, 3.3)
+
+    model.solve(solver, io_api=io_api)
+    assert_equal(model.solution, model_anonymous_constraint.solution)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

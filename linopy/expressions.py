@@ -162,7 +162,7 @@ class LinearExpression(Dataset):
         return AnonymousConstraint(self, "<=", rhs)
 
     def __ge__(self, rhs):
-        return AnonymousConstraint(self, "<=", rhs)
+        return AnonymousConstraint(self, ">=", rhs)
 
     def __eq__(self, rhs):
         return AnonymousConstraint(self, "=", rhs)
