@@ -86,7 +86,7 @@ This package is published under license GNU Public License GPLv3
    :maxdepth: 2
    :caption: Getting started
 
-   getting-started
+   create-a-model
    solvers
 
 .. toctree::
