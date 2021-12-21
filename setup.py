@@ -26,8 +26,6 @@ setup(
     packages=find_packages(exclude=["doc", "test"]),
     include_package_data=True,
     python_requires="~=3.7",
-    use_scm_version={"write_to": "linopy/version.py"},
-    setup_requires=["setuptools_scm"],
     install_requires=[
         "numpy",
         "scipy",
