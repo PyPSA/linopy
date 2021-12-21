@@ -9,5 +9,6 @@ linopy/version.py
 dist/
 build/
 doc/_build
+doc/generated
 doc/api
 .vscode

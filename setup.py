@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 10 11:04:43 2021
+Created on Wed Mar 10 11:04:43 2021.
 
 @author: fabulous
 """
@@ -26,8 +26,6 @@ setup(
     packages=find_packages(exclude=["doc", "test"]),
     include_package_data=True,
     python_requires="~=3.7",
-    use_scm_version={"write_to": "linopy/version.py"},
-    setup_requires=["setuptools_scm"],
     install_requires=[
         "numpy",
         "scipy",
@@ -43,11 +41,11 @@ setup(
         "docs": [
             "ipython",
             "numpydoc",
-            "sphinx-automodapi",
             "sphinx",
             "sphinx_rtd_theme",
             "nbsphinx",
             "nbsphinx-link",
+            "gurobipy",
         ],
         "dev": ["pytest", "pytest-cov", "pre-commit"],
     },

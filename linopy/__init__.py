@@ -10,3 +10,4 @@ from linopy import model
 from linopy.expressions import merge
 from linopy.io import read_netcdf
 from linopy.model import LinearExpression, Model, Variable, available_solvers
+from linopy.version import version as __version__

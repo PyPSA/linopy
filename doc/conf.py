@@ -23,6 +23,14 @@ author = "Fabian Hofmann"
 
 # The full version, including alpha/beta/rc tags
 version = pkg_resources.get_distribution("linopy").version
+if "dev" in version:
+    # remove the dev description and reduce by minor one release
+    release = version.split(".dev")[0]
+    ids = release.split(".")
+    ids[2] = str(int(ids[2]) - 1)
+    release = ".".join(ids)
+else:
+    release = version
 
 
 # -- General configuration ---------------------------------------------------
@@ -31,9 +39,10 @@ version = pkg_resources.get_distribution("linopy").version
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    "sphinx.ext.autodoc",
+    "sphinx.ext.autodoc",  # Core Sphinx library for auto html doc generation from docstrings
+    "sphinx.ext.autosummary",  # Create neat summary tables for modules/classes/methods etc
+    "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
-    "sphinx_automodapi.automodapi",  # for api reference
     "nbsphinx",
     "nbsphinx_link",
     "sphinx.ext.imgconverter",  # for SVG conversion
@@ -60,6 +69,32 @@ source_suffix = {
     ".txt": "markdown",
     ".md": "markdown",
 }
+
+# Autosummary
+
+autosummary_generate = True
+autodoc_typehints = "none"
+
+# Napoleon configurations
+
+napoleon_google_docstring = False
+napoleon_numpy_docstring = True
+napoleon_use_param = False
+napoleon_use_rtype = False
+napoleon_preprocess_types = True
+
+
+# -- Options for nbsphinx -------------------------------------------------
+nbsphinx_prolog = """
+{% set docname = env.doc2path(env.docname, base=None).replace("nblink","ipynb") %}
+.. note::
+
+    You can `download <https://github.com/pypsa/linopy/tree/v{{ env.config.release|e }}/examples/{{ docname }}>`_ this example as a Jupyter notebook
+    or start it `in interactive mode <https://mybinder.org/v2/gh/PyPSA/linopy/v{{ env.config.release|e }}?filepath=examples/{{ docname|e }}>`_.
+
+"""
+
+nbsphinx_allow_errors = True
 
 # -- Options for HTML output -------------------------------------------------
 
