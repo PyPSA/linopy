@@ -46,6 +46,7 @@ setup(
             "nbsphinx",
             "nbsphinx-link",
             "gurobipy",
+            "ipykernel",
         ],
         "dev": ["pytest", "pytest-cov", "pre-commit"],
     },
