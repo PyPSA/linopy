@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 10 11:04:43 2021
+Created on Wed Mar 10 11:04:43 2021.
 
 @author: fabulous
 """
@@ -43,7 +43,6 @@ setup(
         "docs": [
             "ipython",
             "numpydoc",
-            "sphinx-automodapi",
             "sphinx",
             "sphinx_rtd_theme",
             "nbsphinx",

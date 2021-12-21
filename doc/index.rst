@@ -3,6 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
+.. module:: linopy
+
 linopy: Linear optimization with N-D labeled variables
 ======================================================
 
@@ -79,32 +81,18 @@ This package is published under license GNU Public License GPLv3
    :target: https://www.gnu.org/licenses/gpl-3.0
 
 
-
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Examples
+   :caption: Getting started
 
    getting-started
+   solvers
 
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: API Reference
+   :caption: References
 
-   api-model
-   api-variables
-   api-expressions
-   api-constraints
-   api-common
-   api-solvers
-   api-io
-   api-eval
-
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
-   :caption: Release Notes
-
+   api
    release_notes

@@ -1,5 +1,5 @@
-Installation
-============
+Installing solvers
+==================
 
 
 HiGHS
@@ -39,19 +39,19 @@ After the build, add the paths of executables and library to your `.bashrc`:
 
 
 
-PIPS-IMP++
-----------
+.. PIPS-IMP++
+.. ----------
 
-**NOT IMPLEMENTED YET**
-The full installation guide can be found at https://github.com/NCKempke/PIPS-IPMpp. The following commands comprize all important installation steps.
+.. **NOT IMPLEMENTED YET**
+.. The full installation guide can be found at https://github.com/NCKempke/PIPS-IPMpp. The following commands comprize all important installation steps.
 
-.. code:: bash
+.. .. code:: bash
 
-    cd where/pips/should/be/installed
-    sudo apt install wget cmake libboost-all-dev  libscalapack-mpich2.1 libblas-dev liblapack-dev
-    git clone https://github.com/NCKempke/PIPS-IPMpp.git
-    cd PIPS-IPMpp
-    mkdir build
-    cd build
-    cmake .. -DCMAKE_BUILD_TYPE=RELEASE
-    make
+..     cd where/pips/should/be/installed
+..     sudo apt install wget cmake libboost-all-dev  libscalapack-mpich2.1 libblas-dev liblapack-dev
+..     git clone https://github.com/NCKempke/PIPS-IPMpp.git
+..     cd PIPS-IPMpp
+..     mkdir build
+..     cd build
+..     cmake .. -DCMAKE_BUILD_TYPE=RELEASE
+..     make
