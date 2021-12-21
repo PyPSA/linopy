@@ -23,6 +23,14 @@ author = "Fabian Hofmann"
 
 # The full version, including alpha/beta/rc tags
 version = pkg_resources.get_distribution("linopy").version
+if "dev" in version:
+    # remove the dev description and reduce by minor one release
+    release = version.split(".dev")[0]
+    ids = release.split(".")
+    ids[2] = str(int(ids[2]) - 1)
+    release = ".".join(ids)
+else:
+    release = version
 
 
 # -- General configuration ---------------------------------------------------
@@ -81,8 +89,8 @@ nbsphinx_prolog = """
 {% set docname = env.doc2path(env.docname, base=None).replace("nblink","ipynb") %}
 .. note::
 
-    You can `download <https://github.com/pypsa/linopy/tree/v{{ env.config.version|e }}/examples/{{ docname }}>`_ this example as a Jupyter notebook
-    or start it `in interactive mode <https://mybinder.org/v2/gh/PyPSA/linopy/v{{ env.config.version|e }}?filepath=examples/{{ docname|e }}>`_.
+    You can `download <https://github.com/pypsa/linopy/tree/v{{ env.config.release|e }}/examples/{{ docname }}>`_ this example as a Jupyter notebook
+    or start it `in interactive mode <https://mybinder.org/v2/gh/PyPSA/linopy/v{{ env.config.release|e }}?filepath=examples/{{ docname|e }}>`_.
 
 """
 

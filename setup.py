@@ -45,6 +45,7 @@ setup(
             "sphinx_rtd_theme",
             "nbsphinx",
             "nbsphinx-link",
+            "gurobipy",
         ],
         "dev": ["pytest", "pytest-cov", "pre-commit"],
     },
