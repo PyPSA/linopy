@@ -5,6 +5,12 @@ Upcoming Release
 ----------------
 
 
+Version 0.0.6
+-------------
+
+* Hot fix: Assign ``linopy.__version__`` attribute
+* Hot fix: Fix sign assignment in conversion from ``LinearExpression`` to ``AnonymousConstraint``.
+
 Version 0.0.5
 -------------
 
