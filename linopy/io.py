@@ -86,6 +86,9 @@ def constraints_to_file(m, f, log=False):
 
     for (l, v, c, l_, s_, r_) in iterate:
 
+        if not c.size:
+            continue
+
         diff_con = l[:-1] != l[1:]
         new_con_b = concatenate([asarray([True]), diff_con])
         end_of_con_b = concatenate([diff_con, asarray([True])])
@@ -113,6 +116,10 @@ def bounds_to_file(m, f, log=False):
         iterate = tqdm(iterate, "Writing variables.", len(m.non_binaries.labels))
 
     for (lo, l, up) in iterate:
+
+        if not l.size:
+            continue
+
         bounds = with_sign(lo) + " <= x" + as_str(l) + " <= " + with_sign(up)
         f.write("\n".join(bounds))
         f.write("\n")
@@ -133,6 +140,10 @@ def binaries_to_file(m, f, log=False):
         iterate = tqdm(iterate, "Writing binaries.", len(m.binaries.labels))
 
     for l in iterate:
+
+        if not l.size:
+            continue
+
         bounds = "x" + as_str(l)
         f.write("\n".join(bounds))
         f.write("\n")

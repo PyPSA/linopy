@@ -4,9 +4,14 @@ Release Notes
 Upcoming Release
 ----------------
 
-* Add ``get_name_by_label`` function to ``Variables`` and ``Constraints`` class. It retrieves the name of the variable/constraint containing the passed integer label. This is helpful for debugging.
-* The `lhs` accessor for the ``Constraint`` class was fixed. This raised an error before as the `_term` dimension was not adjusted adequately.
+**New Features**
 
+* Add ``get_name_by_label`` function to ``Variables`` and ``Constraints`` class. It retrieves the name of the variable/constraint containing the passed integer label. This is helpful for debugging.
+
+**Bug Fixes**
+
+* The `lhs` accessor for the ``Constraint`` class was fixed. This raised an error before as the `_term` dimension was not adjusted adequately.
+* Variables and constraints which are fully masked are now skipped in the lp-file writing. This lead to a error before.
 
 Version 0.0.6
 -------------
