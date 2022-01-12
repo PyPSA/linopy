@@ -5,6 +5,7 @@ Upcoming Release
 ----------------
 
 * Add ``get_name_by_label`` function to ``Variables`` and ``Constraints`` class. It retrieves the name of the variable/constraint containing the passed integer label. This is helpful for debugging.
+* The `lhs` accessor for the ``Constraint`` class was fixed. This raised an error before as the `_term` dimension was not adjusted adequately.
 
 
 Version 0.0.6

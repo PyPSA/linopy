@@ -140,7 +140,9 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        return LinearExpression(Dataset({"coeffs": self.coeffs, "vars": self.vars}))
+        coeffs = self.coeffs.rename({self.name + "_term": "_term"})
+        vars = self.vars.rename({self.name + "_term": "_term"})
+        return LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
 
     @lhs.setter
     def lhs(self, value):
