@@ -12,3 +12,4 @@ doc/_build
 doc/generated
 doc/api
 .vscode
+Highs.log
