@@ -435,6 +435,33 @@ class Variables:
         """
         return self[self._non_binary_variables]
 
+    def get_name_by_label(self, label):
+        """
+        Get the variable name of the variable containing the passed label.
+
+        Parameters
+        ----------
+        label : int
+            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
+            variable label.
+
+        Raises
+        ------
+        ValueError
+            If label is not contained by any variable.
+
+        Returns
+        -------
+        name : str
+            Name of the containing variable.
+        """
+        if not isinstance(label, (float, int)) or label < 0:
+            raise ValueError("Label must be a positive number.")
+        for name, labels in self.labels.items():
+            if label in labels:
+                return name
+        raise ValueError(f"No variable found containing the label {label}.")
+
     def iter_ravel(self, key, filter_missings=False):
         """
         Create an generator which iterates over all arrays in `key` and

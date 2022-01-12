@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov  2 22:38:48 2021
+Created on Tue Nov  2 22:38:48 2021.
 
 @author: fabian
 """
@@ -121,9 +121,9 @@ def test_constraint_matrix_masked_variables():
     """
     Test constraint matrix with missing variables.
 
-    In this case the variables that are used in the constraints are missing.
-    The matrix shoud not be built for constraints which have variables which
-    are missing.
+    In this case the variables that are used in the constraints are
+    missing. The matrix shoud not be built for constraints which have
+    variables which are missing.
     """
     # now with missing variables
     m = Model()
@@ -173,3 +173,21 @@ def test_constraint_matrix_masked_constraints_and_variables():
 
     A = m.constraints.to_matrix(filter_missings=False)
     assert A.shape == (m._cCounter, m._xCounter)
+
+
+def test_get_name_by_label():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+    y = m.add_variables(coords=[range(10)])
+
+    m.add_constraints(x + y <= 10, name="first")
+    m.add_constraints(x - y >= 5, name="second")
+
+    assert m.constraints.get_name_by_label(4) == "first"
+    assert m.constraints.get_name_by_label(14) == "second"
+
+    with pytest.raises(ValueError):
+        m.constraints.get_name_by_label(30)
+
+    with pytest.raises(ValueError):
+        m.constraints.get_name_by_label("first")

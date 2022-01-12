@@ -355,6 +355,33 @@ class Constraints:
 
             self.labels[name] = self.labels[name].where(no_missing, -1)
 
+    def get_name_by_label(self, label):
+        """
+        Get the constraint name of the constraint containing the passed label.
+
+        Parameters
+        ----------
+        label : int
+            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
+            constraint label.
+
+        Raises
+        ------
+        ValueError
+            If label is not contained by any constraint.
+
+        Returns
+        -------
+        name : str
+            Name of the containing constraint.
+        """
+        if not isinstance(label, (float, int)) or label < 0:
+            raise ValueError("Label must be a positive number.")
+        for name, labels in self.labels.items():
+            if label in labels:
+                return name
+        raise ValueError(f"No constraint found containing the label {label}.")
+
     def get_blocks(self, block_map):
         """
         Get a dataset of same shape as constraints.labels with block values.

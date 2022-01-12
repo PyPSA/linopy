@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov  2 22:36:38 2021
+Created on Tue Nov  2 22:36:38 2021.
 
 @author: fabian
 """
@@ -112,7 +112,7 @@ def test_variable_type_preservation():
     assert isinstance(x.fillna(-1), linopy.variables.Variable)
 
 
-def test_constraint_getter_without_model():
+def test_variable_getter_without_model():
 
     data = xr.DataArray(range(10)).rename("var")
     v = linopy.variables.Variable(data)
@@ -121,3 +121,18 @@ def test_constraint_getter_without_model():
         v.upper
     with pytest.raises(AttributeError):
         v.lower
+
+
+def test_get_name_by_label():
+    m = Model()
+    m.add_variables(coords=[range(10)], name="x")
+    m.add_variables(coords=[range(10)], name="asd")
+
+    assert m.variables.get_name_by_label(4) == "x"
+    assert m.variables.get_name_by_label(14) == "asd"
+
+    with pytest.raises(ValueError):
+        m.variables.get_name_by_label(30)
+
+    with pytest.raises(ValueError):
+        m.variables.get_name_by_label("asd")
