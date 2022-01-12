@@ -4,6 +4,9 @@ Release Notes
 Upcoming Release
 ----------------
 
+Version 0.0.7
+-------------
+
 **New Features**
 
 * Add ``get_name_by_label`` function to ``Variables`` and ``Constraints`` class. It retrieves the name of the variable/constraint containing the passed integer label. This is helpful for debugging.
