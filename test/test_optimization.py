@@ -221,7 +221,9 @@ def test_infeasible_model(model, solver, io_api):
             model.compute_set_of_infeasible_constraints()
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if p[0] != "glpk"])
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["glpk", "cplex"]]
+)
 def test_model_with_inf(model_with_inf, solver, io_api):
     status, condition = model_with_inf.solve(solver, io_api=io_api)
     assert condition == "optimal"
