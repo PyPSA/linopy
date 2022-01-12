@@ -62,6 +62,22 @@ def model_chunked():
 
 
 @pytest.fixture
+def model_with_inf():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(coords=[lower.index], name="x", binary=True)
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(1 * x, "<=", np.inf)
+
+    m.objective = 2 * x + y
+
+    return m
+
+
+@pytest.fixture
 def milp_model():
     m = Model()
 
@@ -203,6 +219,14 @@ def test_infeasible_model(model, solver, io_api):
     else:
         with pytest.raises(NotImplementedError):
             model.compute_set_of_infeasible_constraints()
+
+
+@pytest.mark.parametrize("solver,io_api", [p for p in params if p[0] != "glpk"])
+def test_model_with_inf(model_with_inf, solver, io_api):
+    status, condition = model_with_inf.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (model_with_inf.solution.x == 0).all()
+    assert (model_with_inf.solution.y == 10).all()
 
 
 @pytest.mark.parametrize("solver,io_api", params)
