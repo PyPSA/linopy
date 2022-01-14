@@ -4,6 +4,15 @@ Release Notes
 Upcoming Release
 ----------------
 
+**New Features**
+
+* Writing out the LP was further sped up.
+* The LP file writing for problems with "-0.0" coefficients was fixed.
+
+**Breaking changes**
+
+* the function ``as_str`` was replaced by ``int_to_str`` and ``float_to_str``.
+
 Version 0.0.7
 -------------
 

@@ -24,18 +24,23 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 
 
 # IO functions
-def as_str(arr):
+def int_to_str(arr):
     """
     Convert numpy array to str typed array.
     """
-    return arr.astype(str).astype(object)
+    convert = np.frompyfunc(lambda i: "%i" % i, 1, 1)
+    return convert(arr)
 
 
-def with_sign(arr):
+def float_to_str(arr, ensure_sign=True):
     """
-    Convert a numpy array of dtype float to str typed array with +/- signs.
+    Convert numpy array to str typed array.
     """
-    return np.where(arr >= 0, "+", "").astype(object) + as_str(arr)
+    if ensure_sign:
+        convert = np.frompyfunc(lambda f: "%+f" % f, 1, 1)
+    else:
+        convert = np.frompyfunc(lambda f: "%f" % f, 1, 1)
+    return convert(arr)
 
 
 def fill_by(target_shape, where, fill, other=""):
@@ -61,7 +66,7 @@ def objective_to_file(m, f, log=False):
     nnz = vars != -1
     coeffs, vars = coeffs[nnz], vars[nnz]
 
-    objective = with_sign(coeffs) + " x" + as_str(vars)
+    objective = float_to_str(coeffs) + " x" + int_to_str(vars)
     f.write("\n".join(objective))
 
 
@@ -93,10 +98,10 @@ def constraints_to_file(m, f, log=False):
         new_con_b = concatenate([asarray([True]), diff_con])
         end_of_con_b = concatenate([diff_con, asarray([True])])
 
-        l = fill_by(v.shape, new_con_b, "\nc" + as_str(l_) + ":\n")
-        s = fill_by(v.shape, end_of_con_b, "\n" + as_str(s_) + "\n")
-        r = fill_by(v.shape, end_of_con_b, as_str(r_))
-        constraints = l + with_sign(c) + " x" + as_str(v) + s + r
+        l = fill_by(v.shape, new_con_b, "\nc" + int_to_str(l_) + ":\n")
+        s = fill_by(v.shape, end_of_con_b, "\n" + s_.astype(object) + "\n")
+        r = fill_by(v.shape, end_of_con_b, float_to_str(r_, ensure_sign=False))
+        constraints = l + float_to_str(c) + " x" + int_to_str(v) + s + r
 
         f.write("\n".join(constraints))
         f.write("\n")
@@ -120,7 +125,7 @@ def bounds_to_file(m, f, log=False):
         if not l.size:
             continue
 
-        bounds = with_sign(lo) + " <= x" + as_str(l) + " <= " + with_sign(up)
+        bounds = float_to_str(lo) + " <= x" + int_to_str(l) + " <= " + float_to_str(up)
         f.write("\n".join(bounds))
         f.write("\n")
 
@@ -144,7 +149,7 @@ def binaries_to_file(m, f, log=False):
         if not l.size:
             continue
 
-        bounds = "x" + as_str(l)
+        bounds = "x" + int_to_str(l)
         f.write("\n".join(bounds))
         f.write("\n")
 
