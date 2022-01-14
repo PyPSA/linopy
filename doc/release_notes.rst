@@ -4,6 +4,8 @@ Release Notes
 Upcoming Release
 ----------------
 
+Version 0.0.8
+-------------
 **New Features**
 
 * Writing out the LP was further sped up.
