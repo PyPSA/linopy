@@ -12,6 +12,7 @@ from xarray import DataArray, Dataset
 from xarray.core.groupby import _maybe_reorder, peek_at
 
 from linopy import variables
+from linopy.common import as_dataarray
 
 
 class LinearExpression(Dataset):
@@ -81,6 +82,11 @@ class LinearExpression(Dataset):
     # We have to set the _reduce_method to None, in order to overwrite basic
     # reduction functions as `sum`. There might be a better solution (?).
     _reduce_method = None
+
+    # Disable array function, only function defined below are supported
+    # and set priority higher than pandas/xarray/numpy
+    __array_ufunc__ = None
+    __array_priority__ = 10000
 
     def __repr__(self):
         """
@@ -244,7 +250,12 @@ class LinearExpression(Dataset):
 
         This is the same as calling ``10*x + y`` but a bit more performant.
         """
-        ds_list = [Dataset({"coeffs": c, "vars": v}) for c, v in tuples]
+        # when assigning arrays to Datasets it is taken as coordinates
+        # support numpy arrays and convert them to dataarrays
+        ds_list = [
+            Dataset({"coeffs": as_dataarray(c), "vars": as_dataarray(v)})
+            for c, v in tuples
+        ]
         if len(ds_list) > 1:
             ds = xr.concat(ds_list, dim="_term", coords="minimal")
         else:

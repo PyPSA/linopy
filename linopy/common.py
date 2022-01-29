@@ -7,7 +7,7 @@ This module contains commonly used functions.
 """
 
 import numpy as np
-from xarray import apply_ufunc, merge
+from xarray import DataArray, apply_ufunc, merge
 
 
 def _merge_inplace(self, attr, da, name, **kwargs):
@@ -19,6 +19,15 @@ def _merge_inplace(self, attr, da, name, **kwargs):
     """
     ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
     setattr(self, attr, ds)
+
+
+def as_dataarray(arr):
+    """
+    Convert an object to a DataArray if it is not already a DataArray.
+    """
+    if not isinstance(arr, DataArray):
+        return DataArray(arr)
+    return arr
 
 
 def _remap(array, mapping):

@@ -47,6 +47,11 @@ class Constraint(DataArray):
     # reduction functions as `sum`. There might be a better solution (?).
     _reduce_method = None
 
+    # Disable array function, only function defined below are supported
+    # and set priority higher than pandas/xarray/numpy
+    __array_ufunc__ = None
+    __array_priority__ = 10000
+
     def __repr__(self):
         """
         Get the string representation of the constraints.

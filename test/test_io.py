@@ -21,7 +21,7 @@ def test_str_arrays():
     x = m.add_variables(4, pd.Series([8, 10]))
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
 
-    da = int_to_str(x)
+    da = int_to_str(x.values)
     assert da.dtype == object
 
 
@@ -31,7 +31,7 @@ def test_str_arrays_chunked():
     x = m.add_variables(4, pd.Series([8, 10]))
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
 
-    da = int_to_str(y).compute()
+    da = int_to_str(y.compute().values)
     assert da.dtype == object
 
 
@@ -43,7 +43,7 @@ def test_str_arrays_with_nans():
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]), name="y")
     assert m["x"][-1].item() == -1
 
-    da = int_to_str(m["x"])
+    da = int_to_str(m["x"].values)
     assert da.dtype == object
 
 

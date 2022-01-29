@@ -100,6 +100,11 @@ class Variable(DataArray):
     # reduction functions as `sum`. There might be a better solution (?).
     _reduce_method = None
 
+    # Disable array function, only function defined below are supported
+    # and set priority higher than pandas/xarray/numpy
+    __array_ufunc__ = None
+    __array_priority__ = 10000
+
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
