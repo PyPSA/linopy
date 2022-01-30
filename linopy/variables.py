@@ -263,6 +263,20 @@ class Variable(DataArray):
 
         self.model.variables.lower[self.name] = value
 
+    @property
+    def sol(self):
+        """
+        Get the optimal values of the variable.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the variable.")
+        if self.model.status != "ok":
+            raise AttributeError("Underlying model not optimized.")
+        return self.model.solution[self.name]
+
     @deprecated("0.0.5", "0.0.6", details="Use the `lower` accessor instead.")
     def get_lower_bound(self):
         return self.lower

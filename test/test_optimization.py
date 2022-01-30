@@ -164,6 +164,16 @@ def test_default_setting(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    x = model["x"]
+    assert_equal(x.sol, model.solution["x"])
+    c = model.constraints["con1"]
+    assert_equal(c.dual, model.dual["con1"])
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api):
     status, condition = model_anonymous_constraint.solve(solver, io_api=io_api)
     assert status == "ok"

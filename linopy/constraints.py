@@ -203,6 +203,24 @@ class Constraint(DataArray):
 
         self.model.constraints.rhs[self.name] = value
 
+    @property
+    def dual(self):
+        """
+        Get the dual values of the constraint.
+
+        The function raises an error in case no model is set as a
+        reference or the model status is not okay.
+        """
+        if self.model is None:
+            raise AttributeError("No reference model is assigned to the constraint.")
+        if self.model.status != "ok":
+            raise AttributeError("Underlying model not optimized.")
+        if not list(self.model.dual):
+            raise AttributeError(
+                "Underlying is optimized but does not have dual values stored."
+            )
+        return self.model.dual[self.name]
+
     @deprecated("0.0.5", "0.0.6", details="Use the `coeffs` accessor instead.")
     def get_coeffs(self):
         return self.coeffs

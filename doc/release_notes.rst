@@ -5,6 +5,8 @@ Upcoming Release
 ----------------
 
 * Numpy Array functions were disabled in the `Variable`, `Constraint` and `LinearExpression` class in order to ensure persistence as the class when multiplying with `pandas` and `numpy` objects.
+* The `Variable` class got a new accessor `sol` which points to the optimal values if the underlying model was optimized.
+* The `Constraint` class got a new accessor `dual` which points to the dual values if tune underlying model was optimized and dual values are existent.
 
 Version 0.0.8
 -------------

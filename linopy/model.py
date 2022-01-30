@@ -297,7 +297,7 @@ class Model:
         """
         Get a model variable by the name.
         """
-        return Variable(self.variables[key])
+        return Variable(self.variables[key], model=self)
 
     def check_force_dim_names(self, ds):
         """
