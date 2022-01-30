@@ -4,6 +4,8 @@ Release Notes
 Upcoming Release
 ----------------
 
+* Numpy Array functions were disabled in the `Variable`, `Constraint` and `LinearExpression` class in order to ensure persistence as the class when multiplying with `pandas` and `numpy` objects.
+
 Version 0.0.8
 -------------
 **New Features**
