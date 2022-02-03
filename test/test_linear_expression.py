@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 17 17:06:36 2021
+Created on Wed Mar 17 17:06:36 2021.
 
 @author: fabian
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -68,6 +69,17 @@ def test_variable_to_linexpr():
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
+
+    expr = np.array([1, 2]) * x
+    assert isinstance(expr, LinearExpression)
+
+    # TODO
+    # https://github.com/pandas-dev/pandas/issues/45803 has to be solved
+    # expr = pd.Series([1,2]) * x
+    # assert isinstance(expr, LinearExpression)
+
+    # expr = pd.DataFrame([[1,2], [2,3]]) * x
+    # assert isinstance(expr, LinearExpression)
 
     expr = x.sum()
     assert isinstance(expr, LinearExpression)
