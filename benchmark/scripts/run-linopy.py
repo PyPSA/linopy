@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Jan 27 14:23:00 2022.
+Created on Fri Nov 19 17:40:33 2021.
 
 @author: fabian
 """
 
+from numpy import arange
+
 from linopy import Model
+
+SOLVER = snakemake.wildcards.solver
+N = int(snakemake.wildcards.N)
 
 m = Model()
 coords = [arange(N), arange(N)]

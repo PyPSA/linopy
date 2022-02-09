@@ -1,63 +1,72 @@
-import linopy
-import pyomo
+NRANGE = [10, 20, 50, 100, 200, 300, 400, 500]
+# NRANGE = [5, 10, 20, 50,]
+SOLVERS = ['gurobi']
 
 
-NRANGE = [5, 10, 20, 50, 100, 200, 400]
-SOLVER = "gurobi"
+rule all:
+    input: expand("benchmarks/{solver}/time.pdf", solver=SOLVERS)
 
-rule benchmark_linopy:
+rule benchmark_linopy_single:
     params:
         nrange = NRANGE,
-        solver = SOLVER
-    output:
-        "benchmarks/linopy.csv"
-    script: "scripts/benchmark-linopy.py"
+    benchmark:
+        "benchmarks/{solver}/linopy/{N}.txt"
+    script: "scripts/run-linopy.py"
 
 
-rule benchmark_pyomo:
+rule benchmark_pyomo_single:
     params:
         nrange = NRANGE,
-        solver = SOLVER
-    output:
-        "benchmarks/pyomo.csv"
-    script: "scripts/benchmark-pyomo.py"
+    benchmark:
+        "benchmarks/{solver}/pyomo/{N}.txt"
+    script: "scripts/run-pyomo.py"
 
-rule benchmark_glpk:
+
+rule write_lp_files:
+    output:
+        expand("benchmarks/lp_files/{N}.lp", N=NRANGE)
+    script: "scripts/write-lp-file.py"
+
+
+rule benchmark_glpk_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/glpk/solver/{N}.txt"
+    shell: "glpsol --lp {input} --output {input}.sol"
+
+
+rule benchmark_cbc_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/cbc/solver/{N}.txt"
+    shell: "cbc -import {input} -solve -solu {input}.sol"
+
+rule benchmark_gurobi_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/gurobi/solver/{N}.txt"
+    shell: "gurobi_cl ResultFile={input}.sol {input}"
+
+
+rule concat_benchmarks:
     params:
         nrange = NRANGE
+    input:
+        lambda w: expand("benchmarks/{solver}/{api}/{N}.txt", N=NRANGE, solver=w.solver, api=w.api)
     output:
-        lp_files=directory("benchmarks/lp_files"),
-        benchmark="benchmarks/glpk.csv"
-    script: "scripts/benchmark-glpk.py"
-
-rule benchmark_cbc:
-    params:
-        nrange = NRANGE
-    output:
-        lp_files=directory("benchmarks/lp_files"),
-        benchmark="benchmarks/cbc.csv"
-    script: "scripts/benchmark-cbc.py"
-
-
-
-rule benchmark_gurobi:
-    params:
-        nrange = NRANGE
-    output:
-        lp_files=directory("benchmarks/lp_files"),
-        benchmark="benchmarks/gurobi.csv"
-    script: "scripts/benchmark-gurobi.py"
+        benchmark="benchmarks/{solver}/{api}.csv"
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 rule plot_benchmarks:
-    input: expand("benchmarks/{api}.csv", api=['linopy', 'pyomo', SOLVER])
-    # output:
-    #     time="benchmark-time.pdf",
-    #     memory="benchmark-memory.pdf"
-    # script: "scripts/plot-benchmarks.py"
+    input:
+        lambda w: expand("benchmarks/{solver}/{api}.csv", api=['pyomo', 'linopy', 'solver'], solver=w.solver)
     output:
-        time="benchmark-time.pdf",
-        memory="benchmark-memory.pdf"
-    log:
+        time="benchmarks/{solver}/time.pdf",
+        memory="benchmarks/{solver}/memory.pdf"
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"

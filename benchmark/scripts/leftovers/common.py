@@ -19,9 +19,9 @@ def profile(nrange, func):
         end = time()
         duration = end - start
 
-        memory = memory_usage(func, N)
+        memory = memory_usage((func, (N,)))
 
-        res.loc[N] = duration, memory
+        res.loc[N] = duration, max(memory)
 
     return res
 

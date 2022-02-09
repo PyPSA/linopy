@@ -13,7 +13,7 @@ from numpy import arange, cos, sin
 
 from linopy import Model
 
-SOLVER = snakemake.params.solver
+SOLVER = snakemake.wildcards.solver
 
 
 def model(N):
@@ -25,7 +25,7 @@ def model(N):
     m.add_constraints(x + y >= 0)
     m.add_objective((2 * x).sum() + y.sum())
     m.solve(SOLVER)
-    return m
+    return
 
 
 res = profile(snakemake.params.nrange, model)
