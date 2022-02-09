@@ -13,3 +13,9 @@ doc/generated
 doc/api
 .vscode
 Highs.log
+benchmark/*.pdf
+benchmark/benchmarks
+benchmark/.snakemake
+benchmark/gurobi.log
+benchmark/notebooks/.ipynb_checkpoints
+benchmark/scripts/__pycache__

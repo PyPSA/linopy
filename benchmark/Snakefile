@@ -1,0 +1,63 @@
+import linopy
+import pyomo
+
+
+NRANGE = [5, 10, 20, 50, 100, 200, 400]
+SOLVER = "gurobi"
+
+rule benchmark_linopy:
+    params:
+        nrange = NRANGE,
+        solver = SOLVER
+    output:
+        "benchmarks/linopy.csv"
+    script: "scripts/benchmark-linopy.py"
+
+
+rule benchmark_pyomo:
+    params:
+        nrange = NRANGE,
+        solver = SOLVER
+    output:
+        "benchmarks/pyomo.csv"
+    script: "scripts/benchmark-pyomo.py"
+
+rule benchmark_glpk:
+    params:
+        nrange = NRANGE
+    output:
+        lp_files=directory("benchmarks/lp_files"),
+        benchmark="benchmarks/glpk.csv"
+    script: "scripts/benchmark-glpk.py"
+
+rule benchmark_cbc:
+    params:
+        nrange = NRANGE
+    output:
+        lp_files=directory("benchmarks/lp_files"),
+        benchmark="benchmarks/cbc.csv"
+    script: "scripts/benchmark-cbc.py"
+
+
+
+rule benchmark_gurobi:
+    params:
+        nrange = NRANGE
+    output:
+        lp_files=directory("benchmarks/lp_files"),
+        benchmark="benchmarks/gurobi.csv"
+    script: "scripts/benchmark-gurobi.py"
+
+
+rule plot_benchmarks:
+    input: expand("benchmarks/{api}.csv", api=['linopy', 'pyomo', SOLVER])
+    # output:
+    #     time="benchmark-time.pdf",
+    #     memory="benchmark-memory.pdf"
+    # script: "scripts/plot-benchmarks.py"
+    output:
+        time="benchmark-time.pdf",
+        memory="benchmark-memory.pdf"
+    log:
+    notebook:
+        "notebooks/plot-benchmarks.py.ipynb"
