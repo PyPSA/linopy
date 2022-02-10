@@ -16,7 +16,7 @@ dfs = dfs.rename(columns={"s": "Time [s]", "max_rss": "Memory Usage"})
 dfs = dfs.replace("-", 0)
 dfs["Memory Usage"] = dfs["Memory Usage"].astype(float)
 
-if snakemake.wildcards.api == snakemake.wildcards.solver:
+if snakemake.wildcards.api == "solver":
     dfs["API"] = "Solver Process"
 else:
     dfs["API"] = snakemake.wildcards.api
