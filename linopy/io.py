@@ -68,6 +68,7 @@ def objective_to_file(m, f, log=False):
 
     objective = float_to_str(coeffs) + " x" + int_to_str(vars)
     f.write("\n".join(objective))
+    del objective
 
 
 def constraints_to_file(m, f, log=False):
@@ -105,6 +106,7 @@ def constraints_to_file(m, f, log=False):
 
         f.write("\n".join(constraints))
         f.write("\n")
+        del l, s, r, constraints
 
 
 def bounds_to_file(m, f, log=False):
@@ -128,6 +130,7 @@ def bounds_to_file(m, f, log=False):
         bounds = float_to_str(lo) + " <= x" + int_to_str(l) + " <= " + float_to_str(up)
         f.write("\n".join(bounds))
         f.write("\n")
+        del bounds
 
 
 def binaries_to_file(m, f, log=False):
@@ -152,6 +155,7 @@ def binaries_to_file(m, f, log=False):
         bounds = "x" + int_to_str(l)
         f.write("\n".join(bounds))
         f.write("\n")
+        del bounds
 
 
 def to_file(m, fn):
