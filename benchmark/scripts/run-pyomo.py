@@ -38,4 +38,7 @@ m.con2 = Constraint(m.i, m.j, rule=bound2)
 m.obj = Objective(rule=objective)
 
 opt = SolverFactory(SOLVER)
-opt.solve(m)
+results = opt.solve(m)
+
+# Write the output
+results.write(num=1)

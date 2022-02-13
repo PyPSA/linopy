@@ -2,7 +2,6 @@ import linopy
 import pyomo
 
 NRANGE = [10, 20, 50, 100, 200, 300, 400, 500, 600, 800]
-# NRANGE = [5, 10, 20, 50,]
 SOLVERS = ["gurobi", "cbc"]
 
 
@@ -23,6 +22,13 @@ rule benchmark_pyomo_single:
     benchmark:
         "benchmarks/{solver}/pyomo/{N}.txt"
     script: "scripts/run-pyomo.py"
+
+rule benchmark_jump:
+    params:
+        nrange = NRANGE,
+    output:
+        "benchmarks/{solver}/jump.csv"
+    script: "scripts/benchmark-jump.jl"
 
 
 rule write_lp_files:
