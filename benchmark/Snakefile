@@ -8,6 +8,14 @@ SOLVERS = ["gurobi", "cbc"]
 rule all:
     input: expand("benchmarks/{solver}/time.pdf", solver=SOLVERS)
 
+rule benchmark_linopy:
+    params:
+        nrange = NRANGE
+    output:
+        "benchmarks/{solver}/benchmark-linopy.csv"
+    script: "scripts/benchmark-linopy.py"
+
+
 rule benchmark_linopy_single:
     params:
         nrange = NRANGE,
