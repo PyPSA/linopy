@@ -35,6 +35,10 @@ class RemoteScheduler:
     username: str = None
     password: str = None
     client: paramiko.SSHClient = None
+    channel: paramiko.Channel = None
+    stdin: paramiko.ChannelFile = None
+    stdout: paramiko.ChannelFile = None
+    stderr: paramiko.ChannelFile = None
     _sftp_client: SFTPClient = None
 
     pre_execution: str = "source ~/.bashrc"  # force login shell
@@ -54,8 +58,18 @@ class RemoteScheduler:
             client.load_system_host_keys()
             client.connect(self.hostname, self.port, self.username, self.password)
             self.client = client
+
+        logger.info("Open interactive shell session.")
+        self.channel = self.client.invoke_shell()
+        self.stdin = self.channel.makefile("wb")
+        self.stdout = self.channel.makefile("r")
+        self.stderr = self.channel.makefile("r")
+
         logger.info("Open an SFTP session on the SSH server")
         self._sftp_client = self.client.open_sftp()
+
+    def __del__(self):
+        self.client.close()
 
     def write_python_file_on_remote(self):
         logger.info(f"Writing python script at {self.python_file} on remote")
@@ -74,14 +88,15 @@ class RemoteScheduler:
             self._sftp_client.put(fn.name, self.model_unsolved_file)
 
     def execute(self, command):
-        stdin, stdout, stderr = self.client.exec_command(command, get_pty=True)
-        stdin.close()
+        self.stdin.write(command)
+        self.stdin.flush()
 
-        for line in iter(stdout.readline, ""):
+        self.stdout.close()
+        for line in self.stdout:
             print(line, end="")
 
         raised_error = False
-        for line in iter(stderr.readline, ""):
+        for line in self.stderr:
             print(line, end="")
             raised_error = True
         if raised_error:
