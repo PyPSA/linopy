@@ -37,7 +37,7 @@ class RemoteScheduler:
     client: paramiko.SSHClient = None
     _sftp_client: SFTPClient = None
 
-    pre_execution: str = "source ~/.bashrc"  # force login shell
+    pre_execution: str = None
     post_execution: str = None
 
     python_script: Union[callable, str] = command.format
@@ -54,7 +54,7 @@ class RemoteScheduler:
             client.load_system_host_keys()
             client.connect(self.hostname, self.port, self.username, self.password)
             self.client = client
-        logger.info("Open an SFTP session on the SSH server")
+        logger.info("Open an SFTP session on SSH server")
         self._sftp_client = self.client.open_sftp()
 
     def write_python_file_on_remote(self):
@@ -89,8 +89,7 @@ class RemoteScheduler:
 
     def solve_on_remote(self, model, **kwargs):
 
-        if self.pre_execution:
-            self.execute(self.pre_execution)
+        self.execute(self.pre_execution)
 
         if kwargs:
             self.solve_kwargs = kwargs
@@ -98,11 +97,20 @@ class RemoteScheduler:
         self.write_model_on_remote(model)
 
         command = self.python_executable + " " + self.python_file
+
+        if self.pre_execution:
+            command = self.pre_execution + "\n" + command
+
+        if self.post_execution:
+            command = command + "\n" + self.post_execution
+
+        logger.info(f"Solving model on remote.")
         self.execute(command)
 
         if self.post_execution:
             self.execute(self.post_execution)
 
+        logger.info(f"Getting solved model from remote.")
         with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
             self._sftp_client.get(self.model_solved_file, fn.name)
             return read_netcdf(fn.name)
