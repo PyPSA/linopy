@@ -8,23 +8,17 @@ Created on Tue Feb 15 16:20:51 2022.
 
 import numpy as np
 import pypsa
+from common import NSNAPSHOTS, PATH, SOLVER, SOLVER_PARAMS
 from memory_profiler import profile
-
-PATH = "/home/fabian/vres/py/pypsa-eur/networks/elec_s_37.nc"
-SOLVER_PARAMS = {
-    "crossover": 0,
-    "method": 2,
-    "BarConvTol": 1.0e-3,
-    "FeasibilityTol": 1.0e-3,
-}
 
 
 @profile
 def solve():
     n = pypsa.Network(PATH)
     n.generators.p_nom_max.fillna(np.inf, inplace=True)
+    n.snapshots = n.snapshots[:NSNAPSHOTS]
 
-    m = n.optimize(**SOLVER_PARAMS)
+    n.optimize(solver_name=SOLVER, **SOLVER_PARAMS)
 
 
 solve()
