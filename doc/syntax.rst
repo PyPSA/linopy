@@ -15,7 +15,7 @@ In order to compare the syntax between different API's, let's initialize the fol
 
 
 
-In `JuMP` the formulation translates to the following code:
+In ``JuMP`` the formulation translates to the following code:
 
  .. code-block:: julia
 
@@ -31,7 +31,7 @@ In `JuMP` the formulation translates to the following code:
         return m
     end
 
-The same model in 'linopy' is initialized by
+The same model in ``linopy`` is initialized by
 
  .. code-block:: python
 
@@ -50,9 +50,9 @@ The same model in 'linopy' is initialized by
          m.add_objective((2 * x).sum() + y.sum())
          return
 
-Note that the syntax is quiet similar. An important difference lays in the fact that `linopy` operates all arithmetic operations on **variable arrays**, while the JuMP syntax uses control variables `i` and `j`.
+Note that the syntax is quiet similar. An important difference lays in the fact that ``linopy`` operates all arithmetic operations on **variable arrays**, while the JuMP syntax uses control variables `i` and `j`.
 
-In `Pyomo` the code would look like
+In ``Pyomo`` the code would look like
 
  .. code-block:: python
 

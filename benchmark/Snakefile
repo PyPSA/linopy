@@ -129,23 +129,32 @@ rule plot_benchmarks:
 
 rule benchmark_linopy_pypsa_eur:
     output: "benchmarks/benchmark-linopy-pypsa-eur.dat"
-    shell: "mprof run -C --output {output} scripts/benchmarks-pypsa-eur/benchmark-linopy.py"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-linopy.py"
 
 rule benchmark_pyomo_pypsa_eur:
     output: "benchmarks/benchmark-pyomo-pypsa-eur.dat"
-    shell: "mprof run -C --output {output} scripts/benchmarks-pypsa-eur/benchmark-pyomo.py"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pyomo.py"
 
 rule benchmark_pypsa_linopf_pypsa_eur:
     output: "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
-    shell: "mprof run -C --output {output} scripts/benchmarks-pypsa-eur/benchmark-pypsa-linopf.py"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pypsa-linopf.py"
 
 
 rule plot_pypsa_eur_benchmarks:
     input:
         linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
         pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
-        # pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
     output:
         "benchmarks/benchmark-pypsa-eur.pdf"
+    script:
+        "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"
+
+rule plot_pypsa_eur_benchmarks_with_pypsa:
+    input:
+        linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
+        pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
+        pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
+    output:
+        "benchmarks/benchmark-pypsa-eur-with-pypsa.pdf"
     script:
         "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"
