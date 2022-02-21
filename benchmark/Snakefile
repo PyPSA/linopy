@@ -144,7 +144,7 @@ rule plot_pypsa_eur_benchmarks:
     input:
         linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
         pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
-        pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
+        # pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
     output:
         "benchmarks/benchmark-pypsa-eur.pdf"
     script:
