@@ -1,64 +1,27 @@
-Benchmarking
-============
+.. _benchmark:
+
+Benchmarks
+==========
 
 
-Linopy's performance scales well with the problem size. Its overall speed is comparable with the mighty `JuMP <https://jump.dev/>`_ package written in `Julia <https://julialang.org/>`_. It even outperforms `JuMP` for large models as we see in the following comparison. We initialize a very simple optimization model
+Linopy's performance scales well with the problem size. Its overall speed is comparable with the famous `JuMP <https://jump.dev/>`_ package written in `Julia <https://julialang.org/>`_. It even outperforms `JuMP` in total memory efficiency when it comes to large models. Compared to `Pyomo <https://pyomo.org>`_, the common optimization package in python, one can expect
+
+* a **speedup of times 4-6**
+* a **memory reduction of roughly 50%**
+
+for large problems. The following figure shows the memory usage and speed for solving the problem
 
 .. math::
 
-    & \min \;\; 2 x_{i,j} \; y_{i,j} \qquad \forall \; i,j \in \{1,...,N\} \\
+    & \min \;\; \sum_{i,j} 2 x_{i,j} \; y_{i,j} \\
     s.t. & \\
-    & x_{i,j} - y_{i,j} \; \ge \; i \qquad \forall \; i,j \in \{1,...,N\}
+    & x_{i,j} - y_{i,j} \; \ge \; i \qquad \forall \; i,j \in \{1,...,N\} \\
+    & x_{i,j} + y_{i,j} \; \ge \; 0 \qquad \forall \; i,j \in \{1,...,N\}
 
 
-In `JuMP` this translates to the following code:
+with the different API's using the `Gurobi <https://gurobi.com>`_ solver. The workflow, that produces the figure, can be found `here <https://github.com/PyPSA/linopy/tree/benchmark/benchmark>`_.
 
- .. code-block:: julia
-
-    using JuMP
-
-    function create_model(N)
-        m = Model()
-        @variable(m, x[1:N, 1:N])
-        @variable(m, y[1:N, 1:N])
-        @constraint(m, [i=1:N, j=1:N], x[i, j] - y[i, j] >= i)
-        @objective(m, Min, sum(2 * x[i, j] + y[i, j] for i in 1:N, j in 1:N))
-        return m
-    end
-
-When running it with :math:`N=1000` (after a first compilation run), the initialization takes around 3.3 seconds.
-
- .. code-block:: julia
-
-    @time create_model(1000)
-
- `> 3.328916 seconds (32.00 M allocations: 1.976 GiB, 37.59% gc time)`
-
-When initializing the same problem with `linopy`, the code runs for
-
- .. code-block:: python
-
-     from linopy import Model
-     from numpy import arange
-
-
-     def create_model(N):
-         m = Model()
-         coords = [arange(N), arange(N)]
-         x = m.add_variables(coords=coords)
-         y = m.add_variables(coords=coords)
-         m.add_constraints(x - y >= arange(N))
-         m.add_constraints(x + y >= 0)
-         m.add_objective((2 * x).sum() + y.sum())
-         return
-
- .. code-block:: python
-
-     %time create_model(1000)
-
- | `> CPU times: user 86.1 ms, sys: 20.5 ms, total: 107 ms`
- | `> Wall time: 106 ms`
-
-
-
-or `Pyomo <https://www.pyomo.org/>`_
+.. image:: benchmark.png
+    :width: 1500
+    :alt: benchmark
+    :align: center
