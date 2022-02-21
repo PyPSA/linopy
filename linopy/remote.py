@@ -10,9 +10,14 @@ import logging
 import tempfile
 from dataclasses import dataclass
 
-import paramiko
-
 from linopy.io import read_netcdf
+
+paramiko_present = True
+try:
+    import paramiko
+except ImportError:
+    paramiko_present = False
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +126,8 @@ class RemoteHandler:
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
 
     def __post_init__(self):
+        assert paramiko_present, "The required paramiko package is not installed."
+
         if self.client is None:
             client = paramiko.SSHClient()
             client.load_system_host_keys()
