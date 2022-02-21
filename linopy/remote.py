@@ -134,7 +134,7 @@ class RemoteHandler:
         self.stderr = self.channel.makefile("r", -1)
 
         logger.info("Open an SFTP session on the SSH server")
-        self._sftp_client = self.client.open_sftp()
+        self.sftp_client = self.client.open_sftp()
 
     def __del__(self):
         self.client.close()
@@ -150,7 +150,7 @@ class RemoteHandler:
             solve_kwargs="**" + str(solve_kwargs),
             model_solved_file=self.model_solved_file,
         )
-        with self._sftp_client.open(self.python_file, "w") as fn:
+        with self.sftp_client.open(self.python_file, "w") as fn:
             fn.write(self.python_script(**script_kwargs))
 
     def write_model_on_remote(self, model):
@@ -160,7 +160,7 @@ class RemoteHandler:
         logger.info(f"Saving unsolved model at {self.model_unsolved_file} on remote")
         with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
             model.to_netcdf(fn.name)
-            self._sftp_client.put(fn.name, self.model_unsolved_file)
+            self.sftp_client.put(fn.name, self.model_unsolved_file)
 
     def execute(self, cmd):
         """
@@ -217,16 +217,15 @@ class RemoteHandler:
 
         command = self.python_executable + " " + self.python_file
 
-        if self.pre_execution:
-            command = self.pre_execution + "\n" + command
-
-        if self.post_execution:
-            command = command + "\n" + self.post_execution
-
         logger.info("Solving model on remote.")
         self.execute(command)
 
         logger.info("Retrieve solved model from remote.")
         with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-            self._sftp_client.get(self.model_solved_file, fn.name)
-            return read_netcdf(fn.name)
+            self.sftp_client.get(self.model_solved_file, fn.name)
+            solved = read_netcdf(fn.name)
+
+        self.sftp_client.remove(self.python_file)
+        self.sftp_client.remove(self.model_solved_file)
+
+        return solved
