@@ -40,6 +40,7 @@ extensions = [
     "sphinx.ext.autosummary",  # Create neat summary tables for modules/classes/methods etc
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
+    "sphinx.ext.mathjax",
     "nbsphinx",
     "nbsphinx_link",
     "sphinx.ext.imgconverter",  # for SVG conversion

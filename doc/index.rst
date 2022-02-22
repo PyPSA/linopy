@@ -87,6 +87,8 @@ This package is published under license GNU Public License GPLv3
    :caption: Getting started
 
    create-a-model
+   benchmark
+   syntax
    solvers
 
 .. toctree::
