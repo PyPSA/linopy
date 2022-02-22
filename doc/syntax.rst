@@ -41,14 +41,12 @@ The same model in ``linopy`` is initialized by
 
      def create_model(N):
          m = Model()
-         coords = [arange(N), arange(N)]
-         x = m.add_variables(coords=coords)
-         y = m.add_variables(coords=coords)
+         x = m.add_variables(coords=[arange(N), arange(N)])
+         y = m.add_variables(coords=[arange(N), arange(N)])
          m.add_constraints(x - y >= arange(N))
          m.add_constraints(x + y >= 0)
-         m.add_constraints(x + y >= 0)
          m.add_objective((2 * x).sum() + y.sum())
-         return
+         return m
 
 Note that the syntax is quiet similar. An important difference lays in the fact that ``linopy`` operates all arithmetic operations on **variable arrays**, while the JuMP syntax uses control variables `i` and `j`.
 
@@ -56,23 +54,16 @@ In ``Pyomo`` the code would look like
 
  .. code-block:: python
 
-     from common import profile
      from numpy import arange
      from pyomo.environ import ConcreteModel, Constraint, Objective, Set, Var
-     from pyomo.opt import SolverFactory
 
 
-     def model(n, solver, integerlabels):
+     def create_model(N):
          m = ConcreteModel()
-         if integerlabels:
-             m.i = Set(initialize=arange(n))
-             m.j = Set(initialize=arange(n))
-         else:
-             m.i = Set(initialize=arange(n).astype(float))
-             m.j = Set(initialize=arange(n).astype(str))
+         m.N = Set(initialize=arange(N))
 
-         m.x = Var(m.i, m.j, bounds=(None, None))
-         m.y = Var(m.i, m.j, bounds=(None, None))
+         m.x = Var(m.N, m.N, bounds=(None, None))
+         m.y = Var(m.N, m.N, bounds=(None, None))
 
          def bound1(m, i, j):
              return m.x[(i, j)] - m.y[(i, j)] >= i
@@ -81,10 +72,10 @@ In ``Pyomo`` the code would look like
              return m.x[(i, j)] + m.y[(i, j)] >= 0
 
          def objective(m):
-             return sum(2 * m.x[(i, j)] + m.y[(i, j)] for i in m.i for j in m.j)
+             return sum(2 * m.x[(i, j)] + m.y[(i, j)] for i in m.N for j in m.N)
 
-         m.con1 = Constraint(m.i, m.j, rule=bound1)
-         m.con2 = Constraint(m.i, m.j, rule=bound2)
+         m.con1 = Constraint(m.N, m.N, rule=bound1)
+         m.con2 = Constraint(m.N, m.N, rule=bound2)
          m.obj = Objective(rule=objective)
          return m
 
