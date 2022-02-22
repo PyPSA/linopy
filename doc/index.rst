@@ -87,9 +87,15 @@ This package is published under license GNU Public License GPLv3
    :caption: Getting started
 
    create-a-model
+   solvers
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Benchmarking
+
    benchmark
    syntax
-   solvers
 
 .. toctree::
    :hidden:
