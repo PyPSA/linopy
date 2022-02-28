@@ -448,7 +448,7 @@ class Constraints:
             broadcastable to `broadcast_like`.
         broadcast_like : str, optional
             Name of the dataset to which the input data in `key` is aligned to.
-            Must be one of 'labels', 'vars' The default is "labels".
+            Must be one of "labels", "vars". The default is "labels".
         filter_missings : bool, optional
             Filter out values where `labels` data is -1. If broadcast is `vars`
             also values where `vars` is -1 are filtered. This will raise an
