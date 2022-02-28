@@ -482,7 +482,7 @@ class Variables:
                 return name
         raise ValueError(f"No variable found containing the label {label}.")
 
-    def iter_ravel(self, key, filter_missings=False, check_nans=True):
+    def iter_ravel(self, key, filter_missings=False):
         """
         Create an generator which iterates over all arrays in `key` and
         flattens them.

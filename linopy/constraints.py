@@ -436,9 +436,7 @@ class Constraints:
         self.var_blocks = var_blocks
         return self.blocks
 
-    def iter_ravel(
-        self, key, broadcast_like="labels", filter_missings=False, check_nans=True
-    ):
+    def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
         """
         Create an generator which iterates over all arrays in `key` and
         flattens them.
