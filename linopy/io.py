@@ -68,7 +68,7 @@ def objective_to_file(m, f, log=False):
 
     if np.isnan(coeffs).any():
         raise ValueError(
-            "Objective coefficients are missing (nan) where " "variables are not (-1)."
+            "Objective coefficients are missing (nan) where variables are not (-1)."
         )
 
     objective = float_to_str(coeffs) + " x" + int_to_str(vars)
