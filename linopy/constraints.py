@@ -489,7 +489,13 @@ class Constraints:
                 if check_nans:
                     if pd.isna(flat).any():
                         ds_name = self.dataset_names[self.dataset_attrs.index(key)]
-                        err = f"{ds_name} of constraint '{name}' contains nan's."
+                        bc_name = self.dataset_names[
+                            self.dataset_attrs.index(broadcast_like)
+                        ]
+                        err = (
+                            f"{ds_name} of constraint '{name}' are missing (nan) "
+                            f"where {bc_name.lower()} are defined (not -1)."
+                        )
                         raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()

@@ -81,3 +81,17 @@ def test_nan_in_constraint_rhs():
     m.add_objective(2 * y + x)
     with pytest.raises(ValueError):
         m.solve()
+
+
+def test_nan_in_objective():
+    m = Model()
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x + 6 * y, ">=", np.nan)
+    m.add_constraints(4 * x + 2 * y, ">=", 3)
+
+    m.add_objective(np.nan * y + x)
+    with pytest.raises(ValueError):
+        m.solve()
