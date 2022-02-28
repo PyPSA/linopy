@@ -7,6 +7,8 @@ Upcoming Release
 * Numpy ``__array_ufunc__`` was disabled in the `Variable`, `Constraint` and `LinearExpression` class in order to ensure persistence as the class when multiplying with `numpy` objects. As for pandas objects the issue https://github.com/pandas-dev/pandas/issues/45803 must be solved.
 * The `Variable` class got a new accessor `sol` which points to the optimal values if the underlying model was optimized.
 * The `Constraint` class got a new accessor `dual` which points to the dual values if tune underlying model was optimized and dual values are existent.
+* When writing out the LP file, the handling of `nan` values is now checked in a more rigorous way. Before `linopy`` was skipping and therefore ignoring constraints where the `rhs`` was a `nan` value. As this behavior is not very save, such cases will raise an error now.
+
 
 Version 0.0.8
 -------------
