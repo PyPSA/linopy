@@ -12,6 +12,7 @@ from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
+import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
@@ -481,7 +482,7 @@ class Variables:
                 return name
         raise ValueError(f"No variable found containing the label {label}.")
 
-    def iter_ravel(self, key, filter_missings=False):
+    def iter_ravel(self, key, filter_missings=False, check_nans=True):
         """
         Create an generator which iterates over all arrays in `key` and
         flattens them.
@@ -490,10 +491,13 @@ class Variables:
         ----------
         key : str/Dataset
             Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
+            broadcastable to the variable labels.
         filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1. When enabled, the
-            data is load into memory. The default is False.
+            Filter out values where the variables labels are -1. When enabled,
+            the data is loaded into memory. The default is False.
+        check_nans : bool, optional
+            Check if the ravelled array contains nan's. This is ignored
+            if filter_missings is False. The default is True.
 
 
         Yields
@@ -516,6 +520,11 @@ class Variables:
             if filter_missings:
                 flat = np.ravel(broadcasted)
                 flat = flat[np.ravel(labels) != -1]
+                if check_nans:
+                    if pd.isna(flat).any():
+                        ds_name = self.dataset_names[self.dataset_attrs.index(key)]
+                        err = f"{ds_name} of variable '{name}' contains nan's."
+                        raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()
             yield flat
