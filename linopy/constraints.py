@@ -483,10 +483,9 @@ class Constraints:
                     mask &= labels != -1
                 flat = flat[mask]
                 if pd.isna(flat).any():
-                    ds_name = self.dataset_names[self.dataset_attrs.index(key)]
-                    bc_name = self.dataset_names[
-                        self.dataset_attrs.index(broadcast_like)
-                    ]
+                    names = self.dataset_names
+                    ds_name = names[self.dataset_attrs.index(key)]
+                    bc_name = names[self.dataset_attrs.index(broadcast_like)]
                     err = (
                         f"{ds_name} of constraint '{name}' are missing (nan) "
                         f"where {bc_name.lower()} are defined (not -1)."
