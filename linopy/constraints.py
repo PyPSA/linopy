@@ -453,11 +453,9 @@ class Constraints:
             Must be one of 'labels', 'vars' The default is "labels".
         filter_missings : bool, optional
             Filter out values where `labels` data is -1. If broadcast is `vars`
-            also values where `vars` is -1 are filtered. When enabled, the
-            data is load into memory. The default is False.
-        check_nans : bool, optional
-            Check if the ravelled array contains nan's. This is ignored
-            if filter_missings is False. The default is True.
+            also values where `vars` is -1 are filtered. This will raise an
+            error if the filtered data still contains nan's.
+            When enabled, the data is load into memory. The default is False.
 
 
         Yields
@@ -486,17 +484,16 @@ class Constraints:
                     labels = np.ravel(self.labels[name].broadcast_like(values))
                     mask &= labels != -1
                 flat = flat[mask]
-                if check_nans:
-                    if pd.isna(flat).any():
-                        ds_name = self.dataset_names[self.dataset_attrs.index(key)]
-                        bc_name = self.dataset_names[
-                            self.dataset_attrs.index(broadcast_like)
-                        ]
-                        err = (
-                            f"{ds_name} of constraint '{name}' are missing (nan) "
-                            f"where {bc_name.lower()} are defined (not -1)."
-                        )
-                        raise ValueError(err)
+                if pd.isna(flat).any():
+                    ds_name = self.dataset_names[self.dataset_attrs.index(key)]
+                    bc_name = self.dataset_names[
+                        self.dataset_attrs.index(broadcast_like)
+                    ]
+                    err = (
+                        f"{ds_name} of constraint '{name}' are missing (nan) "
+                        f"where {bc_name.lower()} are defined (not -1)."
+                    )
+                    raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()
             yield flat

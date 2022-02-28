@@ -493,11 +493,9 @@ class Variables:
             Key to be iterated over. Optionally pass a dataset which is
             broadcastable to the variable labels.
         filter_missings : bool, optional
-            Filter out values where the variables labels are -1. When enabled,
-            the data is loaded into memory. The default is False.
-        check_nans : bool, optional
-            Check if the ravelled array contains nan's. This is ignored
-            if filter_missings is False. The default is True.
+            Filter out values where the variables labels are -1. This will
+            raise an error if the filtered data still contains nan's.
+            When enabled, the data is loaded into memory. The default is False.
 
 
         Yields
@@ -520,11 +518,10 @@ class Variables:
             if filter_missings:
                 flat = np.ravel(broadcasted)
                 flat = flat[np.ravel(labels) != -1]
-                if check_nans:
-                    if pd.isna(flat).any():
-                        ds_name = self.dataset_names[self.dataset_attrs.index(key)]
-                        err = f"{ds_name} of variable '{name}' contains nan's."
-                        raise ValueError(err)
+                if pd.isna(flat).any():
+                    ds_name = self.dataset_names[self.dataset_attrs.index(key)]
+                    err = f"{ds_name} of variable '{name}' contains nan's."
+                    raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()
             yield flat
