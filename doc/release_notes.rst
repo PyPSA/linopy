@@ -1,18 +1,27 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.0.9
+-------------
+
+**New Features**
 
 * Numpy ``__array_ufunc__`` was disabled in the `Variable`, `Constraint` and `LinearExpression` class in order to ensure persistence as the class when multiplying with `numpy` objects. As for pandas objects the issue https://github.com/pandas-dev/pandas/issues/45803 must be solved.
 * The `Variable` class got a new accessor `sol` which points to the optimal values if the underlying model was optimized.
 * The `Constraint` class got a new accessor `dual` which points to the dual values if tune underlying model was optimized and dual values are existent.
 * When writing out the LP file, the handling of `nan` values is now checked in a more rigorous way. Before `linopy` was skipping and therefore ignoring constraints where the `rhs` was a `nan` value. As this behavior is not very save, such cases will raise an error now.
 * Models can now be solved on a remote machine using a ssh tunnel. The implementation automatically stores the locally initialized model to a netcdf file on the server, runs the optimization and retrieves the results. See the example `Solve a model on a remote machine` in the documentation for further information.
+
+**Bug Fixes**
+
 * `linopy` is now continuously tested and working for Windows machines.
 
 Version 0.0.8
 -------------
+
 **New Features**
 
 * Writing out the LP was further sped up.
