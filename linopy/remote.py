@@ -175,7 +175,7 @@ class RemoteHandler:
         """
         cmd = cmd.strip("\n")
         self.stdin.write(cmd + "\n")
-        finish = "End of stdout buffer. Finished with exit status"
+        finish = "End of stdout. Exit Status"
         echo_cmd = "echo {} $?".format(finish)
         self.stdin.write(echo_cmd + "\n")
         self.stdin.flush()
