@@ -103,6 +103,7 @@ class Model:
         self._objective_value = nan
 
         self._status = "initialized"
+        self._termination_condition = ""
         self._xCounter = 0
         self._cCounter = 0
         self._varnameCounter = 0
@@ -950,6 +951,7 @@ class Model:
         basis_fn=None,
         warmstart_fn=None,
         keep_files=False,
+        remote=None,
         **solver_options,
     ):
         """
@@ -991,6 +993,10 @@ class Model:
             Whether to keep all temporary files like lp file, solution file.
             This argument is ignored for the logger file `log_fn`. The default
             is False.
+        remote : linopy.remote.RemoteHandler
+            Remote handler to use for solving model on a server. Note that when
+            solving on a rSee
+            linopy.remote.RemoteHandler for more details.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -999,6 +1005,27 @@ class Model:
         linopy.Model
             Optimized model.
         """
+        if remote:
+            solved = remote.solve_on_remote(
+                self,
+                solver_name=solver_name,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                basis_fn=basis_fn,
+                warmstart_fn=warmstart_fn,
+                keep_files=keep_files,
+                **solver_options,
+            )
+
+            self.objective_value = solved.objective_value
+            self.status = solved.status
+            self.termination_condition = solved.termination_condition
+            self.solution = solved.solution
+            self.dual = solved.dual
+            return self.status, self.termination_condition
+
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 

@@ -6,8 +6,12 @@ Created on Wed Mar 10 11:03:06 2021.
 @author: fabulous
 """
 
-from linopy import model
+from linopy import model, remote
 from linopy.expressions import merge
 from linopy.io import read_netcdf
 from linopy.model import LinearExpression, Model, Variable, available_solvers
+from linopy.remote import paramiko_present as _paramiko_present
 from linopy.version import version as __version__
+
+if _paramiko_present:
+    from linopy.remote import RemoteHandler
