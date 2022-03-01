@@ -116,7 +116,7 @@ class RemoteHandler:
     port: int = 22
     username: str = None
     password: str = None
-    client: paramiko.SSHClient = None
+    client: "paramiko.SSHClient" = None
 
     python_script: callable = command.format
     python_executable: str = "python"
