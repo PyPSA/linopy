@@ -12,6 +12,7 @@ from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
+import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
@@ -490,10 +491,11 @@ class Variables:
         ----------
         key : str/Dataset
             Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
+            broadcastable to the variable labels.
         filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1. When enabled, the
-            data is load into memory. The default is False.
+            Filter out values where the variables labels are -1. This will
+            raise an error if the filtered data still contains nan's.
+            When enabled, the data is loaded into memory. The default is False.
 
 
         Yields
@@ -516,6 +518,10 @@ class Variables:
             if filter_missings:
                 flat = np.ravel(broadcasted)
                 flat = flat[np.ravel(labels) != -1]
+                if pd.isna(flat).any():
+                    ds_name = self.dataset_names[self.dataset_attrs.index(key)]
+                    err = f"{ds_name} of variable '{name}' contains nan's."
+                    raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()
             yield flat

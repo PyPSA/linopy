@@ -367,18 +367,13 @@ class Constraints:
 
     def sanitize_missings(self):
         """
-        Set constraints labels to -1 if either rhs, coeffs or vars are missing.
-
-        Also set vars to -1 where labels are -1.
+        Set constraints labels to -1 where all variables in the lhs are
+        missing.
         """
         for name in self:
             term_dim = name + "_term"
-            no_missing_vars = (self.vars[name] != -1).any(term_dim)
-            no_missing_coeffs = self.coeffs[name].notnull().any(term_dim)
-            no_missing_rhs = self.rhs[name].notnull()
-            no_missing = no_missing_vars & no_missing_coeffs & no_missing_rhs
-
-            self.labels[name] = self.labels[name].where(no_missing, -1)
+            contains_non_missing = (self.vars[name] != -1).any(term_dim)
+            self.labels[name] = self.labels[name].where(contains_non_missing, -1)
 
     def get_name_by_label(self, label):
         """
@@ -450,14 +445,15 @@ class Constraints:
         ----------
         key : str/Dataset
             Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`. Must be on of 'labels', 'vars'.
+            broadcastable to `broadcast_like`.
         broadcast_like : str, optional
             Name of the dataset to which the input data in `key` is aligned to.
-            The default is "labels".
+            Must be one of "labels", "vars". The default is "labels".
         filter_missings : bool, optional
             Filter out values where `labels` data is -1. If broadcast is `vars`
-            also values where `vars` is -1 are filtered. When enabled, the
-            data is load into memory. The default is False.
+            also values where `vars` is -1 are filtered. This will raise an
+            error if the filtered data still contains nan's.
+            When enabled, the data is load into memory. The default is False.
 
 
         Yields
@@ -486,6 +482,15 @@ class Constraints:
                     labels = np.ravel(self.labels[name].broadcast_like(values))
                     mask &= labels != -1
                 flat = flat[mask]
+                if pd.isna(flat).any():
+                    names = self.dataset_names
+                    ds_name = names[self.dataset_attrs.index(key)]
+                    bc_name = names[self.dataset_attrs.index(broadcast_like)]
+                    err = (
+                        f"{ds_name} of constraint '{name}' are missing (nan) "
+                        f"where {bc_name.lower()} are defined (not -1)."
+                    )
+                    raise ValueError(err)
             else:
                 flat = broadcasted.data.ravel()
             yield flat
