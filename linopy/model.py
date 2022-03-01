@@ -1115,9 +1115,11 @@ class Model:
             raise NotImplementedError("Solver model must be a Gurobi Model.")
 
         solver_model.computeIIS()
-        with NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-") as f:
-            solver_model.write(f.name)
-            print(f.read().decode())
+        f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
+        solver_model.write(f.name)
+        print(f.read().decode())
+        f.close()
+        os.unlink(f.name)
 
     to_netcdf = to_netcdf
 
