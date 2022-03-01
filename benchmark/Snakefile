@@ -1,0 +1,160 @@
+import linopy
+import pyomo
+
+NRANGE = [10, 20, 50, 100, 200, 300, 400, 500, 600, 800]
+#NRANGE = [10, 20]
+SOLVERS = ["gurobi"]
+APIS = ['pyomo', 'linopy', 'jump', 'solver']
+INTEGERLABELS = True
+
+
+rule all:
+    input: expand("benchmarks/{solver}/time.pdf", solver=SOLVERS)
+
+# For time benchmarks, use one process for all runs (skip import and jit compilation times)
+rule benchmark_linopy:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    output:
+        "benchmarks/{solver}/linopy-time.csv"
+    script: "scripts/benchmark_linopy.py"
+
+# For memory benchmarks, use single processes
+rule benchmark_linopy_single:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    benchmark:
+        "benchmarks/{solver}/linopy/{N}.txt"
+    script: "scripts/run-linopy.py"
+
+
+# For time benchmarks, use one process for all runs (skip import and jit compilation times)
+rule benchmark_pyomo:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    output:
+        "benchmarks/{solver}/pyomo-time.csv"
+    script: "scripts/benchmark_pyomo.py"
+
+# For memory benchmarks, use single processes
+rule benchmark_pyomo_single:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    benchmark:
+        "benchmarks/{solver}/pyomo/{N}.txt"
+    script: "scripts/run-pyomo.py"
+
+
+# For time & memory benchmarks, use one process for all runs (skip import and jit compilation times)
+rule benchmark_jump:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    output:
+        "benchmarks/{solver}/jump.csv"
+    script: "scripts/benchmark_jump.jl"
+
+
+# For benchmarking solver processes only, we have to start from the lp files
+rule write_lp_files:
+    output:
+        expand("benchmarks/lp_files/{N}.lp", N=NRANGE)
+    script: "scripts/write-lp-file.py"
+
+
+rule benchmark_glpk_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/glpk/solver/{N}.txt"
+    shell: "glpsol --lp {input} --output {input}.sol"
+
+
+rule benchmark_cbc_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/cbc/solver/{N}.txt"
+    shell: "cbc -import {input} -solve -solu {input}.sol"
+
+rule benchmark_gurobi_single:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    benchmark:
+        "benchmarks/gurobi/solver/{N}.txt"
+    shell: "gurobi_cl ResultFile={input}.sol {input}"
+
+
+# Concat benchmark of single processes
+rule concat_benchmarks:
+    params:
+        nrange = NRANGE
+    input:
+        lambda w: expand("benchmarks/{solver}/{api}/{N}.txt", N=NRANGE, solver=w.solver, api=w.api)
+    output:
+        benchmark="benchmarks/{solver}/{api}.csv"
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# Merge and manipulate all benchmarks
+rule merge_benchmarks:
+    params:
+        nrange = NRANGE
+    input:
+        benchmarks = lambda w: expand("benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS),
+        benchmarks_time = lambda w: expand("benchmarks/{solver}/{api}-time.csv", solver=w.solver, api=[api for api in APIS if api in ['pyomo', 'linopy']]),
+    output:
+        benchmark="benchmarks/{solver}/benchmarks.csv"
+    script:
+        "scripts/merge-benchmarks.py"
+
+
+
+rule plot_benchmarks:
+    input:
+        "benchmarks/{solver}/benchmarks.csv"
+    output:
+        "benchmarks/{solver}/benchmark.pdf",
+    notebook:
+        "notebooks/plot-benchmarks.py.ipynb"
+
+
+# Benchmark from network optimization, use a PyPSA-EUR network from https://github.com/PyPSA/pypsa-eur and solve it with the pypsa-linopy/pypsa-pyomo implementation in https://github.com/PyPSA/PyPSA/tree/linopy-optimization
+
+
+rule benchmark_linopy_pypsa_eur:
+    output: "benchmarks/benchmark-linopy-pypsa-eur.dat"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-linopy.py"
+
+rule benchmark_pyomo_pypsa_eur:
+    output: "benchmarks/benchmark-pyomo-pypsa-eur.dat"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pyomo.py"
+
+rule benchmark_pypsa_linopf_pypsa_eur:
+    output: "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
+    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pypsa-linopf.py"
+
+
+rule plot_pypsa_eur_benchmarks:
+    input:
+        linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
+        pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
+    output:
+        "benchmarks/benchmark-pypsa-eur.pdf"
+    script:
+        "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"
+
+rule plot_pypsa_eur_benchmarks_with_pypsa:
+    input:
+        linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
+        pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
+        pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
+    output:
+        "benchmarks/benchmark-pypsa-eur-with-pypsa.pdf"
+    script:
+        "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"

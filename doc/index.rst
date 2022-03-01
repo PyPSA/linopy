@@ -92,6 +92,14 @@ This package is published under license GNU Public License GPLv3
 .. toctree::
    :hidden:
    :maxdepth: 2
+   :caption: Benchmarking
+
+   benchmark
+   syntax
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
    :caption: References
 
    api

@@ -2,6 +2,19 @@ Installing solvers
 ==================
 
 
+**linopy** supports the following solvers
+
+-  `Cbc <https://projects.coin-or.org/Cbc>`__ - open source, free, fast
+-  `GLPK <https://www.gnu.org/software/glpk/>`__ - open source, free, not very fast
+-  `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__ - open source, free, fast
+-  `Gurobi <https://www.gurobi.com/>`__  - closed source, commercial, very fast
+-  `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__ - closed source, commercial, very fast
+-  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
+
+
+Please click on the links to get further installation information. In the following we provide additional installation guides for a subset of the above listed solvers.
+
+
 HiGHS
 ------
 
@@ -13,14 +26,14 @@ https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set.
 
 **Installation on Linux**
 
-The script work for version HiGHS 1.1.1. The installation steps are
+The script work for version HiGHS 1.2. The installation steps are
 
 .. code:: bash
 
     sudo apt-get install cmake  # if not installed
     git clone git@github.com:ERGO-Code/HiGHS.git
     cd HiGHS
-    git checkout 95342daa73543cc21e5b27db3e0fbf7330007541 # moves to HiGHS 1.1.1
+    git checkout v1.2
     mkdir build
     cd build
     cmake ..
