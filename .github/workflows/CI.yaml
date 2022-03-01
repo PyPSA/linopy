@@ -5,7 +5,14 @@ on: [push]
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
 
     steps:
     - uses: actions/checkout@v2
@@ -13,13 +20,35 @@ jobs:
       uses: actions/setup-python@v1
       with:
         python-version: 3.8
+
+    - name: Install ubuntu dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get install glpk-utils
+        sudo apt-get install coinor-cbc
+
+    - name: Install macos dependencies
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install glpk hdf5
+
+    - name: Set up windows package manager
+      if: matrix.os == 'windows-latest'
+      uses: crazy-max/ghaction-chocolatey@v1
+      with:
+          args: -h
+
+    - name: Install windows dependencies
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install glpk
+
     - name: Install dependencies
       run: |
-        sudo apt-get install coinor-cbc
-        sudo apt-get install -y glpk-utils
         python -m pip install --upgrade pip
         pip install -e .[dev]
         pip install cplex xpress gurobipy
+
     - name: Lint with flake8
       run: |
         pip install flake8
@@ -27,9 +56,10 @@ jobs:
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=benchmark/scripts
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
     - name: Test with pytest
       run: |
-        export HDF5_USE_FILE_LOCKING=FALSE
         pytest --cov=./ --cov-report=xml
+
     - name: Upload code coverage report
       uses: codecov/codecov-action@v2

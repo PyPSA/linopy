@@ -16,14 +16,18 @@ from xarray import DataArray, Dataset
 
 available_solvers = []
 
+if os.name == "nt":
+    which = "where"
+else:
+    which = "which"
 
-if sub.run(["which", "glpsol"], stdout=sub.DEVNULL).returncode == 0:
+if sub.run([which, "glpsol"], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append("glpk")
 
-if sub.run(["which", "cbc"], stdout=sub.DEVNULL).returncode == 0:
+if sub.run([which, "cbc"], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append("cbc")
 
-if sub.run(["which", "highs"], stdout=sub.DEVNULL).returncode == 0:
+if sub.run([which, "highs"], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append("highs")
 
 try:
