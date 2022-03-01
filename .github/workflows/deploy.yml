@@ -3,9 +3,9 @@ name: Deploy Package
 on: [push]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
+  build-n-publish:
+    name: Build and publish Python 🐍 distributions 📦 to PyPI and TestPyPI
+    runs-on: ubuntu-18.04
 
     steps:
     - uses: actions/checkout@master
