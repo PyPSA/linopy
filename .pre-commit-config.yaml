@@ -38,6 +38,7 @@ repos:
     -   id: jupyter-nb-clear-output
         name: jupyter-nb-clear-output
         files: \.ipynb$
+        exclude: solve-on-remote.ipynb
         stages: [commit]
         language: system
         entry: jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace
