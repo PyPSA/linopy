@@ -6,13 +6,28 @@ Linopy expressions module.
 This module contains definition related to affine expressions.
 """
 
+import functools
+import logging
+
 import numpy as np
+import pandas as pd
 import xarray as xr
 from xarray import DataArray, Dataset
 from xarray.core.groupby import _maybe_reorder, peek_at
 
 from linopy import variables
 from linopy.common import as_dataarray
+
+
+def exprwrap(method):
+    @functools.wraps(method)
+    def _exprwrap(*args, **kwargs):
+        return LinearExpression(method(*args, **kwargs))
+
+    return _exprwrap
+
+
+logger = logging.getLogger(__name__)
 
 
 class LinearExpression(Dataset):
@@ -252,15 +267,50 @@ class LinearExpression(Dataset):
         """
         # when assigning arrays to Datasets it is taken as coordinates
         # support numpy arrays and convert them to dataarrays
-        ds_list = [
-            Dataset({"coeffs": as_dataarray(c), "vars": as_dataarray(v)})
-            for c, v in tuples
-        ]
+        ds_list = []
+        for (c, v) in tuples:
+            v = as_dataarray(v)
+
+            if isinstance(c, np.ndarray) or _pd_series_wo_index_name(c):
+                c = DataArray(c, v.coords)
+            elif _pd_dataframe_wo_axes_names(c):
+                if v.ndim == 1:
+                    c = DataArray(c, v.coords, dims=("dim_0", v.dims[0]))
+                else:
+                    c = DataArray(c, v.coords)
+            else:
+                c = as_dataarray(c)
+            ds_list.append(Dataset({"coeffs": c, "vars": v}))
+
         if len(ds_list) > 1:
             ds = xr.concat(ds_list, dim="_term", coords="minimal")
         else:
             ds = ds_list[0].expand_dims("_term")
         return LinearExpression(ds)
+
+    def where(self, cond, **kwargs):
+        """
+        Filter variables based on a condition.
+
+        This operation call ``xarray.Dataset.where`` but sets the default
+        fill value to -1 for variables and ensures preserving the linopy.LinearExpression type.
+
+        Parameters
+        ----------
+        cond : DataArray or callable
+            Locations at which to preserve this object's values. dtype must be `bool`.
+            If a callable, it must expect this object as its only parameter.
+        **kwargs :
+            Keyword arguments passed to ``xarray.Dataset.where``
+
+        Returns
+        -------
+        linopy.LinearExpression
+        """
+        # Cannot set `other` if drop=True
+        if not kwargs.get("drop", False) and "other" not in kwargs:
+            kwargs["other"] = self.fill_value
+        return self.__class__(DataArray.where(self, cond, **kwargs))
 
     def group_terms(self, group):
         """
@@ -369,6 +419,40 @@ class LinearExpression(Dataset):
         if not np.issubdtype(self.vars.dtype, np.integer):
             return self.assign(vars=self.vars.fillna(-1).astype(int))
         return self
+
+    # Wrapped function which would convert variable to dataarray
+    astype = exprwrap(Dataset.astype)
+
+    bfill = exprwrap(DataArray.bfill)
+
+    broadcast_like = exprwrap(DataArray.broadcast_like)
+
+    clip = exprwrap(DataArray.clip)
+
+    ffill = exprwrap(DataArray.ffill)
+
+    fillna = exprwrap(DataArray.fillna)
+
+
+def _pd_series_wo_index_name(ds):
+    if isinstance(ds, pd.Series):
+        if ds.index.name is None:
+            return True
+    return False
+
+
+def _pd_dataframe_wo_axes_names(df):
+    if isinstance(df, pd.DataFrame):
+        if df.index.name is None and df.columns.name is None:
+            return True
+        elif df.index.name is None or df.columns.name is None:
+            logger.warning(
+                "Pandas DataFrame has only one labeled axis. "
+                "This might lead to unexpected dimension alignment "
+                "of the resulting expression."
+            )
+            return False
+    return False
 
 
 def merge(*exprs, dim="_term"):

@@ -90,6 +90,23 @@ def test_variable_to_linexpr():
         x - 10
 
 
+def test_variable_to_linexpr_with_array():
+    expr = np.arange(20) * v
+    isinstance(expr, LinearExpression)
+
+
+def test_variable_to_linexpr_with_series():
+    lhs = pd.Series(np.arange(20)), v
+    expr = m.linexpr(lhs)
+    isinstance(expr, LinearExpression)
+
+
+def test_variable_to_linexpr_with_dataframe():
+    lhs = pd.DataFrame({"a": np.arange(20)}).T, v
+    expr = m.linexpr(lhs)
+    isinstance(expr, LinearExpression)
+
+
 def test_expr_to_anonymous_constraint():
     expr = 10 * x + y
     con = expr <= 10
@@ -142,6 +159,18 @@ def test_sum():
     assert res.notnull().all().to_array().all()
 
     assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+
+
+def test_where():
+    expr = np.arange(20) * v
+    expr = expr.where(expr.coeffs >= 10)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 1
+
+    expr = np.arange(20) * v
+    expr = expr.where(expr.coeffs >= 10, drop=True).sum()
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 10
 
 
 def test_merge():

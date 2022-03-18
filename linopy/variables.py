@@ -310,7 +310,7 @@ class Variable(DataArray):
         """
         Filter variables based on a condition.
 
-        This opereration call ``xarray.DataArray.where`` but sets the default
+        This operation call ``xarray.DataArray.where`` but sets the default
         fill value to -1 and ensures preserving the linopy.Variable type.
 
         Parameters
