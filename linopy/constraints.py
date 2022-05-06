@@ -178,6 +178,8 @@ class Constraint(DataArray):
             "Dimensions of new values not a subset of labels dimensions, "
             "therefore the new signs cannot be aligned with the existing labels."
         )
+        if (value == "==").any():
+            raise ValueError('Sign "==" not supported, use "=" instead.')
         self.model.constraints.sign[self.name] = value
 
     @property

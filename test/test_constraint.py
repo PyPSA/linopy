@@ -52,8 +52,8 @@ def test_constraint_accessor():
     c.coeffs = 3
     assert c.coeffs.item() == 3
 
-    c.sign = "=="
-    assert c.sign.item() == "=="
+    c.sign = "="
+    assert c.sign.item() == "="
 
 
 def test_constraint_accessor_M():
