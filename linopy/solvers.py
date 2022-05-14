@@ -250,7 +250,7 @@ def run_glpk(
     if "Marginal" in dual_:
         dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
     else:
-        logger.warning("Shadow prices of MILP couldn't be parsed")
+        logger.warning("Dual values of MILP couldn't be parsed")
         dual = None
 
     solution = io.StringIO("".join(read_until_break(f))[:-2])
@@ -463,7 +463,7 @@ def run_cplex(
         dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
         dual = set_int_index(dual)
     else:
-        logger.warning("Shadow prices of MILP couldn't be parsed")
+        logger.warning("Dual values of MILP couldn't be parsed")
         dual = None
 
     return dict(
@@ -587,7 +587,7 @@ def run_gurobi(
         dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
         dual = set_int_index(dual)
     except AttributeError:
-        logger.warning("Shadow prices of MILP couldn't be parsed")
+        logger.warning("Dual values of MILP couldn't be parsed")
         dual = None
 
     return dict(
@@ -686,7 +686,7 @@ def run_xpress(
         dual = pd.Series(m.getDual(dual), index=dual)
         dual = set_int_index(dual)
     except xpress.SolverError:
-        logger.warning("Shadow prices of MILP couldn't be parsed")
+        logger.warning("Dual values of MILP couldn't be parsed")
         dual = None
 
     return dict(
