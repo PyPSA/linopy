@@ -21,10 +21,16 @@ import linopy.expressions as expressions
 from linopy.common import _merge_inplace
 
 
-def varwrap(method):
+def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
     def _varwrap(*args, **kwargs):
-        return Variable(method(*args, **kwargs))
+        for k, v in new_default_kwargs.items():
+            kwargs.setdefault(k, v)
+        return Variable(method(*default_args, *args, **kwargs))
+
+    _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    if new_default_kwargs:
+        _varwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
     return _varwrap
 
@@ -354,6 +360,8 @@ class Variable(DataArray):
     ffill = varwrap(DataArray.ffill)
 
     fillna = varwrap(DataArray.fillna)
+
+    shift = varwrap(DataArray.shift, fill_value=-1)
 
 
 @dataclass(repr=False)

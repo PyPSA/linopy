@@ -91,6 +91,14 @@ def test_variable_where():
     assert x.loc[9].item() == -1
 
 
+def test_variable_shift():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+    x = x.shift(dim_0=3)
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.loc[0].item() == -1
+
+
 def test_variable_sanitize():
     m = Model()
     x = m.add_variables(coords=[range(10)])

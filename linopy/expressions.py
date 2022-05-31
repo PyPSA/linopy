@@ -19,10 +19,16 @@ from linopy import variables
 from linopy.common import as_dataarray
 
 
-def exprwrap(method):
+def exprwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
     def _exprwrap(*args, **kwargs):
+        for k, v in new_default_kwargs.items():
+            kwargs.setdefault(k, v)
         return LinearExpression(method(*args, **kwargs))
+
+    _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    if new_default_kwargs:
+        _exprwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
     return _exprwrap
 
