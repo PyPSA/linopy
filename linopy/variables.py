@@ -8,11 +8,14 @@ This module contains variable related definitions of the package.
 import functools
 import re
 from dataclasses import dataclass
+from distutils.log import warn
 from typing import Any, Sequence, Union
+from warnings import warn
 
 import dask
 import numpy as np
 import pandas as pd
+from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
@@ -190,7 +193,7 @@ class Variable(DataArray):
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
 
-    def group_terms(self, group):
+    def groupby_sum(self, group):
         """
         Sum variable over groups.
 
@@ -206,7 +209,13 @@ class Variable(DataArray):
         -------
         Grouped linear expression.
         """
-        return self.to_linexpr().group_terms(group)
+        return self.to_linexpr().groupby_sum(group)
+
+    def group_terms(self, group):
+        warn(
+            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
+        )
+        return self.groupby_sum(group)
 
     @property
     def upper(self):

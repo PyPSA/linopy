@@ -8,6 +8,7 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -318,7 +319,7 @@ class LinearExpression(Dataset):
             kwargs["other"] = self.fill_value
         return self.__class__(DataArray.where(self, cond, **kwargs))
 
-    def group_terms(self, group):
+    def groupby_sum(self, group):
         """
         Sum expression over groups.
 
@@ -352,6 +353,12 @@ class LinearExpression(Dataset):
         combined = groups._maybe_restore_empty_groups(combined)
         res = groups._maybe_unstack(combined).reset_index("_term", drop=True)
         return self.__class__(res)
+
+    def group_terms(self, group):
+        warn(
+            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
+        )
+        return self.groupby_sum(group)
 
     @property
     def nterm(self):

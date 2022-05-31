@@ -235,16 +235,16 @@ def test_sanitize():
     assert isinstance(expr.sanitize(), LinearExpression)
 
 
-def test_group_terms():
+def test_groupby_sum():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.to_linexpr().group_terms(groups)
+    grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
     assert (grouped.group == [1, 2]).all()
     assert grouped._term.size == 10
 
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = v.to_linexpr().group_terms(groups)
+    grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
     # first group must be full with vars
     assert (grouped.sel(group=1) > 0).all()
@@ -254,9 +254,9 @@ def test_group_terms():
     assert grouped._term.size == 12
 
 
-def test_group_terms_variable():
+def test_groupby_sum_variable():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.group_terms(groups)
+    grouped = v.groupby_sum(groups)
     assert "group" in grouped.dims
     assert (grouped.group == [1, 2]).all()
     assert grouped._term.size == 10

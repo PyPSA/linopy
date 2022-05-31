@@ -9,6 +9,7 @@ Upcoming Release
 
 * Improved type security when applying xarray functions on variables linear expressions and constraints.
 * Correct block assignment for upcoming PIPS-IPM++ implementation.
+* The function ``group_terms`` was renamed to ``groupby_sum``.
 
 
 Version 0.0.9
