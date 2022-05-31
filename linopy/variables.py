@@ -13,7 +13,6 @@ from typing import Any, Sequence, Union
 import dask
 import numpy as np
 import pandas as pd
-from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
@@ -283,14 +282,6 @@ class Variable(DataArray):
         if self.model.status != "ok":
             raise AttributeError("Underlying model not optimized.")
         return self.model.solution[self.name]
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `lower` accessor instead.")
-    def get_lower_bound(self):
-        return self.lower
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `upper` accessor instead.")
-    def get_upper_bound(self):
-        return self.upper
 
     def sum(self, dims=None):
         """

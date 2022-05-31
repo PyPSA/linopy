@@ -13,7 +13,6 @@ import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from deprecation import deprecated
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
 
@@ -222,22 +221,6 @@ class Constraint(DataArray):
                 "Underlying is optimized but does not have dual values stored."
             )
         return self.model.dual[self.name]
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `coeffs` accessor instead.")
-    def get_coeffs(self):
-        return self.coeffs
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `vars` accessor instead.")
-    def get_vars(self):
-        return self.vars
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `sign` accessor instead.")
-    def get_sign(self):
-        return self.sign
-
-    @deprecated("0.0.5", "0.0.6", details="Use the `rhs` accessor instead.")
-    def get_rhs(self):
-        return self.rhs
 
 
 @dataclass(repr=False)
