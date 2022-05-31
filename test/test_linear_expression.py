@@ -260,3 +260,18 @@ def test_groupby_sum_variable():
     assert "group" in grouped.dims
     assert (grouped.group == [1, 2]).all()
     assert grouped._term.size == 10
+
+
+def test_rolling_sum():
+    rolled = v.to_linexpr().rolling_sum(dim_2=2)
+    assert rolled.nterm == 2
+
+    # multi-dimensional rolling with non-scalar _term dimension
+    expr = 10 * x + v
+    rolled = expr.rolling_sum(dim_2=3)
+    assert rolled.nterm == 6
+
+
+def test_rolling_sum_variable():
+    rolled = v.rolling_sum(dim_2=2)
+    assert rolled.nterm == 2

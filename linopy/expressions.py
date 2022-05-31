@@ -360,6 +360,36 @@ class LinearExpression(Dataset):
         )
         return self.groupby_sum(group)
 
+    def rolling_sum(self, **kwargs):
+        """
+        Rolling sum of the linear expression.
+
+        Parameters
+        ----------
+        **kwargs :
+            Keyword arguments passed to ``xarray.Dataset.rolling``.
+
+        Returns
+        -------
+        linopy.LinearExpression
+        """
+
+        coeffs = xr.DataArray.rolling(self.coeffs, **kwargs).construct(
+            "_rolling_term", keep_attrs=True
+        )
+
+        vars = xr.DataArray.rolling(self.vars, **kwargs).construct(
+            "_rolling_term", fill_value=self.fill_value["vars"], keep_attrs=True
+        )
+
+        ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
+        ds = (
+            ds.rename(_term="_stacked_term")
+            .stack(_term=["_stacked_term", "_rolling_term"])
+            .reset_index("_term", drop=True)
+        )
+        return self.__class__(ds).assign_attrs(self.attrs)
+
     @property
     def nterm(self):
         """

@@ -217,6 +217,21 @@ class Variable(DataArray):
         )
         return self.groupby_sum(group)
 
+    def rolling_sum(self, **kwargs):
+        """
+        Rolling sum of variable.
+
+        Parameters
+        ----------
+        **kwargs :
+            Keyword arguments passed to xarray.DataArray.rolling.
+
+        Returns
+        -------
+        Rolling sum of variable.
+        """
+        return self.to_linexpr().rolling_sum(**kwargs)
+
     @property
     def upper(self):
         """
