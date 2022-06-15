@@ -204,7 +204,7 @@ def to_block_files(m, fn):
     m.calculate_block_maps()
 
     N = int(m.blocks.max())
-    for n in range(N + 1):
+    for n in range(N + 2):
         (path / f"block{n}").mkdir()
 
     vars = m.variables
@@ -231,7 +231,7 @@ def to_block_files(m, fn):
     is_equality = cons.ravel(cons.sign == "=", filter_missings=True)
     is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True)
 
-    for n in tqdm(range(N + 1), desc="Write RHS"):
+    for n in tqdm(range(N + 2), desc="Write RHS"):
         is_blockn = blocks == n
 
         rhs[is_blockn & is_equality].tofile(path / f"block{n}" / "b", sep="\n")
