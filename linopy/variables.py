@@ -171,7 +171,9 @@ class Variable(DataArray):
         """
         Add variables to linear expressions or other variables.
         """
-        if isinstance(other, Variable):
+        if isinstance(
+            other, (Variable, DataArray, pd.DataFrame, pd.Series, np.ndarray)
+        ):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, expressions.LinearExpression):
             return self.to_linexpr() + other
@@ -377,6 +379,8 @@ class Variable(DataArray):
     fillna = varwrap(DataArray.fillna)
 
     shift = varwrap(DataArray.shift, fill_value=-1)
+
+    roll = varwrap(DataArray.roll)
 
 
 @dataclass(repr=False)

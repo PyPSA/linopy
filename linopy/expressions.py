@@ -290,7 +290,7 @@ class LinearExpression(Dataset):
             ds_list.append(Dataset({"coeffs": c, "vars": v}))
 
         if len(ds_list) > 1:
-            ds = xr.concat(ds_list, dim="_term", coords="minimal")
+            ds = xr.concat(ds_list, dim="_term", coords="minimal", compat="override")
         else:
             ds = ds_list[0].expand_dims("_term")
         return LinearExpression(ds)
@@ -335,7 +335,7 @@ class LinearExpression(Dataset):
         -------
         Grouped linear expression.
         """
-        groups = self.groupby(group)
+        groups = xr.Dataset.groupby(self, group)
 
         def func(ds):
             ds = ds.sum(groups._group_dim)
@@ -466,15 +466,41 @@ class LinearExpression(Dataset):
     # Wrapped function which would convert variable to dataarray
     astype = exprwrap(Dataset.astype)
 
-    bfill = exprwrap(DataArray.bfill)
+    bfill = exprwrap(Dataset.bfill)
 
-    broadcast_like = exprwrap(DataArray.broadcast_like)
+    broadcast_like = exprwrap(Dataset.broadcast_like)
 
-    clip = exprwrap(DataArray.clip)
+    coarsen = exprwrap(Dataset.coarsen)
 
-    ffill = exprwrap(DataArray.ffill)
+    clip = exprwrap(Dataset.clip)
 
-    fillna = exprwrap(DataArray.fillna)
+    ffill = exprwrap(Dataset.ffill)
+
+    fillna = exprwrap(Dataset.fillna)
+
+    shift = exprwrap(Dataset.shift)
+
+    reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
+
+    roll = exprwrap(Dataset.roll)
+
+    # TODO: explicitly disable `dangerous` functions
+    rolling = property()
+    conj = property()
+    conjugate = property()
+    count = property()
+    cumsum = property()
+    cumprod = property()
+    cumulative_integrate = property()
+    curvefit = property()
+    diff = property()
+    differentiate = property()
+    groupby = property()
+    groupby_bins = property()
+    integrate = property()
+    interp = property()
+    polyfit = property()
+    prod = property()
 
 
 def _pd_series_wo_index_name(ds):

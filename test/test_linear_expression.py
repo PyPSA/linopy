@@ -275,3 +275,10 @@ def test_rolling_sum():
 def test_rolling_sum_variable():
     rolled = v.rolling_sum(dim_2=2)
     assert rolled.nterm == 2
+
+
+def test_shift():
+    shifted = v.to_linexpr().shift(dim_2=2)
+    assert shifted.nterm == 1
+    assert shifted.coeffs.loc[:1].isnull().all()
+    assert (shifted.vars.loc[:1] == -1).all()
