@@ -4,8 +4,8 @@ Release Notes
 Upcoming Release
 ----------------
 
-.. Version 0.0.10
-.. --------------
+Version 0.0.10
+--------------
 
 * Improved type security when applying xarray functions on variables linear expressions and constraints.
 * Correct block assignment for upcoming PIPS-IPM++ implementation.
