@@ -195,6 +195,16 @@ class Variable(DataArray):
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
 
+    @property
+    def at(self):
+        """
+        Access single variable for a single coordinate.
+
+        In contrast to the `.loc` accessor, the `.at` accessor returns a
+        ScalarVariable.
+        """
+        return _AtIndexer(self)
+
     def groupby_sum(self, group):
         """
         Sum variable over groups.
@@ -606,3 +616,48 @@ class Variables:
             res[np.ravel(labels)] = np.ravel(block_map[name])
         res[-1] = -1
         return res
+
+
+@dataclass(slots=True)
+class ScalarVariable:
+    label: int
+    coords: dict = None
+
+    def to_linexpr(self, coeff=1):
+        if not isinstance(coeff, (int, float)):
+            raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
+        return expressions.ScalarLinearExpression([coeff], [self.label], self.coords)
+
+    def __neg__(self):
+        return self.to_linexpr(-1)
+
+    def __add__(self, other):
+        return self.to_linexpr(1) + other
+
+    def __sub__(self, other):
+        return self.to_linexpr(1) - other
+
+    def __mul__(self, coeff):
+        return self.to_linexpr(coeff)
+
+    def __rmul__(self, coeff):
+        return self.to_linexpr(coeff)
+
+    def __div__(self, coeff):
+        return self.to_linexpr(1 / coeff)
+
+    def __rdiv__(self, coeff):
+        return self.to_linexpr(1 / coeff)
+
+
+class _AtIndexer:
+    __slots__ = ("data_array",)
+
+    def __init__(self, data_array: "DataArray"):
+        self.data_array = data_array
+
+    def __getitem__(self, keys) -> "DataArray":
+        key = dict(zip(self.data_array.dims, keys))
+        selector = [self.data_array.get_index(k).get_loc(v) for k, v in key.items()]
+        label = self.data_array.data[tuple(selector)]
+        return ScalarVariable(label, key)

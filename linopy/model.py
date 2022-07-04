@@ -717,11 +717,17 @@ class Model:
         >>> m.add_variables(4, pd.Series([8, 10]), name="y")
         >>> expr = m.linexpr((10, "x"), (1, "y"))
         """
-        tuples = [
-            (c, self.variables[v]) if isinstance(v, str) else (c, v)
-            for (c, v) in tuples
-        ]
-        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+        if callable(tuples[-1]):
+            coords, rule = tuples[:-1], tuples[-1]
+            return LinearExpression.from_rule(self, *coords, rule=rule)
+        if isinstance(*tuples, tuple):
+            tuples = [
+                (c, self.variables[v]) if isinstance(v, str) else (c, v)
+                for (c, v) in tuples
+            ]
+            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+        else:
+            raise TypeError(f"Not supported type {tuples}.")
 
     def _eval(self, expr: str, **kwargs):
         from pandas.core.computation.eval import eval as pd_eval
