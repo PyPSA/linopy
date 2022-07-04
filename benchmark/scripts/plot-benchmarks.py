@@ -13,7 +13,7 @@ import seaborn as sns
 df = [pd.read_csv(fn) for fn in snakemake.input]
 df = pd.concat(df, ignore_index=True)
 
-df["# Variables"] = df.N ** 2 * 2
+df["# Variables"] = df.N**2 * 2
 
 fig, ax = plt.subplots()
 sns.lineplot(x="# Variables", y="Time [s]", hue="API", data=df, ax=ax)

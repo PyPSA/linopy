@@ -19,8 +19,8 @@ for api in df_time.API.unique():
     df.loc[df.API == api, "Time"] = df_time.loc[df.API == api, "Time"].values
 
 
-df["Number of Variables"] = df.N ** 2 * 2
-df["Number of Constraints"] = df.N ** 2 * 2
+df["Number of Variables"] = df.N**2 * 2
+df["Number of Constraints"] = df.N**2 * 2
 
 
 # Make a correction of the memory usage:
