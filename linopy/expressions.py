@@ -10,7 +10,6 @@ import functools
 import logging
 from dataclasses import dataclass
 from itertools import product, zip_longest
-from stat import FILE_ATTRIBUTE_NO_SCRUB_DATA
 from warnings import warn
 
 import numpy as np
@@ -343,7 +342,13 @@ class LinearExpression(Dataset):
         >>> expr = LinearExpression.from_rule(m, *coords, rule=bound)
         >>> m.add_constraints(expr <= 10)
         """
-        shape = list(map(len, coords))
+        # Test output type
+        output = rule(model, *[c[0] for c in coords])
+        if not isinstance(output, ScalarLinearExpression):
+            raise TypeError(
+                "Return type of `rule` has to be "
+                f"ScalarLinearExpression, got {type(output)}."
+            )
 
         coeffs = []
         vars = []
@@ -352,26 +357,7 @@ class LinearExpression(Dataset):
             coeffs.append(linexpr.coeffs)
             vars.append(linexpr.vars)
 
-        coeffs = np.array(list(zip_longest(*coeffs, fillvalue=np.nan)))
-        vars = np.array(list(zip_longest(*vars, fillvalue=-1)))
-
-        nterm = vars.shape[0]
-
-        coeffs = coeffs.reshape((nterm, *shape))
-        vars = vars.reshape((nterm, *shape))
-
-        _term = pd.RangeIndex(nterm)
-        if isinstance(coords, dict):
-            new_coords = {"_term": _term, **coords}
-        elif isinstance(coords, tuple):
-            new_coords = (("_term", _term), *coords)
-
-        coeffs = DataArray(coeffs, new_coords)
-        vars = DataArray(vars, new_coords)
-
-        ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
-
-        return LinearExpression(ds)
+        return _from_irregular_lists(coeffs, vars, coords)
 
     def where(self, cond, **kwargs):
         """
@@ -604,6 +590,34 @@ def _pd_dataframe_wo_axes_names(df):
     return False
 
 
+def _from_irregular_lists(coeffs, vars, coords):
+    """
+    Create a LinearExpression from a list of lists with different lengths.
+    """
+    shape = list(map(len, coords))
+
+    coeffs = np.array(tuple(zip_longest(*coeffs, fillvalue=np.nan)))
+    vars = np.array(tuple(zip_longest(*vars, fillvalue=-1)))
+
+    nterm = vars.shape[0]
+
+    coeffs = coeffs.reshape((nterm, *shape))
+    vars = vars.reshape((nterm, *shape))
+
+    _term = pd.RangeIndex(nterm)
+    if isinstance(coords, dict):
+        new_coords = {"_term": _term, **coords}
+    elif isinstance(coords, tuple):
+        new_coords = (("_term", _term), *coords)
+
+    coeffs = DataArray(coeffs, new_coords)
+    vars = DataArray(vars, new_coords)
+
+    ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
+
+    return LinearExpression(ds)
+
+
 def merge(*exprs, dim="_term"):
     """
     Merge multiple linear expression together.
@@ -672,14 +686,92 @@ class AnonymousConstraint:
             f"\n{rhs_string}"
         )
 
+    def from_rule(model, *coords, rule):
+        """
+        Create a constraint from a rule and a set of coordinates.
+
+        This functionality mirrors the assignment of constraints as done by
+        Pyomo.
+
+
+        Parameters
+        ----------
+        model : linopy.Model
+            Passed to function `rule` as a first argument.
+        *coords :
+            Set of coordinates of the new constraint. For each
+            combination of coordinates, the function given by `rule` is called.
+            The order and size of coords has to be same as the argument list
+            in function rule.
+        rule : callable
+            Function to be called for each combinations in `coords`.
+            The first argument of the function is the underlying `linopy.Model`.
+            The following arguments are given by the coordinates for accessing
+            the variables. The function has to return a
+            `AnonymousScalarConstraint`. Therefore use the `.at` accessor when
+            indexing variables in the linear expression.
+
+
+        Returns
+        -------
+        linopy.AnonymousConstraint
+
+        Examples
+        --------
+        >>> from linopy import Model, LinearExpression
+        >>> m = Model()
+        >>> coords = pd.RangeIndex(10), ["a", "b"]
+        >>> x = m.add_variables(0, 100, coords)
+        >>> def bound(m, i, j):
+        ...     if i % 2:
+        ...         return (i - 1) * x.at[i - 1, j] >= 0
+        ...     else:
+        ...         return i * x.at[i, j] >= 0
+        ...
+        >>> con = AnonymousConstraint.from_rule(m, *coords, rule=bound)
+        >>> m.add_constraints(con)
+        """
+        # Test output type
+        output = rule(model, *[c[0] for c in coords])
+        if not isinstance(output, AnonymousScalarConstraint):
+            raise TypeError(
+                "Return type of `rule` has to be "
+                f"AnonymousScalarConstraint, got {type(output)}."
+            )
+
+        coeffs = []
+        vars = []
+        sign = []
+        rhs = []
+        for coord in product(*coords):
+            linexpr = rule(model, *coord)
+            coeffs.append(linexpr.coeffs)
+            vars.append(linexpr.vars)
+
+        return _from_irregular_lists(coeffs, vars, coords)
+
 
 @dataclass(slots=True)
 class ScalarLinearExpression:
-    coeffs: list
-    vars: list
+    coeffs: tuple
+    vars: tuple
     coords: dict = None
 
     def __add__(self, other):
+        if isinstance(other, variables.ScalarVariable):
+            coeffs = self.coeffs + (1,)
+            vars = self.vars + (other.label,)
+            return ScalarLinearExpression(coeffs, vars)
+        elif not isinstance(other, ScalarLinearExpression):
+            raise TypeError(
+                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
+            )
+
+        coeffs = self.coeffs + other.coeffs
+        vars = self.vars + other.vars
+        return ScalarLinearExpression(coeffs, vars)
+
+    def __sub__(self, other):
         if isinstance(other, variables.ScalarVariable):
             other = other.to_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
@@ -688,7 +780,7 @@ class ScalarLinearExpression:
             )
 
         return ScalarLinearExpression(
-            self.coeffs + other.coeffs, self.vars + other.vars
+            self.coeffs + tuple(-c for c in other.coeffs), self.vars + other.vars
         )
 
     def __le__(self, other):

@@ -626,7 +626,7 @@ class ScalarVariable:
     def to_linexpr(self, coeff=1):
         if not isinstance(coeff, (int, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
-        return expressions.ScalarLinearExpression([coeff], [self.label], self.coords)
+        return expressions.ScalarLinearExpression((coeff,), (self.label,))
 
     def __neg__(self):
         return self.to_linexpr(-1)
@@ -660,4 +660,4 @@ class _AtIndexer:
         key = dict(zip(self.data_array.dims, keys))
         selector = [self.data_array.get_index(k).get_loc(v) for k, v in key.items()]
         label = self.data_array.data[tuple(selector)]
-        return ScalarVariable(label, key)
+        return ScalarVariable(label)
