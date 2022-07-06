@@ -684,18 +684,18 @@ class Model:
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
-    def linexpr(self, *tuples):
+    def linexpr(self, *args):
         """
-        Create a linopy.LinearExpression by using variable names.
-
-        Calls the function LinearExpression.from_tuples but loads variables from
-        the model if a variable name is used.
+        Create a linopy.LinearExpression from argument list.
 
         Parameters
         ----------
-        tuples : tuples of (coefficients, variables)
-            Each tuple represents on term in the linear expression, which can
-            span over multiple dimensions:
+        args : tuples of (coefficients, variables) or tuples of
+               coordinates and a function
+            If *args is a collection of coefficients-variables-tuples, the resulting
+            linear expression is built with the function LinearExpression.from_tuples.
+            In this case, each tuple represents on term in the linear expression,
+            which can span over multiple dimensions:
 
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
@@ -705,6 +705,24 @@ class Model:
                 The variable(s) going into the term. These may be referenced
                 by name.
 
+            If *args is a collection of coordinates with an appended function at the
+            end, the function LinearExpression.from_rule is used to build the linear
+            expression. Then, the argument are expected to contain:
+
+            * *coords : tuple of coordinates
+                Set of coordinates of the new linear expression. For each
+                combination of coordinates, the function `rule` is called.
+                The order and size of coords has to be same as the argument list
+                in function `rule`.
+            * rule : callable
+                Function to be called for each combinations in `coords`.
+                The first argument of the function is the underlying `linopy.Model`.
+                The following arguments are given by the coordinates for accessing
+                the variables. The function has to return a
+                `ScalarLinearExpression`. Therefore use the `.at` accessor when
+                indexing variables.
+
+
         Returns
         -------
         linopy.LinearExpression
@@ -712,22 +730,36 @@ class Model:
         Examples
         --------
 
+        For creating an expression from tuples:
         >>> m = Model()
         >>> m.add_variables(pd.Series([0, 0]), 1, name="x")
         >>> m.add_variables(4, pd.Series([8, 10]), name="y")
         >>> expr = m.linexpr((10, "x"), (1, "y"))
+
+        For creating an expression from a rule:
+        >>> m = linopy.Model()
+        >>> coords = pd.RangeIndex(10), ["a", "b"]
+        >>> a = m.add_variables(coords=coords)
+        >>> def rule(m, i, j):
+        ...     return a.at[i, j] + a.at[(i + 1) % 10, j]
+        ...
+        >>> expr = m.linexpr(*coords, rule)
+
+        See also
+        --------
+        LinearExpression.from_tuples, LinearExpression.from_rule
         """
-        if callable(tuples[-1]):
-            coords, rule = tuples[:-1], tuples[-1]
+        if callable(args[-1]):
+            coords, rule = args[:-1], args[-1]
             return LinearExpression.from_rule(self, *coords, rule=rule)
-        if isinstance(*tuples, tuple):
-            tuples = [
+        if isinstance(*args, tuple):
+            args = [
                 (c, self.variables[v]) if isinstance(v, str) else (c, v)
-                for (c, v) in tuples
+                for (c, v) in args
             ]
-            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+            return LinearExpression.from_tuples(*args, chunk=self.chunk)
         else:
-            raise TypeError(f"Not supported type {tuples}.")
+            raise TypeError(f"Not supported type {args}.")
 
     def _eval(self, expr: str, **kwargs):
         from pandas.core.computation.eval import eval as pd_eval
