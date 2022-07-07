@@ -37,3 +37,4 @@ repos:
     rev: v1.2.1
     hooks:
     -   id: jupyter-notebook-cleanup
+        exclude: examples/solve-on-remote.ipynb
