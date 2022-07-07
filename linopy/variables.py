@@ -56,7 +56,7 @@ class Variable(DataArray):
 
     Add variable together:
 
-    >>> x + y
+    >>> x + y  # doctest: +SKIP
     Linear Expression with 2 term(s):
     ----------------------------------
     <BLANKLINE>
@@ -70,7 +70,7 @@ class Variable(DataArray):
 
     Multiply them with a coefficient:
 
-    >>> 3 * x
+    >>> 3 * x  # doctest: +SKIP
     Linear Expression with 1 term(s):
     ----------------------------------
     <BLANKLINE>
