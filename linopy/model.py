@@ -743,15 +743,19 @@ class Model:
         >>> def rule(m, i, j):
         ...     return a.at[i, j] + a.at[(i + 1) % 10, j]
         ...
-        >>> expr = m.linexpr(*coords, rule)
+        >>> expr = m.linexpr(rule, coords)
 
         See also
         --------
         LinearExpression.from_tuples, LinearExpression.from_rule
         """
-        if callable(args[-1]):
-            coords, rule = args[:-1], args[-1]
-            return LinearExpression.from_rule(self, *coords, rule=rule)
+        if callable(args[0]):
+            assert len(args) == 2, (
+                "When first argument is a function, only one second argument "
+                "containing a tuple or a single set of coords must be given."
+            )
+            rule, coords = args
+            return LinearExpression.from_rule(self, rule, coords)
         if isinstance(*args, tuple):
             args = [
                 (c, self.variables[v]) if isinstance(v, str) else (c, v)
