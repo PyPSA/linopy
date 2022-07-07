@@ -33,12 +33,7 @@ repos:
     -   id: codespell
         types_or: [python, rst, markdown]
         files: ^(linopy|doc)/
--   repo: local
+-   repo: https://github.com/aflc/pre-commit-jupyter
+    rev: v1.2.1
     hooks:
-    -   id: jupyter-nb-clear-output
-        name: jupyter-nb-clear-output
-        files: \.ipynb$
-        exclude: solve-on-remote.ipynb
-        stages: [commit]
-        language: system
-        entry: jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace
+    -   id: jupyter-notebook-cleanup
