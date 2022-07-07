@@ -729,10 +729,10 @@ class Model:
                 `ScalarLinearExpression`. Therefore use the direct getter when
                 indexing variables.
             * coords : coordinate-like
-                Coordinates to be processable by xarray.DataArray. For each
+                Coordinates to be processed by `xarray.DataArray`. For each
                 combination of coordinates, the function `rule` is called.
                 The order and size of coords has to be same as the argument list
-                in function `rule`.
+                followed by `model` in function `rule`.
 
 
         Returns

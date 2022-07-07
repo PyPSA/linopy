@@ -311,11 +311,12 @@ class LinearExpression(Dataset):
             the variables. The function has to return a
             `ScalarLinearExpression`. Therefore use the `.at` accessor when
             indexing variables.
-        coords : tuple/coords
-            Tuple of coordinates or single set of coordinates of the new linear
-            expression. For each combination of coordinates, the function
+        coords : coordinate-like
+            Coordinates to processed by `xarray.DataArray`.
+            For each combination of coordinates, the function
             given by `rule` is called. The order and size of coords has
-            to be same as the argument list in function rule.
+            to be same as the argument list followed by `model` in
+            function `rule`.
 
 
         Returns
@@ -669,6 +670,23 @@ class ScalarLinearExpression:
         return ScalarLinearExpression(
             self.coeffs + tuple(-c for c in other.coeffs), self.vars + other.vars
         )
+
+    def __neg__(self):
+        return ScalarLinearExpression(tuple(-c for c in self.coeffs), self.vars)
+
+    def __mul__(self, other):
+        if not isinstance(other, (float, int)):
+            raise TypeError(
+                "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
+            )
+
+        return ScalarLinearExpression(tuple(other * c for c in self.coeffs), self.vars)
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __div__(self, other):
+        return self.__mul__(1 / other)
 
     def __le__(self, other):
         if not isinstance(other, (int, float)):

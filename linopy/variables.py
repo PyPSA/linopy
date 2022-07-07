@@ -642,6 +642,3 @@ class ScalarVariable:
 
     def __div__(self, coeff):
         return self.to_linexpr(1 / coeff)
-
-    def __rdiv__(self, coeff):
-        return self.to_linexpr(1 / coeff)

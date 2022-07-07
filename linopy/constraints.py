@@ -611,11 +611,11 @@ class AnonymousConstraint:
             the variables. The function has to return a
             `AnonymousScalarConstraint`. Therefore use the direct getter when
             indexing variables in the linear expression.
-        coords : tuple / coordinate-like
-            Tuple of coordinates or single coordinate array of the new constraint.
+        coords : coordinate-like
+            Coordinates to processed by `xarray.DataArray`.
             For each combination of coordinates, the function given by `rule` is called.
             The order and size of coords has to be same as the argument list
-            in function rule.
+            followed by `model` in function `rule`.
 
 
         Returns

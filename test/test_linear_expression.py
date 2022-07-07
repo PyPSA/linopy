@@ -288,3 +288,16 @@ def test_shift():
 def test_scalarexpression_creation():
     expr = 10 * x[0] + y[1] + z[1, 1]
     assert isinstance(expr, ScalarLinearExpression)
+
+
+def test_scalarexpression_operations():
+    expr = 10 * x[0]
+    assert isinstance(expr, ScalarLinearExpression)
+
+    expr2 = 2 * expr
+    assert isinstance(expr2, ScalarLinearExpression)
+    assert expr2.coeffs == (20,)
+
+    expr3 = -expr
+    assert isinstance(expr3, ScalarLinearExpression)
+    assert expr3.coeffs == (-10,)
