@@ -102,9 +102,9 @@ class RemoteHandler:
     >>> con2 = m.add_constraints(x + y >= 0)
     >>> obj = m.add_objective((2 * x + y).sum())
     >>>
-    >>> host = "gridlock.fias.uni-frankfurt.de"
-    >>> username = "hofmann"
-    >>> handler = linopy.remote.RemoteHandler(host, username=username)
+    >>> host = "my-remote-machine.com"
+    >>> username = "my-username"
+    >>> handler = linopy.remote.RemoteHandler(host, username=username)  # doctest: +SKIP
     >>>
     >>> # optionally activate a conda environment
     >>> handler.execute("conda activate my-linopy-env")  # doctest: +SKIP
