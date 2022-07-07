@@ -49,7 +49,12 @@ setup(
             "ipykernel",
             "matplotlib",
         ],
-        "dev": ["pytest", "pytest-cov", "pre-commit"],
+        "dev": [
+            "pytest",
+            "pytest-cov",
+            "pre-commit",
+            "paramiko",
+        ],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
