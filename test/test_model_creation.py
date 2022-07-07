@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 10 11:23:13 2021
+Created on Wed Mar 10 11:23:13 2021.
 
 @author: fabulous
 """
@@ -184,8 +184,10 @@ def test_masked_variables():
 
 def test_variable_merging():
     """
-    Test the merger of a variables with same dimension name but with
-    different lengths. Missing values should be filled up with -1.
+    Test the merger of a variables with same dimension name but with different
+    lengths.
+
+    Missing values should be filled up with -1.
     """
     m = Model()
 
