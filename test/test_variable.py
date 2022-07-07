@@ -15,6 +15,22 @@ import linopy
 from linopy import LinearExpression, Model
 
 
+def test_variable_getter():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+
+    assert isinstance(x[0], linopy.variables.ScalarVariable)
+
+    with pytest.raises(AssertionError):
+        x[0, 0]
+
+    with pytest.raises(AssertionError):
+        x[0:5]
+
+    with pytest.raises(AssertionError):
+        x[[1, 2, 3]]
+
+
 def test_variable_repr():
     m = Model()
     m.variables.__repr__()
@@ -129,13 +145,6 @@ def test_variable_getter_without_model():
         v.upper
     with pytest.raises(AttributeError):
         v.lower
-
-
-def test_variable_at_indexing():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
-
-    assert isinstance(x.at[0], linopy.variables.ScalarVariable)
 
 
 def test_get_name_by_label():

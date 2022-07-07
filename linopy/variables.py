@@ -114,6 +114,18 @@ class Variable(DataArray):
     __array_ufunc__ = None
     __array_priority__ = 10000
 
+    def __getitem__(self, keys) -> "ScalarVariable":
+        keys = (keys,) if not isinstance(keys, tuple) else keys
+        assert all(map(np.isscalar, keys)), (
+            "The get function of Variable is different as of xarray.DataArray. "
+            "Set single values for each dimension in order to obtain a "
+            "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
+        )
+        assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
+        key = dict(zip(self.dims, keys))
+        selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(self.data[tuple(selector)])
+
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
@@ -194,16 +206,6 @@ class Variable(DataArray):
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
-
-    @property
-    def at(self):
-        """
-        Access single variable for a single coordinate.
-
-        In contrast to the `.loc` accessor, the `.at` accessor returns a
-        ScalarVariable.
-        """
-        return _AtIndexer(self)
 
     def groupby_sum(self, group):
         """
@@ -648,17 +650,3 @@ class ScalarVariable:
 
     def __rdiv__(self, coeff):
         return self.to_linexpr(1 / coeff)
-
-
-class _AtIndexer:
-    __slots__ = ("data_array",)
-
-    def __init__(self, data_array: "DataArray"):
-        self.data_array = data_array
-
-    def __getitem__(self, keys) -> "DataArray":
-        keys = (keys,) if not isinstance(keys, tuple) else keys
-        key = dict(zip(self.data_array.dims, keys))
-        selector = [self.data_array.get_index(k).get_loc(v) for k, v in key.items()]
-        label = self.data_array.data[tuple(selector)]
-        return ScalarVariable(label)

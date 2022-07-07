@@ -286,5 +286,5 @@ def test_shift():
 
 
 def test_scalarexpression_creation():
-    expr = 10 * x.at[0] + y.at[1] + z.at[1, 1]
+    expr = 10 * x[0] + y[1] + z[1, 1]
     assert isinstance(expr, ScalarLinearExpression)

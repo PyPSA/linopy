@@ -723,18 +723,18 @@ class Model:
             end, the function LinearExpression.from_rule is used to build the linear
             expression. Then, the argument are expected to contain:
 
-            * *coords : tuple of coordinates
-                Set of coordinates of the new linear expression. For each
-                combination of coordinates, the function `rule` is called.
-                The order and size of coords has to be same as the argument list
-                in function `rule`.
             * rule : callable
                 Function to be called for each combinations in `coords`.
                 The first argument of the function is the underlying `linopy.Model`.
                 The following arguments are given by the coordinates for accessing
                 the variables. The function has to return a
-                `ScalarLinearExpression`. Therefore use the `.at` accessor when
+                `ScalarLinearExpression`. Therefore use the direct getter when
                 indexing variables.
+            * coords : coordinate-like
+                Coordinates to be processable by xarray.DataArray. For each
+                combination of coordinates, the function `rule` is called.
+                The order and size of coords has to be same as the argument list
+                in function `rule`.
 
 
         Returns
@@ -755,7 +755,7 @@ class Model:
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
         >>> def rule(m, i, j):
-        ...     return a.at[i, j] + a.at[(i + 1) % 10, j]
+        ...     return a[i, j] + a[(i + 1) % 10, j]
         ...
         >>> expr = m.linexpr(rule, coords)
 

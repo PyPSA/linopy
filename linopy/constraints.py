@@ -609,7 +609,7 @@ class AnonymousConstraint:
             The first argument of the function is the underlying `linopy.Model`.
             The following arguments are given by the coordinates for accessing
             the variables. The function has to return a
-            `AnonymousScalarConstraint`. Therefore use the `.at` accessor when
+            `AnonymousScalarConstraint`. Therefore use the direct getter when
             indexing variables in the linear expression.
         coords : tuple / coordinate-like
             Tuple of coordinates or single coordinate array of the new constraint.
@@ -630,9 +630,9 @@ class AnonymousConstraint:
         >>> x = m.add_variables(0, 100, coords)
         >>> def bound(m, i, j):
         ...     if i % 2:
-        ...         return (i - 1) * x.at[i - 1, j] >= 0
+        ...         return (i - 1) * x[i - 1, j] >= 0
         ...     else:
-        ...         return i * x.at[i, j] >= 0
+        ...         return i * x[i, j] >= 0
         ...
         >>> con = AnonymousConstraint.from_rule(m, bound, coords)
         >>> m.add_constraints(con)

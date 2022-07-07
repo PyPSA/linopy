@@ -337,9 +337,9 @@ class LinearExpression(Dataset):
         >>> x = m.add_variables(0, 100, coords)
         >>> def bound(m, i, j):
         ...     if i % 2:
-        ...         return (i - 1) * x.at[i - 1, j]
+        ...         return (i - 1) * x[i - 1, j]
         ...     else:
-        ...         return i * x.at[i, j]
+        ...         return i * x[i, j]
         ...
         >>> expr = LinearExpression.from_rule(m, *coords, rule=bound)
         >>> m.add_constraints(expr <= 10)
