@@ -380,22 +380,20 @@ class Model:
 
         Examples
         --------
-
-        >>> m = linopy.Model()
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
-
-        ::
-
-            Variable container:
-            -------------------
-
-            Variables:
-            array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])
-            Coordinates:
-                * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
-            Attributes:
-                name:     x
+        Variable 'x':
+        -------------
+        <BLANKLINE>
+        Variable labels:
+        array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        Coordinates:
+          * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
+        Attributes:
+            binary:   False
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -745,13 +743,15 @@ class Model:
         --------
 
         For creating an expression from tuples:
+        >>> from linopy import Model
+        >>> import pandas as pd
         >>> m = Model()
-        >>> m.add_variables(pd.Series([0, 0]), 1, name="x")
-        >>> m.add_variables(4, pd.Series([8, 10]), name="y")
+        >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+        >>> y = m.add_variables(4, pd.Series([8, 10]), name="y")
         >>> expr = m.linexpr((10, "x"), (1, "y"))
 
         For creating an expression from a rule:
-        >>> m = linopy.Model()
+        >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
         >>> def rule(m, i, j):
@@ -821,11 +821,11 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.vareval("@lower <= x <= @upper")
+        >>> x = m.vareval("@lower <= x <= @upper")  # doctest:+SKIP
 
         This is the same as
 
-        >>> m.add_variables(lower, upper, name="x")
+        >>> x = m.add_variables(lower, upper, name="x")
         """
         if eval_kw is None:
             eval_kw = {}
@@ -868,17 +868,17 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.add_variables(lower, upper, name="x")
-        >>> m.add_variables(lower, upper, name="y")
+        >>> x = m.add_variables(lower, upper, name="x")
+        >>> y = m.add_variables(lower, upper, name="y")
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the linear expression
 
-        >>> m.lineval("@c * x - y")
+        >>> con = m.lineval("@c * x - y")
 
         This is the same as
 
-        >>> m.linexpr((c, "x"), (-1, "y"))
+        >>> con = m.linexpr((c, "x"), (-1, "y"))
         """
         if eval_kw is None:
             eval_kw = {}
@@ -922,18 +922,22 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.add_variables(lower, upper, name="x")
-        >>> m.add_variables(lower, upper, name="y")
+        >>> x = m.add_variables(lower, upper, name="x")
+        >>> y = m.add_variables(lower, upper, name="y")
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the constraint:
 
-        >>> m.coneval("@c * x - y <= 5 ")
+        >>> con = m.coneval("@c * x - y <= 5 ")
 
         This is the same as
 
         >>> lhs = m.linexpr((c, "x"), (-1, "y"))
-        >>> m.add_constraints(lhs, "<=", 5)
+        >>> con = m.add_constraints(lhs, "<=", 5)
+
+        or
+
+        >>> con = m.add_constraints(c * x - y <= 5)
         """
         if eval_kw is None:
             eval_kw = {}

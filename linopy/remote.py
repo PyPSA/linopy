@@ -98,18 +98,18 @@ class RemoteHandler:
     >>> coords = [arange(N), arange(N)]
     >>> x = m.add_variables(coords=coords)
     >>> y = m.add_variables(coords=coords)
-    >>> m.add_constraints(x - y >= arange(N))
-    >>> m.add_constraints(x + y >= 0)
-    >>> m.add_objective((2 * x + y).sum())
+    >>> con1 = m.add_constraints(x - y >= arange(N))
+    >>> con2 = m.add_constraints(x + y >= 0)
+    >>> obj = m.add_objective((2 * x + y).sum())
     >>>
     >>> host = "gridlock.fias.uni-frankfurt.de"
     >>> username = "hofmann"
     >>> handler = linopy.remote.RemoteHandler(host, username=username)
     >>>
     >>> # optionally activate a conda environment
-    >>> handler.execute("conda activate my-linopy-env")
+    >>> handler.execute("conda activate my-linopy-env")  # doctest: +SKIP
     >>>
-    >>> m = handler.solve_on_remote(m)
+    >>> m = handler.solve_on_remote(m)  # doctest: +SKIP
     """
 
     hostname: str = None

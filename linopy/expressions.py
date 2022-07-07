@@ -52,6 +52,8 @@ class LinearExpression(Dataset):
 
     Examples
     --------
+    >>> from linopy import Model
+    >>> import pandas as pd
     >>> m = Model()
     >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
     >>> y = m.add_variables(4, pd.Series([8, 10]), name="y")
@@ -60,32 +62,21 @@ class LinearExpression(Dataset):
 
     >>> expr = 3 * x
     >>> type(expr)
-    linopy.model.LinearExpression
+    <class 'linopy.expressions.LinearExpression'>
 
     >>> other = 4 * y
     >>> type(expr + other)
-    linopy.model.LinearExpression
+    <class 'linopy.expressions.LinearExpression'>
 
     Multiplying:
 
     >>> type(3 * expr)
-    linopy.model.LinearExpression
+    <class 'linopy.expressions.LinearExpression'>
 
     Summation over dimensions
 
-    >>> expr.sum(dim="dim_0")
-
-    ::
-
-        Linear Expression with 2 term(s):
-        ----------------------------------
-
-        Dimensions:  (_term: 2)
-        Coordinates:
-            * _term    (_term) int64 0 1
-        Data:
-            coeffs   (_term) int64 3 3
-            vars     (_term) int64 1 2
+    >>> type(expr.sum(dims="dim_0"))
+    <class 'linopy.expressions.LinearExpression'>
     """
 
     __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable")
@@ -269,9 +260,11 @@ class LinearExpression(Dataset):
 
         Examples
         --------
+        >>> from linopy import Model
+        >>> import pandas as pd
         >>> m = Model()
         >>> x = m.add_variables(pd.Series([0, 0]), 1)
-        >>> m.add_variables(4, pd.Series([8, 10]))
+        >>> y = m.add_variables(4, pd.Series([8, 10]))
         >>> expr = LinearExpression.from_tuples((10, x), (1, y))
 
         This is the same as calling ``10*x + y`` but a bit more performant.
@@ -341,8 +334,8 @@ class LinearExpression(Dataset):
         ...     else:
         ...         return i * x[i, j]
         ...
-        >>> expr = LinearExpression.from_rule(m, *coords, rule=bound)
-        >>> m.add_constraints(expr <= 10)
+        >>> expr = LinearExpression.from_rule(m, bound, coords)
+        >>> con = m.add_constraints(expr <= 10)
         """
         if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
             coords = DataArray(coords=coords).coords
@@ -370,9 +363,8 @@ class LinearExpression(Dataset):
         coeffs = coeffs.reshape((nterm, *shape))
         vars = vars.reshape((nterm, *shape))
 
-        new_coords = {"_term": pd.RangeIndex(nterm), **coords}
-        coeffs = DataArray(coeffs, new_coords)
-        vars = DataArray(vars, new_coords)
+        coeffs = DataArray(coeffs, coords, dims=("_term", *coords))
+        vars = DataArray(vars, coords, dims=("_term", *coords))
         ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
 
         return LinearExpression(ds)

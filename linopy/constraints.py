@@ -635,7 +635,7 @@ class AnonymousConstraint:
         ...         return i * x[i, j] >= 0
         ...
         >>> con = AnonymousConstraint.from_rule(m, bound, coords)
-        >>> m.add_constraints(con)
+        >>> con = m.add_constraints(con)
         """
         if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
             coords = DataArray(coords=coords).coords

@@ -48,6 +48,8 @@ class Variable(DataArray):
 
     Examples
     --------
+    >>> from linopy import Model
+    >>> import pandas as pd
     >>> m = Model()
     >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
     >>> y = m.add_variables(4, pd.Series([8, 10]), name="y")
@@ -55,37 +57,30 @@ class Variable(DataArray):
     Add variable together:
 
     >>> x + y
-
-    ::
-
-        Linear Expression with 2 term(s):
-        ----------------------------------
-
-        Dimensions:  (dim_0: 2, _term: 2)
-        Coordinates:
-            * dim_0    (dim_0) int64 0 1
-            * _term    (_term) int64 0 1
-        Data:
-            coeffs   (dim_0, _term) int64 1 1 1 1
-            vars     (dim_0, _term) int64 1 3 2 4
-
+    Linear Expression with 2 term(s):
+    ----------------------------------
+    <BLANKLINE>
+    Dimensions:  (dim_0: 2, _term: 2)
+    Coordinates:
+      * dim_0    (dim_0) int64 0 1
+    Dimensions without coordinates: _term
+    Data:
+        coeffs   (dim_0, _term) int64 1 1 1 1
+        vars     (dim_0, _term) int64 0 2 1 3
 
     Multiply them with a coefficient:
 
     >>> 3 * x
-
-    ::
-
-        Linear Expression with 1 term(s):
-        ----------------------------------
-
-        Dimensions:  (dim_0: 2, _term: 1)
-        Coordinates:
-            * _term    (_term) int64 0
-            * dim_0    (dim_0) int64 0 1
-        Data:
-            coeffs   (dim_0, _term) int64 3 3
-            vars     (dim_0, _term) int64 1 2
+    Linear Expression with 1 term(s):
+    ----------------------------------
+    <BLANKLINE>
+    Dimensions:  (dim_0: 2, _term: 1)
+    Coordinates:
+      * dim_0    (dim_0) int64 0 1
+    Dimensions without coordinates: _term
+    Data:
+        coeffs   (dim_0, _term) int64 3 3
+        vars     (dim_0, _term) int64 0 1
 
 
     Further operations like taking the negative and subtracting are supported.
