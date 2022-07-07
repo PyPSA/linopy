@@ -634,7 +634,7 @@ def merge(*exprs, dim="_term"):
     return res
 
 
-@dataclass(slots=True)
+@dataclass
 class ScalarLinearExpression:
     coeffs: tuple
     vars: tuple

@@ -615,7 +615,7 @@ class Variables:
         return res
 
 
-@dataclass(slots=True)
+@dataclass
 class ScalarVariable:
     label: int
     coords: dict = None

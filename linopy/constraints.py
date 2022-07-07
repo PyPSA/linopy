@@ -657,7 +657,7 @@ class AnonymousConstraint:
         return AnonymousConstraint(lhs, sign, rhs)
 
 
-@dataclass(slots=True)
+@dataclass
 class AnonymousScalarConstraint:
     """
     Container for anonymous scalar constraint.
