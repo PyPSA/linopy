@@ -131,6 +131,13 @@ def test_variable_getter_without_model():
         v.lower
 
 
+def test_variable_at_indexing():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+
+    assert isinstance(x.at[0], linopy.variables.ScalarVariable)
+
+
 def test_get_name_by_label():
     m = Model()
     m.add_variables(coords=[range(10)], name="x")

@@ -13,6 +13,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
+from linopy.expressions import ScalarLinearExpression
 
 m = Model()
 
@@ -282,3 +283,8 @@ def test_shift():
     assert shifted.nterm == 1
     assert shifted.coeffs.loc[:1].isnull().all()
     assert (shifted.vars.loc[:1] == -1).all()
+
+
+def test_scalarexpression_creation():
+    expr = 10 * x.at[0] + y.at[1] + z.at[1, 1]
+    assert isinstance(expr, ScalarLinearExpression)

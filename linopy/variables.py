@@ -657,6 +657,7 @@ class _AtIndexer:
         self.data_array = data_array
 
     def __getitem__(self, keys) -> "DataArray":
+        keys = (keys,) if not isinstance(keys, tuple) else keys
         key = dict(zip(self.data_array.dims, keys))
         selector = [self.data_array.get_index(k).get_loc(v) for k, v in key.items()]
         label = self.data_array.data[tuple(selector)]

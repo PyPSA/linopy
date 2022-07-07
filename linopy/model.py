@@ -19,9 +19,9 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import best_int, replace_by_map
-from linopy.constraints import Constraints
+from linopy.constraints import AnonymousConstraint, Constraints
 from linopy.eval import Expr
-from linopy.expressions import AnonymousConstraint, LinearExpression
+from linopy.expressions import LinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
 from linopy.solvers import available_solvers
 from linopy.variables import Variable, Variables
@@ -445,7 +445,9 @@ class Model:
 
         return self.variables[name]
 
-    def add_constraints(self, lhs, sign=None, rhs=None, name=None, mask=None):
+    def add_constraints(
+        self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None
+    ):
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -457,10 +459,14 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.AnonynousConstraint
+        lhs : linopy.LinearExpression/linopy.AnonymousConstraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
+            If a function is passed, it is called for every combination of
+            coordinates given in `coords`. It's first argument has to be the
+            model, followed by scalar argument for each coordinate given in
+            coordinates.
         sign : str/array_like
             Relation between the lhs and rhs, valid values are {'=', '>=', '<='}.
         rhs : int/float/array_like
@@ -468,6 +474,9 @@ class Model:
         name : str, optional
             Reference name of the added constraints. The default None results
             results a name like "con1", "con2" etc.
+        coords : list/xarray.Coordinates, optional
+            The coords of the constraint array. This is only used when lhs is
+            a function. The default is None.
         mask : array_like, optional
             Boolean mask with False values for variables which are skipped.
             The shape of the mask has to match the shape the added variables.
@@ -485,6 +494,11 @@ class Model:
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
+
+        if callable(lhs):
+            assert coords is not None, "`coords` must be given when lhs is a function"
+            rule = lhs
+            lhs = AnonymousConstraint.from_rule(self, rule, coords)
 
         if isinstance(lhs, AnonymousConstraint):
             if sign is not None or rhs is not None:
@@ -756,7 +770,7 @@ class Model:
             )
             rule, coords = args
             return LinearExpression.from_rule(self, rule, coords)
-        if isinstance(*args, tuple):
+        if isinstance(args, tuple):
             args = [
                 (c, self.variables[v]) if isinstance(v, str) else (c, v)
                 for (c, v) in args
