@@ -87,7 +87,7 @@ This package is published under license GNU Public License GPLv3
    :caption: Getting started
 
    create-a-model
-   solve-on-remote
+   migrating-from-pyomo
    solvers
 
 .. toctree::
@@ -98,6 +98,8 @@ This package is published under license GNU Public License GPLv3
    creating-variables
    creating-constraints
    manipulating-models
+   solve-on-remote
+
 
 .. toctree::
    :hidden:

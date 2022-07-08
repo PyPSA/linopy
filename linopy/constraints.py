@@ -559,14 +559,26 @@ class AnonymousConstraint:
     A constraint container used for storing multiple constraint arrays.
     """
 
-    __slots__ = ("lhs", "sign", "rhs")
+    __slots__ = ("_lhs", "_sign", "_rhs")
 
     def __init__(self, lhs, sign, rhs):
         """
         Initialize a anonymous constraint.
         """
-        self.lhs, self.rhs = xr.align(lhs, DataArray(rhs))
-        self.sign = DataArray(sign)
+        self._lhs, self._rhs = xr.align(lhs, DataArray(rhs))
+        self._sign = DataArray(sign)
+
+    @property
+    def lhs(self):
+        return self._lhs
+
+    @property
+    def sign(self):
+        return self._sign
+
+    @property
+    def rhs(self):
+        return self._rhs
 
     def __repr__(self):
         """

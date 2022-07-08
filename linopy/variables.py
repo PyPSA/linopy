@@ -116,6 +116,8 @@ class Variable(DataArray):
             "Set single values for each dimension in order to obtain a "
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
+        if not self.ndim:
+            return ScalarVariable(self.data.item())
         assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
         key = dict(zip(self.dims, keys))
         selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
@@ -642,3 +644,12 @@ class ScalarVariable:
 
     def __div__(self, coeff):
         return self.to_linexpr(1 / coeff)
+
+    def __le__(self, other):
+        return self.to_linexpr(1).__le__(other)
+
+    def __ge__(self, other):
+        return self.to_linexpr(1).__ge__(other)
+
+    def __eq__(self, other):
+        return self.to_linexpr(1).__eq__(other)

@@ -675,7 +675,7 @@ class ScalarLinearExpression:
         return ScalarLinearExpression(tuple(-c for c in self.coeffs), self.vars)
 
     def __mul__(self, other):
-        if not isinstance(other, (float, int)):
+        if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
                 "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
             )
@@ -689,7 +689,7 @@ class ScalarLinearExpression:
         return self.__mul__(1 / other)
 
     def __le__(self, other):
-        if not isinstance(other, (int, float)):
+        if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
                 "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
             )
@@ -697,7 +697,7 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, "<=", other)
 
     def __ge__(self, other):
-        if not isinstance(other, (int, float)):
+        if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
                 "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
             )
@@ -705,9 +705,9 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, ">=", other)
 
     def __eq__(self, other):
-        if not isinstance(other, (int, float)):
+        if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
                 "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, "==", other)
+        return constraints.AnonymousScalarConstraint(self, "=", other)
