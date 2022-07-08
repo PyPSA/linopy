@@ -331,7 +331,14 @@ class Model:
             return
 
     def add_variables(
-        self, lower=-inf, upper=inf, coords=None, name=None, mask=None, binary=False
+        self,
+        lower=-inf,
+        upper=inf,
+        coords=None,
+        name=None,
+        mask=None,
+        binary=False,
+        **kwargs,
     ):
         """
         Assign a new, possibly multi-dimensional array of variables to the
@@ -351,10 +358,11 @@ class Model:
             Upper bound of the variable(s). Ignored if `binary` is True.
             The default is inf.
         coords : list/xarray.Coordinates, optional
-            The coords of the variable array. For every single combination of
+            The coords of the variable array.
+            These are directly passed to the DataArray creation of
+            `lower` and `upper`. For every single combination of
             coordinates a optimization variable is added to the model.
-            The default is None. Is ignored when lower and upper bound provide
-            coordinates.
+            The default is None.
         name : str, optional
             Reference name of the added variables. The default None results in
             a name like "var1", "var2" etc.
@@ -365,6 +373,8 @@ class Model:
         binary : bool
             Whether the new variable is a binary variable which are used for
             Mixed-Integer problems.
+        **kwargs :
+            Additional keyword arguments are passed to the DataArray creation.
 
         Raises
         ------
@@ -403,8 +413,8 @@ class Model:
             raise ValueError(f"Variable '{name}' already assigned to model")
 
         if not binary:
-            lower = DataArray(lower)
-            upper = DataArray(upper)
+            lower = DataArray(lower, coords=coords, **kwargs)
+            upper = DataArray(upper, coords=coords, **kwargs)
             if coords is None:
                 # only a lazy calculation for extracting coords, shape and size
                 broadcasted = lower.chunk() + upper.chunk()
@@ -416,8 +426,8 @@ class Model:
                     )
         else:
             # for general compatibility when ravelling all values set non-nan
-            lower = DataArray(-inf)
-            upper = DataArray(inf)
+            lower = DataArray(-inf, coords=coords, **kwargs)
+            upper = DataArray(inf, coords=coords, **kwargs)
 
         labels = DataArray(coords=coords).assign_attrs(binary=binary)
 
@@ -704,7 +714,7 @@ class Model:
         ----------
         args : tuples of (coefficients, variables) or tuples of
                coordinates and a function
-            If *args is a collection of coefficients-variables-tuples, the resulting
+            If args is a collection of coefficients-variables-tuples, the resulting
             linear expression is built with the function LinearExpression.from_tuples.
             In this case, each tuple represents on term in the linear expression,
             which can span over multiple dimensions:
@@ -717,7 +727,7 @@ class Model:
                 The variable(s) going into the term. These may be referenced
                 by name.
 
-            If *args is a collection of coordinates with an appended function at the
+            If args is a collection of coordinates with an appended function at the
             end, the function LinearExpression.from_rule is used to build the linear
             expression. Then, the argument are expected to contain:
 

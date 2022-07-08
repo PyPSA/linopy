@@ -93,6 +93,15 @@ This package is published under license GNU Public License GPLv3
 .. toctree::
    :hidden:
    :maxdepth: 2
+   :caption: User Guide
+
+   creating-variables
+   creating-constraints
+   manipulating-models
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
    :caption: Benchmarking
 
    benchmark

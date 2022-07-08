@@ -50,6 +50,7 @@ Variable
     variables.Variable.where
     variables.Variable.sanitize
     variables.Variables
+    variables.ScalarVariable
 
 Variables
 ---------
@@ -80,7 +81,7 @@ LinearExpressions
     expressions.LinearExpression.group_terms
     expressions.LinearExpression.from_tuples
     expressions.merge
-
+    expressions.ScalarLinearExpression
 
 Constraint
 ----------
@@ -107,7 +108,7 @@ AnonymousConstraint
 .. autosummary::
     :toctree: generated/
 
-    expressions.AnonymousConstraint
+    constraints.AnonymousConstraint
 
 
 Constraints
