@@ -48,44 +48,39 @@ class Variable(DataArray):
 
     Examples
     --------
+    >>> from linopy import Model
+    >>> import pandas as pd
     >>> m = Model()
     >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
     >>> y = m.add_variables(4, pd.Series([8, 10]), name="y")
 
     Add variable together:
 
-    >>> x + y
-
-    ::
-
-        Linear Expression with 2 term(s):
-        ----------------------------------
-
-        Dimensions:  (dim_0: 2, _term: 2)
-        Coordinates:
-            * dim_0    (dim_0) int64 0 1
-            * _term    (_term) int64 0 1
-        Data:
-            coeffs   (dim_0, _term) int64 1 1 1 1
-            vars     (dim_0, _term) int64 1 3 2 4
-
+    >>> x + y  # doctest: +SKIP
+    Linear Expression with 2 term(s):
+    ----------------------------------
+    <BLANKLINE>
+    Dimensions:  (dim_0: 2, _term: 2)
+    Coordinates:
+      * dim_0    (dim_0) int64 0 1
+    Dimensions without coordinates: _term
+    Data:
+        coeffs   (dim_0, _term) int64 1 1 1 1
+        vars     (dim_0, _term) int64 0 2 1 3
 
     Multiply them with a coefficient:
 
-    >>> 3 * x
-
-    ::
-
-        Linear Expression with 1 term(s):
-        ----------------------------------
-
-        Dimensions:  (dim_0: 2, _term: 1)
-        Coordinates:
-            * _term    (_term) int64 0
-            * dim_0    (dim_0) int64 0 1
-        Data:
-            coeffs   (dim_0, _term) int64 3 3
-            vars     (dim_0, _term) int64 1 2
+    >>> 3 * x  # doctest: +SKIP
+    Linear Expression with 1 term(s):
+    ----------------------------------
+    <BLANKLINE>
+    Dimensions:  (dim_0: 2, _term: 1)
+    Coordinates:
+      * dim_0    (dim_0) int64 0 1
+    Dimensions without coordinates: _term
+    Data:
+        coeffs   (dim_0, _term) int64 3 3
+        vars     (dim_0, _term) int64 0 1
 
 
     Further operations like taking the negative and subtracting are supported.
@@ -113,6 +108,18 @@ class Variable(DataArray):
     # and set priority higher than pandas/xarray/numpy
     __array_ufunc__ = None
     __array_priority__ = 10000
+
+    def __getitem__(self, keys) -> "ScalarVariable":
+        keys = (keys,) if not isinstance(keys, tuple) else keys
+        assert all(map(np.isscalar, keys)), (
+            "The get function of Variable is different as of xarray.DataArray. "
+            "Set single values for each dimension in order to obtain a "
+            "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
+        )
+        assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
+        key = dict(zip(self.dims, keys))
+        selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(self.data[tuple(selector)])
 
     def to_array(self):
         """
@@ -606,3 +613,32 @@ class Variables:
             res[np.ravel(labels)] = np.ravel(block_map[name])
         res[-1] = -1
         return res
+
+
+@dataclass
+class ScalarVariable:
+    label: int
+    coords: dict = None
+
+    def to_linexpr(self, coeff=1):
+        if not isinstance(coeff, (int, float)):
+            raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
+        return expressions.ScalarLinearExpression((coeff,), (self.label,))
+
+    def __neg__(self):
+        return self.to_linexpr(-1)
+
+    def __add__(self, other):
+        return self.to_linexpr(1) + other
+
+    def __sub__(self, other):
+        return self.to_linexpr(1) - other
+
+    def __mul__(self, coeff):
+        return self.to_linexpr(coeff)
+
+    def __rmul__(self, coeff):
+        return self.to_linexpr(coeff)
+
+    def __div__(self, coeff):
+        return self.to_linexpr(1 / coeff)

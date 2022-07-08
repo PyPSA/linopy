@@ -19,9 +19,9 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import best_int, replace_by_map
-from linopy.constraints import Constraints
+from linopy.constraints import AnonymousConstraint, Constraints
 from linopy.eval import Expr
-from linopy.expressions import AnonymousConstraint, LinearExpression
+from linopy.expressions import LinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
 from linopy.solvers import available_solvers
 from linopy.variables import Variable, Variables
@@ -380,22 +380,20 @@ class Model:
 
         Examples
         --------
-
-        >>> m = linopy.Model()
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
-
-        ::
-
-            Variable container:
-            -------------------
-
-            Variables:
-            array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])
-            Coordinates:
-                * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
-            Attributes:
-                name:     x
+        Variable 'x':
+        -------------
+        <BLANKLINE>
+        Variable labels:
+        array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        Coordinates:
+          * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
+        Attributes:
+            binary:   False
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -445,7 +443,9 @@ class Model:
 
         return self.variables[name]
 
-    def add_constraints(self, lhs, sign=None, rhs=None, name=None, mask=None):
+    def add_constraints(
+        self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None
+    ):
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -457,10 +457,14 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.AnonynousConstraint
+        lhs : linopy.LinearExpression/linopy.AnonymousConstraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
+            If a function is passed, it is called for every combination of
+            coordinates given in `coords`. It's first argument has to be the
+            model, followed by scalar argument for each coordinate given in
+            coordinates.
         sign : str/array_like
             Relation between the lhs and rhs, valid values are {'=', '>=', '<='}.
         rhs : int/float/array_like
@@ -468,6 +472,9 @@ class Model:
         name : str, optional
             Reference name of the added constraints. The default None results
             results a name like "con1", "con2" etc.
+        coords : list/xarray.Coordinates, optional
+            The coords of the constraint array. This is only used when lhs is
+            a function. The default is None.
         mask : array_like, optional
             Boolean mask with False values for variables which are skipped.
             The shape of the mask has to match the shape the added variables.
@@ -485,6 +492,11 @@ class Model:
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
+
+        if callable(lhs):
+            assert coords is not None, "`coords` must be given when lhs is a function"
+            rule = lhs
+            lhs = AnonymousConstraint.from_rule(self, rule, coords)
 
         if isinstance(lhs, AnonymousConstraint):
             if sign is not None or rhs is not None:
@@ -684,18 +696,18 @@ class Model:
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
-    def linexpr(self, *tuples):
+    def linexpr(self, *args):
         """
-        Create a linopy.LinearExpression by using variable names.
-
-        Calls the function LinearExpression.from_tuples but loads variables from
-        the model if a variable name is used.
+        Create a linopy.LinearExpression from argument list.
 
         Parameters
         ----------
-        tuples : tuples of (coefficients, variables)
-            Each tuple represents on term in the linear expression, which can
-            span over multiple dimensions:
+        args : tuples of (coefficients, variables) or tuples of
+               coordinates and a function
+            If *args is a collection of coefficients-variables-tuples, the resulting
+            linear expression is built with the function LinearExpression.from_tuples.
+            In this case, each tuple represents on term in the linear expression,
+            which can span over multiple dimensions:
 
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
@@ -705,6 +717,24 @@ class Model:
                 The variable(s) going into the term. These may be referenced
                 by name.
 
+            If *args is a collection of coordinates with an appended function at the
+            end, the function LinearExpression.from_rule is used to build the linear
+            expression. Then, the argument are expected to contain:
+
+            * rule : callable
+                Function to be called for each combinations in `coords`.
+                The first argument of the function is the underlying `linopy.Model`.
+                The following arguments are given by the coordinates for accessing
+                the variables. The function has to return a
+                `ScalarLinearExpression`. Therefore use the direct getter when
+                indexing variables.
+            * coords : coordinate-like
+                Coordinates to be processed by `xarray.DataArray`. For each
+                combination of coordinates, the function `rule` is called.
+                The order and size of coords has to be same as the argument list
+                followed by `model` in function `rule`.
+
+
         Returns
         -------
         linopy.LinearExpression
@@ -712,16 +742,42 @@ class Model:
         Examples
         --------
 
+        For creating an expression from tuples:
+        >>> from linopy import Model
+        >>> import pandas as pd
         >>> m = Model()
-        >>> m.add_variables(pd.Series([0, 0]), 1, name="x")
-        >>> m.add_variables(4, pd.Series([8, 10]), name="y")
+        >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+        >>> y = m.add_variables(4, pd.Series([8, 10]), name="y")
         >>> expr = m.linexpr((10, "x"), (1, "y"))
+
+        For creating an expression from a rule:
+        >>> m = Model()
+        >>> coords = pd.RangeIndex(10), ["a", "b"]
+        >>> a = m.add_variables(coords=coords)
+        >>> def rule(m, i, j):
+        ...     return a[i, j] + a[(i + 1) % 10, j]
+        ...
+        >>> expr = m.linexpr(rule, coords)
+
+        See also
+        --------
+        LinearExpression.from_tuples, LinearExpression.from_rule
         """
-        tuples = [
-            (c, self.variables[v]) if isinstance(v, str) else (c, v)
-            for (c, v) in tuples
-        ]
-        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+        if callable(args[0]):
+            assert len(args) == 2, (
+                "When first argument is a function, only one second argument "
+                "containing a tuple or a single set of coords must be given."
+            )
+            rule, coords = args
+            return LinearExpression.from_rule(self, rule, coords)
+        if isinstance(args, tuple):
+            args = [
+                (c, self.variables[v]) if isinstance(v, str) else (c, v)
+                for (c, v) in args
+            ]
+            return LinearExpression.from_tuples(*args, chunk=self.chunk)
+        else:
+            raise TypeError(f"Not supported type {args}.")
 
     def _eval(self, expr: str, **kwargs):
         from pandas.core.computation.eval import eval as pd_eval
@@ -765,11 +821,11 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.vareval("@lower <= x <= @upper")
+        >>> x = m.vareval("@lower <= x <= @upper")  # doctest:+SKIP
 
         This is the same as
 
-        >>> m.add_variables(lower, upper, name="x")
+        >>> x = m.add_variables(lower, upper, name="x")
         """
         if eval_kw is None:
             eval_kw = {}
@@ -812,17 +868,17 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.add_variables(lower, upper, name="x")
-        >>> m.add_variables(lower, upper, name="y")
+        >>> x = m.add_variables(lower, upper, name="x")
+        >>> y = m.add_variables(lower, upper, name="y")
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the linear expression
 
-        >>> m.lineval("@c * x - y")
+        >>> con = m.lineval("@c * x - y")
 
         This is the same as
 
-        >>> m.linexpr((c, "x"), (-1, "y"))
+        >>> con = m.linexpr((c, "x"), (-1, "y"))
         """
         if eval_kw is None:
             eval_kw = {}
@@ -866,18 +922,22 @@ class Model:
         >>> m = linopy.Model()
         >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
         >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> m.add_variables(lower, upper, name="x")
-        >>> m.add_variables(lower, upper, name="y")
+        >>> x = m.add_variables(lower, upper, name="x")
+        >>> y = m.add_variables(lower, upper, name="y")
         >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
 
         Now create the constraint:
 
-        >>> m.coneval("@c * x - y <= 5 ")
+        >>> con = m.coneval("@c * x - y <= 5 ")
 
         This is the same as
 
         >>> lhs = m.linexpr((c, "x"), (-1, "y"))
-        >>> m.add_constraints(lhs, "<=", 5)
+        >>> con = m.add_constraints(lhs, "<=", 5)
+
+        or
+
+        >>> con = m.add_constraints(c * x - y <= 5)
         """
         if eval_kw is None:
             eval_kw = {}

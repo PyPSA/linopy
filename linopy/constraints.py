@@ -7,17 +7,19 @@ This module contains implementations for the Constraint{s} class.
 
 import re
 from dataclasses import dataclass
+from itertools import product
 from typing import Any, Sequence, Union
 
 import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
+from numpy import array
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
 
+from linopy import expressions
 from linopy.common import _merge_inplace, replace_by_map
-from linopy.expressions import LinearExpression
 
 
 class Constraint(DataArray):
@@ -146,11 +148,11 @@ class Constraint(DataArray):
         """
         coeffs = self.coeffs.rename({self.name + "_term": "_term"})
         vars = self.vars.rename({self.name + "_term": "_term"})
-        return LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
+        return expressions.LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
 
     @lhs.setter
     def lhs(self, value):
-        if not isinstance(value, LinearExpression):
+        if not isinstance(value, expressions.LinearExpression):
             raise TypeError("Assigned lhs must be a LinearExpression.")
 
         value = value.rename(_term=self.name + "_term")
@@ -550,3 +552,120 @@ class Constraints:
             shape = (ncons, nvars)  # same as model.nvars/ncons but already there
 
         return coo_matrix((data, (rows, cols)), shape=shape)
+
+
+class AnonymousConstraint:
+    """
+    A constraint container used for storing multiple constraint arrays.
+    """
+
+    __slots__ = ("lhs", "sign", "rhs")
+
+    def __init__(self, lhs, sign, rhs):
+        """
+        Initialize a anonymous constraint.
+        """
+        self.lhs, self.rhs = xr.align(lhs, DataArray(rhs))
+        self.sign = DataArray(sign)
+
+    def __repr__(self):
+        """
+        Get the string representation of the expression.
+        """
+        lhs_string = self.lhs.to_dataset().__repr__()  # .split("\n", 1)[1]
+        lhs_string = lhs_string.split("Data variables:\n", 1)[1]
+        lhs_string = lhs_string.replace("    coeffs", "coeffs")
+        lhs_string = lhs_string.replace("    vars", "vars")
+        if self.sign.size == 1:
+            sign_string = self.sign.item()
+        else:
+            sign_string = self.sign.__repr__().split("\n", 1)[1]
+        if self.rhs.size == 1:
+            rhs_string = self.rhs.item()
+        else:
+            rhs_string = self.rhs.__repr__().split("\n", 1)[1]
+        return (
+            f"Anonymous Constraint:\n"
+            f"---------------------\n"
+            f"\n{lhs_string}"
+            f"\n{sign_string}"
+            f"\n{rhs_string}"
+        )
+
+    def from_rule(model, rule, coords):
+        """
+        Create a constraint from a rule and a set of coordinates.
+
+        This functionality mirrors the assignment of constraints as done by
+        Pyomo.
+
+
+        Parameters
+        ----------
+        model : linopy.Model
+            Passed to function `rule` as a first argument.
+        rule : callable
+            Function to be called for each combinations in `coords`.
+            The first argument of the function is the underlying `linopy.Model`.
+            The following arguments are given by the coordinates for accessing
+            the variables. The function has to return a
+            `AnonymousScalarConstraint`. Therefore use the direct getter when
+            indexing variables in the linear expression.
+        coords : coordinate-like
+            Coordinates to processed by `xarray.DataArray`.
+            For each combination of coordinates, the function given by `rule` is called.
+            The order and size of coords has to be same as the argument list
+            followed by `model` in function `rule`.
+
+
+        Returns
+        -------
+        linopy.AnonymousConstraint
+
+        Examples
+        --------
+        >>> from linopy import Model, LinearExpression
+        >>> m = Model()
+        >>> coords = pd.RangeIndex(10), ["a", "b"]
+        >>> x = m.add_variables(0, 100, coords)
+        >>> def bound(m, i, j):
+        ...     if i % 2:
+        ...         return (i - 1) * x[i - 1, j] >= 0
+        ...     else:
+        ...         return i * x[i, j] >= 0
+        ...
+        >>> con = AnonymousConstraint.from_rule(m, bound, coords)
+        >>> con = m.add_constraints(con)
+        """
+        if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
+            coords = DataArray(coords=coords).coords
+        shape = list(map(len, coords.values()))
+
+        # test output type
+        output = rule(model, *[c.values[0] for c in coords.values()])
+        if not isinstance(output, AnonymousScalarConstraint):
+            msg = f"`rule` has to return AnonymousScalarConstraint not {type(output)}."
+            raise TypeError(msg)
+
+        combinations = product(*[c.values for c in coords.values()])
+        cons = [rule(model, *coord) for coord in combinations]
+        exprs = [con.lhs for con in cons]
+
+        lhs = expressions.LinearExpression._from_scalarexpression_list(exprs, coords)
+        sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
+        rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
+        return AnonymousConstraint(lhs, sign, rhs)
+
+
+@dataclass
+class AnonymousScalarConstraint:
+    """
+    Container for anonymous scalar constraint.
+
+    This contains a left-hand-side (lhs), a sign and a right-hand-side
+    (rhs) for exactly one constraint.
+    """
+
+    lhs: expressions.ScalarLinearExpression
+    sign: str
+    rhs: float
