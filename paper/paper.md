@@ -26,9 +26,18 @@ bibliography: paper.bib
 
 # Summary
 
-linopy is an open-source Python package that facilitates linear and mixed-integer optimization with n-dimensional, labeled input data. It uses state-of-the-art data analysis tools to enable a high-level algebraic syntax and a memory-efficient, performant communication with open and proprietary solvers. With
+`linopy` is an open-source package written in Python to facilitate linear and mixed-integer optimization with n-dimensional labeled input data. Using state-of-the-art data analysis packages, `linopy` enables a high-level algebraic syntax and memory-efficient, performant communication with open and proprietary solvers. While similar packages use object-oriented implementations of single variables and constraints, `linopy` stores and processes its data in an array-based data model. This allows the user to build large optimization models quickly in parallel and lays the foundation for features such as writing to NetCDF file, solving on remote servers, and model scaling.
 
 # Statement of need
+
+* Research community relies on a list of multiple open-source and proprietary solvers. Many projects aim to make their optimization compatibles with most of the solvers to ensure flexibility, comparability and re-usability for a wide range of users.
+* JuMP[@dunningJuMPModelingLanguage2017] is great for Julia, direct communication with solvers etc.
+* Equivalent packages in Python are much less performant Pyomo [@hartPyomoOptimizationModeling2017], PuLP [@Pulp2022]
+due to the lack of parallelized, low-level operations and slow communication.
+* Further, the assignment of coordinates or indexes is in many cases not supported and in others strongly impacting the memory-efficiency due to use of dictionaries where every single combination of coordinates is stored separately.
+* `linopy` tackles these issues together by introducing an array-based data model for variables and constraints.
+* Variables are defined together with the set of dimensions and their corresponding coordinates.
+* Assume a variable $x(d_1, d_2)$ ...
 
 # Convention
 
