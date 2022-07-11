@@ -18,8 +18,14 @@ from numpy import array
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
 
-from linopy import expressions
-from linopy.common import _merge_inplace, replace_by_map
+from linopy import expressions, variables
+from linopy.common import (
+    _merge_inplace,
+    has_assigned_model,
+    has_optimized_model,
+    is_constant,
+    replace_by_map,
+)
 
 
 class Constraint(DataArray):
@@ -83,6 +89,7 @@ class Constraint(DataArray):
         return DataArray(self)
 
     @property
+    @has_assigned_model
     def coeffs(self):
         """
         Get the left-hand-side coefficients of the constraint.
@@ -90,27 +97,16 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.coeffs[self.name]
 
     @coeffs.setter
+    @has_assigned_model
     def coeffs(self, value):
-        labels = self.model.constraints.labels
-        value = DataArray(value)
-        term_dim = self.name + "_term"
-
-        if term_dim not in value.dims:
-            value = value.expand_dims(term_dim)
-
-        assert (set(value.dims) - {term_dim}).issubset(labels.dims), (
-            "Dimensions of new values not a subset of labels dimensions, "
-            "therefore the new coefficients cannot be aligned with the existing labels."
-        )
-
+        value = DataArray(value).broadcast_like(self.vars)
         self.model.constraints.coeffs[self.name] = value
 
     @property
+    @has_assigned_model
     def vars(self):
         """
         Get the left-hand-side variables of the constraint.
@@ -118,27 +114,16 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.vars[self.name]
 
     @vars.setter
+    @has_assigned_model
     def vars(self, value):
-        labels = self.model.constraints.labels
-        value = DataArray(value)
-        term_dim = self.name + "_term"
-
-        if term_dim not in value.dims:
-            value = value.expand_dims(term_dim)
-
-        assert (set(value.dims) - {term_dim}).issubset(labels.dims), (
-            "Dimensions of new values not a subset of labels dimensions, "
-            "therefore the new variables cannot be aligned with the existing labels."
-        )
-
+        value = DataArray(value).broadcast_like(self.coeffs)
         self.model.constraints.vars[self.name] = value
 
     @property
+    @has_assigned_model
     def lhs(self):
         """
         Get the left-hand-side linear expression of the constraint.
@@ -146,11 +131,13 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        coeffs = self.coeffs.rename({self.name + "_term": "_term"})
-        vars = self.vars.rename({self.name + "_term": "_term"})
+        term_dim = self.name + "_term"
+        coeffs = self.coeffs.rename({term_dim: "_term"})
+        vars = self.vars.rename({term_dim: "_term"})
         return expressions.LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
 
     @lhs.setter
+    @has_assigned_model
     def lhs(self, value):
         if not isinstance(value, expressions.LinearExpression):
             raise TypeError("Assigned lhs must be a LinearExpression.")
@@ -160,6 +147,7 @@ class Constraint(DataArray):
         self.vars = value.vars
 
     @property
+    @has_assigned_model
     def sign(self):
         """
         Get the signs of the constraint.
@@ -167,23 +155,19 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.sign[self.name]
 
     @sign.setter
+    @has_assigned_model
+    @is_constant
     def sign(self, value):
-        labels = self.model.constraints.labels
-        value = DataArray(value)
-        assert set(value.dims).issubset(labels.dims), (
-            "Dimensions of new values not a subset of labels dimensions, "
-            "therefore the new signs cannot be aligned with the existing labels."
-        )
+        value = DataArray(value).broadcast_like(self)
         if (value == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
         self.model.constraints.sign[self.name] = value
 
     @property
+    @has_assigned_model
     def rhs(self):
         """
         Get the right hand side constants of the constraint.
@@ -191,22 +175,19 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the constraint.")
         return self.model.constraints.rhs[self.name]
 
     @rhs.setter
+    @has_assigned_model
+    @is_constant
     def rhs(self, value):
-        labels = self.model.constraints.labels
-        value = DataArray(value)
-        assert set(value.dims).issubset(labels.dims), (
-            "Dimensions of new values not a subset of labels dimensions, "
-            "therefore the new right-hand-side cannot be aligned with the existing labels."
-        )
-
+        if isinstance(value, (variables.Variable, expressions.LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(value)}).")
+        value = DataArray(value).broadcast_like(self)
         self.model.constraints.rhs[self.name] = value
 
     @property
+    @has_optimized_model
     def dual(self):
         """
         Get the dual values of the constraint.
@@ -214,10 +195,6 @@ class Constraint(DataArray):
         The function raises an error in case no model is set as a
         reference or the model status is not okay.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the constraint.")
-        if self.model.status != "ok":
-            raise AttributeError("Underlying model not optimized.")
         if not list(self.model.dual):
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
@@ -565,6 +542,8 @@ class AnonymousConstraint:
         """
         Initialize a anonymous constraint.
         """
+        if isinstance(rhs, (variables.Variable, expressions.LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
         self._lhs, self._rhs = xr.align(lhs, DataArray(rhs))
         self._sign = DataArray(sign)
 

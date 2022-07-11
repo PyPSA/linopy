@@ -530,6 +530,9 @@ class Model:
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
+        if isinstance(rhs, (Variable, LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
+
         lhs = lhs.sanitize()
         sign = DataArray(sign)
         rhs = DataArray(rhs)

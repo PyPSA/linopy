@@ -20,7 +20,12 @@ from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
 import linopy.expressions as expressions
-from linopy.common import _merge_inplace
+from linopy.common import (
+    _merge_inplace,
+    has_assigned_model,
+    has_optimized_model,
+    is_constant,
+)
 
 
 def varwrap(method, *default_args, **new_default_kwargs):
@@ -244,6 +249,7 @@ class Variable(DataArray):
         return self.to_linexpr().rolling_sum(**kwargs)
 
     @property
+    @has_assigned_model
     def upper(self):
         """
         Get the upper bounds of the variables.
@@ -251,11 +257,11 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.upper[self.name]
 
     @upper.setter
+    @has_assigned_model
+    @is_constant
     def upper(self, value):
         """
         Set the upper bounds of the variables.
@@ -263,18 +269,11 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
-        labels = self.model.variables.labels
-        value = DataArray(value)
-        assert set(value.dims).issubset(
-            labels.dims
-        ), "Dimensions of new values not a subset of labels dimensions."
-
+        value = DataArray(value).broadcast_like(self)
         self.model.variables.upper[self.name] = value
 
     @property
+    @has_assigned_model
     def lower(self):
         """
         Get the lower bounds of the variables.
@@ -282,11 +281,11 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
         return self.model.variables.lower[self.name]
 
     @lower.setter
+    @has_assigned_model
+    @is_constant
     def lower(self, value):
         """
         Set the lower bounds of the variables.
@@ -294,17 +293,11 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
-        labels = self.model.variables.labels
-        value = DataArray(value)
-        assert set(value.dims).issubset(
-            labels.dims
-        ), "Dimensions of new values not a subset of labels dimensions."
-
+        value = DataArray(value).broadcast_like(self)
         self.model.variables.lower[self.name] = value
 
     @property
+    @has_optimized_model
     def sol(self):
         """
         Get the optimal values of the variable.
@@ -312,8 +305,6 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference or the model is not optimized.
         """
-        if self.model is None:
-            raise AttributeError("No reference model is assigned to the variable.")
         if self.model.status != "ok":
             raise AttributeError("Underlying model not optimized.")
         return self.model.solution[self.name]

@@ -6,6 +6,8 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
+from functools import wraps
+
 import numpy as np
 from xarray import DataArray, apply_ufunc, merge
 
@@ -54,3 +56,45 @@ def best_int(max_value):
     for t in (np.int8, np.int16, np.int32, np.int64):
         if max_value <= np.iinfo(t).max:
             return t
+
+
+def has_assigned_model(func):
+    """
+    Check if a reference model is set.
+    """
+
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if self.model is None:
+            raise AttributeError("No reference model set.")
+        return func(self, *args, **kwargs)
+
+    return wrapper
+
+
+def has_optimized_model(func):
+    """
+    Check if a reference model is set.
+    """
+
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if self.model is None:
+            raise AttributeError("No reference model set.")
+        if self.model.status != "ok":
+            raise AttributeError("Underlying model not optimized.")
+        return func(self, *args, **kwargs)
+
+    return wrapper
+
+
+def is_constant(func):
+    from linopy import expressions, variables
+
+    @wraps(func)
+    def wrapper(self, arg):
+        if isinstance(arg, (variables.Variable, expressions.LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type()}).")
+        return func(self, arg)
+
+    return wrapper

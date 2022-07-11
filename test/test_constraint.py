@@ -72,7 +72,7 @@ def test_constraint_accessor_M():
     assert c.sign.item() == ">="
 
     c.rhs = 2
-    assert c.rhs.item() == 2
+    assert (c.rhs == 2).all().item()
 
     c.lhs = 3 * y
     assert (c.vars.squeeze() == y.data).all()

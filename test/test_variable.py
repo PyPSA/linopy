@@ -12,7 +12,7 @@ import pytest
 import xarray as xr
 
 import linopy
-from linopy import LinearExpression, Model
+from linopy import Model
 
 
 def test_variable_getter():
