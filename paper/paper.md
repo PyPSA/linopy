@@ -26,24 +26,32 @@ bibliography: paper.bib
 
 # Summary
 
-`linopy` is an open-source package written in Python to facilitate linear and mixed-integer optimization with n-dimensional labeled input data. Using state-of-the-art data analysis packages, `linopy` enables a high-level algebraic syntax and memory-efficient, performant communication with open and proprietary solvers. While similar packages use object-oriented implementations of single variables and constraints, `linopy` stores and processes its data in an array-based data model. This allows the user to build large optimization models quickly in parallel and lays the foundation for features such as writing to NetCDF file, solving on remote servers, and model scaling.
+`linopy` is an open-source package written in Python to facilitate linear and mixed-integer optimization with n-dimensional labeled input data. Using state-of-the-art data analysis packages, `linopy` enables a high-level algebraic syntax and memory-efficient, performant communication with open and proprietary solvers. While similar packages use object-oriented implementations of single variables and constraints, `linopy` stores and processes its data in an array-based data model. This allows the user to build large optimization models quickly in parallel and lays the foundation for features such as fast writing to NetCDF file, masking, solving on remote servers, and model scaling.
 
 # Statement of need
 
-* Research community relies on a list of multiple open-source and proprietary solvers. Many projects aim to make their optimization compatibles with most of the solvers to ensure flexibility, comparability and re-usability for a wide range of users.
-* JuMP[@dunningJuMPModelingLanguage2017] is great for Julia, direct communication with solvers etc.
-* Equivalent packages in Python are much less performant Pyomo [@hartPyomoOptimizationModeling2017], PuLP [@Pulp2022]
-due to the lack of parallelized, low-level operations and slow communication.
-* Further, the assignment of coordinates or indexes is in many cases not supported and in others strongly impacting the memory-efficiency due to use of dictionaries where every single combination of coordinates is stored separately.
-* `linopy` tackles these issues together by introducing an array-based data model for variables and constraints.
-* Variables are defined together with the set of dimensions and their corresponding coordinates.
-* Assume a variable $x(d_1, d_2)$ ...
+The research community relies on a list of open-source and proprietary solvers such as `GLPK` [@GLPKGNUProject], `Gurobi` [@GurobiFastestSolver], `Xpress` [@FICOXpressSolver] etc. To ensure comparability and re-usability for a wide range of users, many research projects dealing with optimization programs aim to make their work compatibles with many solvers.
+<!-- * There is therefore the general need, besides the solver specific interfaces like `Gurobipy` [@GurobipyPythonInterface] or the `Xpress` Python interface [@teamXpressFICOXpress]  -->
+Fulfilling this need, JuMP[@dunningJuMPModelingLanguage2017] has recently gained a lot of attention due to a high-level optimization language, a fast implementation in Julia and direct communication with solvers. It builds an interface to a wide range of solvers allowing the user to choose the preferred or available solver.  Other interfaces like GAMS...
 
-# Convention
+The equivalent packages in Python, namely Pyomo [@hartPyomoOptimizationModeling2017] and PuLP [@Pulp2022], are much less performant due to the lack of parallelized, low-level operations and slow communication / LP file writing.
+Further, the Python equivalents do not make use of state-of-the-art data handling packages. In particular, the assignment of coordinates or indexes is often not supported or impacting the memory-efficiency due to use of memory-intensive object-oriented implementation where every single combination of coordinates is stored separately.
+`linopy` tackles these issues together. By introducing an array-based data model for variables and constraints, it makes mathematical programming compatible with Python's advanced data handling packages like Numpy[@harrisArrayProgrammingNumPy2020], Pandas [@rebackPandasdevPandasPandas2022] or Xarray [@hoyerXarrayNDLabeled2017] while significantly increasing speed and flexibility.
+The core data classes `Variable`, `LinearExpression` and `Constraint`  are subclasses of `xarray`'s `DataArray` and `Dataset` class containing n-dimensional arrays with unique labels referencing the optimization variables and coefficients.
+...
+
+# Basic Structure
+
+Variables are defined together with a set of dimensions and their corresponding coordinates.
+For example, creating a variable $x(d_1, d_2)$ defined on $d_1 \in \{1,N\}$ and $d_2 \in \{1, M\}$, would only require passing $d_1$ and $d_2$ to the variable initialization, with optional lower and upper bounds $l_x(d_1,d_2)$ and $u_x(d_1,d_2)$ being defined on (a subset of) $\{d_1, d_2\}$. The returned object is an $N \times M$ array of integer labels referencing to the optimization variables used by the solver.
+...
 
 # Related Research
 
-`linopy` is used by several research projects and groups. The [PyPSA package](https://github.com/PyPSA/pypsa) [@brownPyPSAPythonPower2018] is an open-source software for (large scale) energy system modelling and optimization. Together with the [PyPSA-Eur workflow](https://github.com/PyPSA/pypsa-eur) [@horschPyPSAEurOpenOptimisation2018] and the sector-coupled extension [PyPSA-Eur-sec](https://github.com/PyPSA/pypsa-eur-sec) [@brownPyPSAPythonPower2018], it uses `linopy` to solve large linear problems with up to $10^8$ variables.
+`linopy` is used by several research projects and groups. The [PyPSA package](https://github.com/PyPSA/pypsa) [@brownPyPSAPythonPower2018] is an open-source software for (large scale) energy system modelling and optimization.
+
+**Not yet:**
+Together with the [PyPSA-Eur workflow](https://github.com/PyPSA/pypsa-eur) [@horschPyPSAEurOpenOptimisation2018] and the sector-coupled extension [PyPSA-Eur-sec](https://github.com/PyPSA/pypsa-eur-sec) [@brownPyPSAPythonPower2018], it uses `linopy` to solve large linear problems with up to $10^8$ variables.
 
 # Availability
 
