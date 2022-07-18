@@ -43,7 +43,7 @@ The core data classes `Variable`, `LinearExpression` and `Constraint`  are subcl
 # Basic Structure
 
 Variables are defined together with a set of dimensions and their corresponding coordinates.
-For example, creating a variable $x(d_1, d_2)$ defined on $d_1 \in \{1,N\}$ and $d_2 \in \{1, M\}$, would only require passing $d_1$ and $d_2$ to the variable initialization, with optional lower and upper bounds $l_x(d_1,d_2)$ and $u_x(d_1,d_2)$ being defined on (a subset of) $\{d_1, d_2\}$. The returned object is an $N \times M$ array of integer labels referencing to the optimization variables used by the solver.
+For example, creating a variable $x(d_1, d_2)$ defined on $d_1 \in \{1,...,N\}$ and $d_2 \in \{1,...,M\}$, would only require passing $d_1$ and $d_2$ to the variable initialization, with optional lower and upper bounds $l_x(d_1,d_2)$ and $u_x(d_1,d_2)$ being defined on (a subset of) $\{d_1, d_2\}$. The returned object is an $N \times M$ array of integer labels referencing to the optimization variables used by the solver.
 ...
 
 # Related Research
