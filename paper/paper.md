@@ -45,7 +45,7 @@ For example, creating a variable $x(d_1, d_2)$ defined on $d_1 \in \{1,...,N\}$ 
 
 # Benchmark
 
-Benchmarking against two well-established open source AMLs Gurobi and Pyomo, the linopy outperforms Pyomo in speed and memory efficieny and outperform JuMP in memory-efficiency.
+Benchmarking against two well-established open source AMLs Gurobi and Pyomo, `linopy` outperforms Pyomo in speed and memory-efficieny and outperform JuMP in memory-efficiency.
 
 ![Benchmark of `linopy` against Gurobi and Pyomo. The figure show the net overhead that the AMLs used for the communication to the solver. \label{fig:benchmark}](figures/benchmark-overhead.pdf)
 
