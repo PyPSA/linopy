@@ -9,7 +9,7 @@ INTEGERLABELS = True
 
 
 rule all:
-    input: expand("benchmarks/{solver}/time.pdf", solver=SOLVERS)
+    input: expand("benchmarks/{solver}/benchmark-{kind}.pdf", solver=SOLVERS, kind=['absolute', 'overhead'])
 
 # For time benchmarks, use one process for all runs (skip import and jit compilation times)
 rule benchmark_linopy:
@@ -109,7 +109,8 @@ rule merge_benchmarks:
         benchmarks = lambda w: expand("benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS),
         benchmarks_time = lambda w: expand("benchmarks/{solver}/{api}-time.csv", solver=w.solver, api=[api for api in APIS if api in ['pyomo', 'linopy']]),
     output:
-        benchmark="benchmarks/{solver}/benchmarks.csv"
+        absolute="benchmarks/{solver}/benchmarks-absolute.csv",
+        overhead="benchmarks/{solver}/benchmarks-overhead.csv"
     script:
         "scripts/merge-benchmarks.py"
 
@@ -117,9 +118,9 @@ rule merge_benchmarks:
 
 rule plot_benchmarks:
     input:
-        "benchmarks/{solver}/benchmarks.csv"
+        "benchmarks/{solver}/benchmarks-{kind}.csv"
     output:
-        "benchmarks/{solver}/benchmark.pdf",
+        "benchmarks/{solver}/benchmark-{kind}.pdf",
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"
 

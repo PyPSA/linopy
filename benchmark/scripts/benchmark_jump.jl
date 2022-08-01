@@ -1,4 +1,5 @@
 using JuMP
+using Gurobi
 using DataFrames
 using CSV
 using Dates
@@ -21,7 +22,6 @@ function model(n, solver, integerlabel=false)
 end
 
 if snakemake.wildcards["solver"] == "gurobi"
-    using Gurobi
     solver = Gurobi.Optimizer
 elseif snakemake.wildcards["solver"] == "cbc"
     using CBC
@@ -38,7 +38,7 @@ for N in snakemake.params[1]
     mem = @allocated(model(N, solver))/10^6
     push!(profile, [N, time, mem])
 end
-profile[:API] = "jump"
+profile[!, :API] .= "jump"
 insertcols!(profile, 1, :Row => 1:nrow(profile))
 
 CSV.write(snakemake.output[1], profile)
