@@ -212,7 +212,7 @@ def test_sum_drop_zeros():
     res = expr.sum("dim_1", drop_zeros=True)
     assert res.nterm == 1
 
-    coeff[1, 2] = 4
+    expr.coeffs[1, 2] = 4
     res = expr.sum()
 
     res = expr.sum("dim_0", drop_zeros=True)

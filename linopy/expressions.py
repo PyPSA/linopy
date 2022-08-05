@@ -139,11 +139,7 @@ class LinearExpression(Dataset):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
-        fill_value = {"vars": -1, "coeffs": np.nan}
-        res = LinearExpression(
-            xr.concat([self, other], dim="_term", fill_value=fill_value)
-        )
-        return res
+        return merge(self, other)
 
     def __sub__(self, other):
         """
@@ -157,11 +153,7 @@ class LinearExpression(Dataset):
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
-        fill_value = {"vars": -1, "coeffs": np.nan}
-        res = LinearExpression(
-            xr.concat([self, other], dim="_term", fill_value=fill_value)
-        )
-        return res
+        return merge(self, other)
 
     def __neg__(self):
         """
@@ -282,13 +274,10 @@ class LinearExpression(Dataset):
                     c = DataArray(c, v.coords)
             else:
                 c = as_dataarray(c)
-            ds_list.append(Dataset({"coeffs": c, "vars": v}))
+            ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
+            ds_list.append(ds)
 
-        if len(ds_list) > 1:
-            ds = xr.concat(ds_list, dim="_term", coords="minimal", compat="override")
-        else:
-            ds = ds_list[0].expand_dims("_term")
-        return LinearExpression(ds)
+        return merge(ds_list)
 
     def from_rule(model, rule, coords):
         """
