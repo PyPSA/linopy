@@ -83,18 +83,20 @@ class LinearExpression(Dataset):
 
     fill_value = {"vars": -1, "coeffs": np.nan}
 
-    def __init__(self, dataset=None):
-        if dataset is not None:
-            assert set(dataset) == {"coeffs", "vars"}
-            if np.issubdtype(dataset.vars, np.floating):
-                dataset["vars"] = dataset.vars.fillna(-1).astype(int)
-            (dataset,) = xr.broadcast(dataset)
-            dataset = dataset.transpose(..., "_term")
-        else:
+    def __init__(self, data_vars=None, coords=None, attrs=None):
+        ds = Dataset(data_vars, coords, attrs)
+
+        if not len(ds):
             vars = DataArray(np.array([], dtype=int), dims="_term")
             coeffs = DataArray(np.array([], dtype=float), dims="_term")
-            dataset = xr.Dataset({"coeffs": coeffs, "vars": vars})
-        super().__init__(dataset)
+            ds = ds.assign(coeffs=coeffs, vars=vars)
+
+        assert set(ds).issuperset({"coeffs", "vars"})
+        if np.issubdtype(ds.vars, np.floating):
+            ds["vars"] = ds.vars.fillna(-1).astype(int)
+        (ds,) = xr.broadcast(ds)
+        ds = ds.transpose(..., "_term")
+        super().__init__(ds)
 
     # We have to set the _reduce_method to None, in order to overwrite basic
     # reduction functions as `sum`. There might be a better solution (?).
@@ -219,17 +221,13 @@ class LinearExpression(Dataset):
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs})
 
         else:
-            dims = list(np.atleast_1d(dims))
-
-            if "_term" in dims:
-                dims.remove("_term")
-
+            dims = [d for d in np.atleast_1d(dims) if d != "_term"]
             ds = (
-                self.reset_index(dims, drop=True)
-                .rename(_term="_stacked_term")
-                .stack(_term=["_stacked_term"] + dims)
-                .reset_index("_term", drop=True)
+                self.rename(_term="_stacked_term")
+                .stack(_term=["_stacked_term"] + dims, create_index=False)
+                .drop(dims)
             )
+
         if drop_zeros:
             ds = ds.densify_terms()
 
@@ -616,7 +614,7 @@ def merge(*exprs, dim="_term"):
 
     Returns
     -------
-    None.
+    res : linopy.LinearExpression
     """
 
     if len(exprs) == 1:
@@ -629,6 +627,7 @@ def merge(*exprs, dim="_term"):
 
     fill_value = LinearExpression.fill_value
     res = LinearExpression(xr.concat(exprs, dim, fill_value=fill_value))
+
     if "_term" in res.coords:
         res = res.reset_index("_term", drop=True)
 

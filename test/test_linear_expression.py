@@ -197,7 +197,7 @@ def test_merge():
 
     res = merge(expr1, expr2, dim="dim_1")
     assert res.nterm == 3
-    assert res.sel(dim_1=0, _term=2).vars.item() == -1
+    assert res.sel(dim_1=0).vars[2].item() == -1
 
 
 def test_sum_drop_zeros():
