@@ -24,15 +24,16 @@ df["Number of Constraints"] = df.N**2 * 2
 
 solver_usage = df.loc[df.API == "Solving Process", "Memory"].values
 
+breakpoint()
 absolute = df.copy()
 # Make a correction of the memory usage:
 # Pyomo uses external threads for the solving process, this is not counted by the snakemake
 # memory tracking
 absolute.loc[absolute.API == "pyomo", "Memory"] += solver_usage
+absolute.loc[absolute.API == "linopy", "Memory"] += solver_usage
 absolute.to_csv(snakemake.output.absolute)
 
 overhead = df.copy()
-overhead.loc[overhead.API == "linopy", "Memory"] -= solver_usage
 overhead.loc[overhead.API == "jump", "Memory"] -= solver_usage
 overhead = overhead.query("API != 'Solving Process'")
 overhead.to_csv(snakemake.output.overhead)

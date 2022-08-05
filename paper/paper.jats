@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.2 20190208//EN"
+                  "JATS-publishing1.dtd">
+<article xmlns:mml="http://www.w3.org/1998/Math/MathML" xmlns:xlink="http://www.w3.org/1999/xlink" dtd-version="1.2" article-type="other">
+<front>
+<journal-meta>
+<journal-id></journal-id>
+<journal-title-group>
+<journal-title>Journal of Open Source Software</journal-title>
+<abbrev-journal-title>JOSS</abbrev-journal-title>
+</journal-title-group>
+<issn publication-format="electronic">2475-9066</issn>
+<publisher>
+<publisher-name>Open Journals</publisher-name>
+</publisher>
+</journal-meta>
+<article-meta>
+<article-id pub-id-type="publisher-id">0</article-id>
+<article-id pub-id-type="doi">N/A</article-id>
+<title-group>
+<article-title>linopy: Linear optimization with n-dimensional labeled
+variables</article-title>
+</title-group>
+<contrib-group>
+<contrib contrib-type="author">
+<contrib-id contrib-id-type="orcid">0000-0002-6604-5450</contrib-id>
+<name>
+<surname>Hofmann</surname>
+<given-names>Fabian</given-names>
+</name>
+<xref ref-type="aff" rid="aff-1"/>
+</contrib>
+<aff id="aff-1">
+<institution-wrap>
+<institution>Institute of Energy Technology, Technical University of
+Berlin</institution>
+</institution-wrap>
+</aff>
+</contrib-group>
+<pub-date date-type="pub" publication-format="electronic" iso-8601-date="2022-07-11">
+<day>11</day>
+<month>7</month>
+<year>2022</year>
+</pub-date>
+<volume>¿VOL?</volume>
+<issue>¿ISSUE?</issue>
+<fpage>¿PAGE?</fpage>
+<permissions>
+<copyright-statement>Authors of papers retain copyright and release the
+work under a Creative Commons Attribution 4.0 International License (CC
+BY 4.0)</copyright-statement>
+<copyright-year>2022</copyright-year>
+<copyright-holder>The article authors</copyright-holder>
+<license license-type="open-access" xlink:href="https://creativecommons.org/licenses/by/4.0/">
+<license-p>Authors of papers retain copyright and release the work under
+a Creative Commons Attribution 4.0 International License (CC BY
+4.0)</license-p>
+</license>
+</permissions>
+<kwd-group kwd-group-type="author">
+<kwd>python</kwd>
+<kwd>linear optimization</kwd>
+</kwd-group>
+</article-meta>
+</front>
+<body>
+<sec id="summary">
+  <title>Summary</title>
+  <p><monospace>linopy</monospace> is an open-source package written in
+  Python to facilitate linear and mixed-integer optimization with
+  n-dimensional labeled input data. Using state-of-the-art data analysis
+  packages, <monospace>linopy</monospace> enables a high-level algebraic
+  syntax and memory-efficient, performant communication with open and
+  proprietary solvers. While similar packages use object-oriented
+  implementations of single variables and constraints,
+  <monospace>linopy</monospace> stores and processes its data in an
+  array-based data model. This allows the user to build large
+  optimization models quickly in parallel and lays the foundation for
+  features such as fast writing to NetCDF file, masking, solving on
+  remote servers, and model scaling.</p>
+</sec>
+<sec id="statement-of-need">
+  <title>Statement of need</title>
+  <p>Mathematical programming and optimization is a broad field in the
+  research community. There exists a list of open-source and proprietary
+  solvers such as <monospace>GLPK</monospace>
+  (<xref alt="GLPK - GNU Project - Free Software Foundation (FSF), n.d." rid="ref-GLPKGNUProject" ref-type="bibr"><italic>GLPK
+  - GNU Project - Free Software Foundation (FSF)</italic>, n.d.</xref>),
+  <monospace>Gurobi</monospace>
+  (<xref alt="“Gurobi - The Fastest Solver,” n.d." rid="ref-GurobiFastestSolver" ref-type="bibr">“Gurobi
+  - The Fastest Solver,” n.d.</xref>), <monospace>Xpress</monospace>
+  (<xref alt="“FICO Xpress Solver,” n.d." rid="ref-FICOXpressSolver" ref-type="bibr">“FICO
+  Xpress Solver,” n.d.</xref>), each with its own strengths and
+  weaknesses. To ensure comparability and re-usability for a wide range
+  of users, many research projects dealing with optimization aim to make
+  their work compatibles with many solvers as possible. Besides the
+  solver specific interfaces like <monospace>Gurobipy</monospace>
+  (<xref alt="Gurobipy, n.d." rid="ref-GurobipyPythonInterface" ref-type="bibr"><italic>Gurobipy</italic>,
+  n.d.</xref>) and others, there is therefore the general need for a
+  solver-independent interface allowing the user to formulate
+  optimization problems and solve it with the solver of choice.</p>
+  <p>Fulfilling this need, Algebraic modeling languages (AML) allow to
+  formulate large scale, complex problems using a high-level syntax
+  similar to the mathematical notation. Well established AMLs such as
+  GAMS(<xref alt="Corporation, n.d." rid="ref-gamsdevelopmentcorporationGAMSCuttingEdge" ref-type="bibr">Corporation,
+  n.d.</xref>) and AMPL Fourer et al.
+  (<xref alt="2003" rid="ref-fourerAMPLModelingLanguage2003" ref-type="bibr">2003</xref>)
+  support a wide range of solvers, but are license-restricted and rely
+  on closed-source code. In contrast, AMLs as
+  JuMP(<xref alt="Dunning et al., 2017" rid="ref-dunningJuMPModelingLanguage2017" ref-type="bibr">Dunning
+  et al., 2017</xref>), Pyomo
+  (<xref alt="Hart et al., 2017" rid="ref-hartPyomoOptimizationModeling2017" ref-type="bibr">Hart
+  et al., 2017</xref>), GEKKO
+  (<xref alt="Beal et al., 2018" rid="ref-bealGEKKOOptimizationSuite2018" ref-type="bibr">Beal
+  et al., 2018</xref>) and PuLP
+  (<xref alt="Pulp, 2022" rid="ref-Pulp2022" ref-type="bibr"><italic>Pulp</italic>,
+  2022</xref>) are open-source and have gained increasing attention
+  throughout the recent years. While the Julia package JuMP is
+  characterized by high-performance in-memory communication with the
+  solvers, the Python packages Pyomo, GEKKO and PuLP lack parallelized,
+  low-level operations and communicate slower with the solver via
+  intermediate files written to disk. Further, the Python AMLs do not
+  make use of state-of-the-art data handling packages. In particular,
+  the assignment of coordinates or indexes is often not supported or
+  memory extensive due to use of an object-oriented implementation where
+  every single combination of coordinates is stored separately.</p>
+  <p><monospace>linopy</monospace> tackles these issues together. By
+  introducing an array-based data model for variables and constraints,
+  it makes mathematical programming compatible with Python’s advanced
+  data handling packages
+  Numpy(<xref alt="Harris et al., 2020" rid="ref-harrisArrayProgrammingNumPy2020" ref-type="bibr">Harris
+  et al., 2020</xref>), Pandas
+  (<xref alt="Reback et al., 2022" rid="ref-rebackPandasdevPandasPandas2022" ref-type="bibr">Reback
+  et al., 2022</xref>) and Xarray
+  (<xref alt="Hoyer &amp; Hamman, 2017" rid="ref-hoyerXarrayNDLabeled2017" ref-type="bibr">Hoyer
+  &amp; Hamman, 2017</xref>) while significantly increasing speed and
+  flexibility.</p>
+</sec>
+<sec id="basic-structure">
+  <title>Basic Structure</title>
+  <p>The core data classes <monospace>Variable</monospace>,
+  <monospace>LinearExpression</monospace> and
+  <monospace>Constraint</monospace> are subclasses of
+  <monospace>xarray</monospace>’s <monospace>DataArray</monospace> and
+  <monospace>Dataset</monospace> class. These contain n-dimensional
+  arrays with unique labels referencing the optimization variables and
+  coefficients. Hence, variables and constraints are defined together
+  with a set of dimensions and their corresponding coordinates. For
+  example, creating a variable <inline-formula><alternatives>
+  <tex-math><![CDATA[x(d_1, d_2)]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>x</mml:mi><mml:mrow><mml:mo stretchy="true" form="prefix">(</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub><mml:mo>,</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub><mml:mo stretchy="true" form="postfix">)</mml:mo></mml:mrow></mml:mrow></mml:math></alternatives></inline-formula>
+  defined on <inline-formula><alternatives>
+  <tex-math><![CDATA[d_1 \in \{1,...,N\}]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub><mml:mo>∈</mml:mo><mml:mo stretchy="false" form="prefix">{</mml:mo><mml:mn>1</mml:mn><mml:mo>,</mml:mo><mml:mi>.</mml:mi><mml:mi>.</mml:mi><mml:mi>.</mml:mi><mml:mo>,</mml:mo><mml:mi>N</mml:mi><mml:mo stretchy="false" form="postfix">}</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>
+  and <inline-formula><alternatives>
+  <tex-math><![CDATA[d_2 \in \{1,...,M\}]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub><mml:mo>∈</mml:mo><mml:mo stretchy="false" form="prefix">{</mml:mo><mml:mn>1</mml:mn><mml:mo>,</mml:mo><mml:mi>.</mml:mi><mml:mi>.</mml:mi><mml:mi>.</mml:mi><mml:mo>,</mml:mo><mml:mi>M</mml:mi><mml:mo stretchy="false" form="postfix">}</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>,
+  would only require passing <inline-formula><alternatives>
+  <tex-math><![CDATA[d_1]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub></mml:math></alternatives></inline-formula>
+  and <inline-formula><alternatives>
+  <tex-math><![CDATA[d_2]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub></mml:math></alternatives></inline-formula>
+  to the variable initialization, with optional lower and upper bounds
+  <inline-formula><alternatives>
+  <tex-math><![CDATA[l_x(d_1,d_2)]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mi>l</mml:mi><mml:mi>x</mml:mi></mml:msub><mml:mrow><mml:mo stretchy="true" form="prefix">(</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub><mml:mo>,</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub><mml:mo stretchy="true" form="postfix">)</mml:mo></mml:mrow></mml:mrow></mml:math></alternatives></inline-formula>
+  and <inline-formula><alternatives>
+  <tex-math><![CDATA[u_x(d_1,d_2)]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mi>u</mml:mi><mml:mi>x</mml:mi></mml:msub><mml:mrow><mml:mo stretchy="true" form="prefix">(</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub><mml:mo>,</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub><mml:mo stretchy="true" form="postfix">)</mml:mo></mml:mrow></mml:mrow></mml:math></alternatives></inline-formula>
+  being defined on (a subset of) <inline-formula><alternatives>
+  <tex-math><![CDATA[\{d_1, d_2\}]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mo stretchy="false" form="prefix">{</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>1</mml:mn></mml:msub><mml:mo>,</mml:mo><mml:msub><mml:mi>d</mml:mi><mml:mn>2</mml:mn></mml:msub><mml:mo stretchy="false" form="postfix">}</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>.
+  The returned object is an <inline-formula><alternatives>
+  <tex-math><![CDATA[N \times M]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>N</mml:mi><mml:mo>×</mml:mo><mml:mi>M</mml:mi></mml:mrow></mml:math></alternatives></inline-formula>
+  array of integer labels referencing to the optimization variables used
+  by the solver. …</p>
+</sec>
+<sec id="benchmark">
+  <title>Benchmark</title>
+  <p>Benchmarking against two well-established open source AMLs Gurobi
+  and Pyomo, <monospace>linopy</monospace> outperforms Pyomo in speed
+  and memory-efficieny and outperform JuMP in memory-efficiency.</p>
+  <fig>
+    <caption><p>Benchmark of <monospace>linopy</monospace> against
+    Gurobi and Pyomo. The figure show the net overhead that the AMLs
+    used for the communication to the solver.
+    <styled-content id="figU003Abenchmark"></styled-content></p></caption>
+    <graphic mimetype="application" mime-subtype="pdf" xlink:href="figures/benchmark-overhead.pdf" xlink:title="" />
+  </fig>
+</sec>
+<sec id="related-research">
+  <title>Related Research</title>
+  <p><monospace>linopy</monospace> is used by several research projects
+  and groups. The
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/pypsa">PyPSA
+  package</ext-link>
+  (<xref alt="Brown et al., 2018" rid="ref-brownPyPSAPythonPower2018" ref-type="bibr">Brown
+  et al., 2018</xref>) is an open-source software for (large scale)
+  energy system modelling and optimization.</p>
+  <p><bold>Not yet:</bold> Together with the
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/pypsa-eur">PyPSA-Eur
+  workflow</ext-link>
+  (<xref alt="Hörsch et al., 2018" rid="ref-horschPyPSAEurOpenOptimisation2018" ref-type="bibr">Hörsch
+  et al., 2018</xref>) and the sector-coupled extension
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/pypsa-eur-sec">PyPSA-Eur-sec</ext-link>
+  (<xref alt="Brown et al., 2018" rid="ref-brownPyPSAPythonPower2018" ref-type="bibr">Brown
+  et al., 2018</xref>), it uses <monospace>linopy</monospace> to solve
+  large linear problems with up to <inline-formula><alternatives>
+  <tex-math><![CDATA[10^8]]></tex-math>
+  <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:msup><mml:mn>10</mml:mn><mml:mn>8</mml:mn></mml:msup></mml:math></alternatives></inline-formula>
+  variables.</p>
+</sec>
+<sec id="availability">
+  <title>Availability</title>
+  <p>Stable versions of the <monospace>linopy</monospace> package are
+  available for Linux, MacOS and Windows via <monospace>pip</monospace>
+  in the
+  <ext-link ext-link-type="uri" xlink:href="https://pypi.org/project/linopy/">Python
+  Package Index (PyPI)</ext-link> Development branches are available in
+  the project’s
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/linopy">GitHub
+  repository</ext-link> together with a documentation on
+  <ext-link ext-link-type="uri" xlink:href="https://linopy.readthedocs.io/en/master/">Read
+  the Docs</ext-link>. The <monospace>linopy</monospace> package is
+  released under
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/linopy/blob/master/LICENSES/GPL-3.0-or-later.txt">GPLv3</ext-link>
+  and welcomes contributions via the project’s
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/linopy">GitHub
+  repository</ext-link>.</p>
+</sec>
+<sec id="acknowledgements">
+  <title>Acknowledgements</title>
+  <p>We thank all
+  <ext-link ext-link-type="uri" xlink:href="https://github.com/PyPSA/linopy/graphs/contributors">contributors</ext-link>
+  who helped to develop <monospace>linopy</monospace>. Fabian Hofmann is
+  funded by the BreakthroughEnergy initiative.</p>
+</sec>
+</body>
+<back>
+<ref-list>
+  <ref id="ref-amploptimizationinc.AMPLStramlinedModeling">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Inc.</surname><given-names>AMPL Optimization</given-names></name>
+      </person-group>
+      <article-title>AMPL - Stramlined modeling for real optimization</article-title>
+      <source>AMPL</source>
+      <publisher-name>https://ampl.com/</publisher-name>
+    </element-citation>
+  </ref>
+  <ref id="ref-bealGEKKOOptimizationSuite2018">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Beal</surname><given-names>Logan</given-names></name>
+        <name><surname>Hill</surname><given-names>Daniel</given-names></name>
+        <name><surname>Martin</surname><given-names>R.</given-names></name>
+        <name><surname>Hedengren</surname><given-names>John</given-names></name>
+      </person-group>
+      <article-title>GEKKO Optimization Suite</article-title>
+      <source>Processes</source>
+      <year iso-8601-date="2018-07">2018</year><month>07</month>
+      <volume>6</volume>
+      <issue>8</issue>
+      <issn>2227-9717</issn>
+      <pub-id pub-id-type="doi">10.3390/pr6080106</pub-id>
+      <fpage>106</fpage>
+      <lpage></lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-brownPyPSAPythonPower2018">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Brown</surname><given-names>Tom</given-names></name>
+        <name><surname>Hörsch</surname><given-names>Jonas</given-names></name>
+        <name><surname>Schlachtberger</surname><given-names>David</given-names></name>
+      </person-group>
+      <article-title>PyPSA: Python for Power System Analysis</article-title>
+      <source>Journal of Open Research Software</source>
+      <year iso-8601-date="2018-01">2018</year><month>01</month>
+      <volume>6</volume>
+      <issn>2049-9647</issn>
+      <uri>https://arxiv.org/abs/1707.09913</uri>
+      <pub-id pub-id-type="doi">10.5334/jors.188</pub-id>
+      <fpage>4</fpage>
+      <lpage></lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-dunningJuMPModelingLanguage2017">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Dunning</surname><given-names>Iain</given-names></name>
+        <name><surname>Huchette</surname><given-names>Joey</given-names></name>
+        <name><surname>Lubin</surname><given-names>Miles</given-names></name>
+      </person-group>
+      <article-title>JuMP: A Modeling Language for Mathematical Optimization</article-title>
+      <source>SIAM Review</source>
+      <year iso-8601-date="2017-01">2017</year><month>01</month>
+      <volume>59</volume>
+      <issue>2</issue>
+      <issn>0036-1445</issn>
+      <pub-id pub-id-type="doi">10.1137/15M1020575</pub-id>
+      <fpage>295</fpage>
+      <lpage>320</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-FICOXpressSolver">
+    <element-citation>
+      <article-title>FICO Xpress Solver</article-title>
+      <source>FICO</source>
+      <publisher-name>https://www.fico.com/en/products/fico-xpress-solver</publisher-name>
+    </element-citation>
+  </ref>
+  <ref id="ref-fourerAMPLModelingLanguage2003">
+    <element-citation publication-type="book">
+      <person-group person-group-type="author">
+        <name><surname>Fourer</surname><given-names>Robert</given-names></name>
+        <name><surname>Gay</surname><given-names>David M.</given-names></name>
+        <name><surname>Kernighan</surname><given-names>Brian W.</given-names></name>
+      </person-group>
+      <source>AMPL: A modeling language for mathematical programming</source>
+      <publisher-name>Thomson/Brooks/Cole</publisher-name>
+      <publisher-loc>Pacific Grove, CA</publisher-loc>
+      <year iso-8601-date="2003">2003</year>
+      <edition>2nd ed</edition>
+      <isbn>978-0-534-38809-6</isbn>
+    </element-citation>
+  </ref>
+  <ref id="ref-gamsdevelopmentcorporationGAMSCuttingEdge">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Corporation</surname><given-names>GAMS Development</given-names></name>
+      </person-group>
+      <article-title>GAMS - Cutting Edge Modeling</article-title>
+      <publisher-name>https://www.gams.com/</publisher-name>
+    </element-citation>
+  </ref>
+  <ref id="ref-GLPKGNUProject">
+    <element-citation>
+      <article-title>GLPK - GNU Project - Free Software Foundation (FSF)</article-title>
+      <publisher-name>https://www.gnu.org/software/glpk/</publisher-name>
+    </element-citation>
+  </ref>
+  <ref id="ref-GurobiFastestSolver">
+    <element-citation>
+      <article-title>Gurobi - The Fastest Solver</article-title>
+      <source>Gurobi</source>
+      <publisher-name>https://www.gurobi.com/</publisher-name>
+    </element-citation>
+  </ref>
+  <ref id="ref-GurobipyPythonInterface">
+    <element-citation>
+      <article-title>Gurobipy: Python interface to Gurobi</article-title>
+    </element-citation>
+  </ref>
+  <ref id="ref-harrisArrayProgrammingNumPy2020">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Harris</surname><given-names>Charles R.</given-names></name>
+        <name><surname>Millman</surname><given-names>K. Jarrod</given-names></name>
+        <name><surname>van der Walt</surname><given-names>Stéfan J.</given-names></name>
+        <name><surname>Gommers</surname><given-names>Ralf</given-names></name>
+        <name><surname>Virtanen</surname><given-names>Pauli</given-names></name>
+        <name><surname>Cournapeau</surname><given-names>David</given-names></name>
+        <name><surname>Wieser</surname><given-names>Eric</given-names></name>
+        <name><surname>Taylor</surname><given-names>Julian</given-names></name>
+        <name><surname>Berg</surname><given-names>Sebastian</given-names></name>
+        <name><surname>Smith</surname><given-names>Nathaniel J.</given-names></name>
+        <name><surname>Kern</surname><given-names>Robert</given-names></name>
+        <name><surname>Picus</surname><given-names>Matti</given-names></name>
+        <name><surname>Hoyer</surname><given-names>Stephan</given-names></name>
+        <name><surname>van Kerkwijk</surname><given-names>Marten H.</given-names></name>
+        <name><surname>Brett</surname><given-names>Matthew</given-names></name>
+        <name><surname>Haldane</surname><given-names>Allan</given-names></name>
+        <name><surname>del Río</surname><given-names>Jaime Fernández</given-names></name>
+        <name><surname>Wiebe</surname><given-names>Mark</given-names></name>
+        <name><surname>Peterson</surname><given-names>Pearu</given-names></name>
+        <name><surname>Gérard-Marchant</surname><given-names>Pierre</given-names></name>
+        <name><surname>Sheppard</surname><given-names>Kevin</given-names></name>
+        <name><surname>Reddy</surname><given-names>Tyler</given-names></name>
+        <name><surname>Weckesser</surname><given-names>Warren</given-names></name>
+        <name><surname>Abbasi</surname><given-names>Hameer</given-names></name>
+        <name><surname>Gohlke</surname><given-names>Christoph</given-names></name>
+        <name><surname>Oliphant</surname><given-names>Travis E.</given-names></name>
+      </person-group>
+      <article-title>Array programming with NumPy</article-title>
+      <source>Nature</source>
+      <year iso-8601-date="2020-09">2020</year><month>09</month>
+      <volume>585</volume>
+      <issue>7825</issue>
+      <issn>0028-0836</issn>
+      <pub-id pub-id-type="doi">10.1038/s41586-020-2649-2</pub-id>
+      <fpage>357</fpage>
+      <lpage>362</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-hartPyomoOptimizationModeling2017">
+    <element-citation publication-type="book">
+      <person-group person-group-type="author">
+        <name><surname>Hart</surname><given-names>William E.</given-names></name>
+        <name><surname>Laird</surname><given-names>Carl D.</given-names></name>
+        <name><surname>Watson</surname><given-names>Jean-Paul</given-names></name>
+        <name><surname>Woodruff</surname><given-names>David L.</given-names></name>
+        <name><surname>Hackebeil</surname><given-names>Gabriel A.</given-names></name>
+        <name><surname>Nicholson</surname><given-names>Bethany L.</given-names></name>
+        <name><surname>Siirola</surname><given-names>John D.</given-names></name>
+      </person-group>
+      <source>Pyomo  Optimization Modeling in Python</source>
+      <publisher-name>Springer International Publishing</publisher-name>
+      <publisher-loc>Cham</publisher-loc>
+      <year iso-8601-date="2017">2017</year>
+      <volume>67</volume>
+      <isbn>978-3-319-58821-6</isbn>
+      <pub-id pub-id-type="doi">10.1007/978-3-319-58821-6</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-horschPyPSAEurOpenOptimisation2018">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Hörsch</surname><given-names>Jonas</given-names></name>
+        <name><surname>Hofmann</surname><given-names>Fabian</given-names></name>
+        <name><surname>Schlachtberger</surname><given-names>David</given-names></name>
+        <name><surname>Brown</surname><given-names>Tom</given-names></name>
+      </person-group>
+      <article-title>PyPSA-Eur: An open optimisation model of the European transmission system</article-title>
+      <source>Energy Strategy Reviews</source>
+      <year iso-8601-date="2018-11">2018</year><month>11</month>
+      <volume>22</volume>
+      <pub-id pub-id-type="doi">10.1016/j.esr.2018.08.012</pub-id>
+      <fpage>207</fpage>
+      <lpage>215</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-hoyerXarrayNDLabeled2017">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Hoyer</surname><given-names>Stephan</given-names></name>
+        <name><surname>Hamman</surname><given-names>Joseph J.</given-names></name>
+      </person-group>
+      <article-title>Xarray: N-D labeled Arrays and Datasets in Python</article-title>
+      <source>Journal of Open Research Software</source>
+      <year iso-8601-date="2017-04">2017</year><month>04</month>
+      <volume>5</volume>
+      <issn>2049-9647</issn>
+      <pub-id pub-id-type="doi">10.5334/jors.148</pub-id>
+      <fpage>10</fpage>
+      <lpage></lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-Pulp2022">
+    <element-citation>
+      <article-title>Pulp</article-title>
+      <publisher-name>COIN-OR Foundation</publisher-name>
+      <year iso-8601-date="2022-07">2022</year><month>07</month>
+    </element-citation>
+  </ref>
+  <ref id="ref-rebackPandasdevPandasPandas2022">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Reback</surname><given-names>Jeff</given-names></name>
+        <name><surname>Jbrockmendel</surname></name>
+        <name><surname>McKinney</surname><given-names>Wes</given-names></name>
+        <name><surname>Van Den Bossche</surname><given-names>Joris</given-names></name>
+        <name><surname>Roeschke</surname><given-names>Matthew</given-names></name>
+        <name><surname>Augspurger</surname><given-names>Tom</given-names></name>
+        <name><surname>Hawkins</surname><given-names>Simon</given-names></name>
+        <name><surname>Cloud</surname><given-names>Phillip</given-names></name>
+        <name><surname>Gfyoung</surname></name>
+        <name><surname>Sinhrks</surname></name>
+        <name><surname>Hoefler</surname><given-names>Patrick</given-names></name>
+        <name><surname>Klein</surname><given-names>Adam</given-names></name>
+        <name><surname>Petersen</surname><given-names>Terji</given-names></name>
+        <name><surname>Tratner</surname><given-names>Jeff</given-names></name>
+        <name><surname>She</surname><given-names>Chang</given-names></name>
+        <name><surname>Ayd</surname><given-names>William</given-names></name>
+        <name><surname>Naveh</surname><given-names>Shahar</given-names></name>
+        <name><surname>Darbyshire</surname><given-names>JHM</given-names></name>
+        <name><surname>Shadrach</surname><given-names>Richard</given-names></name>
+        <name><surname>Garcia</surname><given-names>Marc</given-names></name>
+        <name><surname>Schendel</surname><given-names>Jeremy</given-names></name>
+        <name><surname>Hayden</surname><given-names>Andy</given-names></name>
+        <name><surname>Saxton</surname><given-names>Daniel</given-names></name>
+        <name><surname>Gorelli</surname><given-names>Marco Edward</given-names></name>
+        <name><surname>Li</surname><given-names>Fangchen</given-names></name>
+        <name><surname>Wörtwein</surname><given-names>Torsten</given-names></name>
+        <name><surname>Zeitlin</surname><given-names>Matthew</given-names></name>
+        <name><surname>Jancauskas</surname><given-names>Vytautas</given-names></name>
+        <name><surname>McMaster</surname><given-names>Ali</given-names></name>
+        <name><surname>Li</surname><given-names>Thomas</given-names></name>
+      </person-group>
+      <article-title>Pandas-dev/pandas: Pandas 1.4.3</article-title>
+      <publisher-name>Zenodo</publisher-name>
+      <year iso-8601-date="2022-06">2022</year><month>06</month>
+      <pub-id pub-id-type="doi">10.5281/ZENODO.3509134</pub-id>
+    </element-citation>
+  </ref>
+</ref-list>
+</back>
+</article>
