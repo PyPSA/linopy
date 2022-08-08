@@ -277,7 +277,10 @@ class LinearExpression(Dataset):
             ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
             ds_list.append(ds)
 
-        return merge(ds_list)
+        if len(ds_list) > 1:
+            return merge(ds_list)
+        else:
+            return LinearExpression(ds_list[0])
 
     def from_rule(model, rule, coords):
         """
@@ -400,27 +403,11 @@ class LinearExpression(Dataset):
         groups = xr.Dataset.groupby(self, group)
 
         def func(ds):
-            ds = ds.sum(groups._group_dim)
-            return ds.assign_coords(_term=np.arange(ds.nterm))
+            ds = LinearExpression.sum(ds, groups._group_dim)
+            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+            return ds
 
-        # mostly taken from xarray/core/groupby.py
-        applied = (func(ds) for ds in groups._iter_grouped())
-        applied_example, applied = peek_at(applied)
-        coord, dim, positions = groups._infer_concat_args(applied_example)
-        combined = xr.concat(applied, dim, fill_value=self.fill_value)
-        combined = _maybe_reorder(combined, dim, positions)
-        # assign coord when the applied function does not return that coord
-        if coord is not None and dim not in applied_example.dims:
-            combined[coord.name] = coord
-        combined = groups._maybe_restore_empty_groups(combined)
-        res = groups._maybe_unstack(combined).reset_index("_term", drop=True)
-        return self.__class__(res)
-
-    def group_terms(self, group):
-        warn(
-            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
-        )
-        return self.groupby_sum(group)
+        return groups.map(func)  # .reset_index('_term')
 
     def rolling_sum(self, **kwargs):
         """
@@ -447,10 +434,8 @@ class LinearExpression(Dataset):
         )
 
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
-        ds = (
-            ds.rename(_term="_stacked_term")
-            .stack(_term=["_stacked_term", "_rolling_term"])
-            .reset_index("_term", drop=True)
+        ds = ds.rename(_term="_stacked_term").stack(
+            _term=["_stacked_term", "_rolling_term"], create_index=False
         )
         return self.__class__(ds).assign_attrs(self.attrs)
 
@@ -615,7 +600,8 @@ def merge(*exprs, dim="_term"):
         exprs = [expr.assign_coords(_term=np.arange(expr.nterm)) for expr in exprs]
 
     fill_value = LinearExpression.fill_value
-    res = LinearExpression(xr.concat(exprs, dim, fill_value=fill_value))
+    kwargs = dict(fill_value=fill_value, coords="minimal", compat="override")
+    res = LinearExpression(xr.concat(exprs, dim, **kwargs))
 
     if "_term" in res.coords:
         res = res.reset_index("_term", drop=True)
