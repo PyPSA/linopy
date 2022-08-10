@@ -22,6 +22,10 @@ y = m.add_variables(4, pd.Series([8, 10]), name="y")
 z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
 v = m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
 
+idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+idx.name = "dim_3"
+u = m.add_variables(coords=[idx], name="u")
+
 
 def test_repr():
     expr = m.linexpr((10, "x"), (1, "y"))
@@ -212,7 +216,8 @@ def test_sum_drop_zeros():
     res = expr.sum("dim_1", drop_zeros=True)
     assert res.nterm == 1
 
-    expr.coeffs[1, 2] = 4
+    coeff[1, 2] = 4
+    expr["coeffs"] = coeff
     res = expr.sum()
 
     res = expr.sum("dim_0", drop_zeros=True)
@@ -234,6 +239,11 @@ def test_mul():
 def test_sanitize():
     expr = 10 * x + y + z
     assert isinstance(expr.sanitize(), LinearExpression)
+
+
+def test_multiindexed_expression():
+    expr = 3 * u + 1 * u
+    assert isinstance(expr, LinearExpression)
 
 
 def test_groupby_sum():

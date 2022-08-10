@@ -404,6 +404,7 @@ class LinearExpression(Dataset):
 
         def func(ds):
             ds = LinearExpression.sum(ds, groups._group_dim)
+            ds = ds.to_dataset()
             ds = ds.assign_coords(_term=np.arange(len(ds._term)))
             return ds
 
@@ -597,11 +598,13 @@ def merge(*exprs, dim="_term"):
         exprs = list(exprs)
 
     if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
-        exprs = [expr.assign_coords(_term=np.arange(expr.nterm)) for expr in exprs]
+        exprs = [expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs]
 
+    exprs = [e.to_dataset() if isinstance(e, LinearExpression) else e for e in exprs]
     fill_value = LinearExpression.fill_value
     kwargs = dict(fill_value=fill_value, coords="minimal", compat="override")
-    res = LinearExpression(xr.concat(exprs, dim, **kwargs))
+    ds = xr.concat(exprs, dim, **kwargs)
+    res = LinearExpression(ds)
 
     if "_term" in res.coords:
         res = res.reset_index("_term", drop=True)
