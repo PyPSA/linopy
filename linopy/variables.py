@@ -30,10 +30,11 @@ from linopy.common import (
 
 def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _varwrap(*args, **kwargs):
+    def _varwrap(obj, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        return Variable(method(*default_args, *args, **kwargs))
+        obj = DataArray(obj)
+        return Variable(method(obj, *default_args, *args, **kwargs))
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -381,6 +382,8 @@ class Variable(DataArray):
     shift = varwrap(DataArray.shift, fill_value=-1)
 
     roll = varwrap(DataArray.roll)
+
+    rolling = varwrap(DataArray.rolling)
 
 
 @dataclass(repr=False)

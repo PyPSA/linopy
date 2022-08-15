@@ -26,10 +26,11 @@ from linopy.common import as_dataarray
 
 def exprwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _exprwrap(*args, **kwargs):
+    def _exprwrap(obj, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        return LinearExpression(method(*args, **kwargs))
+        obj = Dataset(obj)
+        return LinearExpression(method(obj, *default_args, *args, **kwargs))
 
     _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -408,7 +409,7 @@ class LinearExpression(Dataset):
             ds = ds.assign_coords(_term=np.arange(len(ds._term)))
             return ds
 
-        return groups.map(func)  # .reset_index('_term')
+        return LinearExpression(groups.map(func))  # .reset_index('_term')
 
     def rolling_sum(self, **kwargs):
         """
@@ -526,7 +527,7 @@ class LinearExpression(Dataset):
 
     ffill = exprwrap(Dataset.ffill)
 
-    fillna = exprwrap(Dataset.fillna)
+    fillna = exprwrap(Dataset.fillna, value=fill_value)
 
     shift = exprwrap(Dataset.shift)
 
@@ -534,8 +535,9 @@ class LinearExpression(Dataset):
 
     roll = exprwrap(Dataset.roll)
 
+    rolling = exprwrap(Dataset.rolling)
+
     # TODO: explicitly disable `dangerous` functions
-    rolling = property()
     conj = property()
     conjugate = property()
     count = property()
@@ -545,7 +547,6 @@ class LinearExpression(Dataset):
     curvefit = property()
     diff = property()
     differentiate = property()
-    groupby = property()
     groupby_bins = property()
     integrate = property()
     interp = property()
