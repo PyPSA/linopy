@@ -25,6 +25,7 @@ def model(n, solver, integerlabels):
     m.add_constraints(x - y >= N)
     m.add_constraints(x + y >= 0)
     m.add_objective((2 * x).sum() + y.sum())
+    # m.to_file(f"linopy-model.lp")
     m.solve(solver)
     return
 

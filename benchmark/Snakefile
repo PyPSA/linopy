@@ -81,13 +81,29 @@ rule benchmark_cbc_single:
         "benchmarks/cbc/solver/{N}.txt"
     shell: "cbc -import {input} -solve -solu {input}.sol"
 
+
 rule benchmark_gurobi_single:
     input:
-        "benchmarks/lp_files/{N}.lp"
+        time="benchmarks/gurobi/solver/{N}-time.txt",
+        lp="benchmarks/lp_files/{N}.lp"
     benchmark:
         "benchmarks/gurobi/solver/{N}.txt"
-    shell: "gurobi_cl ResultFile={input}.sol {input}"
+    shell: "gurobi_cl ResultFile={input.lp}.sol {input.lp}"
 
+
+rule benchmark_gurobi_single_time:
+    input:
+        "benchmarks/lp_files/{N}.lp"
+    output:
+        "benchmarks/gurobi/solver/{N}-time.txt"
+    run:
+        import gurobipy
+
+        m = gurobipy.read(input[0])
+        m.optimize()
+
+        with open(output[0], 'w') as f:
+            f.write(str(m.RunTime))
 
 # Concat benchmark of single processes
 rule concat_benchmarks:
