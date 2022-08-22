@@ -137,7 +137,6 @@ def test_variable_type_preservation():
 
 
 def test_variable_getter_without_model():
-
     data = xr.DataArray(range(10)).rename("var")
     v = linopy.variables.Variable(data)
 

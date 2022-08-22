@@ -121,7 +121,6 @@ def test_expr_to_anonymous_constraint():
 
 
 def test_add():
-
     expr = 10 * x + y
     other = 2 * y + z
     res = expr + other

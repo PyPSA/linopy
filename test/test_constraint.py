@@ -95,7 +95,6 @@ def test_constraints_accessor():
 
 
 def test_constraint_getter_without_model():
-
     data = xr.DataArray(range(10)).rename("con")
     c = linopy.constraints.Constraint(data)
 
