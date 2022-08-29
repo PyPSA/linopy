@@ -22,5 +22,5 @@ benchmark/notebooks/.ipynb_checkpoints
 benchmark/scripts/__pycache__
 benchmark/scripts/benchmarks-pypsa-eur/__pycache__
 
-paper/paper.pdf
+paper/*.pdf
 paper/paper.jats
