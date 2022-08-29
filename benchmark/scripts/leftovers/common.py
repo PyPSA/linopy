@@ -8,7 +8,6 @@ from memory_profiler import memory_usage
 
 
 def profile(nrange, func):
-
     res = pd.DataFrame(index=nrange, columns=["Time [s]", "Memory Usage"])
 
     for N in res.index:
@@ -27,7 +26,6 @@ def profile(nrange, func):
 
 
 def profile_shell(nrange, cmd):
-
     res = pd.DataFrame(index=nrange, columns=["Time [s]", "Memory Usage"])
 
     for N in res.index:

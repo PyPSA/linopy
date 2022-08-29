@@ -6,7 +6,6 @@ from memory_profiler import memory_usage
 
 
 def profile(nrange, func, *args):
-
     res = pd.DataFrame(index=nrange, columns=["Time", "Memory"])
 
     for N in res.index:
