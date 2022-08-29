@@ -87,7 +87,6 @@ This package is published under license GNU Public License GPLv3
    :caption: Getting started
 
    create-a-model
-   .. migrating-from-pyomo
    solvers
 
 .. toctree::
@@ -116,3 +115,4 @@ This package is published under license GNU Public License GPLv3
 
    api
    release_notes
+   contributing
