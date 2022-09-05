@@ -78,7 +78,7 @@ LinearExpressions
 
     expressions.LinearExpression
     expressions.LinearExpression.sum
-    expressions.LinearExpression.group_terms
+    expressions.LinearExpression.groupby_sum
     expressions.LinearExpression.from_tuples
     expressions.merge
     expressions.ScalarLinearExpression

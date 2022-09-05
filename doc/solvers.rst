@@ -15,8 +15,11 @@ Installing solvers
 Please click on the links to get further installation information. In the following we provide additional installation guides for a subset of the above listed solvers.
 
 
+Particular solver instructions
+------------------------------
+
 HiGHS
-------
+~~~~~
 
 HiGHS is an "open source serial and parallel solvers for large-scale sparse linear programming".
 

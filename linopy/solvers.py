@@ -34,7 +34,7 @@ try:
     import gurobipy
 
     available_solvers.append("gurobi")
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 
 
@@ -42,14 +42,14 @@ try:
     import cplex
 
     available_solvers.append("cplex")
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 
 try:
     import xpress
 
     available_solvers.append("xpress")
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 
 logger = logging.getLogger(__name__)
