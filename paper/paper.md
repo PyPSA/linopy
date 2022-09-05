@@ -14,11 +14,11 @@ authors:
   #   orcid: 0000-0001-9438-767X
   #   affiliation: "5" # (Multiple affiliations must be quoted)
 affiliations:
- - name: Institute of Energy Technology, Technical University of Berlin
+ - name: Department of Digital Transformation in Energy Systems, Technical University of Berlin
    index: 1
 #  - name: Climate Analytics gGmbH, Berlin
 #    index: 5
-date: 11 July 2022
+date: 5 September 2022
 bibliography: paper.bib
 
 
@@ -26,7 +26,7 @@ bibliography: paper.bib
 
 # Summary
 
-Linopy is an open-source package written in Python to facilitate linear and mixed-integer optimization with n-dimensional labeled input data. Using state-of-the-art data analysis packages, Linopy enables a high-level algebraic syntax and memory-efficient, fast communication with open and proprietary solvers. While similar packages use object-oriented implementations of single variables and constraints, Linopy stores and processes its data in an array-based data model. This allows the user to build large optimization models quickly and lays the foundation for features such as fast writing to array-oriented scientific data formats, masking, automatic solving on remote servers and model scaling.
+Linopy is an open-source package written in Python to build and process linear and mixed-integer optimization with n-dimensional labeled input data. Using state-of-the-art data analysis packages, Linopy enables a high-level algebraic syntax and memory-efficient, fast communication with open and proprietary solvers. While similar packages use object-oriented implementations of single variables and constraints, Linopy stores and processes its data in an array-based data model. This allows the user to build large optimization models quickly and lays the foundation for features such as fast writing to array-oriented scientific data formats, masking, automatic solving on remote servers and model scaling.
 
 # Statement of need
 
@@ -61,7 +61,7 @@ For example, creating a variable $x(d_1, d_2)$ defined on $d_1 \in \{1,...,N\}$ 
 
 # Related Research
 
-Linopy is used by several research projects and groups, mostly related to energy system modelling. Our modelling group plans to add Linopy in the newer version of our own energy system modelling tool [PyPSA package](https://github.com/PyPSA/pypsa) [@brownPyPSAPythonPower2018] used in the [PyPSA-Eur workflow](https://github.com/PyPSA/pypsa-eur) [@horschPyPSAEurOpenOptimisation2018] and the sector-coupled extension [PyPSA-Eur-sec](https://github.com/PyPSA/pypsa-eur-sec) [@brownPyPSAPythonPower2018]. The Fraunhofer Institute for Energy Economics and Energy System Technology is using Linopy in order to create an interface to GPU-based solvers. The German Aerospace Center uses Linopy for calculating probabilistic optimization problems.
+Linopy is used by several research projects and groups, mostly related to energy system modelling. Our modelling group plans to add Linopy in the newer version of our own energy system modelling tool [PyPSA package](https://github.com/PyPSA/pypsa) [@brownPyPSAPythonPower2018] used by [various institutions](https://pypsa.readthedocs.io/en/latest/users.html) and building the core of the [PyPSA-Eur workflow](https://github.com/PyPSA/pypsa-eur) [@horschPyPSAEurOpenOptimisation2018] and the sector-coupled extension [PyPSA-Eur-sec](https://github.com/PyPSA/pypsa-eur-sec) [@brownPyPSAPythonPower2018]. The Fraunhofer Institute for Energy Economics and Energy System Technology is using Linopy in order to create an interface to GPU-based solvers. The German Aerospace Center uses Linopy for calculating stochastic optimization problems.
 
 # Availability
 
@@ -73,7 +73,7 @@ For continuous integration, Linopy uses automated tests on Github together with 
 
 # Acknowledgements
 
-We thank all [contributors](https://github.com/PyPSA/linopy/graphs/contributors) who helped to develop Linopy.
+We thank all [contributors](https://github.com/PyPSA/linopy/graphs/contributors) who helped to develop Linopy. In particular, Linopy was inspired by the [Nomopyomo](https://github.com/PyPSA/nomopyomo) prototype written by Tom Brown and its approach to store variables as integer labels.
 
 Fabian Hofmann is funded by the [BreakthroughEnergy initiative](https://www.breakthroughenergy.org/).
 
