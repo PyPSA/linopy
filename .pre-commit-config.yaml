@@ -6,16 +6,16 @@ repos:
     -   id: trailing-whitespace
     -   id: check-merge-conflict
 -   repo: https://github.com/psf/black
-    rev: 22.6.0
+    rev: 22.8.0
     hooks:
     -   id: black
--   repo: https://github.com/myint/docformatter
+-   repo: https://github.com/PyCQA/docformatter
     rev: v1.5.0
     hooks:
     -   id: docformatter
         args: [--in-place, --make-summary-multi-line, --pre-summary-newline]
 -   repo: https://github.com/keewis/blackdoc
-    rev: v0.3.5
+    rev: v0.3.7
     hooks:
       - id: blackdoc
 -   repo: https://github.com/MarcoGorelli/absolufy-imports
