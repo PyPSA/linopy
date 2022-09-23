@@ -32,7 +32,7 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray @ https://github.com/pydata/xarray/archive/main.zip",
+        "xarray<=2022.03.",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",
