@@ -216,9 +216,10 @@ class LinearExpression(Dataset):
         else:
             dims = [d for d in np.atleast_1d(dims) if d != "_term"]
             ds = (
-                self.rename(_term="_stacked_term")
-                .stack(_term=["_stacked_term"] + dims, create_index=False)
-                .drop(dims)
+                self.reset_index(dims, drop=True)
+                .rename(_term="_stacked_term")
+                .stack(_term=["_stacked_term"] + dims)
+                .reset_index("_term", drop=True)
             )
 
         if drop_zeros:
@@ -436,8 +437,10 @@ class LinearExpression(Dataset):
         )
 
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
-        ds = ds.rename(_term="_stacked_term").stack(
-            _term=["_stacked_term", "_rolling_term"], create_index=False
+        ds = (
+            ds.rename(_term="_stacked_term")
+            .stack(_term=["_stacked_term", "_rolling_term"])
+            .reset_index("_term", drop=True)
         )
         return self.__class__(ds).assign_attrs(self.attrs)
 
