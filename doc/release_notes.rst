@@ -1,13 +1,16 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.0.11
+--------------
 
 * Constraints and expressions can now be created using function that iterates over all combinations of given coordinates. This functionality mirrors the behavior of the Pyomo package. For complicated constraints which are hard to create with arrays of variables, it is easier (thus less efficient) to use an iterating function. For more information see the example notebook in the documentation.
 * When getting the value of a variable, the value of the variable is returned as a `ScalarVariable`. This is useful for the above mentioned creation of expressions and constraints with iterating functions. This affect only the direct getter function, all other functions like `.sel` or `.isel` behave as known from Xarray.
 * The docstring examples are now part of the Continuous Integration.
-* Fix package for latest xarray release (v2022.6.0).
+* Due to problems with indexing in the latest package version, the xarray dependency was set to `<=v2022.3.0`.
 
 Version 0.0.10
 --------------
