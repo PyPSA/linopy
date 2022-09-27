@@ -660,3 +660,6 @@ class AnonymousScalarConstraint:
     lhs: expressions.ScalarLinearExpression
     sign: str
     rhs: float
+
+    def to_anonymous_constraint(self):
+        return AnonymousConstraint(self.lhs.to_linexpr(), self.sign, self.rhs)

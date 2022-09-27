@@ -642,7 +642,7 @@ class ScalarLinearExpression:
 
     def __sub__(self, other):
         if isinstance(other, variables.ScalarVariable):
-            other = other.to_linexpr(1)
+            other = other.to_scalar_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
@@ -692,3 +692,8 @@ class ScalarLinearExpression:
             )
 
         return constraints.AnonymousScalarConstraint(self, "=", other)
+
+    def to_linexpr(self):
+        coeffs = xr.DataArray(list(self.coeffs), dims="_term")
+        vars = xr.DataArray(list(self.vars), dims="_term")
+        return LinearExpression({"coeffs": coeffs, "vars": vars})

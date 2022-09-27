@@ -33,6 +33,23 @@ def test_constraints_repr():
     m.constraints.__repr__()
 
 
+def test_scalarconstraint():
+    m = Model()
+    coords = [pd.Index(range(10))]
+    x = m.add_variables(coords=coords)
+    con = m.add_constraints(x[0] >= 0)
+    assert isinstance(con, linopy.constraints.Constraint)
+
+    con = m.add_constraints(x[0] + x[1] >= 0)
+    assert isinstance(con, linopy.constraints.Constraint)
+
+    con = m.add_constraints(x[0], ">=", 0)
+    assert isinstance(con, linopy.constraints.Constraint)
+
+    con = m.add_constraints(x[0] + x[1], ">=", 0)
+    assert isinstance(con, linopy.constraints.Constraint)
+
+
 def test_constraint_accessor():
     m = Model()
     x = m.add_variables()

@@ -625,34 +625,37 @@ class ScalarVariable:
     label: int
     coords: dict = None
 
-    def to_linexpr(self, coeff=1):
+    def to_scalar_linexpr(self, coeff=1):
         if not isinstance(coeff, (int, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,))
 
+    def to_linexpr(self, coeff=1):
+        return self.to_scalar_linexpr(coeff).to_linexpr()
+
     def __neg__(self):
-        return self.to_linexpr(-1)
+        return self.to_scalar_linexpr(-1)
 
     def __add__(self, other):
-        return self.to_linexpr(1) + other
+        return self.to_scalar_linexpr(1) + other
 
     def __sub__(self, other):
-        return self.to_linexpr(1) - other
+        return self.to_scalar_linexpr(1) - other
 
     def __mul__(self, coeff):
-        return self.to_linexpr(coeff)
+        return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff):
-        return self.to_linexpr(coeff)
+        return self.to_scalar_linexpr(coeff)
 
     def __div__(self, coeff):
-        return self.to_linexpr(1 / coeff)
+        return self.to_scalar_linexpr(1 / coeff)
 
     def __le__(self, other):
-        return self.to_linexpr(1).__le__(other)
+        return self.to_scalar_linexpr(1).__le__(other)
 
     def __ge__(self, other):
-        return self.to_linexpr(1).__ge__(other)
+        return self.to_scalar_linexpr(1).__ge__(other)
 
     def __eq__(self, other):
-        return self.to_linexpr(1).__eq__(other)
+        return self.to_scalar_linexpr(1).__eq__(other)

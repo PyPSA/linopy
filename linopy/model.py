@@ -19,12 +19,16 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import best_int, replace_by_map
-from linopy.constraints import AnonymousConstraint, Constraints
+from linopy.constraints import (
+    AnonymousConstraint,
+    AnonymousScalarConstraint,
+    Constraints,
+)
 from linopy.eval import Expr
-from linopy.expressions import LinearExpression
+from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
 from linopy.solvers import available_solvers
-from linopy.variables import Variable, Variables
+from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
 
@@ -508,6 +512,9 @@ class Model:
             rule = lhs
             lhs = AnonymousConstraint.from_rule(self, rule, coords)
 
+        if isinstance(lhs, AnonymousScalarConstraint):
+            lhs = lhs.to_anonymous_constraint()
+
         if isinstance(lhs, AnonymousConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(
@@ -526,7 +533,7 @@ class Model:
 
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
-        elif isinstance(lhs, Variable):
+        elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
