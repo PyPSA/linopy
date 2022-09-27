@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* AnonymousConstraint can now built from comparison operations of variables with constants, e.g. `x >= 5`.
+
 
 Version 0.0.11
 --------------

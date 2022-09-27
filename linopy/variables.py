@@ -210,6 +210,15 @@ class Variable(DataArray):
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
 
+    def __le__(self, other):
+        return self.to_linexpr().__le__(other)
+
+    def __ge__(self, other):
+        return self.to_linexpr().__ge__(other)
+
+    def __eq__(self, other):
+        return self.to_linexpr().__eq__(other)
+
     def groupby_sum(self, group):
         """
         Sum variable over groups.

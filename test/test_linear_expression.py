@@ -119,6 +119,33 @@ def test_expr_to_anonymous_constraint():
     assert con.sign.item() == "<="
     assert con.rhs.item() == 10
 
+    con = expr >= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == ">="
+    assert con.rhs.item() == 10
+
+    con = expr == 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "="
+    assert con.rhs.item() == 10
+
+
+def test_expr_to_anonymous_constraint_from_variable():
+    con = x <= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "<="
+    assert con.rhs.item() == 10
+
+    con = x >= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == ">="
+    assert con.rhs.item() == 10
+
+    con = x == 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "="
+    assert con.rhs.item() == 10
+
 
 def test_add():
     expr = 10 * x + y

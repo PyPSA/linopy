@@ -55,7 +55,7 @@ def test_scalar_variable_assignment_default():
 def test_variable_getitem():
     m = Model()
     x = m.add_variables(name="x")
-    assert m["x"] == x
+    assert m["x"].values == x.values
 
 
 def test_scalar_variable_name_counter():
