@@ -14,7 +14,7 @@ import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import array
+from numpy import arange, array
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
 
@@ -102,8 +102,17 @@ class Constraint(DataArray):
     @coeffs.setter
     @has_assigned_model
     def coeffs(self, value):
-        value = DataArray(value).broadcast_like(self.vars)
-        self.model.constraints.coeffs[self.name] = value
+        term_dim = self.name + "_term"
+        value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
+        try:
+            self.model.constraints.coeffs[self.name] = value
+        except ValueError:
+            coeffs = self.model.constraints.coeffs
+            coeffs = coeffs.assign_coords({term_dim: coeffs[term_dim]})
+            value = value.assign_coords({term_dim: value[term_dim]})
+            coeffs[self.name] = value
+            coeffs = coeffs.reset_index(term_dim, drop=True)
+            self.model.constraints.coeffs = coeffs
 
     @property
     @has_assigned_model
@@ -119,8 +128,17 @@ class Constraint(DataArray):
     @vars.setter
     @has_assigned_model
     def vars(self, value):
-        value = DataArray(value).broadcast_like(self.coeffs)
-        self.model.constraints.vars[self.name] = value
+        term_dim = self.name + "_term"
+        value = DataArray(value).broadcast_like(self.coeffs, exclude=[term_dim])
+        try:
+            self.model.constraints.vars[self.name] = value
+        except ValueError:
+            vars = self.model.constraints.vars
+            vars = vars.assign_coords({term_dim: vars[term_dim]})
+            value = value.assign_coords({term_dim: value[term_dim]})
+            vars[self.name] = value
+            vars = vars.reset_index(term_dim, drop=True)
+            self.model.constraints.vars = vars
 
     @property
     @has_assigned_model
@@ -265,6 +283,15 @@ class Constraints:
         return self.labels.__iter__()
 
     _merge_inplace = _merge_inplace
+
+    def _ipython_key_completions_(self) -> list[str]:
+        """
+        Provide method for the key-autocompletions in IPython.
+
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        return list(self)
 
     def add(
         self,
@@ -516,14 +543,14 @@ class Constraints:
             clabels = self.ravel("labels", filter_missings=True)
             ncons = clabels.shape[0]
             cmap = np.empty(self.model._cCounter)
-            cmap[clabels] = np.arange(clabels.shape[0])
+            cmap[clabels] = arange(clabels.shape[0])
             rows = cmap[rows]
 
             variables = self.model.variables
             vlabels = variables.ravel("labels", filter_missings=True)
             nvars = vlabels.shape[0]
             vmap = np.empty(self.model._xCounter)
-            vmap[vlabels] = np.arange(nvars)
+            vmap[vlabels] = arange(nvars)
             cols = vmap[cols]
 
             shape = (ncons, nvars)  # same as model.nvars/ncons but already there

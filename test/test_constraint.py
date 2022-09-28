@@ -72,6 +72,12 @@ def test_constraint_accessor():
     c.sign = "="
     assert c.sign.item() == "="
 
+    c.lhs = x + y
+    assert len(c.vars) == 2
+    assert len(c.coeffs) == 2
+    assert c.vars.notnull().all().item()
+    assert c.coeffs.notnull().all().item()
+
 
 def test_constraint_accessor_M():
     m = Model()

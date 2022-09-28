@@ -445,6 +445,15 @@ class Variables:
 
     _merge_inplace = _merge_inplace
 
+    def _ipython_key_completions_(self) -> list[str]:
+        """
+        Provide method for the key-autocompletions in IPython.
+
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        return list(self)
+
     def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
         """
         Add variable `name`.
