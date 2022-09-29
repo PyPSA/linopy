@@ -7,7 +7,7 @@ Upcoming Release
 * AnonymousConstraint can now built from comparison operations of variables with constants, e.g. `x >= 5`.
 * The `Model.add_constraints` function now support input of type `ScalarVariable`, `ScalarLinearExpression` and `ScalarConstraint`.
 * For `Constraints`` and `Variables`` a `ipython` autocompletion function for getting items was added.
-* Inplace updates for constraints is now more flexible.
+* Inplace updates for constraints are now more flexible.
 
 Version 0.0.11
 --------------

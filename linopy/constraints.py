@@ -284,7 +284,7 @@ class Constraints:
 
     _merge_inplace = _merge_inplace
 
-    def _ipython_key_completions_(self) -> list[str]:
+    def _ipython_key_completions_(self):
         """
         Provide method for the key-autocompletions in IPython.
 
