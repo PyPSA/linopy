@@ -356,6 +356,16 @@ class Constraints:
         """
         return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
 
+    def sanitize_zeros(self):
+        """
+        Filter out terms with zero coefficient.
+        """
+        for name in self:
+            term_dim = name + "_term"
+            not_zero = self.coeffs[name] != 0
+            self.vars[name] = self.vars[name].where(not_zero, -1)
+            self.coeffs[name] = self.coeffs[name].where(not_zero)
+
     def sanitize_missings(self):
         """
         Set constraints labels to -1 where all variables in the lhs are

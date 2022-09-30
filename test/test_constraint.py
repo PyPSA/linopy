@@ -131,6 +131,16 @@ def test_constraint_getter_without_model():
         c.rhs
 
 
+def test_constraint_sanitize_zeros():
+    m = Model()
+    x = m.add_variables(coords=[range(10)])
+    y = m.add_variables()
+    m.add_constraints(0 * x + y == 0)
+    m.constraints.sanitize_zeros()
+    assert m.constraints["con0"].vars[0, 0].item() == -1
+    assert np.isnan(m.constraints["con0"].coeffs[0, 0].item())
+
+
 def test_constraint_matrix():
     m = Model()
     x = m.add_variables(coords=[range(10)])

@@ -8,6 +8,8 @@ Upcoming Release
 * The `Model.add_constraints` function now support input of type `ScalarVariable`, `ScalarLinearExpression` and `ScalarConstraint`.
 * For `Constraints`` and `Variables`` a `ipython` autocompletion function for getting items was added.
 * Inplace updates for constraints are now more flexible.
+* Terms with zero coefficient are now filtered out before writing to file to avoid unnecessary overhead.
+* The function `sanitize_zeros` was added to `Constraints`. Use this to filter out zero coefficient terms.
 
 Version 0.0.11
 --------------

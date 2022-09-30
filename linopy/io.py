@@ -100,6 +100,11 @@ def constraints_to_file(m, f, log=False):
         if not c.size:
             continue
 
+        # drop zeros
+        l = l[c != 0]
+        v = v[c != 0]
+        c = c[c != 0]
+
         diff_con = l[:-1] != l[1:]
         new_con_b = concatenate([asarray([True]), diff_con])
         end_of_con_b = concatenate([diff_con, asarray([True])])
