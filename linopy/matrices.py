@@ -160,15 +160,8 @@ def get_constraint_labels(m, filter_missings=True):
     labels
         One-dimensional numpy array containing labels of all constraints.
     """
+    m.constraints.sanitize_missings()
     return m.constraints.ravel("labels", filter_missings=filter_missings)
-
-
-def is_documented_by(original):
-    def wrapper(target):
-        target.__doc__ = original.__doc__.splitlines()[0]
-        return target
-
-    return wrapper
 
 
 class MatrixAccessor:
@@ -180,41 +173,41 @@ class MatrixAccessor:
         self._parent = model
 
     @property
-    @is_documented_by(get_variable_labels)
     def vlabels(self):
+        "Vector of labels of all non-missing variables."
         return get_variable_labels(self._parent)
 
     @property
-    @is_documented_by(get_lower_bounds)
     def lb(self):
+        "Vector of lower bounds of all non-missing variables."
         return get_lower_bounds(self._parent)
 
     @property
-    @is_documented_by(get_upper_bounds)
     def ub(self):
+        "Vector of upper bounds of all non-missing variables."
         return get_upper_bounds(self._parent)
 
     @property
-    @is_documented_by(get_constraint_labels)
     def clabels(self):
+        "Vector of labels of all non-missing constraints."
         return get_constraint_labels(self._parent)
 
     @property
-    @is_documented_by(get_constraint_matrix)
     def A(self):
+        "Constraint matrix of all non-missing constraints and variables."
         return get_constraint_matrix(self._parent)
 
     @property
-    @is_documented_by(get_sense)
     def sense(self):
+        "Vector of senses of all non-missing constraints."
         return get_sense(self._parent)
 
     @property
-    @is_documented_by(get_rhs)
     def b(self):
+        "Vector of right-hand-sides of all non-missing constraints."
         return get_rhs(self._parent)
 
     @property
-    @is_documented_by(get_objective_coefficients)
     def c(self):
+        "Vector of objective coefficients of all non-missing variables."
         return get_objective_coefficients(self._parent)
