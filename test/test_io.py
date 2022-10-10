@@ -85,6 +85,20 @@ def test_to_file(tmp_path):
     gurobipy.read(str(fn))
 
 
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_gurobipy(tmp_path):
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]))
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
+
+    m.add_constraints(x + y, "<=", 10)
+
+    m.add_objective(2 * x + 3 * y)
+
+    m.to_gurobipy()
+
+
 def test_to_blocks(tmp_path):
     m = Model()
 

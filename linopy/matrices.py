@@ -165,7 +165,7 @@ def get_constraint_labels(m, filter_missings=True):
 
 def is_documented_by(original):
     def wrapper(target):
-        target.__doc__ = original.__doc__.splitlines()[0]
+        target.__doc__ = original.__doc__.splitlines()
         return target
 
     return wrapper
@@ -199,8 +199,8 @@ class MatrixAccessor:
     def clabels(self):
         return get_constraint_labels(self._parent)
 
-    @property
     @is_documented_by(get_constraint_matrix)
+    @property
     def A(self):
         return get_constraint_matrix(self._parent)
 

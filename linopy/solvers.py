@@ -506,37 +506,7 @@ def run_gurobi(
 
     else:
         problem_fn = None
-        m = gurobipy.Model()
-
-        lower = Model.variables.ravel("lower", filter_missings=True)
-        upper = Model.variables.ravel("upper", filter_missings=True)
-        xlabels = Model.variables.ravel("labels", filter_missings=True)
-        names = "x" + xlabels.astype(str).astype(object)
-        kwargs = {}
-        if len(Model.binaries.labels):
-            specs = {
-                name: "B" if name in Model.binaries else "C" for name in Model.variables
-            }
-            specs = Dataset({k: DataArray(v) for k, v in specs.items()})
-            kwargs["vtype"] = Model.variables.ravel(specs, filter_missings=True)
-
-        x = m.addMVar(xlabels.shape, lower, upper, name=list(names), **kwargs)
-
-        coeffs = np.zeros(Model._xCounter)
-        coeffs[np.asarray(Model.objective.vars)] = np.asarray(Model.objective.coeffs)
-        m.setObjective(coeffs[xlabels] @ x)
-
-        A = Model.constraints.to_matrix(filter_missings=True)
-        sense = Model.constraints.ravel("sign", filter_missings=True).astype(
-            np.dtype("<U1")
-        )
-        b = Model.constraints.ravel("rhs", filter_missings=True)
-        clabels = Model.constraints.ravel("labels", filter_missings=True)
-        names = "c" + clabels.astype(str).astype(object)
-        c = m.addMConstr(A, x, sense, b)
-        c.setAttr("ConstrName", list(names))
-
-        m.update()
+        m = Model.to_gurobipy()
 
     if solver_options is not None:
         for key, value in solver_options.items():

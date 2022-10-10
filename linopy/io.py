@@ -194,6 +194,47 @@ def to_file(m, fn):
     return fn
 
 
+def to_gurobipy(m):
+    """
+    Export the model to gurobipy.
+
+    This function does not write the model to intermediate files but directly
+    passes it to gurobipy. Note that for large models this is not
+    computationally efficient.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : gurobipy.Model
+    """
+    import gurobipy
+
+    m.constraints.sanitize_missings()
+    model = gurobipy.Model()
+
+    M = m.matrices
+
+    names = "x" + M.vlabels.astype(str).astype(object)
+    kwargs = {}
+    if len(m.binaries.labels):
+        specs = {name: "B" if name in m.binaries else "C" for name in m.variables}
+        specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
+        kwargs["vtype"] = m.variables.ravel(specs, filter_missings=True)
+    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
+
+    model.setObjective(M.c @ x)
+
+    names = "c" + M.clabels.astype(str).astype(object)
+    c = model.addMConstr(M.A, x, M.sense, M.b)
+    c.setAttr("ConstrName", list(names))
+
+    model.update()
+    return model
+
+
 def to_block_files(m, fn):
     """
     Write out the linopy model to a block structured output.

@@ -11,6 +11,7 @@ Upcoming Release
 * Terms with zero coefficient are now filtered out before writing to file to avoid unnecessary overhead.
 * The function `sanitize_zeros` was added to `Constraints`. Use this to filter out zero coefficient terms.
 * A new module was created to export basic mathematical quantities such as `lb`, `ub`, `c` vectors and the `A` matrix. Use it with the `matrices` accessor in `linopy.Model`.
+* Solving with `gurobi` and `io_api="direct"` lead to wrong objective assignment if the objective contained non-unique variables. This is fixed in this version.
 
 Version 0.0.11
 --------------
