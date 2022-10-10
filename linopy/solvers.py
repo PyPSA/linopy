@@ -511,7 +511,7 @@ def run_gurobi(
         lower = Model.variables.ravel("lower", filter_missings=True)
         upper = Model.variables.ravel("upper", filter_missings=True)
         xlabels = Model.variables.ravel("labels", filter_missings=True)
-        names = "v" + xlabels.astype(str).astype(object)
+        names = "x" + xlabels.astype(str).astype(object)
         kwargs = {}
         if len(Model.binaries.labels):
             specs = {

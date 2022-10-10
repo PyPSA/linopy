@@ -10,6 +10,7 @@ Upcoming Release
 * Inplace updates for constraints are now more flexible.
 * Terms with zero coefficient are now filtered out before writing to file to avoid unnecessary overhead.
 * The function `sanitize_zeros` was added to `Constraints`. Use this to filter out zero coefficient terms.
+* A new module was created to export basic mathematical quantities such as `lb`, `ub`, `c` vectors and the `A` matrix. Use it with the `matrices` accessor in `linopy.Model`.
 
 Version 0.0.11
 --------------
