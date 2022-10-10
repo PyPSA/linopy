@@ -27,6 +27,7 @@ from linopy.constraints import (
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import to_block_files, to_file, to_netcdf
+from linopy.matrices import MatrixAccessor
 from linopy.solvers import available_solvers
 from linopy.variables import ScalarVariable, Variable, Variables
 
@@ -71,6 +72,7 @@ class Model:
         "_force_dim_names",
         "_solver_dir",
         "solver_model",
+        "matrices",
     )
 
     def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
@@ -117,6 +119,8 @@ class Model:
         self._chunk = chunk
         self._force_dim_names = bool(force_dim_names)
         self._solver_dir = Path(gettempdir() if solver_dir is None else solver_dir)
+
+        self.matrices = MatrixAccessor(self)
 
     @property
     def variables(self):
