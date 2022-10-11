@@ -1035,6 +1035,7 @@ class Model:
         basis_fn=None,
         warmstart_fn=None,
         keep_files=False,
+        sanitize_zeros=True,
         remote=None,
         **solver_options,
     ):
@@ -1077,6 +1078,10 @@ class Model:
             Whether to keep all temporary files like lp file, solution file.
             This argument is ignored for the logger file `log_fn`. The default
             is False.
+        sanitize_zeros : bool, optional
+            Whether to set terms with zero coeffficient as missing.
+            This will remove unneeded overhead in the lp file writing.
+            The default is True.
         remote : linopy.remote.RemoteHandler
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
@@ -1100,6 +1105,7 @@ class Model:
                 basis_fn=basis_fn,
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
                 **solver_options,
             )
 
@@ -1122,6 +1128,9 @@ class Model:
 
         problem_fn = self.get_problem_file(problem_fn)
         solution_fn = self.get_solution_file(solution_fn)
+
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
 
         try:
             func = getattr(solvers, f"run_{solver_name}")
