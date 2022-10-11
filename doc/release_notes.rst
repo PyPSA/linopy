@@ -1,16 +1,24 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
 
-* AnonymousConstraint can now built from comparison operations of variables with constants, e.g. `x >= 5`.
-* The `Model.add_constraints` function now support input of type `ScalarVariable`, `ScalarLinearExpression` and `ScalarConstraint`.
+Version 0.0.12
+--------------
+
+**New Features**
+
+* A new module was created to export basic mathematical quantities such as `lb`, `ub`, `c` vectors and the `A` matrix. Use it with the `matrices` accessor in `linopy.Model`.
 * For `Constraints`` and `Variables`` a `ipython` autocompletion function for getting items was added.
 * Inplace updates for constraints are now more flexible.
+* AnonymousConstraint can now built from comparison operations of variables with constants, e.g. `x >= 5`.
+* The `Model.add_constraints` function now support input of type `ScalarVariable`, `ScalarLinearExpression` and `ScalarConstraint`.
 * Terms with zero coefficient are now filtered out before writing to file to avoid unnecessary overhead.
 * The function `sanitize_zeros` was added to `Constraints`. Use this to filter out zero coefficient terms.
-* A new module was created to export basic mathematical quantities such as `lb`, `ub`, `c` vectors and the `A` matrix. Use it with the `matrices` accessor in `linopy.Model`.
+
+**Bug Fixes**
+
 * Solving with `gurobi` and `io_api="direct"` lead to wrong objective assignment if the objective contained non-unique variables. This is fixed in this version.
 
 Version 0.0.11
