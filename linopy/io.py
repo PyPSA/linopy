@@ -325,6 +325,15 @@ def to_block_files(m, fn):
                     path / f"block{n}" / f"D_{suffix}", sep="\n"
                 )
 
+                if key == "labels":
+                    mask = is_conblock_n & is_equality
+                    all_rows = np.sort(np.unique(arr[mask]))
+                    all_rows.tofile(path / f"block{n}" / "A-B_rows", sep="\n")
+
+                    mask = is_conblock_n & ~is_equality
+                    all_rows = np.sort(np.unique(arr[mask]))
+                    all_rows.tofile(path / f"block{n}" / "C-D_rows", sep="\n")
+
 
 def non_bool_dict(d):
     """
