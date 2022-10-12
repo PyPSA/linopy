@@ -4,6 +4,11 @@ Release Notes
 Upcoming Release
 ----------------
 
+**New Features**
+
+* The function `LinearExpression.from_tuples` now allows `ScalarVariable` as input.
+* For compatibility reasons, the function `groupby_sum` now allows `pandas.Series` as input.
+
 **Bug Fixes**
 
 * Filtering out zeros is now an optional feature in the `solve` function. The previous behavior of filtering just before the LP file writing, lead to unexpected errors for constraints with only zero terms.

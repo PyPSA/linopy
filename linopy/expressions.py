@@ -265,6 +265,8 @@ class LinearExpression(Dataset):
         # support numpy arrays and convert them to dataarrays
         ds_list = []
         for (c, v) in tuples:
+            if isinstance(v, variables.ScalarVariable):
+                v = v.label
             v = as_dataarray(v)
 
             if isinstance(c, np.ndarray) or _pd_series_wo_index_name(c):
@@ -402,6 +404,9 @@ class LinearExpression(Dataset):
         -------
         Grouped linear expression.
         """
+        if isinstance(group, pd.Series):
+            logger.info("Converting group pandas.Series to xarray.DataArray")
+            group = group.to_xarray()
         groups = xr.Dataset.groupby(self, group)
 
         def func(ds):
