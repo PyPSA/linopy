@@ -230,6 +230,41 @@ def to_gurobipy(m):
     return model
 
 
+def to_highspy(m):
+    """
+    Export the model to highspy.
+
+    This function does not write the model to intermediate files but directly
+    passes it to highspy. The function does not yet support passing binary variables.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : highspy.Highs
+    """
+    import highspy
+
+    if m.binaries.labels:
+        raise NotImplementedError(
+            "The direct Highs interface does not yet support passing binary "
+            "variables. Please consider writing the model to LP file and loading "
+            "via highspy."
+        )
+    M = m.matrices
+    h = highspy.Highs()
+    h.addVars(len(M.vlabels), M.lb, M.ub)
+    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
+    A = M.A.tocsr()
+    num_cons = A.shape[0]
+    lower = np.where(M.sense != "<", M.b, -np.inf)
+    upper = np.where(M.sense != ">", M.b, np.inf)
+    h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+    return h
+
+
 def to_block_files(m, fn):
     """
     Write out the linopy model to a block structured output.
