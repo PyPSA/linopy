@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.0.14
+--------------
 
 **New Features**
 
