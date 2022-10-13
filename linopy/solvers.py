@@ -327,6 +327,7 @@ def run_highs(
     if log_fn is None:
         log_fn = Model.solver_dir / "highs.log"
     solver_options["log_file"] = maybe_convert_path(log_fn)
+    logger.info(f"Log file at {solver_options['log_file']}.")
 
     for k, v in solver_options.items():
         h.setOptionValue(k, v)
