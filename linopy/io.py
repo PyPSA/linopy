@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import xarray as xr
-from numpy import asarray, concatenate
+from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -215,9 +215,7 @@ def to_gurobipy(m):
     names = "x" + M.vlabels.astype(str).astype(object)
     kwargs = {}
     if len(m.binaries.labels):
-        specs = {name: "B" if name in m.binaries else "C" for name in m.variables}
-        specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
-        kwargs["vtype"] = m.variables.ravel(specs, filter_missings=True)
+        kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
     model.setObjective(M.c @ x)
@@ -228,6 +226,43 @@ def to_gurobipy(m):
 
     model.update()
     return model
+
+
+def to_highspy(m):
+    """
+    Export the model to highspy.
+
+    This function does not write the model to intermediate files but directly
+    passes it to highspy.
+
+    Note, this function does not track variable and constraint labels.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : highspy.Highs
+    """
+    import highspy
+
+    M = m.matrices
+    h = highspy.Highs()
+    h.addVars(len(M.vlabels), M.lb, M.ub)
+    if len(m.binaries.labels):
+        vtypes = M.vtypes
+        blabels = np.arange(len(vtypes))[vtypes == "B"]
+        nbinaries = len(blabels)
+        h.changeColsIntegrality(nbinaries, blabels, ones_like(blabels))
+        h.changeColsBounds(nbinaries, blabels, zeros_like(blabels), ones_like(blabels))
+    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
+    A = M.A.tocsr()
+    num_cons = A.shape[0]
+    lower = np.where(M.sense != "<", M.b, -np.inf)
+    upper = np.where(M.sense != ">", M.b, np.inf)
+    h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+    return h
 
 
 def to_block_files(m, fn):

@@ -10,9 +10,7 @@ import re
 import subprocess as sub
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from xarray import DataArray, Dataset
 
 available_solvers = []
 
@@ -27,13 +25,17 @@ if sub.run([which, "glpsol"], stdout=sub.DEVNULL).returncode == 0:
 if sub.run([which, "cbc"], stdout=sub.DEVNULL).returncode == 0:
     available_solvers.append("cbc")
 
-if sub.run([which, "highs"], stdout=sub.DEVNULL).returncode == 0:
-    available_solvers.append("highs")
-
 try:
     import gurobipy
 
     available_solvers.append("gurobi")
+except (ModuleNotFoundError, ImportError):
+    pass
+
+try:
+    import highspy
+
+    available_solvers.append("highs")
 except (ModuleNotFoundError, ImportError):
     pass
 
@@ -308,67 +310,41 @@ def run_highs(
     constraints_dual : series
     objective : float
     """
-    Model.to_file(problem_fn)
+    if warmstart_fn:
+        logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
+
+    if io_api is None or (io_api == "lp"):
+        Model.to_file(problem_fn)
+        h = highspy.Highs()
+        h.readModel(maybe_convert_path(problem_fn))
+    elif io_api == "direct":
+        h = Model.to_highspy()
+    else:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+        )
 
     if log_fn is None:
         log_fn = Model.solver_dir / "highs.log"
+    solver_options["log_file"] = maybe_convert_path(log_fn)
+    logger.info(f"Log file at {solver_options['log_file']}.")
 
-    options_fn = Model.solver_dir / "highs_options.txt"
-    hard_coded_options = {
-        "solution_file": solution_fn,
-        "write_solution_to_file": True,
-        "write_solution_style": 1,
-        "log_file": log_fn,
-    }
-    solver_options.update(hard_coded_options)
+    for k, v in solver_options.items():
+        h.setOptionValue(k, v)
 
-    method = solver_options.pop("method", "ipm")
+    h.run()
 
-    with open(options_fn, "w") as fn:
-        fn.write("\n".join([f"{k} = {v}" for k, v in solver_options.items()]))
+    termination_condition = h.modelStatusToString(h.getModelStatus()).lower()
+    status = "ok" if "optimal" in termination_condition else "warning"
+    objective = h.getObjectiveValue()
+    solution = h.getSolution()
 
-    command = f"highs --model_file {problem_fn} "
-    if warmstart_fn:
-        logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
-    command += f"--solver {method} --options_file {options_fn}"
-
-    p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
-    for line in iter(p.stdout.readline, b""):
-        line = line.decode()
-
-        if line.startswith("Model   status"):
-            model_status = line[len("Model   status      : ") : -1].lower()
-            if "optimal" in model_status:
-                status = "ok"
-                termination_condition = model_status
-            elif "infeasible" in model_status:
-                status = "warning"
-                termination_condition = model_status
-            else:
-                status = "warning"
-                termination_condition = model_status
-
-        if line.startswith("Objective value"):
-            objective = float(line[len("Objective value     :  ") :])
-
-        print(line, end="")
-
-    p.stdout.close()
-    p.wait()
-
-    os.remove(options_fn)
-
-    f = open(solution_fn, "rb")
-    f.readline()
-    trimmed = re.sub(rb"\*\*\s+", b"", f.read())
-    sol, sentinel, dual = trimmed.partition(bytes("Rows\n", "utf-8"))
-    f.close()
-
-    sol = pd.read_fwf(io.BytesIO(sol))
-    sol = sol.set_index("Name")["Primal"].pipe(set_int_index)
-
-    dual = pd.read_fwf(io.BytesIO(dual))["Dual"]
-    dual.index = Model.constraints.ravel("labels", filter_missings=True)
+    if io_api == "direct":
+        sol = pd.Series(solution.col_value, Model.matrices.vlabels)
+        dual = pd.Series(solution.row_value, Model.matrices.clabels)
+    else:
+        sol = pd.Series(solution.col_value, h.getLp().col_names_).pipe(set_int_index)
+        dual = pd.Series(solution.row_value, h.getLp().row_names_).pipe(set_int_index)
 
     return dict(
         status=status,
@@ -503,10 +479,13 @@ def run_gurobi(
         problem_fn = Model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
         m = gurobipy.read(problem_fn)
-
-    else:
+    elif io_api == "direct":
         problem_fn = None
         m = Model.to_gurobipy()
+    else:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+        )
 
     if solver_options is not None:
         for key, value in solver_options.items():

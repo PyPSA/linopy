@@ -26,6 +26,7 @@ jobs:
       run: |
         sudo apt-get install glpk-utils
         sudo apt-get install coinor-cbc
+        pip install highspy
 
     - name: Install macos dependencies
       if: matrix.os == 'macos-latest'
@@ -47,7 +48,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e .[dev]
-        pip install cplex xpress gurobipy
 
     - name: Lint with flake8
       run: |

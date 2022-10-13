@@ -54,6 +54,18 @@ setup(
             "pytest-cov",
             "pre-commit",
             "paramiko",
+            "gurobipy",
+            # until available for windows/mac
+            # "highspy",
+            "cplex",
+            "xpress",
+        ],
+        "solvers": [
+            "gurobipy",
+            # until available for windows/mac
+            # "highspy",
+            "cplex",
+            "xpress",
         ],
     },
     classifiers=[
