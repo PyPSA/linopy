@@ -1,8 +1,13 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+**New Features**
+
+* Linopy now uses [highspy](https://pypi.org/project/highspy/) as an interface to the HiGHS solver. This enables a direct and fast communication without needing to write an intermediate LP file.
+
 
 Version 0.0.13
 --------------

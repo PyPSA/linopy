@@ -233,7 +233,9 @@ def to_highspy(m):
     Export the model to highspy.
 
     This function does not write the model to intermediate files but directly
-    passes it to highspy. The function does not yet support passing binary variables.
+    passes it to highspy.
+
+    Note, this function does not track variable and constraint labels.
 
     Parameters
     ----------

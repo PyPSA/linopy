@@ -54,8 +54,12 @@ setup(
             "pytest-cov",
             "pre-commit",
             "paramiko",
+            "gurobipy",
+            "highspy",
+            "cplex",
+            "xpress",
         ],
-        "solvers": ["gurobipy", "highspy", "cplex"],
+        "solvers": ["gurobipy", "highspy", "cplex", "xpress"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
