@@ -55,11 +55,18 @@ setup(
             "pre-commit",
             "paramiko",
             "gurobipy",
-            "highspy",
+            # until available for windows/mac
+            # "highspy",
             "cplex",
             "xpress",
         ],
-        "solvers": ["gurobipy", "highspy", "cplex", "xpress"],
+        "solvers": [
+            "gurobipy",
+            # until available for windows/mac
+            # "highspy",
+            "cplex",
+            "xpress",
+        ],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
