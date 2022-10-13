@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import xarray as xr
-from numpy import asarray, concatenate
+from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -215,9 +215,7 @@ def to_gurobipy(m):
     names = "x" + M.vlabels.astype(str).astype(object)
     kwargs = {}
     if len(m.binaries.labels):
-        specs = {name: "B" if name in m.binaries else "C" for name in m.variables}
-        specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
-        kwargs["vtype"] = m.variables.ravel(specs, filter_missings=True)
+        kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
     model.setObjective(M.c @ x)
@@ -247,15 +245,15 @@ def to_highspy(m):
     """
     import highspy
 
-    if m.binaries.labels:
-        raise NotImplementedError(
-            "The direct Highs interface does not yet support passing binary "
-            "variables. Please consider writing the model to LP file and loading "
-            "via highspy."
-        )
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
+    if len(m.binaries.labels):
+        vtypes = M.vtypes
+        blabels = np.arange(len(vtypes))[vtypes == "B"]
+        nbinaries = len(blabels)
+        h.changeColsIntegrality(nbinaries, blabels, ones_like(blabels))
+        h.changeColsBounds(nbinaries, blabels, zeros_like(blabels), ones_like(blabels))
     h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
     A = M.A.tocsr()
     num_cons = A.shape[0]

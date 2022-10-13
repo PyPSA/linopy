@@ -26,7 +26,7 @@ from linopy.constraints import (
 )
 from linopy.eval import Expr
 from linopy.expressions import LinearExpression, ScalarLinearExpression
-from linopy.io import to_block_files, to_file, to_gurobipy, to_netcdf
+from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
 from linopy.solvers import available_solvers
 from linopy.variables import ScalarVariable, Variable, Variables
@@ -1219,5 +1219,7 @@ class Model:
     to_file = to_file
 
     to_gurobipy = to_gurobipy
+
+    to_highspy = to_highspy
 
     to_block_files = to_block_files

@@ -55,6 +55,7 @@ setup(
             "pre-commit",
             "paramiko",
         ],
+        "solvers": ["gurobipy", "highspy", "cplex"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

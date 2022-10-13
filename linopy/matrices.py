@@ -8,6 +8,7 @@ Created on Mon Oct 10 13:33:55 2022.
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 
 def get_lower_bounds(m, filter_missings=True):
@@ -62,6 +63,29 @@ def get_variable_labels(m, filter_missings=True):
         One-dimensional numpy array containing all variable labels.
     """
     return m.variables.ravel("labels", filter_missings=filter_missings)
+
+
+def get_variable_types(m, filter_missings=True):
+    """
+    Get vector of all variable types.
+
+    'C' -> continuous
+    'B -> binary
+
+    Parameters
+    ----------
+    m : linopy.Model
+    filter_missings : bool, optional
+        Whether to filter out missing variables. The default is True.
+
+    Returns
+    -------
+    labels
+        One-dimensional numpy array containing all variable types.
+    """
+    specs = {name: "B" if name in m.binaries else "C" for name in m.variables}
+    specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
+    return m.variables.ravel(specs, filter_missings=True)
 
 
 def get_objective_coefficients(m, filter_missings=True):
@@ -176,6 +200,11 @@ class MatrixAccessor:
     def vlabels(self):
         "Vector of labels of all non-missing variables."
         return get_variable_labels(self._parent)
+
+    @property
+    def vtypes(self):
+        "Vector of types of all non-missing variables."
+        return get_variable_types(self._parent)
 
     @property
     def lb(self):
