@@ -20,7 +20,6 @@ Creating a model
     model.Model.add_objective
     model.Model.linexpr
     model.Model.remove_constraints
-    model.Model.remove_constraints
 
 Creating a model with ``eval`` strings (experimental)
 =====================================================
