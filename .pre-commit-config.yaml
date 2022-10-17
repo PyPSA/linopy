@@ -28,7 +28,7 @@ repos:
       - id: isort
         args: ["--profile", "black", "--filter-files"]
 -   repo: https://github.com/codespell-project/codespell
-    rev: v2.2.1
+    rev: v2.2.2
     hooks:
     -   id: codespell
         types_or: [python, rst, markdown]
