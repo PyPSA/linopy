@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from itertools import product, zip_longest
 from typing import Union
 
-from deprecation import deprecated
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecation import deprecated
 from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates

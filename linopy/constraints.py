@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Any, Sequence, Union
 
-from deprecation import deprecated
 import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecation import deprecated
 from numpy import arange, array
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
