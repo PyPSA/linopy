@@ -38,7 +38,7 @@ class Constraint:
     """
 
     name: str
-    model: "Model"
+    model: Any
 
     def __repr__(self):
         """
@@ -216,7 +216,7 @@ class Constraints:
     sign: Dataset = Dataset()
     rhs: Dataset = Dataset()
     blocks: Dataset = Dataset()
-    model: "Model" = None  # Model is not defined due to circular imports
+    model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
