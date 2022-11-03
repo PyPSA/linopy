@@ -6,6 +6,7 @@ This module contains implementations for the Constraint{s} class.
 """
 
 import re
+from deprecated import deprecated
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Sequence, Union
@@ -21,51 +22,29 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     _merge_inplace,
-    has_assigned_model,
     has_optimized_model,
     is_constant,
     replace_by_map,
 )
 
 
-class Constraint(DataArray):
+@dataclass(repr=False)
+class Constraint:
     """
-    Constraint container for storing constraint labels.
+    Projection to a single constraint in a model
 
     The Constraint class is a subclass of xr.DataArray hence most xarray
     functions can be applied to it.
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
-
-    def __init__(self, *args, **kwargs):
-
-        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
-        if isinstance(args[0], DataArray):
-            da = args[0]
-            args = (da.data, da.coords)
-            kwargs.update({"attrs": da.attrs, "name": da.name})
-
-        self.model = kwargs.pop("model", None)
-        super().__init__(*args, **kwargs)
-        assert self.name is not None, "Constraint data does not have a name."
-
-    # We have to set the _reduce_method to None, in order to overwrite basic
-    # reduction functions as `sum`. There might be a better solution (?).
-    _reduce_method = None
-
-    # Disable array function, only function defined below are supported
-    # and set priority higher than pandas/xarray/numpy
-    __array_ufunc__ = None
-    __array_priority__ = 10000
+    name: str
+    model: "Model"
 
     def __repr__(self):
         """
         Get the string representation of the constraints.
         """
-        data_string = (
-            "Constraint labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
-        )
+        data_string = "Constraint labels:\n" + self.labels.__repr__().split("\n", 1)[1]
         extend_line = "-" * len(self.name)
         return (
             f"Constraint '{self.name}':\n"
@@ -78,18 +57,28 @@ class Constraint(DataArray):
         Get the html representation of the variables.
         """
         # return self.__repr__()
-        data_string = self.to_array()._repr_html_()
+        data_string = self.labels._repr_html_()
         data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
         return data_string
 
+    @deprecated(
+        reason="Constraint.to_array has been replaced by using the .labels property"
+    )
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
         """
-        return DataArray(self)
+        return self.labels
 
     @property
-    @has_assigned_model
+    def labels(self):
+        return self.model.constraints.labels[self.name]
+
+    @labels.setter
+    def labels(self, value):
+        raise RuntimeError("Labels are read-only")
+
+    @property
     def coeffs(self):
         """
         Get the left-hand-side coefficients of the constraint.
@@ -100,7 +89,6 @@ class Constraint(DataArray):
         return self.model.constraints.coeffs[self.name]
 
     @coeffs.setter
-    @has_assigned_model
     def coeffs(self, value):
         term_dim = self.name + "_term"
         value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
@@ -115,7 +103,6 @@ class Constraint(DataArray):
             self.model.constraints.coeffs = coeffs
 
     @property
-    @has_assigned_model
     def vars(self):
         """
         Get the left-hand-side variables of the constraint.
@@ -126,7 +113,6 @@ class Constraint(DataArray):
         return self.model.constraints.vars[self.name]
 
     @vars.setter
-    @has_assigned_model
     def vars(self, value):
         term_dim = self.name + "_term"
         value = DataArray(value).broadcast_like(self.coeffs, exclude=[term_dim])
@@ -141,7 +127,6 @@ class Constraint(DataArray):
             self.model.constraints.vars = vars
 
     @property
-    @has_assigned_model
     def lhs(self):
         """
         Get the left-hand-side linear expression of the constraint.
@@ -155,7 +140,6 @@ class Constraint(DataArray):
         return expressions.LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
 
     @lhs.setter
-    @has_assigned_model
     def lhs(self, value):
         if not isinstance(value, expressions.LinearExpression):
             raise TypeError("Assigned lhs must be a LinearExpression.")
@@ -165,7 +149,6 @@ class Constraint(DataArray):
         self.vars = value.vars
 
     @property
-    @has_assigned_model
     def sign(self):
         """
         Get the signs of the constraint.
@@ -176,16 +159,14 @@ class Constraint(DataArray):
         return self.model.constraints.sign[self.name]
 
     @sign.setter
-    @has_assigned_model
     @is_constant
     def sign(self, value):
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.sign)
         if (value == "==").any():
             raise ValueError('Sign "==" not supported, use "=" instead.')
         self.model.constraints.sign[self.name] = value
 
     @property
-    @has_assigned_model
     def rhs(self):
         """
         Get the right hand side constants of the constraint.
@@ -196,12 +177,11 @@ class Constraint(DataArray):
         return self.model.constraints.rhs[self.name]
 
     @rhs.setter
-    @has_assigned_model
     @is_constant
     def rhs(self, value):
         if isinstance(value, (variables.Variable, expressions.LinearExpression)):
             raise TypeError(f"Assigned rhs must be a constant, got {type(value)}).")
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.rhs)
         self.model.constraints.rhs[self.name] = value
 
     @property
@@ -219,6 +199,10 @@ class Constraint(DataArray):
             )
         return self.model.dual[self.name]
 
+    @property
+    def shape(self):
+        return self.labels.shape
+
 
 @dataclass(repr=False)
 class Constraints:
@@ -232,7 +216,7 @@ class Constraints:
     sign: Dataset = Dataset()
     rhs: Dataset = Dataset()
     blocks: Dataset = Dataset()
-    model: Any = None  # Model is not defined due to circular imports
+    model: "Model" = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
@@ -268,7 +252,7 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return Constraint(self.labels[names], model=self.model)
+            return Constraint(names, model=self.model)
 
         return self.__class__(
             self.labels[names],
@@ -581,7 +565,8 @@ class AnonymousConstraint:
         """
         if isinstance(rhs, (variables.Variable, expressions.LinearExpression)):
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
-        self._lhs, self._rhs = xr.align(lhs, DataArray(rhs))
+        lhs, self._rhs = xr.align(lhs.data, DataArray(rhs))
+        self._lhs = expressions.LinearExpression(lhs)
         self._sign = DataArray(sign)
 
     @property

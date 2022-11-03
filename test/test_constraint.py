@@ -117,20 +117,6 @@ def test_constraints_accessor():
     assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
 
 
-def test_constraint_getter_without_model():
-    data = xr.DataArray(range(10)).rename("con")
-    c = linopy.constraints.Constraint(data)
-
-    with pytest.raises(AttributeError):
-        c.coeffs
-    with pytest.raises(AttributeError):
-        c.vars
-    with pytest.raises(AttributeError):
-        c.sign
-    with pytest.raises(AttributeError):
-        c.rhs
-
-
 def test_constraint_sanitize_zeros():
     m = Model()
     x = m.add_variables(coords=[range(10)])
