@@ -6,16 +6,16 @@ Linopy expressions module.
 This module contains definition related to affine expressions.
 """
 
-from typing import Union
 import functools
 import logging
 from dataclasses import dataclass
 from itertools import product, zip_longest
-from deprecated import deprecated
+from typing import Union
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecated import deprecated
 from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
@@ -572,7 +572,7 @@ class LinearExpression:
     def equals(self, other: "LinearExpression"):
         return self.data.equals(_expr_unwrap(other))
 
-    def rename(self, name_dict = None, **names) -> Dataset:
+    def rename(self, name_dict=None, **names) -> Dataset:
         return self.data.rename(name_dict, **names)
 
     def __iter__(self):

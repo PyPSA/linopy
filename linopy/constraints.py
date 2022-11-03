@@ -6,7 +6,6 @@ This module contains implementations for the Constraint{s} class.
 """
 
 import re
-from deprecated import deprecated
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Sequence, Union
@@ -15,6 +14,7 @@ import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecated import deprecated
 from numpy import arange, array
 from scipy.sparse import coo_matrix
 from xarray import DataArray, Dataset
@@ -31,7 +31,7 @@ from linopy.common import (
 @dataclass(repr=False)
 class Constraint:
     """
-    Projection to a single constraint in a model
+    Projection to a single constraint in a model.
 
     The Constraint class is a subclass of xr.DataArray hence most xarray
     functions can be applied to it.

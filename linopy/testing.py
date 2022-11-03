@@ -1,5 +1,6 @@
 from xarray.testing import assert_equal
-from .expressions import _expr_unwrap
+
+from linopy.expressions import _expr_unwrap
 
 
 def assert_linequal(a, b):
