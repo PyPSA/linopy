@@ -572,9 +572,8 @@ class LinearExpression:
     def equals(self, other: "LinearExpression"):
         return self.data.equals(_expr_unwrap(other))
 
-    def rename(self, name_dict, **renames):
-        # Does not return a linear expression
-        return self.data.rename(name_dict, **renames)
+    def rename(self, name_dict = None, **names) -> Dataset:
+        return self.data.rename(name_dict, **names)
 
     def __iter__(self):
         return self.data.__iter__()
