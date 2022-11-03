@@ -16,6 +16,7 @@ import pytest
 import xarray as xr
 
 from linopy import Model
+from linopy.testing import assert_linequal
 
 # Test model functions
 
@@ -220,7 +221,7 @@ def test_linexpr():
     expr = m.linexpr((1, "x"), (10, "y"))
     target = 1 * x + 10 * y
     # assert (expr._term == ['x', 'y']).all()
-    assert (expr.to_dataset() == target.to_dataset()).all().to_array().all()
+    assert_linequal(expr, target)
 
 
 def test_constraint_assignment():
