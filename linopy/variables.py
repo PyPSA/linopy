@@ -15,7 +15,6 @@ from warnings import warn
 import dask
 import numpy as np
 import pandas as pd
-from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 

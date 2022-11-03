@@ -6,6 +6,7 @@ This module contains implementations for the Constraint{s} class.
 """
 
 import re
+from deprecation import deprecated
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Sequence, Union
@@ -61,9 +62,7 @@ class Constraint:
         data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
         return data_string
 
-    @deprecated(
-        reason="Constraint.to_array has been replaced by using the .labels property"
-    )
+    @deprecated(details="Use the `labels` property instead of `to_array`")
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.

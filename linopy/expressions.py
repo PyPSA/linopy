@@ -11,11 +11,11 @@ import logging
 from dataclasses import dataclass
 from itertools import product, zip_longest
 from typing import Union
+from deprecation import deprecated
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from deprecated import deprecated
 from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
@@ -186,7 +186,7 @@ class LinearExpression:
     def __eq__(self, rhs):
         return constraints.AnonymousConstraint(self, "=", rhs)
 
-    @deprecated(reason="Access the Dataset directly through `.data`")
+    @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
         """
         Convert the expression to a xarray.Dataset.
