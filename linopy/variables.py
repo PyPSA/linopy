@@ -22,11 +22,12 @@ from xarray import DataArray, Dataset, zeros_like
 import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
+    forward_as_properties,
     has_assigned_model,
     has_optimized_model,
     is_constant,
-    forward_as_properties,
 )
+
 
 def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
@@ -49,11 +50,7 @@ def _var_unwrap(var):
 
 
 @dataclass(repr=False)
-@forward_as_properties(
-    labels=[
-        "name"
-    ]
-)
+@forward_as_properties(labels=["name"])
 class Variable:
     """
     Variable container for storing variable labels.
@@ -106,7 +103,6 @@ class Variable:
     labels: DataArray
     model: Any = None
 
-
     # Disable array function, only function defined below are supported
     # and set priority higher than pandas/xarray/numpy
     __array_ufunc__ = None
@@ -121,7 +117,9 @@ class Variable:
         )
         if not self.labels.ndim:
             return ScalarVariable(self.data.item())
-        assert self.labels.ndim == len(keys), f"expected {self.labels.ndim} keys, got {len(keys)}."
+        assert self.labels.ndim == len(
+            keys
+        ), f"expected {self.labels.ndim} keys, got {len(keys)}."
         key = dict(zip(self.labels.dims, keys))
         selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
         return ScalarVariable(self.labels.data[tuple(selector)])
@@ -143,9 +141,7 @@ class Variable:
         """
         Get the string representation of the variables.
         """
-        data_string = (
-            "Variable labels:\n" + self.labels.__repr__().split("\n", 1)[1]
-        )
+        data_string = "Variable labels:\n" + self.labels.__repr__().split("\n", 1)[1]
         extend_line = "-" * len(self.name)
         return (
             f"Variable '{self.name}':\n"
@@ -372,26 +368,26 @@ class Variable:
         if issubdtype(self.dtype, floating):
             return self.__class__(self.labels.fillna(-1).astype(int))
         return self
-    
+
     def equals(self, other):
         return self.labels.equals(_var_unwrap(other))
-    
+
     @property
     def attrs(self):
         return self.labels.attrs
-    
+
     @property
     def values(self):
         return self.labels.values
-    
+
     @property
     def shape(self):
         return self.labels.shape
-    
+
     @property
     def size(self):
         return self.labels.size
-    
+
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(DataArray.assign_attrs)
 
