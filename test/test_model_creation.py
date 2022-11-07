@@ -376,7 +376,7 @@ def test_remove_variable():
 
     assert "con0" not in m.constraints.labels
 
-    assert not m.objective.vars.isin(x).any()
+    assert not m.objective.vars.isin(x.labels).any()
 
 
 def test_remove_constraint():
