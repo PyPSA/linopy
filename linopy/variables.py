@@ -51,7 +51,9 @@ def _var_unwrap(var):
 
 
 @dataclass(repr=False)
-@forward_as_properties(labels=["attrs", "name", "values", "shape", "size"])
+@forward_as_properties(
+    labels=["attrs", "coords", "indexes", "name", "shape", "size", "values"]
+)
 class Variable:
     """
     Variable container for storing variable labels.
@@ -103,6 +105,8 @@ class Variable:
 
     labels: DataArray
     model: Any = None
+
+    __array_ufunc__ = None
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
@@ -361,7 +365,7 @@ class Variable:
         -------
         linopy.Variable
         """
-        if issubdtype(self.dtype, floating):
+        if issubdtype(self.labels.dtype, floating):
             return self.__class__(self.labels.fillna(-1).astype(int))
         return self
 
@@ -673,6 +677,7 @@ class ScalarVariable:
 #####
 ## MONKEY PATCH DataArray __mul__ function to pass multiplication to Variable
 #####
+
 
 @monkey_patch(DataArray, pass_unpatched_method=True)
 def __mul__(da, other, unpatched_method):

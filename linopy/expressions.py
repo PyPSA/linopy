@@ -95,6 +95,7 @@ class LinearExpression:
     fill_value = {"vars": -1, "coeffs": np.nan}
 
     __array_ufunc__ = None
+    __array_priority__ = 10000
 
     def __init__(self, data_vars=None, coords=None, attrs=None):
         ds = Dataset(data_vars, coords, attrs)

@@ -6,7 +6,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from functools import wraps, update_wrapper, partial
+from functools import wraps, update_wrapper, partialmethod
 
 import numpy as np
 from xarray import DataArray, apply_ufunc, merge
@@ -121,7 +121,7 @@ def monkey_patch(cls, pass_unpatched_method=False):
     def deco(func):
         wrapped = getattr(cls, func.__name__)
         if pass_unpatched_method:
-            func = partial(func, unpatched_method=wrapped)
+            func = partialmethod(func, unpatched_method=wrapped)
         update_wrapper(func, wrapped)
         setattr(cls, func.__name__, func)
         return func

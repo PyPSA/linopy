@@ -104,7 +104,7 @@ def test_variable_where():
     x = m.add_variables(coords=[range(10)])
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
+    assert x.values[9] == -1
 
 
 def test_variable_shift():
@@ -112,7 +112,7 @@ def test_variable_shift():
     x = m.add_variables(coords=[range(10)])
     x = x.shift(dim_0=3)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[0].item() == -1
+    assert x.values[0] == -1
 
 
 def test_variable_sanitize():
@@ -122,7 +122,7 @@ def test_variable_sanitize():
     x = x.where([True] * 4 + [False] * 6, np.nan)
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
+    assert x.values[9] == -1
 
 
 def test_variable_type_preservation():
