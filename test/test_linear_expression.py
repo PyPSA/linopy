@@ -232,7 +232,7 @@ def test_merge():
 
 
 def test_sum_drop_zeros():
-    coeff = xr.zeros_like(z)
+    coeff = xr.zeros_like(z.labels)
     coeff[1, 0] = 3
     coeff[0, 2] = 5
     expr = coeff * z

@@ -98,7 +98,7 @@ def test_constraint_accessor_M():
     assert (c.rhs == 2).all().item()
 
     c.lhs = 3 * y
-    assert (c.vars.squeeze() == y.data).all()
+    assert (c.vars.squeeze() == y.labels.data).all()
     assert (c.coeffs == 3).all()
     assert isinstance(c.lhs, linopy.LinearExpression)
 

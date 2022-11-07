@@ -15,6 +15,7 @@ from warnings import warn
 import dask
 import numpy as np
 import pandas as pd
+from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 
@@ -24,16 +25,15 @@ from linopy.common import (
     has_assigned_model,
     has_optimized_model,
     is_constant,
+    forward_as_properties,
 )
-
 
 def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _varwrap(obj, *args, **kwargs):
+    def _varwrap(var, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        obj = DataArray(obj)
-        return Variable(method(obj, *default_args, *args, **kwargs))
+        return var.__class__(method(var.labels, *default_args, *args, **kwargs))
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -42,7 +42,19 @@ def varwrap(method, *default_args, **new_default_kwargs):
     return _varwrap
 
 
-class Variable(DataArray):
+def _var_unwrap(var):
+    if isinstance(var, Variable):
+        return var.labels
+    return var
+
+
+@dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "name"
+    ]
+)
+class Variable:
     """
     Variable container for storing variable labels.
 
@@ -91,28 +103,14 @@ class Variable(DataArray):
     Further operations like taking the negative and subtracting are supported.
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
+    labels: DataArray
+    model: Any = None
 
-    def __init__(self, *args, **kwargs):
-
-        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
-        if isinstance(args[0], DataArray):
-            da = args[0]
-            args = (da.data, da.coords)
-            kwargs.update({"attrs": da.attrs, "name": da.name})
-
-        self.model = kwargs.pop("model", None)
-        super().__init__(*args, **kwargs)
-        assert self.name is not None, "Variable data does not have a name."
-
-    # We have to set the _reduce_method to None, in order to overwrite basic
-    # reduction functions as `sum`. There might be a better solution (?).
-    _reduce_method = None
 
     # Disable array function, only function defined below are supported
     # and set priority higher than pandas/xarray/numpy
     __array_ufunc__ = None
-    __array_priority__ = 10000
+    # __array_priority__ = 10000
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
@@ -121,18 +119,19 @@ class Variable(DataArray):
             "Set single values for each dimension in order to obtain a "
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
-        if not self.ndim:
+        if not self.labels.ndim:
             return ScalarVariable(self.data.item())
-        assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
-        key = dict(zip(self.dims, keys))
-        selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.data[tuple(selector)])
+        assert self.labels.ndim == len(keys), f"expected {self.labels.ndim} keys, got {len(keys)}."
+        key = dict(zip(self.labels.dims, keys))
+        selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(self.labels.data[tuple(selector)])
 
+    @deprecated(details="Use `labels` instead of `to_array()`")
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
         """
-        return DataArray(self)
+        return self.labels
 
     def to_linexpr(self, coefficient=1):
         """
@@ -145,7 +144,7 @@ class Variable(DataArray):
         Get the string representation of the variables.
         """
         data_string = (
-            "Variable labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
+            "Variable labels:\n" + self.labels.__repr__().split("\n", 1)[1]
         )
         extend_line = "-" * len(self.name)
         return (
@@ -159,7 +158,7 @@ class Variable(DataArray):
         Get the html representation of the variables.
         """
         # return self.__repr__()
-        data_string = self.to_array()._repr_html_()
+        data_string = self.labels._repr_html_()
         data_string = data_string.replace("xarray.DataArray", "linopy.Variable")
         return data_string
 
@@ -278,7 +277,7 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.upper)
         self.model.variables.upper[self.name] = value
 
     @property
@@ -302,7 +301,7 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.lower)
         self.model.variables.lower[self.name] = value
 
     @property
@@ -360,7 +359,7 @@ class Variable(DataArray):
         -------
         linopy.Variable
         """
-        return self.__class__(DataArray.where(self, cond, other, **kwargs))
+        return self.__class__(self.labels.where(cond, other, **kwargs))
 
     def sanitize(self):
         """
@@ -371,10 +370,31 @@ class Variable(DataArray):
         linopy.Variable
         """
         if issubdtype(self.dtype, floating):
-            return self.fillna(-1).astype(int)
+            return self.__class__(self.labels.fillna(-1).astype(int))
         return self
-
+    
+    def equals(self, other):
+        return self.labels.equals(_var_unwrap(other))
+    
+    @property
+    def attrs(self):
+        return self.labels.attrs
+    
+    @property
+    def values(self):
+        return self.labels.values
+    
+    @property
+    def shape(self):
+        return self.labels.shape
+    
+    @property
+    def size(self):
+        return self.labels.size
+    
     # Wrapped function which would convert variable to dataarray
+    assign_attrs = varwrap(DataArray.assign_attrs)
+
     astype = varwrap(DataArray.astype)
 
     bfill = varwrap(DataArray.bfill)
@@ -383,9 +403,14 @@ class Variable(DataArray):
 
     clip = varwrap(DataArray.clip)
 
+    compute = varwrap(DataArray.compute)
+
     ffill = varwrap(DataArray.ffill)
 
     fillna = varwrap(DataArray.fillna)
+
+    sel = varwrap(DataArray.sel)
+    isel = varwrap(DataArray.isel)
 
     shift = varwrap(DataArray.shift, fill_value=-1)
 

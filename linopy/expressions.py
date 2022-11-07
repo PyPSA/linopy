@@ -21,7 +21,7 @@ from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 
 from linopy import constraints, variables
-from linopy.common import as_dataarray
+from linopy.common import as_dataarray, forward_as_properties
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
@@ -50,6 +50,7 @@ def _expr_unwrap(maybe_expr):
 logger = logging.getLogger(__name__)
 
 
+@forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -92,6 +93,8 @@ class LinearExpression:
     __slots__ = ("data",)
 
     fill_value = {"vars": -1, "coeffs": np.nan}
+
+    __array_ufunc__ = None
 
     def __init__(self, data_vars=None, coords=None, attrs=None):
         ds = Dataset(data_vars, coords, attrs)
@@ -209,22 +212,6 @@ class LinearExpression:
     def coeffs(self, value):
         self.data["coeffs"] = value
 
-    @property
-    def attrs(self):
-        return self.data.attrs
-
-    @property
-    def coords(self):
-        return self.data.coords
-
-    @property
-    def dims(self):
-        return self.data.dims
-
-    @property
-    def indexes(self):
-        return self.data.indexes
-
     @classmethod
     def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:
         data = _expr_unwrap(expr)
@@ -311,6 +298,8 @@ class LinearExpression:
         for (c, v) in tuples:
             if isinstance(v, variables.ScalarVariable):
                 v = v.label
+            elif isinstance(v, variables.Variable):
+                v = v.labels
             v = as_dataarray(v)
 
             if isinstance(c, np.ndarray) or _pd_series_wo_index_name(c):
@@ -434,7 +423,7 @@ class LinearExpression:
         else:
             other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
-        return self.__class__(DataArray.where(self.data, cond, other=other, **kwargs))
+        return self.__class__(self.data.where(cond, other=other, **kwargs))
 
     def groupby_sum(self, group):
         """
