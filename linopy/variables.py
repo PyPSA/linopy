@@ -26,6 +26,7 @@ from linopy.common import (
     has_assigned_model,
     has_optimized_model,
     is_constant,
+    monkey_patch,
 )
 
 
@@ -50,7 +51,7 @@ def _var_unwrap(var):
 
 
 @dataclass(repr=False)
-@forward_as_properties(labels=["name"])
+@forward_as_properties(labels=["attrs", "name", "values", "shape", "size"])
 class Variable:
     """
     Variable container for storing variable labels.
@@ -102,11 +103,6 @@ class Variable:
 
     labels: DataArray
     model: Any = None
-
-    # Disable array function, only function defined below are supported
-    # and set priority higher than pandas/xarray/numpy
-    __array_ufunc__ = None
-    # __array_priority__ = 10000
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
@@ -371,22 +367,6 @@ class Variable:
 
     def equals(self, other):
         return self.labels.equals(_var_unwrap(other))
-
-    @property
-    def attrs(self):
-        return self.labels.attrs
-
-    @property
-    def values(self):
-        return self.labels.values
-
-    @property
-    def shape(self):
-        return self.labels.shape
-
-    @property
-    def size(self):
-        return self.labels.size
 
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(DataArray.assign_attrs)
@@ -688,3 +668,14 @@ class ScalarVariable:
 
     def __eq__(self, other):
         return self.to_scalar_linexpr(1).__eq__(other)
+
+
+#####
+## MONKEY PATCH DataArray __mul__ function to pass multiplication to Variable
+#####
+
+@monkey_patch(DataArray, pass_unpatched_method=True)
+def __mul__(da, other, unpatched_method):
+    if isinstance(other, Variable):
+        return NotImplemented
+    return unpatched_method(da, other)
