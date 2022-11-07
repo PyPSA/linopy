@@ -6,7 +6,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from functools import wraps, update_wrapper, partialmethod
+from functools import partialmethod, update_wrapper, wraps
 
 import numpy as np
 from xarray import DataArray, apply_ufunc, merge
