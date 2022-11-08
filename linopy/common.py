@@ -115,15 +115,3 @@ def forward_as_properties(**routes):
         return cls
 
     return deco
-
-
-def monkey_patch(cls, pass_unpatched_method=False):
-    def deco(func):
-        wrapped = getattr(cls, func.__name__)
-        if pass_unpatched_method:
-            func = partialmethod(func, unpatched_method=wrapped)
-        update_wrapper(func, wrapped)
-        setattr(cls, func.__name__, func)
-        return func
-
-    return deco

@@ -26,7 +26,6 @@ from linopy.common import (
     has_assigned_model,
     has_optimized_model,
     is_constant,
-    monkey_patch,
 )
 
 
@@ -672,15 +671,3 @@ class ScalarVariable:
 
     def __eq__(self, other):
         return self.to_scalar_linexpr(1).__eq__(other)
-
-
-#####
-## MONKEY PATCH DataArray __mul__ function to pass multiplication to Variable
-#####
-
-
-@monkey_patch(DataArray, pass_unpatched_method=True)
-def __mul__(da, other, unpatched_method):
-    if isinstance(other, Variable):
-        return NotImplemented
-    return unpatched_method(da, other)
