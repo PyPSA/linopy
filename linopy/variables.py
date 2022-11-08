@@ -7,7 +7,7 @@ This module contains variable related definitions of the package.
 
 import functools
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from distutils.log import warn
 from typing import Any, Sequence, Union
 from warnings import warn
@@ -103,7 +103,7 @@ class Variable:
     Further operations like taking the negative and subtracting are supported.
     """
 
-    labels: DataArray
+    labels: DataArray = field(default_factory=DataArray)
     model: Any = None
 
     __array_ufunc__ = None
@@ -405,10 +405,10 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    labels: Dataset = Dataset()
-    lower: Dataset = Dataset()
-    upper: Dataset = Dataset()
-    blocks: Dataset = Dataset()
+    labels: Dataset = field(default_factory=Dataset)
+    lower: Dataset = field(default_factory=Dataset)
+    upper: Dataset = field(default_factory=Dataset)
+    blocks: Dataset = field(default_factory=Dataset)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
