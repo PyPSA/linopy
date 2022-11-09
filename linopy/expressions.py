@@ -166,6 +166,12 @@ class LinearExpression(Dataset):
         """
         Multiply the expr by a factor.
         """
+        if isinstance(other, (LinearExpression, variables.Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for *: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
         coeffs = other * self.coeffs
         assert coeffs.shape == self.coeffs.shape
         return LinearExpression(self.assign(coeffs=coeffs))
@@ -175,6 +181,18 @@ class LinearExpression(Dataset):
         Right-multiply the expr by a factor.
         """
         return self.__mul__(other)
+
+    def __div__(self, other):
+        if isinstance(other, (LinearExpression, variables.Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}"
+                "Non-linear expressions are not yet supported."
+            )
+        return self.__mul__(1 / other)
+
+    def __truediv__(self, other):
+        return self.__div__(other)
 
     def __le__(self, rhs):
         return constraints.AnonymousConstraint(self, "<=", rhs)
@@ -672,12 +690,19 @@ class ScalarLinearExpression:
         return self.__mul__(other)
 
     def __div__(self, other):
+        if not isinstance(other, (int, np.integer, float)):
+            raise TypeError(
+                "unsupported operand type(s) for /: " f"{type(self)} and {type(other)}"
+            )
         return self.__mul__(1 / other)
+
+    def __truediv__(self, other):
+        return self.__div__(other)
 
     def __le__(self, other):
         if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
-                "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
+                "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, "<=", other)
