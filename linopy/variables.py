@@ -10,7 +10,6 @@ import re
 from dataclasses import dataclass, field
 from distutils.log import warn
 from typing import Any, Sequence, Union
-from warnings import warn
 
 import dask
 import numpy as np
@@ -18,6 +17,7 @@ import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
+from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
@@ -52,7 +52,17 @@ def _var_unwrap(var):
 
 @dataclass(repr=False)
 @forward_as_properties(
-    labels=["attrs", "coords", "indexes", "name", "shape", "size", "values"]
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "name",
+        "shape",
+        "size",
+        "values",
+        "dims",
+        "ndim",
+    ]
 )
 class Variable:
     """
@@ -124,12 +134,19 @@ class Variable:
         selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
         return ScalarVariable(self.labels.data[tuple(selector)])
 
+    @property
+    def loc(self):
+        return _LocIndexer(self)
+
     @deprecated(details="Use `labels` instead of `to_array()`")
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
         """
         return self.labels
+
+    def to_pandas(self):
+        return self.labels.to_pandas()
 
     def to_linexpr(self, coefficient=1):
         """
@@ -375,6 +392,8 @@ class Variable:
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(DataArray.assign_attrs)
 
+    assign_coords = varwrap(DataArray.assign_coords)
+
     astype = varwrap(DataArray.astype)
 
     bfill = varwrap(DataArray.bfill)
@@ -390,13 +409,30 @@ class Variable:
     fillna = varwrap(DataArray.fillna)
 
     sel = varwrap(DataArray.sel)
+
     isel = varwrap(DataArray.isel)
 
     shift = varwrap(DataArray.shift, fill_value=-1)
 
+    rename = varwrap(DataArray.rename)
+
     roll = varwrap(DataArray.roll)
 
     rolling = varwrap(DataArray.rolling)
+
+
+class _LocIndexer:
+    __slots__ = ("variable",)
+
+    def __init__(self, variable: Variable):
+        self.variable = variable
+
+    def __getitem__(self, key) -> DataArray:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.variable.ndim)
+            key = dict(zip(self.variable.dims, labels))
+        return self.variable.sel(key)
 
 
 @dataclass(repr=False)
