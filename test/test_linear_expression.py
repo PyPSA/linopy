@@ -55,6 +55,12 @@ def test_variable_to_linexpr():
     expr = x * 1
     assert isinstance(expr, LinearExpression)
 
+    expr = x / 1
+    assert isinstance(expr, LinearExpression)
+
+    expr = x / 1.0
+    assert isinstance(expr, LinearExpression)
+
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
     assert_equal(expr, m.linexpr((10, "x"), (1, "y")))
@@ -90,9 +96,25 @@ def test_variable_to_linexpr():
     assert isinstance(expr, LinearExpression)
 
     with pytest.raises(TypeError):
+        x.to_linexpr(x)
+
+    with pytest.raises(TypeError):
         x + 10
+
     with pytest.raises(TypeError):
         x - 10
+
+    with pytest.raises(TypeError):
+        x * x
+
+    with pytest.raises(TypeError):
+        x / x
+
+    with pytest.raises(TypeError):
+        x * (1 * x)
+
+    with pytest.raises(TypeError):
+        x / (1 * x)
 
 
 def test_variable_to_linexpr_with_array():
@@ -261,6 +283,20 @@ def test_mul():
     mexpr = 10 * expr
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
 
+    mexpr = expr / 100
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
+
+    mexpr = expr / 100.0
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
+
+    with pytest.raises(TypeError):
+        expr = 10 * x + y + z
+        expr * x
+
+    with pytest.raises(TypeError):
+        expr = 10 * x + y + z
+        expr / x
+
 
 def test_sanitize():
     expr = 10 * x + y + z
@@ -334,6 +370,20 @@ def test_scalarexpression_operations():
     assert isinstance(expr2, ScalarLinearExpression)
     assert expr2.coeffs == (20,)
 
+    expr2 = expr / 2
+    assert isinstance(expr2, ScalarLinearExpression)
+    assert expr2.coeffs == (5,)
+
+    expr2 = expr / 2.0
+    assert isinstance(expr2, ScalarLinearExpression)
+    assert expr2.coeffs == (5,)
+
     expr3 = -expr
     assert isinstance(expr3, ScalarLinearExpression)
     assert expr3.coeffs == (-10,)
+
+    with pytest.raises(TypeError):
+        x[1] * x[1]
+
+    with pytest.raises(TypeError):
+        x[1] / x[1]

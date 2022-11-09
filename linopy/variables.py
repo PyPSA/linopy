@@ -139,6 +139,8 @@ class Variable(DataArray):
         """
         Create a linear exprssion from the variables.
         """
+        if isinstance(coefficient, (expressions.LinearExpression, Variable)):
+            raise TypeError(f"unsupported type of coefficient: {type(coefficient)}")
         return expressions.LinearExpression.from_tuples((coefficient, self))
 
     def __repr__(self):
@@ -170,17 +172,41 @@ class Variable(DataArray):
         """
         return self.to_linexpr(-1)
 
-    def __mul__(self, coefficient):
+    def __mul__(self, other):
         """
         Multiply variables with a coefficient.
         """
-        return self.to_linexpr(coefficient)
+        if isinstance(other, (expressions.LinearExpression, Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for *: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self.to_linexpr(other)
 
-    def __rmul__(self, coefficient):
+    def __rmul__(self, other):
         """
         Right-multiply variables with a coefficient.
         """
-        return self.to_linexpr(coefficient)
+        return self.to_linexpr(other)
+
+    def __div__(self, other):
+        """
+        Divide variables with a coefficient.
+        """
+        if isinstance(other, (expressions.LinearExpression, Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self.to_linexpr(1 / other)
+
+    def __truediv__(self, coefficient):
+        """
+        True divide variables with a coefficient.
+        """
+        return self.__div__(coefficient)
 
     def __add__(self, other):
         """
@@ -635,7 +661,7 @@ class ScalarVariable:
     coords: dict = None
 
     def to_scalar_linexpr(self, coeff=1):
-        if not isinstance(coeff, (int, float)):
+        if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,))
 
@@ -659,6 +685,9 @@ class ScalarVariable:
 
     def __div__(self, coeff):
         return self.to_scalar_linexpr(1 / coeff)
+
+    def __truediv__(self, coeff):
+        return self.__div__(coeff)
 
     def __le__(self, other):
         return self.to_scalar_linexpr(1).__le__(other)
