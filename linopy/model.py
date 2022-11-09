@@ -306,7 +306,7 @@ class Model:
         """
         Get a model variable by the name.
         """
-        return Variable(self.variables[key], model=self)
+        return self.variables[key]
 
     def check_force_dim_names(self, ds):
         """
@@ -534,7 +534,6 @@ class Model:
                     "Argument `sign` and `rhs` must not be None if first argument "
                     " is an expression."
                 )
-
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
