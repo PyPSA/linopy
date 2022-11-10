@@ -50,6 +50,28 @@ def _expr_unwrap(maybe_expr):
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class LinearExpressionGroupby:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    groupby: xr.core.groupby.DatasetGroupBy
+
+    def map(self, func, shortcut=False, args=(), **kwargs):
+        return LinearExpression(
+            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs)
+        )
+
+    def sum(self, **kwargs):
+        def func(ds):
+            ds = LinearExpression._sum(ds, self.groupby._group_dim)
+            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+            return ds
+
+        return self.map(func, **kwargs)
+
+
 @forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
 class LinearExpression:
     """
@@ -426,6 +448,43 @@ class LinearExpression:
         cond = _expr_unwrap(cond)
         return self.__class__(self.data.where(cond, other=other, **kwargs))
 
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ):
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        ds = self.to_dataset()
+        groups = ds.groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
+        return LinearExpressionGroupby(groups)
+
     def groupby_sum(self, group):
         """
         Sum expression over groups.
@@ -583,9 +642,11 @@ class LinearExpression:
 
     chunk = exprwrap(Dataset.chunk)
 
-    coarsen = exprwrap(Dataset.coarsen)
+    drop = exprwrap(Dataset.drop)
 
-    clip = exprwrap(Dataset.clip)
+    drop_sel = exprwrap(Dataset.drop_sel)
+
+    drop_isel = exprwrap(Dataset.drop_isel)
 
     ffill = exprwrap(Dataset.ffill)
 
