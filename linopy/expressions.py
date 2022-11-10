@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+@forward_as_properties(groupby=["dims", "groups"])
 class LinearExpressionGroupby:
     """
     GroupBy object specialized to grouping LinearExpression objects.
@@ -71,7 +72,30 @@ class LinearExpressionGroupby:
 
         return self.map(func, **kwargs)
 
+    def roll(self, **kwargs):
+        return self.map(Dataset.roll, **kwargs)
 
+
+@dataclass
+@forward_as_properties(rolling=["center", "dim", "obj", "rollings", "window"])
+class LinearExpressionRolling:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    rolling: xr.core.rolling.DataArrayRolling
+
+    def sum(self, **kwargs):
+        ds = (
+            self.rolling.construct("_rolling_term", keep_attrs=True)
+            .rename(_term="_stacked_term")
+            .stack(_term=["_stacked_term", "_rolling_term"])
+            .reset_index("_term", drop=True)
+        )
+        return LinearExpression(ds)
+
+
+@dataclass(repr=False)
 @forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
 class LinearExpression:
     """
@@ -453,7 +477,7 @@ class LinearExpression:
         group,
         squeeze: "bool" = True,
         restore_coord_dims: "bool" = None,
-    ):
+    ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
         operations.
@@ -479,7 +503,7 @@ class LinearExpression:
             A `LinearExpressionGroupBy` containing the xarray groups and ensuring
             the correct return type.
         """
-        ds = self.to_dataset()
+        ds = self.data
         groups = ds.groupby(
             group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
         )
@@ -512,6 +536,43 @@ class LinearExpression:
             return ds
 
         return self.__class__(groups.map(func))  # .reset_index('_term')
+
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> LinearExpressionRolling:
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return LinearExpressionRolling(rolling)
 
     def rolling_sum(self, **kwargs):
         """
@@ -621,6 +682,7 @@ class LinearExpression:
     def equals(self, other: "LinearExpression"):
         return self.data.equals(_expr_unwrap(other))
 
+    # TODO: make this return a LinearExpression (needs refactoring of __init__)
     def rename(self, name_dict=None, **names) -> Dataset:
         return self.data.rename(name_dict, **names)
 
@@ -658,9 +720,9 @@ class LinearExpression:
 
     reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
 
-    roll = exprwrap(Dataset.roll)
+    rename_dims = exprwrap(Dataset.rename_dims)
 
-    rolling = exprwrap(Dataset.rolling)
+    roll = exprwrap(Dataset.roll)
 
 
 def _pd_series_wo_index_name(ds):

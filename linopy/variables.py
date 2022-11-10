@@ -9,7 +9,7 @@ import functools
 import re
 from dataclasses import dataclass, field
 from distutils.log import warn
-from typing import Any, Sequence, Union
+from typing import Any, Mapping, Sequence, Union
 
 import dask
 import numpy as np
@@ -284,6 +284,41 @@ class Variable:
         """
         return self.to_linexpr().groupby_sum(group)
 
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> "expressions.LinearExpressionRolling":
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        return self.to_linexpr().rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+
     def rolling_sum(self, **kwargs):
         """
         Rolling sum of variable.
@@ -451,8 +486,6 @@ class Variable:
     rename = varwrap(DataArray.rename)
 
     roll = varwrap(DataArray.roll)
-
-    rolling = varwrap(DataArray.rolling)
 
 
 class _LocIndexer:

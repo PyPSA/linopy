@@ -565,7 +565,7 @@ class Model:
             ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
-        lhs = lhs.rename({"_term": f"{name}_term"})
+        lhs = lhs.data.rename({"_term": f"{name}_term"})
 
         if self.chunk:
             lhs = lhs.chunk(self.chunk)
