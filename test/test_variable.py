@@ -130,7 +130,7 @@ def test_variable_type_preservation():
     x = m.add_variables(coords=[range(10)])
 
     assert isinstance(x.bfill("dim_0"), linopy.variables.Variable)
-    assert isinstance(x.broadcast_like(x.to_array()), linopy.variables.Variable)
+    assert isinstance(x.broadcast_like(x.labels), linopy.variables.Variable)
     assert isinstance(x.ffill("dim_0"), linopy.variables.Variable)
     assert isinstance(x.fillna(-1), linopy.variables.Variable)
 
