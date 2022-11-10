@@ -14,6 +14,7 @@ from typing import Any, Sequence, Union
 import dask
 import numpy as np
 import pandas as pd
+import xarray as xr
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
@@ -230,6 +231,41 @@ class Variable:
     def __eq__(self, other):
         return self.to_linexpr().__eq__(other)
 
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ):
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        return self.to_linexpr().groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
+
     def groupby_sum(self, group):
         """
         Sum variable over groups.
@@ -247,12 +283,6 @@ class Variable:
         Grouped linear expression.
         """
         return self.to_linexpr().groupby_sum(group)
-
-    def group_terms(self, group):
-        warn(
-            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
-        )
-        return self.groupby_sum(group)
 
     def rolling_sum(self, **kwargs):
         """
@@ -400,9 +430,13 @@ class Variable:
 
     broadcast_like = varwrap(DataArray.broadcast_like)
 
-    clip = varwrap(DataArray.clip)
-
     compute = varwrap(DataArray.compute)
+
+    drop = varwrap(DataArray.drop)
+
+    drop_sel = varwrap(DataArray.drop_sel)
+
+    drop_isel = varwrap(DataArray.drop_isel)
 
     ffill = varwrap(DataArray.ffill)
 

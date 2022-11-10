@@ -131,7 +131,6 @@ def test_variable_type_preservation():
 
     assert isinstance(x.bfill("dim_0"), linopy.variables.Variable)
     assert isinstance(x.broadcast_like(x.to_array()), linopy.variables.Variable)
-    assert isinstance(x.clip(max=20), linopy.variables.Variable)
     assert isinstance(x.ffill("dim_0"), linopy.variables.Variable)
     assert isinstance(x.fillna(-1), linopy.variables.Variable)
 
