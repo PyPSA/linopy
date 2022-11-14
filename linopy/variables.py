@@ -117,7 +117,7 @@ class Variable(DataArray):
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
-        assert all(map(np.isscalar, keys)), (
+        assert all(map(pd.api.types.is_scalar, keys)), (
             "The get function of Variable is different as of xarray.DataArray. "
             "Set single values for each dimension in order to obtain a "
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
