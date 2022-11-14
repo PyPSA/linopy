@@ -674,6 +674,11 @@ class ScalarVariable:
     def __add__(self, other):
         return self.to_scalar_linexpr(1) + other
 
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other
 

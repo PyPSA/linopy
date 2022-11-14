@@ -659,6 +659,11 @@ class ScalarLinearExpression:
         vars = self.vars + other.vars
         return ScalarLinearExpression(coeffs, vars)
 
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+
     @property
     def nterm(self):
         return len(self.vars)

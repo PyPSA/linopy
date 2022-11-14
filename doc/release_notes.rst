@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
 
 Version 0.0.14
 --------------
