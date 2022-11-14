@@ -355,12 +355,14 @@ class LinearExpression(Dataset):
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, ScalarLinearExpression):
+        if not isinstance(output, ScalarLinearExpression) and output is not None:
             msg = f"`rule` has to return ScalarLinearExpression not {type(output)}."
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        exprs = [rule(model, *coord) for coord in combinations]
+        exprs = []
+        placeholder = ScalarLinearExpression((np.nan,), (-1,))
+        exprs = [rule(model, *coord) or placeholder for coord in combinations]
         return LinearExpression._from_scalarexpression_list(exprs, coords)
 
     def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates):

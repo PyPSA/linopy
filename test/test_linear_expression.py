@@ -134,6 +134,30 @@ def test_variable_to_linexpr_with_dataframe():
     isinstance(expr, LinearExpression)
 
 
+def test_from_rule():
+    def bound(m, i):
+        if i == 1:
+            return (i - 1) * x[i - 1] + y[i]
+        else:
+            return i * x[i] - y[i]
+
+    expr = LinearExpression.from_rule(m, bound, x.coords)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 2
+
+    # with return type None
+    def bound(m, i):
+        if i == 1:
+            return (i - 1) * x[i - 1] + y[i]
+
+    expr = LinearExpression.from_rule(m, bound, x.coords)
+    assert isinstance(expr, LinearExpression)
+    assert (expr.vars[0] == -1).all()
+    assert (expr.vars[1] != -1).all()
+    assert expr.coeffs[0].isnull().all()
+    assert expr.coeffs[1].notnull().all()
+
+
 def test_expr_to_anonymous_constraint():
     expr = 10 * x + y
     con = expr <= 10
