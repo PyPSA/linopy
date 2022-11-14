@@ -8,13 +8,11 @@ This module contains variable related definitions of the package.
 import functools
 import re
 from dataclasses import dataclass, field
-from distutils.log import warn
 from typing import Any, Mapping, Sequence, Union
 
 import dask
 import numpy as np
 import pandas as pd
-import xarray as xr
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
@@ -778,7 +776,7 @@ class ScalarVariable:
 
 
 #####
-## MONKEY PATCH DataArray __mul__ function to pass multiplication to Variable
+# MONKEY PATCH DataArray __mul__ function to pass multiplication to Variable
 #####
 
 
