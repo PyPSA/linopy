@@ -361,6 +361,14 @@ def test_scalarexpression_creation():
     expr = 10 * x[0] + y[1] + z[1, 1]
     assert isinstance(expr, ScalarLinearExpression)
 
+    expr2 = sum((10 * x[0], y[1], z[1, 1]))
+    assert isinstance(expr, ScalarLinearExpression)
+    assert expr.vars == expr2.vars
+    assert expr.coeffs == expr2.coeffs
+
+    expr = sum((x[0], y[1]))
+    assert isinstance(expr, ScalarLinearExpression)
+
 
 def test_scalarexpression_operations():
     expr = 10 * x[0]
