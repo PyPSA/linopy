@@ -14,6 +14,7 @@ from xarray.testing import assert_equal
 
 import linopy
 from linopy import Model
+from linopy.constraints import AnonymousConstraint
 
 
 def test_constraint_repr():
@@ -48,6 +49,32 @@ def test_scalarconstraint():
 
     con = m.add_constraints(x[0] + x[1], ">=", 0)
     assert isinstance(con, linopy.constraints.Constraint)
+
+
+def test_from_rule():
+    m = Model()
+    coords = pd.RangeIndex(10), ["a", "b"]
+    x = m.add_variables(0, 100, coords)
+
+    def bound(m, i, j):
+        if i % 2:
+            return (i - 1) * x[i - 1, j] >= 0
+        else:
+            return i * x[i, j] >= 0
+
+    con = AnonymousConstraint.from_rule(m, bound, coords)
+    assert isinstance(con, AnonymousConstraint)
+    assert con.lhs.nterm == 1
+
+    def bound(m, i, j):
+        if i % 2:
+            return i * x[i, j] >= 0
+
+    con = AnonymousConstraint.from_rule(m, bound, coords)
+    assert isinstance(con, AnonymousConstraint)
+    assert con.lhs.nterm == 1
+    assert (con.lhs.vars.loc[0, :] == -1).all()
+    assert (con.lhs.vars.loc[1, :] != -1).all()
 
 
 def test_constraint_accessor():
