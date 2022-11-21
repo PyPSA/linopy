@@ -1,8 +1,9 @@
 from functools import partialmethod, update_wrapper
+
 from xarray import DataArray
 
-from .variables import Variable
-from .expressions import LinearExpression
+from linopy.expressions import LinearExpression
+from linopy.variables import Variable
 
 
 def monkey_patch(cls, pass_unpatched_method=False):
