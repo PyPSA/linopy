@@ -273,6 +273,40 @@ def test_multiindexed_expression():
     assert isinstance(expr, LinearExpression)
 
 
+def test_groupby():
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).sum()
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
+
+    # now asymetric groups which result in different nterms
+    groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
+    grouped = expr.groupby(groups).sum()
+    assert "group" in grouped.dims
+    # first group must be full with vars
+    assert (grouped.data.sel(group=1) > 0).all()
+    # the last 4 entries of the second group must be empty, i.e. -1
+    assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
+    assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
+    assert grouped.data._term.size == 12
+
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).roll(dim_2=1)
+    assert grouped.nterm == 1
+    assert grouped.vars[0].item() == 19
+
+
+def test_groupby_variable():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.groupby(groups).sum()
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
+
+
 def test_groupby_sum():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.to_linexpr().groupby_sum(groups)
@@ -300,6 +334,15 @@ def test_groupby_sum_variable():
     assert grouped.data._term.size == 10
 
 
+def test_rolling():
+    expr = 1 * v
+    rolled = expr.rolling(dim_2=2).sum()
+    assert rolled.nterm == 2
+
+    rolled = expr.rolling(dim_2=3).sum()
+    assert rolled.nterm == 3
+
+
 def test_rolling_sum():
     rolled = v.to_linexpr().rolling_sum(dim_2=2)
     assert rolled.nterm == 2
@@ -308,6 +351,11 @@ def test_rolling_sum():
     expr = 10 * x + v
     rolled = expr.rolling_sum(dim_2=3)
     assert rolled.nterm == 6
+
+
+def test_rolling_variable():
+    rolled = v.rolling(dim_2=2).sum()
+    assert rolled.nterm == 2
 
 
 def test_rolling_sum_variable():

@@ -10,7 +10,7 @@ import functools
 import logging
 from dataclasses import dataclass
 from itertools import product, zip_longest
-from typing import Union
+from typing import Any, Mapping, Union
 
 import numpy as np
 import pandas as pd
@@ -50,6 +50,52 @@ def _expr_unwrap(maybe_expr):
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+@forward_as_properties(groupby=["dims", "groups"])
+class LinearExpressionGroupby:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    groupby: xr.core.groupby.DatasetGroupBy
+
+    def map(self, func, shortcut=False, args=(), **kwargs):
+        return LinearExpression(
+            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs)
+        )
+
+    def sum(self, **kwargs):
+        def func(ds):
+            ds = LinearExpression._sum(ds, self.groupby._group_dim)
+            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+            return ds
+
+        return self.map(func, **kwargs)
+
+    def roll(self, **kwargs):
+        return self.map(Dataset.roll, **kwargs)
+
+
+@dataclass
+@forward_as_properties(rolling=["center", "dim", "obj", "rollings", "window"])
+class LinearExpressionRolling:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    rolling: xr.core.rolling.DataArrayRolling
+
+    def sum(self, **kwargs):
+        ds = (
+            self.rolling.construct("_rolling_term", keep_attrs=True)
+            .rename(_term="_stacked_term")
+            .stack(_term=["_stacked_term", "_rolling_term"])
+            .reset_index("_term", drop=True)
+        )
+        return LinearExpression(ds)
+
+
+@dataclass(repr=False)
 @forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
 class LinearExpression:
     """
@@ -426,6 +472,43 @@ class LinearExpression:
         cond = _expr_unwrap(cond)
         return self.__class__(self.data.where(cond, other=other, **kwargs))
 
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ) -> LinearExpressionGroupby:
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        ds = self.data
+        groups = ds.groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
+        return LinearExpressionGroupby(groups)
+
     def groupby_sum(self, group):
         """
         Sum expression over groups.
@@ -453,6 +536,43 @@ class LinearExpression:
             return ds
 
         return self.__class__(groups.map(func))  # .reset_index('_term')
+
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> LinearExpressionRolling:
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return LinearExpressionRolling(rolling)
 
     def rolling_sum(self, **kwargs):
         """
@@ -562,6 +682,7 @@ class LinearExpression:
     def equals(self, other: "LinearExpression"):
         return self.data.equals(_expr_unwrap(other))
 
+    # TODO: make this return a LinearExpression (needs refactoring of __init__)
     def rename(self, name_dict=None, **names) -> Dataset:
         return self.data.rename(name_dict, **names)
 
@@ -573,6 +694,8 @@ class LinearExpression:
 
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
+    assign_coords = exprwrap(Dataset.assign_coords)
+
     astype = exprwrap(Dataset.astype)
 
     bfill = exprwrap(Dataset.bfill)
@@ -581,9 +704,11 @@ class LinearExpression:
 
     chunk = exprwrap(Dataset.chunk)
 
-    coarsen = exprwrap(Dataset.coarsen)
+    drop = exprwrap(Dataset.drop)
 
-    clip = exprwrap(Dataset.clip)
+    drop_sel = exprwrap(Dataset.drop_sel)
+
+    drop_isel = exprwrap(Dataset.drop_isel)
 
     ffill = exprwrap(Dataset.ffill)
 
@@ -595,9 +720,9 @@ class LinearExpression:
 
     reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
 
-    roll = exprwrap(Dataset.roll)
+    rename_dims = exprwrap(Dataset.rename_dims)
 
-    rolling = exprwrap(Dataset.rolling)
+    roll = exprwrap(Dataset.roll)
 
 
 def _pd_series_wo_index_name(ds):
