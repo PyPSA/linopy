@@ -11,7 +11,4 @@ from linopy.expressions import merge
 from linopy.io import read_netcdf
 from linopy.model import LinearExpression, Model, Variable, available_solvers
 from linopy.remote import RemoteHandler
-
-# from linopy.version import version as __version__
-
-__version__ = "0.0.14"
+from linopy.version import version as __version__
