@@ -6,7 +6,7 @@ This module contains implementations for the Constraint{s} class.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, Sequence, Union
 
@@ -226,12 +226,12 @@ class Constraints:
     A constraint container used for storing multiple constraint arrays.
     """
 
-    labels: Dataset = Dataset()
-    coeffs: Dataset = Dataset()
-    vars: Dataset = Dataset()
-    sign: Dataset = Dataset()
-    rhs: Dataset = Dataset()
-    blocks: Dataset = Dataset()
+    labels: Dataset = field(default_factory=Dataset)
+    coeffs: Dataset = field(default_factory=Dataset)
+    vars: Dataset = field(default_factory=Dataset)
+    sign: Dataset = field(default_factory=Dataset)
+    rhs: Dataset = field(default_factory=Dataset)
+    blocks: Dataset = field(default_factory=Dataset)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
