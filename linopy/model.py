@@ -152,7 +152,7 @@ class Model:
         """
         Parameters assigned to the model.
 
-        The parameters serve as an expta field where additional data may
+        The parameters serve as an extra field where additional data may
         be stored.
         """
         return self._parameters
