@@ -253,7 +253,7 @@ class LinearExpression(Dataset):
         Parameters
         ----------
         tuples : tuples of (coefficients, variables)
-            Each tuple represents on term in the resulting linear expression,
+            Each tuple represents one term in the resulting linear expression,
             which can possibly span over multiple dimensions:
 
             * coefficients : int/float/array_like
