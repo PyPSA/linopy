@@ -32,7 +32,7 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray!=2022.06.",
+        "xarray<=2022.03.,>=2022.09.",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",

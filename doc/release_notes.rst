@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+
+Version 0.0.15
+--------------
 
 * Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
 * Returning None type in `from_rule` assignment is now supported.
