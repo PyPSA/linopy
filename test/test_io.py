@@ -84,6 +84,15 @@ def test_to_file(tmp_path):
 
     gurobipy.read(str(fn))
 
+    fn = tmp_path / "test.mps"
+    m.to_file(fn)
+
+    gurobipy.read(str(fn))
+
+    with pytest.raises(ValueError):
+        fn = tmp_path / "test.failedtype"
+        m.to_file(fn)
+
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy(tmp_path):

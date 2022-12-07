@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Support exporting problems to MPS file via fast highspy MPS-writer.
 
 
 Version 0.0.15
