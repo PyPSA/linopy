@@ -15,6 +15,8 @@ import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
 
+from linopy import solvers
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,26 +167,45 @@ def binaries_to_file(m, f, log=False):
 
 def to_file(m, fn):
     """
-    Write out a model to a lp file.
+    Write out a model to a lp or mps file.
     """
-    fn = m.get_problem_file(fn)
+    fn = Path(m.get_problem_file(fn))
 
-    if os.path.exists(fn):
-        os.remove(fn)  # ensure a clear file
+    if fn.exists():
+        fn.unlink()
 
-    log = m._xCounter > 10000
+    if fn.suffix == ".lp":
 
-    with open(fn, mode="w") as f:
+        log = m._xCounter > 10000
 
-        start = time.time()
+        with open(fn, mode="w") as f:
 
-        objective_to_file(m, f, log)
-        constraints_to_file(m, f, log)
-        bounds_to_file(m, f, log)
-        binaries_to_file(m, f, log)
-        f.write("end\n")
+            start = time.time()
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+            objective_to_file(m, f, log)
+            constraints_to_file(m, f, log)
+            bounds_to_file(m, f, log)
+            binaries_to_file(m, f, log)
+            f.write("end\n")
+
+            logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+    elif fn.suffix == ".mps":
+        if "highs" in solvers.available_solvers:
+            # Use very fast highspy implementation
+            # Might be replaced by custom writer, however needs C bindings for performance
+            h = m.to_highspy()
+            h.writeModel(str(fn))
+        else:
+            raise RuntimeError(
+                "Package highspy not installed. This is required to exporting to MPS file."
+            )
+
+    else:
+
+        raise ValueError(
+            f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
+        )
 
     return fn
 
@@ -262,6 +283,10 @@ def to_highspy(m):
     lower = np.where(M.sense != "<", M.b, -np.inf)
     upper = np.where(M.sense != ">", M.b, np.inf)
     h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+    lp = h.getLp()
+    lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
+    lp.col_names_ = "x" + M.vlabels.astype(str).astype(object)
+    h.passModel(lp)
     return h
 
 
