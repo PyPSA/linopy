@@ -19,9 +19,9 @@ from linopy import Model
 @pytest.fixture
 def m():
     m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
-    y = m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
-    z = m.add_variables(0, 10, name="z")
+    m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
+    m.add_variables(0, 10, name="z")
     return m
 
 
