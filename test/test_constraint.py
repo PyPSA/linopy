@@ -9,11 +9,10 @@ Created on Tue Nov  2 22:38:48 2021.
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 from xarray.testing import assert_equal
 
 import linopy
-from linopy import Model
+from linopy import LinearExpression, Model
 from linopy.constraints import AnonymousConstraint
 
 
@@ -21,9 +20,9 @@ from linopy.constraints import AnonymousConstraint
 def m():
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
-    y = m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
-    z = m.add_variables(0, 10, name="z")
-    c = m.add_constraints(x >= 0, name="c")
+    m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
+    m.add_variables(0, 10, name="z")
+    m.add_constraints(x >= 0, name="c")
     return m
 
 
@@ -59,6 +58,51 @@ def test_empty_constraints_repr():
 def test_constraints_getter(m, c):
     assert c.shape == (10,)
     assert isinstance(m.constraints[["c"]], linopy.constraints.Constraints)
+
+
+def test_anonymous_constraint_from_linear_expression_le(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "<="
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_linear_expression_ge(x, y):
+    expr = 10 * x + y
+    con = expr >= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == ">="
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_linear_expression_eq(x, y):
+    expr = 10 * x + y
+    con = expr == 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "="
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_variable_le(x):
+    con = x <= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "<="
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_variable_ge(x):
+    con = x >= 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == ">="
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_variable_eq(x):
+    con = x == 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.sign.item() == "="
+    assert (con.rhs == 10).all()
 
 
 def test_constraint_from_rule(m, x, y):
