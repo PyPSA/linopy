@@ -15,6 +15,8 @@ import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
 
+from linopy import solvers
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,10 +191,15 @@ def to_file(m, fn):
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
     elif fn.suffix == ".mps":
-        # Use very fast highspy implementation
-        # Might be replaced by custom writer, however needs C bindings for performance
-        h = m.to_highspy()
-        h.writeModel(str(fn))
+        if "highs" in solvers.available_solvers:
+            # Use very fast highspy implementation
+            # Might be replaced by custom writer, however needs C bindings for performance
+            h = m.to_highspy()
+            h.writeModel(str(fn))
+        else:
+            raise RuntimeError(
+                "Package highspy not installed. This is required to exporting to MPS file."
+            )
 
     else:
 

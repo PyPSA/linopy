@@ -55,7 +55,8 @@ setup(
             "pre-commit",
             "paramiko",
             "gurobipy",
-            "highspy",
+            # until available for windows/mac
+            # "highspy",
             "cplex",
             "xpress",
         ],
