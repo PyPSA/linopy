@@ -17,12 +17,10 @@ from linopy.io import float_to_str, int_to_str
 
 @pytest.fixture
 def m():
-    import gurobipy
-
     m = Model()
 
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]), name="y")
 
     m.add_constraints(x + y, "<=", 10)
 
@@ -31,13 +29,8 @@ def m():
     return m
 
 
-def test_str_arrays():
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
-
-    da = int_to_str(x.values)
+def test_str_arrays(m):
+    da = int_to_str(m.variables["x"].values)
     assert da.dtype == object
 
 
@@ -63,14 +56,7 @@ def test_str_arrays_with_nans():
     assert da.dtype == object
 
 
-def test_to_netcdf(tmp_path):
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-    m.add_constraints(x + y, "<=", 10)
-    m.add_objective(2 * x + 3 * y)
-
+def test_to_netcdf(m, tmp_path):
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
@@ -113,17 +99,13 @@ def test_to_file_invalid(m, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_gurobipy(tmp_path):
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-
-    m.add_constraints(x + y, "<=", 10)
-
-    m.add_objective(2 * x + 3 * y)
-
+def test_to_gurobipy(m):
     m.to_gurobipy()
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_gurobipy(m):
+    m.to_highspy()
 
 
 def test_to_blocks(tmp_path):
