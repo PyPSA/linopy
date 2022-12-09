@@ -30,6 +30,8 @@ def test_variable_getter():
     with pytest.raises(AssertionError):
         x[[1, 2, 3]]
 
+    assert isinstance(x.loc[[1, 2, 3]], linopy.Variable)
+
 
 def test_variable_repr():
     m = Model()
@@ -104,7 +106,7 @@ def test_variable_where():
     x = m.add_variables(coords=[range(10)])
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
+    assert x.values[9] == -1
 
 
 def test_variable_shift():
@@ -112,7 +114,7 @@ def test_variable_shift():
     x = m.add_variables(coords=[range(10)])
     x = x.shift(dim_0=3)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[0].item() == -1
+    assert x.values[0] == -1
 
 
 def test_variable_sanitize():
@@ -122,7 +124,7 @@ def test_variable_sanitize():
     x = x.where([True] * 4 + [False] * 6, np.nan)
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
+    assert x.values[9] == -1
 
 
 def test_variable_type_preservation():
@@ -130,8 +132,7 @@ def test_variable_type_preservation():
     x = m.add_variables(coords=[range(10)])
 
     assert isinstance(x.bfill("dim_0"), linopy.variables.Variable)
-    assert isinstance(x.broadcast_like(x.to_array()), linopy.variables.Variable)
-    assert isinstance(x.clip(max=20), linopy.variables.Variable)
+    assert isinstance(x.broadcast_like(x.labels), linopy.variables.Variable)
     assert isinstance(x.ffill("dim_0"), linopy.variables.Variable)
     assert isinstance(x.fillna(-1), linopy.variables.Variable)
 

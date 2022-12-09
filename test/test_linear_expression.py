@@ -14,6 +14,7 @@ from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
 from linopy.expressions import ScalarLinearExpression
+from linopy.testing import assert_linequal
 
 m = Model()
 
@@ -43,7 +44,7 @@ def test_values():
 
 def test_duplicated_index():
     expr = m.linexpr((10, "x"), (-1, "x"))
-    assert (expr._term == [0, 1]).all()
+    assert (expr.data._term == [0, 1]).all()
 
 
 def test_variable_to_linexpr():
@@ -63,23 +64,23 @@ def test_variable_to_linexpr():
 
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((10, "x"), (1, "y")))
+    assert_linequal(expr, m.linexpr((10, "x"), (1, "y")))
 
     expr = x + 8 * y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, "x"), (8, "y")))
+    assert_linequal(expr, m.linexpr((1, "x"), (8, "y")))
 
     expr = x + y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, "x"), (1, "y")))
+    assert_linequal(expr, m.linexpr((1, "x"), (1, "y")))
 
     expr = x - y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((1, "x"), (-1, "y")))
+    assert_linequal(expr, m.linexpr((1, "x"), (-1, "y")))
 
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
-    assert_equal(expr, m.linexpr((-1, "x"), (-8, "y")))
+    assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
@@ -201,7 +202,7 @@ def test_add():
     assert res.nterm == expr.nterm + other.nterm
     assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
-    assert res.notnull().all().to_array().all()
+    assert res.data.notnull().all().to_array().all()
 
     assert isinstance(x - expr, LinearExpression)
     assert isinstance(x + expr, LinearExpression)
@@ -220,7 +221,7 @@ def test_sub():
     assert res.nterm == expr.nterm + other.nterm
     assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
-    assert res.notnull().all().to_array().all()
+    assert res.data.notnull().all().to_array().all()
 
 
 def test_sum():
@@ -228,14 +229,14 @@ def test_sum():
     res = expr.sum("dim_0")
 
     assert res.size == expr.size
-    assert res.nterm == expr.nterm * len(expr.dim_0)
+    assert res.nterm == expr.nterm * len(expr.data.dim_0)
 
     res = expr.sum()
     assert res.size == expr.size
     assert res.nterm == expr.size
-    assert res.notnull().all().to_array().all()
+    assert res.data.notnull().all().to_array().all()
 
-    assert_equal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+    assert_linequal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
 
 
 def test_where():
@@ -255,10 +256,10 @@ def test_merge():
     expr2 = z.sum("dim_0")
 
     res = merge(expr1, expr2)
-    assert res._term.size == 6
+    assert res.nterm == 6
 
     res = merge([expr1, expr2])
-    assert res._term.size == 6
+    assert res.nterm == 6
 
     # now concat with same length of terms
     expr1 = z.sel(dim_0=0).sum("dim_1")
@@ -277,7 +278,7 @@ def test_merge():
 
 
 def test_sum_drop_zeros():
-    coeff = xr.zeros_like(z)
+    coeff = xr.zeros_like(z.labels)
     coeff[1, 0] = 3
     coeff[0, 2] = 5
     expr = coeff * z
@@ -289,7 +290,7 @@ def test_sum_drop_zeros():
     assert res.nterm == 1
 
     coeff[1, 2] = 4
-    expr["coeffs"] = coeff
+    expr.data["coeffs"] = coeff
     res = expr.sum()
 
     res = expr.sum("dim_0", drop_zeros=True)
@@ -332,31 +333,74 @@ def test_multiindexed_expression():
     assert isinstance(expr, LinearExpression)
 
 
+def test_groupby():
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).sum()
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
+
+    # now asymetric groups which result in different nterms
+    groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
+    grouped = expr.groupby(groups).sum()
+    assert "group" in grouped.dims
+    # first group must be full with vars
+    assert (grouped.data.sel(group=1) > 0).all()
+    # the last 4 entries of the second group must be empty, i.e. -1
+    assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
+    assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
+    assert grouped.data._term.size == 12
+
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).roll(dim_2=1)
+    assert grouped.nterm == 1
+    assert grouped.vars[0].item() == 19
+
+
+def test_groupby_variable():
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = v.groupby(groups).sum()
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
+
+
 def test_groupby_sum():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
-    assert (grouped.group == [1, 2]).all()
-    assert grouped._term.size == 10
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
 
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
     grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
     # first group must be full with vars
-    assert (grouped.sel(group=1) > 0).all()
+    assert (grouped.data.sel(group=1) > 0).all()
     # the last 4 entries of the second group must be empty, i.e. -1
-    assert (grouped.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
-    assert (grouped.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
-    assert grouped._term.size == 12
+    assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
+    assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
+    assert grouped.data._term.size == 12
 
 
 def test_groupby_sum_variable():
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.groupby_sum(groups)
     assert "group" in grouped.dims
-    assert (grouped.group == [1, 2]).all()
-    assert grouped._term.size == 10
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.data._term.size == 10
+
+
+def test_rolling():
+    expr = 1 * v
+    rolled = expr.rolling(dim_2=2).sum()
+    assert rolled.nterm == 2
+
+    rolled = expr.rolling(dim_2=3).sum()
+    assert rolled.nterm == 3
 
 
 def test_rolling_sum():
@@ -367,6 +411,11 @@ def test_rolling_sum():
     expr = 10 * x + v
     rolled = expr.rolling_sum(dim_2=3)
     assert rolled.nterm == 6
+
+
+def test_rolling_variable():
+    rolled = v.rolling(dim_2=2).sum()
+    assert rolled.nterm == 2
 
 
 def test_rolling_sum_variable():

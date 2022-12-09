@@ -105,6 +105,25 @@ def test_constraint_accessor():
     assert c.vars.notnull().all().item()
     assert c.coeffs.notnull().all().item()
 
+    # Test that assigning labels raises RuntimeError
+    with pytest.raises(RuntimeError):
+        c.labels = c.labels
+
+    # Test that assigning lhs with other type that LinearExpression raises TypeError
+    with pytest.raises(TypeError):
+        c.lhs = x
+
+    # Test that assigning lhs with other type that LinearExpression raises TypeError
+    with pytest.raises(ValueError):
+        c.sign = "=="
+
+    # Test that assigning a variable or linear expression to the rhs property raises a TypeError
+    with pytest.raises(TypeError):
+        c.rhs = x
+
+    with pytest.raises(TypeError):
+        c.rhs = x + y
+
 
 def test_constraint_accessor_M():
     m = Model()
@@ -125,7 +144,7 @@ def test_constraint_accessor_M():
     assert (c.rhs == 2).all().item()
 
     c.lhs = 3 * y
-    assert (c.vars.squeeze() == y.data).all()
+    assert (c.vars.squeeze() == y.labels.data).all()
     assert (c.coeffs == 3).all()
     assert isinstance(c.lhs, linopy.LinearExpression)
 
@@ -142,20 +161,6 @@ def test_constraints_accessor():
     assert isinstance(m.constraints[["con0"]], linopy.constraints.Constraints)
     assert isinstance(m.constraints.inequalities, linopy.constraints.Constraints)
     assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
-
-
-def test_constraint_getter_without_model():
-    data = xr.DataArray(range(10)).rename("con")
-    c = linopy.constraints.Constraint(data)
-
-    with pytest.raises(AttributeError):
-        c.coeffs
-    with pytest.raises(AttributeError):
-        c.vars
-    with pytest.raises(AttributeError):
-        c.sign
-    with pytest.raises(AttributeError):
-        c.rhs
 
 
 def test_constraint_sanitize_zeros():

@@ -8,9 +8,7 @@ This module contains variable related definitions of the package.
 import functools
 import re
 from dataclasses import dataclass, field
-from distutils.log import warn
-from typing import Any, Sequence, Union
-from warnings import warn
+from typing import Any, Mapping, Sequence, Union
 
 import dask
 import numpy as np
@@ -18,10 +16,12 @@ import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
+from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
+    forward_as_properties,
     has_assigned_model,
     has_optimized_model,
     is_constant,
@@ -30,11 +30,10 @@ from linopy.common import (
 
 def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _varwrap(obj, *args, **kwargs):
+    def _varwrap(var, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        obj = DataArray(obj)
-        return Variable(method(obj, *default_args, *args, **kwargs))
+        return var.__class__(method(var.labels, *default_args, *args, **kwargs))
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -43,7 +42,27 @@ def varwrap(method, *default_args, **new_default_kwargs):
     return _varwrap
 
 
-class Variable(DataArray):
+def _var_unwrap(var):
+    if isinstance(var, Variable):
+        return var.labels
+    return var
+
+
+@dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "name",
+        "shape",
+        "size",
+        "values",
+        "dims",
+        "ndim",
+    ]
+)
+class Variable:
     """
     Variable container for storing variable labels.
 
@@ -92,28 +111,10 @@ class Variable(DataArray):
     Further operations like taking the negative and subtracting are supported.
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
+    labels: DataArray = field(default_factory=DataArray)
+    model: Any = None
 
-    def __init__(self, *args, **kwargs):
-
-        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
-        if isinstance(args[0], DataArray):
-            da = args[0]
-            args = (da.data, da.coords)
-            kwargs.update({"attrs": da.attrs, "name": da.name})
-
-        self.model = kwargs.pop("model", None)
-        super().__init__(*args, **kwargs)
-        assert self.name is not None, "Variable data does not have a name."
-
-    # We have to set the _reduce_method to None, in order to overwrite basic
-    # reduction functions as `sum`. There might be a better solution (?).
-    _reduce_method = None
-
-    # Disable array function, only function defined below are supported
-    # and set priority higher than pandas/xarray/numpy
     __array_ufunc__ = None
-    __array_priority__ = 10000
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
@@ -122,18 +123,28 @@ class Variable(DataArray):
             "Set single values for each dimension in order to obtain a "
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
-        if not self.ndim:
+        if not self.labels.ndim:
             return ScalarVariable(self.data.item())
-        assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
-        key = dict(zip(self.dims, keys))
-        selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.data[tuple(selector)])
+        assert self.labels.ndim == len(
+            keys
+        ), f"expected {self.labels.ndim} keys, got {len(keys)}."
+        key = dict(zip(self.labels.dims, keys))
+        selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(self.labels.data[tuple(selector)])
 
+    @property
+    def loc(self):
+        return _LocIndexer(self)
+
+    @deprecated(details="Use `labels` instead of `to_array()`")
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
         """
-        return DataArray(self)
+        return self.labels
+
+    def to_pandas(self):
+        return self.labels.to_pandas()
 
     def to_linexpr(self, coefficient=1):
         """
@@ -147,9 +158,7 @@ class Variable(DataArray):
         """
         Get the string representation of the variables.
         """
-        data_string = (
-            "Variable labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
-        )
+        data_string = "Variable labels:\n" + self.labels.__repr__().split("\n", 1)[1]
         extend_line = "-" * len(self.name)
         return (
             f"Variable '{self.name}':\n"
@@ -162,7 +171,7 @@ class Variable(DataArray):
         Get the html representation of the variables.
         """
         # return self.__repr__()
-        data_string = self.to_array()._repr_html_()
+        data_string = self.labels._repr_html_()
         data_string = data_string.replace("xarray.DataArray", "linopy.Variable")
         return data_string
 
@@ -245,6 +254,41 @@ class Variable(DataArray):
     def __eq__(self, other):
         return self.to_linexpr().__eq__(other)
 
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ):
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        return self.to_linexpr().groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
+
     def groupby_sum(self, group):
         """
         Sum variable over groups.
@@ -263,11 +307,40 @@ class Variable(DataArray):
         """
         return self.to_linexpr().groupby_sum(group)
 
-    def group_terms(self, group):
-        warn(
-            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> "expressions.LinearExpressionRolling":
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        return self.to_linexpr().rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
-        return self.groupby_sum(group)
 
     def rolling_sum(self, **kwargs):
         """
@@ -305,7 +378,7 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.upper)
         self.model.variables.upper[self.name] = value
 
     @property
@@ -329,7 +402,7 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.lower)
         self.model.variables.lower[self.name] = value
 
     @property
@@ -387,7 +460,7 @@ class Variable(DataArray):
         -------
         linopy.Variable
         """
-        return self.__class__(DataArray.where(self, cond, other, **kwargs))
+        return self.__class__(self.labels.where(cond, other, **kwargs))
 
     def sanitize(self):
         """
@@ -397,28 +470,59 @@ class Variable(DataArray):
         -------
         linopy.Variable
         """
-        if issubdtype(self.dtype, floating):
-            return self.fillna(-1).astype(int)
+        if issubdtype(self.labels.dtype, floating):
+            return self.__class__(self.labels.fillna(-1).astype(int))
         return self
 
+    def equals(self, other):
+        return self.labels.equals(_var_unwrap(other))
+
     # Wrapped function which would convert variable to dataarray
+    assign_attrs = varwrap(DataArray.assign_attrs)
+
+    assign_coords = varwrap(DataArray.assign_coords)
+
     astype = varwrap(DataArray.astype)
 
     bfill = varwrap(DataArray.bfill)
 
     broadcast_like = varwrap(DataArray.broadcast_like)
 
-    clip = varwrap(DataArray.clip)
+    compute = varwrap(DataArray.compute)
+
+    drop = varwrap(DataArray.drop)
+
+    drop_sel = varwrap(DataArray.drop_sel)
+
+    drop_isel = varwrap(DataArray.drop_isel)
 
     ffill = varwrap(DataArray.ffill)
 
     fillna = varwrap(DataArray.fillna)
 
+    sel = varwrap(DataArray.sel)
+
+    isel = varwrap(DataArray.isel)
+
     shift = varwrap(DataArray.shift, fill_value=-1)
+
+    rename = varwrap(DataArray.rename)
 
     roll = varwrap(DataArray.roll)
 
-    rolling = varwrap(DataArray.rolling)
+
+class _LocIndexer:
+    __slots__ = ("variable",)
+
+    def __init__(self, variable: Variable):
+        self.variable = variable
+
+    def __getitem__(self, key) -> DataArray:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.variable.ndim)
+            key = dict(zip(self.variable.dims, labels))
+        return self.variable.sel(key)
 
 
 @dataclass(repr=False)

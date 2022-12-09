@@ -6,7 +6,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from functools import wraps
+from functools import partialmethod, update_wrapper, wraps
 
 import numpy as np
 from xarray import DataArray, apply_ufunc, merge
@@ -98,3 +98,20 @@ def is_constant(func):
         return func(self, arg)
 
     return wrapper
+
+
+def forward_as_properties(**routes):
+    def add_accessor(cls, item, attr):
+        @property
+        def get(self):
+            return getattr(getattr(self, item), attr)
+
+        setattr(cls, attr, get)
+
+    def deco(cls):
+        for item, attrs in routes.items():
+            for attr in attrs:
+                add_accessor(cls, item, attr)
+        return cls
+
+    return deco
