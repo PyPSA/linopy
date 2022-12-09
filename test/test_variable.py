@@ -30,6 +30,8 @@ def test_variable_getter():
     with pytest.raises(AssertionError):
         x[[1, 2, 3]]
 
+    assert isinstance(x.loc[[1, 2, 3]], linopy.Variable)
+
 
 def test_variable_repr():
     m = Model()

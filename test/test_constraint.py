@@ -105,6 +105,25 @@ def test_constraint_accessor():
     assert c.vars.notnull().all().item()
     assert c.coeffs.notnull().all().item()
 
+    # Test that assigning labels raises RuntimeError
+    with pytest.raises(RuntimeError):
+        c.labels = c.labels
+
+    # Test that assigning lhs with other type that LinearExpression raises TypeError
+    with pytest.raises(TypeError):
+        c.lhs = x
+
+    # Test that assigning lhs with other type that LinearExpression raises TypeError
+    with pytest.raises(ValueError):
+        c.sign = "=="
+
+    # Test that assigning a variable or linear expression to the rhs property raises a TypeError
+    with pytest.raises(TypeError):
+        c.rhs = x
+
+    with pytest.raises(TypeError):
+        c.rhs = x + y
+
 
 def test_constraint_accessor_M():
     m = Model()
