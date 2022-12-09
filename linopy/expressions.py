@@ -738,6 +738,8 @@ class LinearExpression:
 
     sel = exprwrap(Dataset.sel)
 
+    isel = exprwrap(Dataset.isel)
+
     shift = exprwrap(Dataset.shift)
 
     reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
