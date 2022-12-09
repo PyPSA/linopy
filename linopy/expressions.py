@@ -15,6 +15,8 @@ from typing import Any, Mapping, Union
 import numpy as np
 import pandas as pd
 import xarray as xr
+import xarray.core.groupby
+import xarray.core.rolling
 from deprecation import deprecated
 from numpy import array, nan
 from xarray import DataArray, Dataset
