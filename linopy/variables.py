@@ -379,6 +379,8 @@ class Variable:
         reference.
         """
         value = DataArray(value).broadcast_like(self.upper)
+        if not set(value.dims).issubset(self.model.variables[self.name].dims):
+            raise ValueError("Cannot assign new dimensions to existing variable.")
         self.model.variables.upper[self.name] = value
 
     @property
@@ -403,6 +405,8 @@ class Variable:
         reference.
         """
         value = DataArray(value).broadcast_like(self.lower)
+        if not set(value.dims).issubset(self.model.variables[self.name].dims):
+            raise ValueError("Cannot assign new dimensions to existing variable.")
         self.model.variables.lower[self.name] = value
 
     @property
@@ -526,6 +530,14 @@ class _LocIndexer:
 
 
 @dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "dims",
+    ]
+)
 class Variables:
     """
     A variables container used for storing multiple variable arrays.
