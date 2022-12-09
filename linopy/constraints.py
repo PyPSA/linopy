@@ -679,7 +679,7 @@ class AnonymousScalarConstraint:
     (rhs) for exactly one constraint.
     """
 
-    lhs: expressions.ScalarLinearExpression
+    lhs: "expressions.ScalarLinearExpression"
     sign: str
     rhs: float
 

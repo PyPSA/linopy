@@ -2,8 +2,7 @@ from functools import partialmethod, update_wrapper
 
 from xarray import DataArray
 
-from linopy.expressions import LinearExpression
-from linopy.variables import Variable
+from linopy import expressions, variables
 
 
 def monkey_patch(cls, pass_unpatched_method=False):
@@ -21,6 +20,6 @@ def monkey_patch(cls, pass_unpatched_method=False):
 
 @monkey_patch(DataArray, pass_unpatched_method=True)
 def __mul__(da, other, unpatched_method):
-    if isinstance(other, (Variable, LinearExpression)):
+    if isinstance(other, (variables.Variable, expressions.LinearExpression)):
         return NotImplemented
     return unpatched_method(da, other)
