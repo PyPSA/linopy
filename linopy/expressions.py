@@ -10,27 +10,30 @@ import functools
 import logging
 from dataclasses import dataclass
 from itertools import product, zip_longest
-from warnings import warn
+from typing import Any, Mapping, Union
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+import xarray.core.groupby
+import xarray.core.rolling
+from deprecation import deprecated
 from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
-from xarray.core.groupby import _maybe_reorder, peek_at
 
 from linopy import constraints, variables
-from linopy.common import as_dataarray
+from linopy.common import as_dataarray, forward_as_properties
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _exprwrap(obj, *args, **kwargs):
+    def _exprwrap(expr, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        obj = Dataset(obj)
-        return LinearExpression(method(obj, *default_args, *args, **kwargs))
+        return expr.__class__(
+            method(_expr_unwrap(expr), *default_args, *args, **kwargs)
+        )
 
     _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -39,10 +42,64 @@ def exprwrap(method, *default_args, **new_default_kwargs):
     return _exprwrap
 
 
+def _expr_unwrap(maybe_expr):
+    if isinstance(maybe_expr, LinearExpression):
+        return maybe_expr.data
+
+    return maybe_expr
+
+
 logger = logging.getLogger(__name__)
 
 
-class LinearExpression(Dataset):
+@dataclass
+@forward_as_properties(groupby=["dims", "groups"])
+class LinearExpressionGroupby:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    groupby: xr.core.groupby.DatasetGroupBy
+
+    def map(self, func, shortcut=False, args=(), **kwargs):
+        return LinearExpression(
+            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs)
+        )
+
+    def sum(self, **kwargs):
+        def func(ds):
+            ds = LinearExpression._sum(ds, self.groupby._group_dim)
+            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+            return ds
+
+        return self.map(func, **kwargs)
+
+    def roll(self, **kwargs):
+        return self.map(Dataset.roll, **kwargs)
+
+
+@dataclass
+@forward_as_properties(rolling=["center", "dim", "obj", "rollings", "window"])
+class LinearExpressionRolling:
+    """
+    GroupBy object specialized to grouping LinearExpression objects.
+    """
+
+    rolling: xr.core.rolling.DataArrayRolling
+
+    def sum(self, **kwargs):
+        ds = (
+            self.rolling.construct("_rolling_term", keep_attrs=True)
+            .rename(_term="_stacked_term")
+            .stack(_term=["_stacked_term", "_rolling_term"])
+            .reset_index("_term", drop=True)
+        )
+        return LinearExpression(ds)
+
+
+@dataclass(repr=False)
+@forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
+class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
 
@@ -80,9 +137,13 @@ class LinearExpression(Dataset):
     <class 'linopy.expressions.LinearExpression'>
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable")
+    data: Dataset
+    __slots__ = ("data",)
 
     fill_value = {"vars": -1, "coeffs": np.nan}
+
+    __array_ufunc__ = None
+    __array_priority__ = 10000
 
     def __init__(self, data_vars=None, coords=None, attrs=None):
         ds = Dataset(data_vars, coords, attrs)
@@ -97,22 +158,14 @@ class LinearExpression(Dataset):
             ds["vars"] = ds.vars.fillna(-1).astype(int)
         (ds,) = xr.broadcast(ds)
         ds = ds.transpose(..., "_term")
-        super().__init__(ds)
 
-    # We have to set the _reduce_method to None, in order to overwrite basic
-    # reduction functions as `sum`. There might be a better solution (?).
-    _reduce_method = None
-
-    # Disable array function, only function defined below are supported
-    # and set priority higher than pandas/xarray/numpy
-    __array_ufunc__ = None
-    __array_priority__ = 10000
+        self.data = ds
 
     def __repr__(self):
         """
         Get the string representation of the expression.
         """
-        ds_string = self.to_dataset().__repr__().split("\n", 1)[1]
+        ds_string = self.data.__repr__().split("\n", 1)[1]
         ds_string = ds_string.replace("Data variables:\n", "Data:\n")
         nterm = getattr(self, "nterm", 0)
         return (
@@ -125,7 +178,7 @@ class LinearExpression(Dataset):
         Get the html representation of the expression.
         """
         # return self.__repr__()
-        ds_string = self.to_dataset()._repr_html_()
+        ds_string = self.data._repr_html_()
         ds_string = ds_string.replace("Data variables:\n", "Data:\n")
         ds_string = ds_string.replace("xarray.Dataset", "linopy.LinearExpression")
         return ds_string
@@ -160,7 +213,7 @@ class LinearExpression(Dataset):
         """
         Get the negative of the expression.
         """
-        return LinearExpression(self.assign(coeffs=-self.coeffs))
+        return self.assign(coeffs=-self.coeffs)
 
     def __mul__(self, other):
         """
@@ -174,7 +227,7 @@ class LinearExpression(Dataset):
             )
         coeffs = other * self.coeffs
         assert coeffs.shape == self.coeffs.shape
-        return LinearExpression(self.assign(coeffs=coeffs))
+        return self.assign(coeffs=coeffs)
 
     def __rmul__(self, other):
         """
@@ -203,13 +256,50 @@ class LinearExpression(Dataset):
     def __eq__(self, rhs):
         return constraints.AnonymousConstraint(self, "=", rhs)
 
+    @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
         """
         Convert the expression to a xarray.Dataset.
         """
-        return Dataset(self)
+        return self.data
 
-    def sum(self, dims=None, drop_zeros=False):
+    @property
+    def vars(self):
+        return self.data.vars
+
+    @vars.setter
+    def vars(self, value):
+        self.data["vars"] = value
+
+    @property
+    def coeffs(self):
+        return self.data.coeffs
+
+    @coeffs.setter
+    def coeffs(self, value):
+        self.data["coeffs"] = value
+
+    @classmethod
+    def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:
+        data = _expr_unwrap(expr)
+
+        if dims is None:
+            vars = DataArray(data.vars.data.ravel(), dims="_term")
+            coeffs = DataArray(data.coeffs.data.ravel(), dims="_term")
+            ds = xr.Dataset({"vars": vars, "coeffs": coeffs})
+
+        else:
+            dims = [d for d in np.atleast_1d(dims) if d != "_term"]
+            ds = (
+                data.reset_index(dims, drop=True)
+                .rename(_term="_stacked_term")
+                .stack(_term=["_stacked_term"] + dims)
+                .reset_index("_term", drop=True)
+            )
+
+        return ds
+
+    def sum(self, dims=None, drop_zeros=False) -> "LinearExpression":
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -226,26 +316,16 @@ class LinearExpression(Dataset):
         linopy.LinearExpression
             Summed expression.
         """
-        if dims is None:
-            vars = DataArray(self.vars.data.ravel(), dims="_term")
-            coeffs = DataArray(self.coeffs.data.ravel(), dims="_term")
-            ds = xr.Dataset({"vars": vars, "coeffs": coeffs})
 
-        else:
-            dims = [d for d in np.atleast_1d(dims) if d != "_term"]
-            ds = (
-                self.reset_index(dims, drop=True)
-                .rename(_term="_stacked_term")
-                .stack(_term=["_stacked_term"] + dims)
-                .reset_index("_term", drop=True)
-            )
+        res = self.__class__(self._sum(self, dims=dims))
 
         if drop_zeros:
-            ds = ds.densify_terms()
+            res = res.densify_terms()
 
-        return self.__class__(ds)
+        return res
 
-    def from_tuples(*tuples, chunk=None):
+    @classmethod
+    def from_tuples(cls, *tuples, chunk=None):
         """
         Create a linear expression by using tuples of coefficients and
         variables.
@@ -253,7 +333,7 @@ class LinearExpression(Dataset):
         Parameters
         ----------
         tuples : tuples of (coefficients, variables)
-            Each tuple represents on term in the resulting linear expression,
+            Each tuple represents one term in the resulting linear expression,
             which can possibly span over multiple dimensions:
 
             * coefficients : int/float/array_like
@@ -285,6 +365,8 @@ class LinearExpression(Dataset):
         for (c, v) in tuples:
             if isinstance(v, variables.ScalarVariable):
                 v = v.label
+            elif isinstance(v, variables.Variable):
+                v = v.labels
             v = as_dataarray(v)
 
             if isinstance(c, np.ndarray) or _pd_series_wo_index_name(c):
@@ -300,9 +382,9 @@ class LinearExpression(Dataset):
             ds_list.append(ds)
 
         if len(ds_list) > 1:
-            return merge(ds_list)
+            return merge(ds_list, cls=cls)
         else:
-            return LinearExpression(ds_list[0])
+            return cls(ds_list[0])
 
     def from_rule(model, rule, coords):
         """
@@ -384,7 +466,7 @@ class LinearExpression(Dataset):
 
         return LinearExpression(ds)
 
-    def where(self, cond, **kwargs):
+    def where(self, cond, other=xr.core.dtypes.NA, **kwargs):
         """
         Filter variables based on a condition.
 
@@ -404,9 +486,50 @@ class LinearExpression(Dataset):
         linopy.LinearExpression
         """
         # Cannot set `other` if drop=True
-        if not kwargs.get("drop", False) and "other" not in kwargs:
-            kwargs["other"] = self.fill_value
-        return self.__class__(DataArray.where(self, cond, **kwargs))
+        if other is xr.core.dtypes.NA:
+            if not kwargs.get("drop", False):
+                other = self.fill_value
+        else:
+            other = _expr_unwrap(other)
+        cond = _expr_unwrap(cond)
+        return self.__class__(self.data.where(cond, other=other, **kwargs))
+
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ) -> LinearExpressionGroupby:
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        ds = self.data
+        groups = ds.groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
+        return LinearExpressionGroupby(groups)
 
     def groupby_sum(self, group):
         """
@@ -427,15 +550,51 @@ class LinearExpression(Dataset):
         if isinstance(group, pd.Series):
             logger.info("Converting group pandas.Series to xarray.DataArray")
             group = group.to_xarray()
-        groups = xr.Dataset.groupby(self, group)
+        groups = xr.Dataset.groupby(self.data, group)
 
         def func(ds):
-            ds = LinearExpression.sum(ds, groups._group_dim)
-            ds = ds.to_dataset()
+            ds = self._sum(ds, groups._group_dim)
             ds = ds.assign_coords(_term=np.arange(len(ds._term)))
             return ds
 
-        return LinearExpression(groups.map(func))  # .reset_index('_term')
+        return self.__class__(groups.map(func))  # .reset_index('_term')
+
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> LinearExpressionRolling:
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return LinearExpressionRolling(rolling)
 
     def rolling_sum(self, **kwargs):
         """
@@ -474,7 +633,7 @@ class LinearExpression(Dataset):
         """
         Get the number of terms in the linear expression.
         """
-        return len(self._term)
+        return len(self.data._term)
 
     @property
     def shape(self):
@@ -503,12 +662,12 @@ class LinearExpression(Dataset):
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
         """
-        self = self.transpose(..., "_term")
+        data = self.data.transpose(..., "_term")
 
-        data = self.coeffs.data
-        axis = data.ndim - 1
-        nnz = np.nonzero(data)
-        nterm = (data != 0).sum(axis).max()
+        cdata = data.coeffs.data
+        axis = cdata.ndim - 1
+        nnz = np.nonzero(cdata)
+        nterm = (cdata != 0).sum(axis).max()
 
         mod_nnz = list(nnz)
         mod_nnz.pop(axis)
@@ -519,15 +678,15 @@ class LinearExpression(Dataset):
         new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
         mod_nnz.insert(axis, new_index)
 
-        vdata = np.full_like(data, -1)
-        vdata[tuple(mod_nnz)] = self.vars.data[nnz]
-        self.vars.data = vdata
+        vdata = np.full_like(cdata, -1)
+        vdata[tuple(mod_nnz)] = data.vars.data[nnz]
+        data.vars.data = vdata
 
-        cdata = np.zeros_like(data)
-        cdata[tuple(mod_nnz)] = self.coeffs.data[nnz]
-        self.coeffs.data = cdata
+        cdata = np.zeros_like(cdata)
+        cdata[tuple(mod_nnz)] = data.coeffs.data[nnz]
+        data.coeffs.data = cdata
 
-        return self.sel(_term=slice(0, nterm))
+        return self.__class__(data.sel(_term=slice(0, nterm)))
 
     def sanitize(self):
         """
@@ -542,44 +701,50 @@ class LinearExpression(Dataset):
             return self.assign(vars=self.vars.fillna(-1).astype(int))
         return self
 
+    def equals(self, other: "LinearExpression"):
+        return self.data.equals(_expr_unwrap(other))
+
+    # TODO: make this return a LinearExpression (needs refactoring of __init__)
+    def rename(self, name_dict=None, **names) -> Dataset:
+        return self.data.rename(name_dict, **names)
+
+    def __iter__(self):
+        return self.data.__iter__()
+
     # Wrapped function which would convert variable to dataarray
+    assign = exprwrap(Dataset.assign)
+
+    assign_attrs = exprwrap(Dataset.assign_attrs)
+
+    assign_coords = exprwrap(Dataset.assign_coords)
+
     astype = exprwrap(Dataset.astype)
 
     bfill = exprwrap(Dataset.bfill)
 
     broadcast_like = exprwrap(Dataset.broadcast_like)
 
-    coarsen = exprwrap(Dataset.coarsen)
+    chunk = exprwrap(Dataset.chunk)
 
-    clip = exprwrap(Dataset.clip)
+    drop = exprwrap(Dataset.drop)
+
+    drop_sel = exprwrap(Dataset.drop_sel)
+
+    drop_isel = exprwrap(Dataset.drop_isel)
 
     ffill = exprwrap(Dataset.ffill)
 
     fillna = exprwrap(Dataset.fillna, value=fill_value)
 
+    sel = exprwrap(Dataset.sel)
+
     shift = exprwrap(Dataset.shift)
 
     reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
 
+    rename_dims = exprwrap(Dataset.rename_dims)
+
     roll = exprwrap(Dataset.roll)
-
-    rolling = exprwrap(Dataset.rolling)
-
-    # TODO: explicitly disable `dangerous` functions
-    conj = property()
-    conjugate = property()
-    count = property()
-    cumsum = property()
-    cumprod = property()
-    cumulative_integrate = property()
-    curvefit = property()
-    diff = property()
-    differentiate = property()
-    groupby_bins = property()
-    integrate = property()
-    interp = property()
-    polyfit = property()
-    prod = property()
 
 
 def _pd_series_wo_index_name(ds):
@@ -603,7 +768,7 @@ def _pd_dataframe_wo_axes_names(df):
     return False
 
 
-def merge(*exprs, dim="_term"):
+def merge(*exprs, dim="_term", cls=LinearExpression):
     """
     Merge multiple linear expression together.
 
@@ -626,19 +791,18 @@ def merge(*exprs, dim="_term"):
     else:
         exprs = list(exprs)
 
+    exprs = [e.data if isinstance(e, cls) else e for e in exprs]
+
     if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
         exprs = [expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs]
 
-    exprs = [e.to_dataset() if isinstance(e, LinearExpression) else e for e in exprs]
-    fill_value = LinearExpression.fill_value
+    fill_value = cls.fill_value
     kwargs = dict(fill_value=fill_value, coords="minimal", compat="override")
     ds = xr.concat(exprs, dim, **kwargs)
-    res = LinearExpression(ds)
+    if "_term" in ds.coords:
+        ds = ds.reset_index("_term", drop=True)
 
-    if "_term" in res.coords:
-        res = res.reset_index("_term", drop=True)
-
-    return res
+    return cls(ds)
 
 
 @dataclass
