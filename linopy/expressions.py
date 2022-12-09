@@ -217,6 +217,12 @@ class LinearExpression:
         """
         Multiply the expr by a factor.
         """
+        if isinstance(other, (LinearExpression, variables.Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for *: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
         coeffs = other * self.coeffs
         assert coeffs.shape == self.coeffs.shape
         return self.assign(coeffs=coeffs)
@@ -226,6 +232,18 @@ class LinearExpression:
         Right-multiply the expr by a factor.
         """
         return self.__mul__(other)
+
+    def __div__(self, other):
+        if isinstance(other, (LinearExpression, variables.Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}"
+                "Non-linear expressions are not yet supported."
+            )
+        return self.__mul__(1 / other)
+
+    def __truediv__(self, other):
+        return self.__div__(other)
 
     def __le__(self, rhs):
         return constraints.AnonymousConstraint(self, "<=", rhs)
@@ -417,12 +435,14 @@ class LinearExpression:
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, ScalarLinearExpression):
+        if not isinstance(output, ScalarLinearExpression) and output is not None:
             msg = f"`rule` has to return ScalarLinearExpression not {type(output)}."
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        exprs = [rule(model, *coord) for coord in combinations]
+        exprs = []
+        placeholder = ScalarLinearExpression((np.nan,), (-1,))
+        exprs = [rule(model, *coord) or placeholder for coord in combinations]
         return LinearExpression._from_scalarexpression_list(exprs, coords)
 
     def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates):
@@ -803,6 +823,11 @@ class ScalarLinearExpression:
         vars = self.vars + other.vars
         return ScalarLinearExpression(coeffs, vars)
 
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+
     @property
     def nterm(self):
         return len(self.vars)
@@ -834,12 +859,19 @@ class ScalarLinearExpression:
         return self.__mul__(other)
 
     def __div__(self, other):
+        if not isinstance(other, (int, np.integer, float)):
+            raise TypeError(
+                "unsupported operand type(s) for /: " f"{type(self)} and {type(other)}"
+            )
         return self.__mul__(1 / other)
+
+    def __truediv__(self, other):
+        return self.__div__(other)
 
     def __le__(self, other):
         if not isinstance(other, (int, np.integer, float)):
             raise TypeError(
-                "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
+                "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, "<=", other)

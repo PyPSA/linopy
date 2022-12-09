@@ -330,44 +330,53 @@ def to_block_files(m, fn):
     is_varblock_0 = varblocks == 0
     is_conblock_L = conblocks == N + 1
 
-    for key, suffix in zip(["labels", "coeffs", "vars"], ["row", "data", "col"]):
+    keys = ["labels", "coeffs", "vars"]
+
+    def filtered(arr, mask, key):
+        """
+        Set coefficients to zero for mask, keep others unchanged.
+
+        PIPS requires this information to set the shape of sub-matrices.
+        """
+        assert key in keys
+        if key == "coeffs":
+            return np.where(mask, arr, 0)
+        return arr
+
+    for key, suffix in zip(keys, ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True)
         for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
 
             is_conblock_n = conblocks == n
             is_varblock_n = varblocks == n
 
-            mask = is_conblock_n & is_varblock_0
-            arr[mask & is_equality].tofile(path / f"block{n}" / f"A_{suffix}", sep="\n")
-            arr[mask & ~is_equality].tofile(
+            mask = is_conblock_n & is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"A_{suffix}", sep="\n"
+            )
+            mask = is_conblock_n & ~is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
                 path / f"block{n}" / f"C_{suffix}", sep="\n"
             )
 
-            mask = is_conblock_L & is_varblock_n
-            arr[mask & is_equality].tofile(
+            mask = is_conblock_L & is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
                 path / f"block{n}" / f"BL_{suffix}", sep="\n"
             )
-            arr[mask & ~is_equality].tofile(
+            mask = is_conblock_L & ~is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
                 path / f"block{n}" / f"DL_{suffix}", sep="\n"
             )
 
             if n:
-                mask = is_conblock_n & is_varblock_n
-                arr[mask & is_equality].tofile(
+                mask = is_conblock_n & is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
                     path / f"block{n}" / f"B_{suffix}", sep="\n"
                 )
-                arr[mask & ~is_equality].tofile(
+                mask = is_conblock_n & ~is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
                     path / f"block{n}" / f"D_{suffix}", sep="\n"
                 )
-
-                if key == "labels":
-                    mask = is_conblock_n & is_equality
-                    all_rows = np.sort(np.unique(arr[mask]))
-                    all_rows.tofile(path / f"block{n}" / "A-B_rows", sep="\n")
-
-                    mask = is_conblock_n & ~is_equality
-                    all_rows = np.sort(np.unique(arr[mask]))
-                    all_rows.tofile(path / f"block{n}" / "C-D_rows", sep="\n")
 
 
 def non_bool_dict(d):

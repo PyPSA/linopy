@@ -654,12 +654,14 @@ class AnonymousConstraint:
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, AnonymousScalarConstraint):
+        if not isinstance(output, AnonymousScalarConstraint) and not output is None:
             msg = f"`rule` has to return AnonymousScalarConstraint not {type(output)}."
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        cons = [rule(model, *coord) for coord in combinations]
+        placeholder_lhs = expressions.ScalarLinearExpression((np.nan,), (-1,))
+        placeholder = AnonymousScalarConstraint(placeholder_lhs, "=", np.nan)
+        cons = [rule(model, *coord) or placeholder for coord in combinations]
         exprs = [con.lhs for con in cons]
 
         lhs = expressions.LinearExpression._from_scalarexpression_list(exprs, coords)

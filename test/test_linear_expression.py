@@ -56,6 +56,12 @@ def test_variable_to_linexpr():
     expr = x * 1
     assert isinstance(expr, LinearExpression)
 
+    expr = x / 1
+    assert isinstance(expr, LinearExpression)
+
+    expr = x / 1.0
+    assert isinstance(expr, LinearExpression)
+
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((10, "x"), (1, "y")))
@@ -91,9 +97,25 @@ def test_variable_to_linexpr():
     assert isinstance(expr, LinearExpression)
 
     with pytest.raises(TypeError):
+        x.to_linexpr(x)
+
+    with pytest.raises(TypeError):
         x + 10
+
     with pytest.raises(TypeError):
         x - 10
+
+    with pytest.raises(TypeError):
+        x * x
+
+    with pytest.raises(TypeError):
+        x / x
+
+    with pytest.raises(TypeError):
+        x * (1 * x)
+
+    with pytest.raises(TypeError):
+        x / (1 * x)
 
 
 def test_variable_to_linexpr_with_array():
@@ -111,6 +133,30 @@ def test_variable_to_linexpr_with_dataframe():
     lhs = pd.DataFrame({"a": np.arange(20)}).T, v
     expr = m.linexpr(lhs)
     isinstance(expr, LinearExpression)
+
+
+def test_from_rule():
+    def bound(m, i):
+        if i == 1:
+            return (i - 1) * x[i - 1] + y[i]
+        else:
+            return i * x[i] - y[i]
+
+    expr = LinearExpression.from_rule(m, bound, x.coords)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 2
+
+    # with return type None
+    def bound(m, i):
+        if i == 1:
+            return (i - 1) * x[i - 1] + y[i]
+
+    expr = LinearExpression.from_rule(m, bound, x.coords)
+    assert isinstance(expr, LinearExpression)
+    assert (expr.vars[0] == -1).all()
+    assert (expr.vars[1] != -1).all()
+    assert expr.coeffs[0].isnull().all()
+    assert expr.coeffs[1].notnull().all()
 
 
 def test_expr_to_anonymous_constraint():
@@ -262,6 +308,20 @@ def test_mul():
     mexpr = 10 * expr
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 100).item()
 
+    mexpr = expr / 100
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
+
+    mexpr = expr / 100.0
+    assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
+
+    with pytest.raises(TypeError):
+        expr = 10 * x + y + z
+        expr * x
+
+    with pytest.raises(TypeError):
+        expr = 10 * x + y + z
+        expr / x
+
 
 def test_sanitize():
     expr = 10 * x + y + z
@@ -374,6 +434,14 @@ def test_scalarexpression_creation():
     expr = 10 * x[0] + y[1] + z[1, 1]
     assert isinstance(expr, ScalarLinearExpression)
 
+    expr2 = sum((10 * x[0], y[1], z[1, 1]))
+    assert isinstance(expr, ScalarLinearExpression)
+    assert expr.vars == expr2.vars
+    assert expr.coeffs == expr2.coeffs
+
+    expr = sum((x[0], y[1]))
+    assert isinstance(expr, ScalarLinearExpression)
+
 
 def test_scalarexpression_operations():
     expr = 10 * x[0]
@@ -383,6 +451,20 @@ def test_scalarexpression_operations():
     assert isinstance(expr2, ScalarLinearExpression)
     assert expr2.coeffs == (20,)
 
+    expr2 = expr / 2
+    assert isinstance(expr2, ScalarLinearExpression)
+    assert expr2.coeffs == (5,)
+
+    expr2 = expr / 2.0
+    assert isinstance(expr2, ScalarLinearExpression)
+    assert expr2.coeffs == (5,)
+
     expr3 = -expr
     assert isinstance(expr3, ScalarLinearExpression)
     assert expr3.coeffs == (-10,)
+
+    with pytest.raises(TypeError):
+        x[1] * x[1]
+
+    with pytest.raises(TypeError):
+        x[1] / x[1]

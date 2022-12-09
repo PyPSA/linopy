@@ -4,6 +4,15 @@ Release Notes
 .. Upcoming Release
 .. ----------------
 
+
+Version 0.0.15
+--------------
+
+* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
+* Returning None type in `from_rule` assignment is now supported.
+* Python 3.11 is now supported
+* Xarray versions higher and lower `v2022.06.` are now supported.
+
 Version 0.0.14
 --------------
 
