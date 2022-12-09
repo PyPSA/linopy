@@ -15,6 +15,22 @@ from linopy import Model, available_solvers, read_netcdf
 from linopy.io import float_to_str, int_to_str
 
 
+@pytest.fixture
+def m():
+    import gurobipy
+
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]))
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
+
+    m.add_constraints(x + y, "<=", 10)
+
+    m.add_objective(2 * x + 3 * y)
+
+    return m
+
+
 def test_str_arrays():
     m = Model()
 
@@ -67,28 +83,30 @@ def test_to_netcdf(tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file(tmp_path):
+def test_to_file_lp(m, tmp_path):
     import gurobipy
-
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-
-    m.add_constraints(x + y, "<=", 10)
-
-    m.add_objective(2 * x + 3 * y)
 
     fn = tmp_path / "test.lp"
     m.to_file(fn)
 
     gurobipy.read(str(fn))
 
+
+@pytest.mark.skipif(
+    not {"gurobi", "highs"}.issubset(available_solvers),
+    reason="Gurobipy of highspy not installed",
+)
+def test_to_file_mps(m, tmp_path):
+    import gurobipy
+
     fn = tmp_path / "test.mps"
     m.to_file(fn)
 
     gurobipy.read(str(fn))
 
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_invalid(m, tmp_path):
     with pytest.raises(ValueError):
         fn = tmp_path / "test.failedtype"
         m.to_file(fn)
