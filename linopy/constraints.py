@@ -90,15 +90,9 @@ class Constraint:
     def coeffs(self, value):
         term_dim = self.name + "_term"
         value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
-        try:
-            self.model.constraints.coeffs[self.name] = value
-        except ValueError:
-            coeffs = self.model.constraints.coeffs
-            coeffs = coeffs.assign_coords({term_dim: coeffs[term_dim]})
-            value = value.assign_coords({term_dim: value[term_dim]})
-            coeffs[self.name] = value
-            coeffs = coeffs.reset_index(term_dim, drop=True)
-            self.model.constraints.coeffs = coeffs
+        self.model.constraints.coeffs = self.model.constraints.coeffs.drop_vars(
+            self.name
+        ).assign({self.name: value})
 
     @property
     def vars(self):
@@ -113,16 +107,14 @@ class Constraint:
     @vars.setter
     def vars(self, value):
         term_dim = self.name + "_term"
-        value = DataArray(value).broadcast_like(self.coeffs, exclude=[term_dim])
-        try:
-            self.model.constraints.vars[self.name] = value
-        except ValueError:
-            vars = self.model.constraints.vars
-            vars = vars.assign_coords({term_dim: vars[term_dim]})
-            value = value.assign_coords({term_dim: value[term_dim]})
-            vars[self.name] = value
-            vars = vars.reset_index(term_dim, drop=True)
-            self.model.constraints.vars = vars
+        if isinstance(value, variables.Variable):
+            value = value.labels
+        if not isinstance(value, DataArray):
+            raise TypeError("Expected value to be of type DataArray or Variable")
+        value = value.broadcast_like(self.coeffs, exclude=[term_dim])
+        self.model.constraints.vars = self.model.constraints.vars.drop_vars(
+            self.name
+        ).assign({self.name: value})
 
     @property
     def lhs(self):

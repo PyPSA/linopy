@@ -17,106 +17,137 @@ from linopy import Model
 from linopy.constraints import AnonymousConstraint
 
 
-def test_constraint_repr():
+@pytest.fixture
+def m():
     m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    y = m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
+    z = m.add_variables(0, 10, name="z")
+    c = m.add_constraints(x >= 0, name="c")
+    return m
 
-    x = m.add_variables()
-    c = m.add_constraints(x, ">=", 0)
+
+@pytest.fixture
+def x(m):
+    return m.variables["x"]
+
+
+@pytest.fixture
+def y(m):
+    return m.variables["y"]
+
+
+@pytest.fixture
+def c(m):
+    return m.constraints["c"]
+
+
+def test_constraint_repr(c):
     c.__repr__()
     c._repr_html_()
 
 
-def test_constraints_repr():
-    m = Model()
-    m.constraints.__repr__()
-    x = m.add_variables()
-    m.add_constraints(x, ">=", 0)
+def test_constraints_repr(m):
     m.constraints.__repr__()
 
 
-def test_scalarconstraint():
-    m = Model()
-    coords = [pd.Index(range(10))]
-    x = m.add_variables(coords=coords)
-    con = m.add_constraints(x[0] >= 0)
-    assert isinstance(con, linopy.constraints.Constraint)
-
-    con = m.add_constraints(x[0] + x[1] >= 0)
-    assert isinstance(con, linopy.constraints.Constraint)
-
-    con = m.add_constraints(x[0], ">=", 0)
-    assert isinstance(con, linopy.constraints.Constraint)
-
-    con = m.add_constraints(x[0] + x[1], ">=", 0)
-    assert isinstance(con, linopy.constraints.Constraint)
+def test_empty_constraints_repr():
+    # test empty contraints
+    Model().constraints.__repr__()
 
 
-def test_from_rule():
-    m = Model()
-    coords = pd.RangeIndex(10), ["a", "b"]
-    x = m.add_variables(0, 100, coords)
+def test_constraints_getter(m, c):
+    assert c.shape == (10,)
+    assert isinstance(m.constraints[["c"]], linopy.constraints.Constraints)
 
+
+def test_constraint_from_rule(m, x, y):
     def bound(m, i, j):
         if i % 2:
-            return (i - 1) * x[i - 1, j] >= 0
+            return (i - 1) * x[i - 1] + y[j] >= 0
         else:
-            return i * x[i, j] >= 0
+            return i * x[i] >= 0
 
+    coords = [x.coords["first"], y.coords["second"]]
     con = AnonymousConstraint.from_rule(m, bound, coords)
     assert isinstance(con, AnonymousConstraint)
-    assert con.lhs.nterm == 1
+    assert con.lhs.nterm == 2
 
+
+def test_constraint_from_rule_with_none_return(m, x, y):
     def bound(m, i, j):
         if i % 2:
-            return i * x[i, j] >= 0
+            return i * x[i] + y[j] >= 0
 
+    coords = [x.coords["first"], y.coords["second"]]
     con = AnonymousConstraint.from_rule(m, bound, coords)
     assert isinstance(con, AnonymousConstraint)
-    assert con.lhs.nterm == 1
+    assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
     assert (con.lhs.vars.loc[1, :] != -1).all()
 
 
-def test_constraint_accessor():
-    m = Model()
-    x = m.add_variables()
-    y = m.add_variables()
-    c = m.add_constraints(x, ">=", 0)
-    assert c.rhs.item() == 0
-    assert c.vars.item() == 0
-    assert c.coeffs.item() == 1
+def test_constraint_vars_getter(c, x):
+    assert_equal(c.vars.squeeze(), x.labels)
+
+
+def test_constraint_coeffs_getter(c):
+    assert (c.coeffs == 1).all()
+
+
+def test_constraint_sign_getter(c):
     assert c.sign.item() == ">="
 
-    c.rhs = 2
-    assert c.rhs.item() == 2
 
-    c.vars = y
-    assert c.vars.item() == 1
+def test_constraint_rhs_getter(c):
+    assert c.rhs.item() == 0
 
+
+def test_constraint_vars_setter(c, x):
+    c.vars = x
+    assert_equal(c.vars, x.labels)
+
+
+def test_constraint_vars_setter_with_array(c, x):
+    c.vars = x.labels
+    assert_equal(c.vars, x.labels)
+
+
+def test_constraint_coeffs_setter(c):
     c.coeffs = 3
-    assert c.coeffs.item() == 3
+    assert (c.coeffs == 3).all()
 
-    c.sign = "="
-    assert c.sign.item() == "="
 
+def test_constraint_lhs_setter(c, x, y):
     c.lhs = x + y
-    assert len(c.vars) == 2
-    assert len(c.coeffs) == 2
+    assert c.lhs.nterm == 2
     assert c.vars.notnull().all().item()
     assert c.coeffs.notnull().all().item()
 
-    # Test that assigning labels raises RuntimeError
-    with pytest.raises(RuntimeError):
-        c.labels = c.labels
 
+def test_constraint_lhs_setter_invalid(c):
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(TypeError):
         c.lhs = x
 
+
+def test_constraint_sign_setter(c):
+    c.sign = "="
+    assert c.sign.item() == "="
+
+
+def test_constraint_sign_setter_invalid(c):
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
         c.sign = "=="
 
+
+def test_constraint_rhs_setter(c):
+    c.rhs = 2
+    assert c.rhs.item() == 2
+
+
+def test_constraint_rhs_setter_invalid(c, x):
     # Test that assigning a variable or linear expression to the rhs property raises a TypeError
     with pytest.raises(TypeError):
         c.rhs = x
@@ -125,61 +156,22 @@ def test_constraint_accessor():
         c.rhs = x + y
 
 
-def test_constraint_accessor_M():
-    m = Model()
-    lower = pd.Series(range(10), range(10))
-    upper = pd.Series(range(10, 20), range(10))
-    x = m.add_variables(lower, upper)
-    y = m.add_variables(lower, upper)
-    c = m.add_constraints(x, ">=", 0)
-    assert c.rhs.item() == 0
-    assert (c.rhs == 0).all()
-
-    assert c.vars.shape == (10, 1)
-    assert c.coeffs.shape == (10, 1)
-
-    assert c.sign.item() == ">="
-
-    c.rhs = 2
-    assert (c.rhs == 2).all().item()
-
-    c.lhs = 3 * y
-    assert (c.vars.squeeze() == y.labels.data).all()
-    assert (c.coeffs == 3).all()
-    assert isinstance(c.lhs, linopy.LinearExpression)
+def test_constraint_labels_setter_invalid(c):
+    # Test that assigning labels raises RuntimeError
+    with pytest.raises(RuntimeError):
+        c.labels = c.labels
 
 
-def test_constraints_accessor():
-    m = Model()
-
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    x = m.add_variables(lower, upper)
-    y = m.add_variables()
-    m.add_constraints(1 * x + 10 * y, "=", 0)
-    assert m.constraints["con0"].shape == (10, 10)
-    assert isinstance(m.constraints[["con0"]], linopy.constraints.Constraints)
-    assert isinstance(m.constraints.inequalities, linopy.constraints.Constraints)
-    assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
-
-
-def test_constraint_sanitize_zeros():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
-    y = m.add_variables()
-    m.add_constraints(0 * x + y == 0)
+def test_constraint_sanitize_zeros(m, x, y):
+    m.add_constraints(0 * x + y == 0, name="c2")
     m.constraints.sanitize_zeros()
-    assert m.constraints["con0"].vars[0, 0].item() == -1
-    assert np.isnan(m.constraints["con0"].coeffs[0, 0].item())
+    assert m.constraints["c2"].vars[0, 0, 0].item() == -1
+    assert np.isnan(m.constraints["c2"].coeffs[0, 0, 0].item())
 
 
-def test_constraint_matrix():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
-    y = m.add_variables()
-    m.add_constraints(x, "=", 0)
+def test_constraint_matrix(m):
     A = m.constraints.to_matrix()
-    assert A.shape == (10, 11)
+    assert A.shape == (10, 14)
 
 
 def test_constraint_matrix_masked_variables():
@@ -256,3 +248,11 @@ def test_get_name_by_label():
 
     with pytest.raises(ValueError):
         m.constraints.get_name_by_label("first")
+
+
+def test_constraints_inequalities(m):
+    assert isinstance(m.constraints.inequalities, linopy.constraints.Constraints)
+
+
+def test_constraints_equalities(m):
+    assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
