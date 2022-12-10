@@ -35,13 +35,9 @@ def z(m):
     return m.variables["z"]
 
 
-def test_variables_nvars(m):
-    assert m.variables.nvars == 14
-
-    idx = pd.RangeIndex(10, name="first")
-    mask = pd.Series([True] * 5 + [False] * 5, idx)
-    m.add_variables(coords=[idx], mask=mask)
-    assert m.variables.nvars == 19
+def test_variable_repr(x):
+    x.__repr__()
+    x._repr_html_()
 
 
 def test_variable_getter(x):
@@ -71,15 +67,6 @@ def test_variable_isel(x):
         x.isel(first=[0, 1]).labels,
         x.sel(first=[0, 1]).labels,
     )
-
-
-def test_variable_repr(x):
-    x.__repr__()
-    x._repr_html_()
-
-
-def test_variables_repr(m):
-    m.variables.__repr__()
 
 
 def test_variable_upper_getter(z):
@@ -181,18 +168,3 @@ def test_variable_sanitize(x):
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
     assert x.values[9] == -1
-
-
-def test_variables_get_name_by_label(m):
-    assert m.variables.get_name_by_label(4) == "x"
-    assert m.variables.get_name_by_label(12) == "y"
-
-    with pytest.raises(ValueError):
-        m.variables.get_name_by_label(30)
-
-    with pytest.raises(ValueError):
-        m.variables.get_name_by_label("anystring")
-
-
-def test_variables_binaries(m):
-    assert isinstance(m.binaries, linopy.variables.Variables)

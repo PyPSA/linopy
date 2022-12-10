@@ -13,7 +13,6 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
-from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal
 
 
