@@ -645,6 +645,17 @@ class Variables:
         """
         return self[self._non_binary_variables]
 
+    @property
+    def _integer_variables(self):
+        return [v for v in self if self[v].attrs["integer"]]
+
+    @property
+    def integers(self):
+        """
+        Get all integers variables.
+        """
+        return self[self._integer_variables]
+
     def get_name_by_label(self, label):
         """
         Get the variable name of the variable containing the passed label.

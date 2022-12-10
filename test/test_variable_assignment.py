@@ -153,3 +153,20 @@ def test_variable_assignment_binary():
     m.add_variables(coords=coords, binary=True)
 
     assert m.variables.labels.var0.shape == target_shape
+
+
+def test_variable_assignment_integer():
+    m = Model()
+
+    coords = [pd.Index(range(10)), pd.Index(range(10))]
+    m.add_variables(coords=coords, integer=True)
+
+    assert m.variables.labels.var0.shape == target_shape
+
+
+def test_variable_assignment_binary_and_integer_invalid():
+    m = Model()
+
+    coords = [pd.Index(range(10)), pd.Index(range(10))]
+    with pytest.raises(ValueError):
+        m.add_variables(coords=coords, binary=True, integer=True)

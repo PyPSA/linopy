@@ -64,6 +64,7 @@ Variables
     variables.Variables.remove
     variables.Variables.binaries
     variables.Variables.non_binaries
+    variables.Variables.integers
     variables.Variables.iter_ravel
     variables.Variables.ravel
     variables.Variables.get_blocks

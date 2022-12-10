@@ -80,7 +80,7 @@ def model_with_inf():
 
 
 @pytest.fixture
-def milp_model():
+def milp_binary_model():
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -94,7 +94,7 @@ def milp_model():
 
 
 @pytest.fixture
-def milp_model_r():
+def milp_binary_model_r():
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -104,6 +104,34 @@ def milp_model_r():
     m.add_constraints(x + y, ">=", 10)
 
     m.add_objective(2 * x + y)
+    return m
+
+
+@pytest.fixture
+def milp_model():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, 9, name="y", integer=True)
+
+    m.add_constraints(x + y, ">=", 9.5)
+
+    m.add_objective(2 * x + y)
+    return m
+
+
+@pytest.fixture
+def milp_model_r():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x", integer=True)
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, ">=", 10.99)
+
+    m.add_objective(x + 2 * y)
     return m
 
 
@@ -244,17 +272,35 @@ def test_model_with_inf(model_with_inf, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_milp_binary_model(milp_binary_model, solver, io_api):
+    status, condition = milp_binary_model.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (
+        (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
+    ).all()
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_milp_binary_model_r(milp_binary_model_r, solver, io_api):
+    status, condition = milp_binary_model_r.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (
+        (milp_binary_model_r.solution.x == 1) | (milp_binary_model_r.solution.x == 0)
+    ).all()
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_milp_model(milp_model, solver, io_api):
     status, condition = milp_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
-    assert ((milp_model.solution.y == 1) | (milp_model.solution.y == 0)).all()
+    assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
 
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_milp_model_r(milp_model_r, solver, io_api):
     status, condition = milp_model_r.solve(solver, io_api=io_api)
     assert condition == "optimal"
-    assert ((milp_model_r.solution.x == 1) | (milp_model_r.solution.x == 0)).all()
+    assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
 @pytest.mark.parametrize("solver,io_api", params)

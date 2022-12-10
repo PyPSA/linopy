@@ -165,6 +165,31 @@ def binaries_to_file(m, f, log=False):
         del bounds
 
 
+def integers_to_file(m, f, log=False):
+    """
+    Write out integers of a model to a lp file.
+    """
+    f.write("\n\ngeneral\n\n")
+    labels = m.integers.iter_ravel("labels", filter_missings=True)
+
+    if len(m.variables._integer_variables) == 0:
+        return
+
+    iterate = labels
+    if log:
+        iterate = tqdm(iterate, "Writing integer variables.", len(m.integers.labels))
+
+    for l in iterate:
+
+        if not l.size:
+            continue
+
+        bounds = "x" + int_to_str(l)
+        f.write("\n".join(bounds))
+        f.write("\n")
+        del bounds
+
+
 def to_file(m, fn):
     """
     Write out a model to a lp or mps file.
@@ -186,6 +211,7 @@ def to_file(m, fn):
             constraints_to_file(m, f, log)
             bounds_to_file(m, f, log)
             binaries_to_file(m, f, log)
+            integers_to_file(m, f, log)
             f.write("end\n")
 
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -235,7 +261,7 @@ def to_gurobipy(m):
 
     names = "x" + M.vlabels.astype(str).astype(object)
     kwargs = {}
-    if len(m.binaries.labels):
+    if len(m.binaries.labels) + len(m.integers.labels):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
@@ -271,12 +297,15 @@ def to_highspy(m):
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries.labels):
+    if len(m.binaries.labels) + len(m.integers.labels):
         vtypes = M.vtypes
-        blabels = np.arange(len(vtypes))[vtypes == "B"]
-        nbinaries = len(blabels)
-        h.changeColsIntegrality(nbinaries, blabels, ones_like(blabels))
-        h.changeColsBounds(nbinaries, blabels, zeros_like(blabels), ones_like(blabels))
+        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
+        n = len(labels)
+        h.changeColsIntegrality(n, labels, ones_like(labels))
+        if len(m.binaries.labels):
+            labels = np.arange(len(vtypes))[vtypes == "B"]
+            n = len(labels)
+            h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
     h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
     A = M.A.tocsr()
     num_cons = A.shape[0]

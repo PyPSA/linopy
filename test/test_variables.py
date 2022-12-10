@@ -54,6 +54,10 @@ def test_variables_binaries(m):
     assert isinstance(m.binaries, linopy.variables.Variables)
 
 
+def test_variables_integers(m):
+    assert isinstance(m.integers, linopy.variables.Variables)
+
+
 def test_variables_nvars(m):
     assert m.variables.nvars == 14
 
