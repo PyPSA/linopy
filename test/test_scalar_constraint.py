@@ -12,7 +12,7 @@ from linopy import Model
 @pytest.fixture
 def m():
     m = Model()
-    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
     return m
 
 
