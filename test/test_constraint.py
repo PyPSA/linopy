@@ -157,6 +157,11 @@ def test_constraint_vars_setter_with_array(c, x):
     assert_equal(c.vars, x.labels)
 
 
+def test_constraint_vars_setter_invalid(c, x):
+    with pytest.raises(TypeError):
+        c.vars = pd.DataFrame(x.labels)
+
+
 def test_constraint_coeffs_setter(c):
     c.coeffs = 3
     assert (c.coeffs == 3).all()
