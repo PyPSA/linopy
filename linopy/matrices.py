@@ -71,6 +71,7 @@ def get_variable_types(m, filter_missings=True):
 
     'C' -> continuous
     'B -> binary
+    'I -> integer
 
     Parameters
     ----------
@@ -83,7 +84,15 @@ def get_variable_types(m, filter_missings=True):
     labels
         One-dimensional numpy array containing all variable types.
     """
-    specs = {name: "B" if name in m.binaries else "C" for name in m.variables}
+    specs = {}
+    for name in m.variables:
+        if name in m.binaries:
+            specs[name] = "B"
+        elif name in m.integers:
+            specs[name] = "I"
+        else:
+            specs[name] = "C"
+
     specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
     return m.variables.ravel(specs, filter_missings=True)
 

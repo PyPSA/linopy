@@ -346,6 +346,7 @@ class Model:
         name=None,
         mask=None,
         binary=False,
+        integer=False,
         **kwargs,
     ):
         """
@@ -381,6 +382,9 @@ class Model:
         binary : bool
             Whether the new variable is a binary variable which are used for
             Mixed-Integer problems.
+        integer : bool
+            Whether the new variable is a integer variable which are used for
+            Mixed-Integer problems.
         **kwargs :
             Additional keyword arguments are passed to the DataArray creation.
 
@@ -412,6 +416,7 @@ class Model:
           * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
         Attributes:
             binary:   False
+            integer:  False
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -419,6 +424,9 @@ class Model:
 
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
+
+        if binary and integer:
+            raise ValueError("Variable cannot be both binary and integer.")
 
         if not binary:
             lower = DataArray(lower, coords=coords, **kwargs)
@@ -437,7 +445,7 @@ class Model:
             lower = DataArray(-inf, coords=coords, **kwargs)
             upper = DataArray(inf, coords=coords, **kwargs)
 
-        labels = DataArray(coords=coords).assign_attrs(binary=binary)
+        labels = DataArray(coords=coords).assign_attrs(binary=binary, integer=integer)
 
         self.check_force_dim_names(labels)
 
@@ -661,6 +669,13 @@ class Model:
         Get all binary variables.
         """
         return self.variables.binaries
+
+    @property
+    def integers(self):
+        """
+        Get all integer variables.
+        """
+        return self.variables.integers
 
     @property
     def non_binaries(self):
