@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from linopy import Model
+from linopy import EQUAL, GREATER_EQUAL, Model
 
 
 def test_basic_matrices():
@@ -21,7 +21,7 @@ def test_basic_matrices():
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(1 * x + 10 * y, "=", 0)
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
     obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
@@ -40,9 +40,9 @@ def test_basic_matrices_masked():
     mask = pd.Series([True] * 8 + [False, False])
     y = m.add_variables(lower, name="y", mask=mask)
 
-    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    m.add_constraints(y, ">=", 0)
+    m.add_constraints(y, GREATER_EQUAL, 0)
 
     m.add_objective(2 * x + y)
 

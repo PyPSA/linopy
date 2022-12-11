@@ -293,7 +293,7 @@ def run_highs(
     . The full list of solver options is documented at
     https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set .
 
-    Some examplary options are:
+    Some exemplary options are:
 
         * presolve : "choose" by default - "on"/"off" are alternatives.
         * solver :"choose" by default - "simplex"/"ipm" are alternatives.

@@ -16,6 +16,7 @@ from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
 
 from linopy import solvers
+from linopy.constants import EQUAL, GREATER_EQUAL
 
 logger = logging.getLogger(__name__)
 
@@ -358,8 +359,8 @@ def to_block_files(m, fn):
     # Write out rhs
     blocks = cons.ravel("blocks", filter_missings=True)
     rhs = cons.ravel("rhs", filter_missings=True)
-    is_equality = cons.ravel(cons.sign == "=", filter_missings=True)
-    is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == EQUAL, filter_missings=True)
+    is_lower_bound = cons.ravel(cons.sign == GREATER_EQUAL, filter_missings=True)
 
     for n in tqdm(range(N + 2), desc="Write RHS"):
         is_blockn = blocks == n
@@ -379,7 +380,7 @@ def to_block_files(m, fn):
     # Write out constraints
     conblocks = cons.ravel("blocks", "vars", filter_missings=True)
     varblocks = cons.ravel("var_blocks", "vars", filter_missings=True)
-    is_equality = cons.ravel(cons.sign == "=", "vars", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == EQUAL, "vars", filter_missings=True)
 
     is_varblock_0 = varblocks == 0
     is_conblock_L = conblocks == N + 1

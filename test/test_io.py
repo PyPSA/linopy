@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import Model, available_solvers, read_netcdf
+from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.io import int_to_str
 
 
@@ -22,7 +22,7 @@ def m():
     x = m.add_variables(4, pd.Series([8, 10]), name="x")
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]), name="y")
 
-    m.add_constraints(x + y, "<=", 10)
+    m.add_constraints(x + y, LESS_EQUAL, 10)
 
     m.add_objective(2 * x + 3 * y)
 
@@ -116,7 +116,7 @@ def test_to_blocks(tmp_path):
     x = m.add_variables(lower, upper)
     y = m.add_variables(lower, upper)
 
-    m.add_constraints(x + y, "<=", 10)
+    m.add_constraints(x + y, LESS_EQUAL, 10)
 
     m.add_objective(2 * x + 3 * y)
 

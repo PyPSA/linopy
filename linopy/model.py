@@ -18,7 +18,7 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import best_int, replace_by_map
+from linopy.common import best_int, maybe_replace_signs, replace_by_map
 from linopy.constraints import (
     AnonymousConstraint,
     AnonymousScalarConstraint,
@@ -552,11 +552,8 @@ class Model:
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
 
         lhs = lhs.sanitize()
-        sign = DataArray(sign)
+        sign = maybe_replace_signs(DataArray(sign))
         rhs = DataArray(rhs)
-
-        if (sign == "==").any():
-            raise ValueError('Sign "==" not supported, use "=" instead.')
 
         labels = (lhs.vars.chunk() + rhs).sum("_term")
 
@@ -971,7 +968,7 @@ class Model:
         This is the same as
 
         >>> lhs = m.linexpr((c, "x"), (-1, "y"))
-        >>> con = m.add_constraints(lhs, "<=", 5)
+        >>> con = m.add_constraints(lhs, linopy.LESS_EQUAL, 5)
 
         or
 

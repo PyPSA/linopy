@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import EQUAL, Model
 
 target_shape = (10, 10)
 
@@ -47,7 +47,7 @@ def test_coefficient_range():
     x = m.add_variables(lower, upper)
     y = m.add_variables()
 
-    m.add_constraints(1 * x + 10 * y, "=", 0)
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
     assert m.coefficientrange["min"].con0 == 1
     assert m.coefficientrange["max"].con0 == 10
 
@@ -85,7 +85,7 @@ def test_remove_variable():
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(1 * x + 10 * y, "=", 0)
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
     obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
@@ -103,6 +103,6 @@ def test_remove_constraint():
     m = Model()
 
     x = m.add_variables()
-    m.add_constraints(x, "=", 0, name="x")
+    m.add_constraints(x, EQUAL, 0, name="x")
     m.remove_constraints("x")
     assert not len(m.constraints.labels)

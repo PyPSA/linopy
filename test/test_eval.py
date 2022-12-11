@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import GREATER_EQUAL, Model
 from linopy.eval import Expr, separate_coeff_and_var, separate_terms
 
 
@@ -59,7 +59,7 @@ def test_expr_to_constraint_args_kwargs():
     assert len(args) == 3
     lhs, sign, rhs = args
     assert lhs == [("+5", "b"), ("-@ds", "b")]
-    assert sign == ">="
+    assert sign == GREATER_EQUAL
     assert rhs == "2"
 
     args, kwargs = Expr("con : 5*b - @ds * b >= 2").to_constraint_args_kwargs()
@@ -67,7 +67,7 @@ def test_expr_to_constraint_args_kwargs():
     assert len(args) == 3
     lhs, sign, rhs = args
     assert lhs == [("+5", "b"), ("-@ds", "b")]
-    assert sign == ">="
+    assert sign == GREATER_EQUAL
     assert rhs == "2"
     assert kwargs["name"] == "con"
 
