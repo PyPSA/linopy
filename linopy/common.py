@@ -11,6 +11,22 @@ from functools import partialmethod, update_wrapper, wraps
 import numpy as np
 from xarray import DataArray, apply_ufunc, merge
 
+from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
+
+
+def maybe_replace_sign(sign):
+    if sign in SIGNS_alternative:
+        return sign_replace_dict[sign]
+    elif sign in SIGNS:
+        return sign
+    else:
+        raise ValueError(f"Sign {sign} not in {SIGNS} or {SIGNS_alternative}")
+
+
+def maybe_replace_signs(sign):
+    func = np.vectorize(maybe_replace_sign)
+    return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
+
 
 def _merge_inplace(self, attr, da, name, **kwargs):
     """

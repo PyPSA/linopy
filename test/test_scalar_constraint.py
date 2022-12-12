@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import linopy
-from linopy import Model
+from linopy import GREATER_EQUAL, Model
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ def test_scalar_constraint_initialization(m, x):
     c = m.add_constraints(x[0] + x[1] >= 0)
     assert isinstance(c, linopy.constraints.Constraint)
 
-    c = m.add_constraints(x[0], ">=", 0)
+    c = m.add_constraints(x[0], GREATER_EQUAL, 0)
     assert isinstance(c, linopy.constraints.Constraint)
 
-    c = m.add_constraints(x[0] + x[1], ">=", 0)
+    c = m.add_constraints(x[0] + x[1], GREATER_EQUAL, 0)
     assert isinstance(c, linopy.constraints.Constraint)

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from xarray.testing import assert_equal
 
-from linopy import Model
+from linopy import GREATER_EQUAL, Model
 from linopy.solvers import available_solvers
 
 params = [(name, "lp") for name in available_solvers]
@@ -28,8 +28,8 @@ def model():
     x = m.add_variables(name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(2 * x + 6 * y, ">=", 10)
-    m.add_constraints(4 * x + 2 * y, ">=", 3)
+    m.add_constraints(2 * x + 6 * y, GREATER_EQUAL, 10)
+    m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
 
     m.add_objective(2 * y + x)
     return m
@@ -56,8 +56,8 @@ def model_chunked():
     x = m.add_variables(name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(2 * x + 6 * y, ">=", 10)
-    m.add_constraints(4 * x + 2 * y, ">=", 3)
+    m.add_constraints(2 * x + 6 * y, GREATER_EQUAL, 10)
+    m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
 
     m.add_objective(2 * y + x)
     return m
@@ -71,7 +71,7 @@ def model_with_inf():
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
     m.add_constraints(1 * x, "<=", np.inf)
 
     m.objective = 2 * x + y
@@ -87,7 +87,7 @@ def milp_binary_model():
     x = m.add_variables(lower, name="x")
     y = m.add_variables(coords=x.coords, name="y", binary=True)
 
-    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
 
     m.add_objective(2 * x + y)
     return m
@@ -101,7 +101,7 @@ def milp_binary_model_r():
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
 
     m.add_objective(2 * x + y)
     return m
@@ -115,7 +115,7 @@ def milp_model():
     x = m.add_variables(lower, name="x")
     y = m.add_variables(lower, 9, name="y", integer=True)
 
-    m.add_constraints(x + y, ">=", 9.5)
+    m.add_constraints(x + y, GREATER_EQUAL, 9.5)
 
     m.add_objective(2 * x + y)
     return m
@@ -129,7 +129,7 @@ def milp_model_r():
     x = m.add_variables(lower, name="x", integer=True)
     y = m.add_variables(lower, name="y")
 
-    m.add_constraints(x + y, ">=", 10.99)
+    m.add_constraints(x + y, GREATER_EQUAL, 10.99)
 
     m.add_objective(x + 2 * y)
     return m
@@ -143,7 +143,7 @@ def modified_model():
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    c = m.add_constraints(x + y, ">=", 10)
+    c = m.add_constraints(x + y, GREATER_EQUAL, 10)
 
     y.lower = 9
     c.lhs = 2 * x + y
@@ -161,9 +161,9 @@ def masked_variable_model():
     mask = pd.Series([True] * 8 + [False, False])
     y = m.add_variables(lower, name="y", mask=mask)
 
-    m.add_constraints(x + y, ">=", 10)
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    m.add_constraints(y, ">=", 0)
+    m.add_constraints(y, GREATER_EQUAL, 0)
 
     m.add_objective(2 * x + y)
     return m
@@ -178,9 +178,9 @@ def masked_constraint_model():
     y = m.add_variables(lower, name="y")
 
     mask = pd.Series([True] * 8 + [False, False])
-    m.add_constraints(x + y, ">=", 10, mask=mask)
+    m.add_constraints(x + y, GREATER_EQUAL, 10, mask=mask)
     # for the last two entries only the following constraint will be active
-    m.add_constraints(x + y, ">=", 5)
+    m.add_constraints(x + y, GREATER_EQUAL, 5)
 
     m.add_objective(2 * x + y)
     return m
@@ -342,8 +342,8 @@ def test_basis_and_warmstart(tmp_path, model, solver, io_api):
 #     y = m.add_variables(name="y", lower=0, coords=[time])
 #     factor = pd.Series(time, index=time)
 
-#     m.add_constraints(3 * x + 7 * y, ">=", 10 * factor, name="Constraint1")
-#     m.add_constraints(5 * x + 2 * y, ">=", 3 * factor, name="Constraint2")
+#     m.add_constraints(3 * x + 7 * y, GREATER_EQUAL, 10 * factor, name="Constraint1")
+#     m.add_constraints(5 * x + 2 * y, GREATER_EQUAL, 3 * factor, name="Constraint2")
 
 #     shifted = (1 * x).shift(time=1)
 #     lhs = (x - shifted).sel(time=time[1:])

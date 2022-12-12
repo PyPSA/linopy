@@ -12,7 +12,13 @@ import pytest
 from xarray.testing import assert_equal
 
 import linopy
-from linopy import LinearExpression, Model
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, LinearExpression, Model
+from linopy.constants import (
+    long_EQUAL,
+    short_GREATER_EQUAL,
+    short_LESS_EQUAL,
+    sign_replace_dict,
+)
 from linopy.constraints import AnonymousConstraint
 
 
@@ -64,7 +70,7 @@ def test_anonymous_constraint_from_linear_expression_le(x, y):
     expr = 10 * x + y
     con = expr <= 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == "<="
+    assert con.sign.item() == LESS_EQUAL
     assert (con.rhs == 10).all()
 
 
@@ -72,7 +78,7 @@ def test_anonymous_constraint_from_linear_expression_ge(x, y):
     expr = 10 * x + y
     con = expr >= 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == ">="
+    assert con.sign.item() == GREATER_EQUAL
     assert (con.rhs == 10).all()
 
 
@@ -80,28 +86,28 @@ def test_anonymous_constraint_from_linear_expression_eq(x, y):
     expr = 10 * x + y
     con = expr == 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == "="
+    assert con.sign.item() == EQUAL
     assert (con.rhs == 10).all()
 
 
 def test_anonymous_constraint_from_variable_le(x):
     con = x <= 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == "<="
+    assert con.sign.item() == LESS_EQUAL
     assert (con.rhs == 10).all()
 
 
 def test_anonymous_constraint_from_variable_ge(x):
     con = x >= 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == ">="
+    assert con.sign.item() == GREATER_EQUAL
     assert (con.rhs == 10).all()
 
 
 def test_anonymous_constraint_from_variable_eq(x):
     con = x == 10
     assert isinstance(con.lhs, LinearExpression)
-    assert con.sign.item() == "="
+    assert con.sign.item() == EQUAL
     assert (con.rhs == 10).all()
 
 
@@ -140,7 +146,7 @@ def test_constraint_coeffs_getter(c):
 
 
 def test_constraint_sign_getter(c):
-    assert c.sign.item() == ">="
+    assert c.sign.item() == GREATER_EQUAL
 
 
 def test_constraint_rhs_getter(c):
@@ -181,14 +187,19 @@ def test_constraint_lhs_setter_invalid(c):
 
 
 def test_constraint_sign_setter(c):
-    c.sign = "="
-    assert c.sign.item() == "="
+    c.sign = EQUAL
+    assert c.sign.item() == EQUAL
+
+
+def test_constraint_sign_setter_alternative(c):
+    c.sign = long_EQUAL
+    assert c.sign.item() == EQUAL
 
 
 def test_constraint_sign_setter_invalid(c):
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
-        c.sign = "=="
+        c.sign = "asd"
 
 
 def test_constraint_rhs_setter(c):
@@ -211,11 +222,53 @@ def test_constraint_labels_setter_invalid(c):
         c.labels = c.labels
 
 
-def test_constraint_sanitize_zeros(m, x, y):
+def test_constraint_assignment_with_anonymous_constraints(m, x, y):
+    m.add_constraints(x + y == 0, name="c2")
+    assert m.constraints["c2"].vars.notnull().all()
+    assert m.constraints["c2"].coeffs.notnull().all()
+
+
+def test_constraint_assignment_sanitize_zeros(m, x, y):
     m.add_constraints(0 * x + y == 0, name="c2")
     m.constraints.sanitize_zeros()
     assert m.constraints["c2"].vars[0, 0, 0].item() == -1
     assert np.isnan(m.constraints["c2"].coeffs[0, 0, 0].item())
+
+
+def test_constraint_assignment_with_args(m, x, y):
+    lhs = x + y
+    m.add_constraints(lhs, EQUAL, 0, name="c2")
+    assert m.constraints["c2"].vars.notnull().all()
+    assert m.constraints["c2"].coeffs.notnull().all()
+    assert m.constraints["c2"].sign == EQUAL
+    assert m.constraints["c2"].rhs == 0
+
+
+def test_constraint_assignment_with_args_valid_sign(m, x, y):
+    lhs = x + y
+    for i, sign in enumerate([EQUAL, GREATER_EQUAL, LESS_EQUAL]):
+        m.add_constraints(lhs, sign, 0, name=f"c{i}")
+        assert m.constraints[f"c{i}"].vars.notnull().all()
+        assert m.constraints[f"c{i}"].coeffs.notnull().all()
+        assert m.constraints[f"c{i}"].sign == sign
+        assert m.constraints[f"c{i}"].rhs == 0
+
+
+def test_constraint_assignment_with_args_alternative_sign(m, x, y):
+    lhs = x + y
+
+    for i, sign in enumerate([long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL]):
+        m.add_constraints(lhs, sign, 0, name=f"c{i}")
+        assert m.constraints[f"c{i}"].vars.notnull().all()
+        assert m.constraints[f"c{i}"].coeffs.notnull().all()
+        assert m.constraints[f"c{i}"].sign == sign_replace_dict[sign]
+        assert m.constraints[f"c{i}"].rhs == 0
+
+
+def test_constraint_assignment_with_args_invalid_sign(m, x, y):
+    lhs = x + y
+    with pytest.raises(ValueError):
+        m.add_constraints(lhs, ",", 0)
 
 
 def test_constraint_matrix(m):
@@ -236,7 +289,7 @@ def test_constraint_matrix_masked_variables():
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
-    m.add_constraints(x, "=", 0)
+    m.add_constraints(x, EQUAL, 0)
     A = m.constraints.to_matrix(filter_missings=True)
     assert A.shape == (5, 6)
     assert A.shape == (m.ncons, m.nvars)
@@ -254,7 +307,7 @@ def test_constraint_matrix_masked_constraints():
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)])
     m.add_variables()
-    m.add_constraints(x, "=", 0, mask=mask)
+    m.add_constraints(x, EQUAL, 0, mask=mask)
     A = m.constraints.to_matrix(filter_missings=True)
     assert A.shape == (5, 11)
     assert A.shape == (m.ncons, m.nvars)
@@ -272,7 +325,7 @@ def test_constraint_matrix_masked_constraints_and_variables():
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
-    m.add_constraints(x, "=", 0, mask=mask)
+    m.add_constraints(x, EQUAL, 0, mask=mask)
     A = m.constraints.to_matrix(filter_missings=True)
     assert A.shape == (5, 6)
     assert A.shape == (m.ncons, m.nvars)

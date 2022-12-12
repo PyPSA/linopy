@@ -14,6 +14,8 @@ equation_signs = re.compile(r"(>=|==|<=|=)")
 
 disallowed_tokens = ["^", "**"]
 
+from linopy.constants import GREATER_EQUAL
+
 
 class Expr(str):
     """
@@ -97,7 +99,7 @@ class Expr(str):
             return dict(name=exprs[0])
         elif len(exprs) == 3:
             # assume that one bound is given, variable comes first
-            if exprs[1] == ">=":
+            if exprs[1] == GREATER_EQUAL:
                 return dict(name=exprs[0], lower=exprs[2])
             else:
                 return dict(name=exprs[0], upper=exprs[2])

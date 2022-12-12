@@ -24,8 +24,10 @@ from linopy.common import (
     _merge_inplace,
     has_optimized_model,
     is_constant,
+    maybe_replace_signs,
     replace_by_map,
 )
+from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
 @dataclass(repr=False)
@@ -151,9 +153,7 @@ class Constraint:
     @sign.setter
     @is_constant
     def sign(self, value):
-        value = DataArray(value).broadcast_like(self.sign)
-        if (value == "==").any():
-            raise ValueError('Sign "==" not supported, use "=" instead.')
+        value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self.model.constraints.sign[self.name] = value
 
     @property
@@ -321,14 +321,16 @@ class Constraints:
         """
         Get the subset of constraints which are purely inequalities.
         """
-        return self[[n for n, s in self.sign.items() if s in ("<=", ">=")]]
+        return self[
+            [n for n, s in self.sign.items() if s in (LESS_EQUAL, GREATER_EQUAL)]
+        ]
 
     @property
     def equalities(self):
         """
         Get the subset of constraints which are purely equalities.
         """
-        return self[[n for n, s in self.sign.items() if s in ("=", "==")]]
+        return self[[n for n, s in self.sign.items() if s == EQUAL]]
 
     def sanitize_zeros(self):
         """

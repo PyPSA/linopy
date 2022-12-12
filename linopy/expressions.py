@@ -24,6 +24,7 @@ from xarray.core.dataarray import DataArrayCoordinates
 
 from linopy import constraints, variables
 from linopy.common import as_dataarray, forward_as_properties
+from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
@@ -248,13 +249,13 @@ class LinearExpression:
         return self.__div__(other)
 
     def __le__(self, rhs):
-        return constraints.AnonymousConstraint(self, "<=", rhs)
+        return constraints.AnonymousConstraint(self, LESS_EQUAL, rhs)
 
     def __ge__(self, rhs):
-        return constraints.AnonymousConstraint(self, ">=", rhs)
+        return constraints.AnonymousConstraint(self, GREATER_EQUAL, rhs)
 
     def __eq__(self, rhs):
-        return constraints.AnonymousConstraint(self, "=", rhs)
+        return constraints.AnonymousConstraint(self, EQUAL, rhs)
 
     @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
@@ -878,7 +879,7 @@ class ScalarLinearExpression:
                 "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, "<=", other)
+        return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
     def __ge__(self, other):
         if not isinstance(other, (int, np.integer, float)):
@@ -886,7 +887,7 @@ class ScalarLinearExpression:
                 "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, ">=", other)
+        return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
     def __eq__(self, other):
         if not isinstance(other, (int, np.integer, float)):
@@ -894,7 +895,7 @@ class ScalarLinearExpression:
                 "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, "=", other)
+        return constraints.AnonymousScalarConstraint(self, EQUAL, other)
 
     def to_linexpr(self):
         coeffs = xr.DataArray(list(self.coeffs), dims="_term")
