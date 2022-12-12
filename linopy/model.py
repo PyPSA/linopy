@@ -19,6 +19,7 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import best_int, maybe_replace_signs, replace_by_map
+from linopy.constants import SolverStatus, TerminationCondition
 from linopy.constraints import (
     AnonymousConstraint,
     AnonymousScalarConstraint,
@@ -192,8 +193,7 @@ class Model:
 
     @status.setter
     def status(self, value):
-        assert value in ["initialized", "ok", "warning"]
-        self._status = value
+        self._status = SolverStatus[value].value
 
     @property
     def termination_condition(self):
@@ -204,7 +204,7 @@ class Model:
 
     @termination_condition.setter
     def termination_condition(self, value):
-        self._termination_condition = str(value)
+        self._termination_condition = TerminationCondition[value].value
 
     @property
     def objective_value(self):
@@ -1145,7 +1145,7 @@ class Model:
 
         try:
             func = getattr(solvers, f"run_{solver_name}")
-            res = func(
+            result = func(
                 self,
                 io_api,
                 problem_fn,
@@ -1162,30 +1162,18 @@ class Model:
                     if os.path.exists(fn) and not keep_files:
                         os.remove(fn)
 
-        status = res.pop("status")
-        termination_condition = res.pop("termination_condition")
-        obj = res.pop("objective", None)
-        self.solver_model = res.pop("model", None)
+        result.info()
 
-        if status == "ok" and termination_condition == "optimal":
-            logger.info(f" Optimization successful. Objective value: {obj:.2e}")
-        elif status == "warning" and termination_condition == "suboptimal":
-            logger.warning(
-                f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
-            )
-        else:
-            logger.warning(
-                f"Optimization failed with status `{status}` and "
-                f"termination condition `{termination_condition}`."
-            )
-            return status, termination_condition
+        self.objective_value = result.solution.objective
+        self.status = result.status.status.value
+        self.termination_condition = result.status.termination_condition.value
+        self.solver_model = result.solver_model
 
-        self.objective_value = obj
-        self.status = status
-        self.termination_condition = termination_condition
+        if not result.status.is_ok:
+            return result.status.status.value, result.status.termination_condition.value
 
         # map solution and dual to original shape which includes missing values
-        sol = res["solution"]
+        sol = result.solution.primal.copy()
         sol.loc[-1] = nan
 
         for name, labels in self.variables.labels.items():
@@ -1193,8 +1181,8 @@ class Model:
             vals = sol[idx].values.reshape(labels.shape)
             self.solution[name] = xr.DataArray(vals, labels.coords)
 
-        if res["dual"] is not None:
-            dual = res["dual"]
+        if not result.solution.dual.empty:
+            dual = result.solution.dual.copy()
             dual.loc[-1] = nan
 
             for name, labels in self.constraints.labels.items():
@@ -1202,7 +1190,7 @@ class Model:
                 vals = dual[idx].values.reshape(labels.shape)
                 self.dual[name] = xr.DataArray(vals, labels.coords)
 
-        return status, termination_condition
+        return result.status.status.value, result.status.termination_condition.value
 
     def compute_set_of_infeasible_constraints(self):
         """

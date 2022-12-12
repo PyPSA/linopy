@@ -8,9 +8,19 @@ import logging
 import os
 import re
 import subprocess as sub
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple, Union
 
 import pandas as pd
+
+from linopy.constants import (
+    Result,
+    Solution,
+    SolverStatus,
+    Status,
+    TerminationCondition,
+)
 
 available_solvers = []
 
@@ -62,6 +72,21 @@ io_structure = dict(
 )
 
 
+def get_solution(status, func):
+    """
+    Get solution from solver, if status is unknown try to parse it.
+    """
+    if status.is_ok:
+        return func()
+    elif status.status == SolverStatus.unknown:
+        try:
+            logger.warning("Solution status unknown. Trying to parse solution.")
+            return func()
+        except Exception as e:
+            pass
+    return Solution()
+
+
 def set_int_index(series):
     """
     Convert string index to int index.
@@ -78,7 +103,7 @@ def maybe_convert_path(path):
 
 
 def run_cbc(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -102,7 +127,7 @@ def run_cbc(
             "Falling back to `lp`."
         )
 
-    problem_fn = Model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn)
 
     # printingOptions is about what goes in solution file
     command = f"cbc -printingOptions all -import {problem_fn} "
@@ -134,47 +159,41 @@ def run_cbc(
         data = f.readline()
 
     if data.startswith("Optimal - objective value"):
-        status = "ok"
-        termination_condition = "optimal"
+        status = Status.from_termination_condition("optimal")
     elif "Infeasible" in data:
-        status = "warning"
-        termination_condition = "infeasible"
+        status = Status.from_termination_condition("infeasible")
     else:
-        status = "warning"
-        termination_condition = "other"
+        status = Status(SolverStatus.warning, TerminationCondition.unknown)
+    status.legacy_status = data
 
-    if termination_condition != "optimal":
-        return dict(status=status, termination_condition=termination_condition)
+    def get_solver_solution():
 
-    objective = float(data[len("Optimal - objective value ") :])
+        objective = float(data[len("Optimal - objective value ") :])
 
-    with open(solution_fn, "rb") as f:
-        trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
+        with open(solution_fn, "rb") as f:
+            trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
 
-    data = pd.read_csv(
-        io.BytesIO(trimmed_sol_fn),
-        header=None,
-        skiprows=[0],
-        sep=r"\s+",
-        usecols=[1, 2, 3],
-        index_col=0,
-    )
-    variables_b = data.index.str[0] == "x"
+        df = pd.read_csv(
+            io.BytesIO(trimmed_sol_fn),
+            header=None,
+            skiprows=[0],
+            sep=r"\s+",
+            usecols=[1, 2, 3],
+            index_col=0,
+        )
+        variables_b = df.index.str[0] == "x"
 
-    solution = data[variables_b][2].pipe(set_int_index)
-    dual = data[~variables_b][3].pipe(set_int_index)
+        sol = df[variables_b][2].pipe(set_int_index)
+        dual = df[~variables_b][3].pipe(set_int_index)
+        return Solution(sol, dual, objective)
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=solution,
-        dual=dual,
-        objective=objective,
-    )
+    solution = get_solution(status, get_solver_solution)
+
+    return Result(status, solution)
 
 
 def run_glpk(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -194,13 +213,18 @@ def run_glpk(
     For more information on the glpk solver options:
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
+    CONDITION_MAP = {
+        "integer optimal": "optimal",
+        "undefined": "infeasible_or_unbounded",
+    }
+
     if io_api is not None and (io_api != "lp"):
         logger.warning(
             f"IO setting '{io_api}' not available for glpk solver. "
             "Falling back to `lp`."
         )
 
-    problem_fn = Model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn)
 
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --lp {problem_fn} --output {solution_fn}"
@@ -232,49 +256,41 @@ def run_glpk(
 
     info = io.StringIO("".join(read_until_break(f))[:-2])
     info = pd.read_csv(info, sep=":", index_col=0, header=None)[1]
-    termination_condition = info.Status.lower().strip()
+    condition = info.Status.lower().strip()
     objective = float(re.sub(r"[^0-9\.\+\-e]+", "", info.Objective))
 
-    if termination_condition in ["optimal", "integer optimal"]:
-        status = "ok"
-        termination_condition = "optimal"
-    elif termination_condition == "undefined":
-        status = "warning"
-        termination_condition = "infeasible"
-    else:
-        status = "warning"
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
 
-    if termination_condition != "optimal":
-        return dict(status=status, termination_condition=termination_condition)
+    def get_solver_solution() -> Solution:
+        dual_ = io.StringIO("".join(read_until_break(f))[:-2])
+        dual_ = pd.read_fwf(dual_)[1:].set_index("Row name")
+        if "Marginal" in dual_:
+            dual = (
+                pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
+            )
+        else:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
 
-    dual_ = io.StringIO("".join(read_until_break(f))[:-2])
-    dual_ = pd.read_fwf(dual_)[1:].set_index("Row name")
-    if "Marginal" in dual_:
-        dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
-    else:
-        logger.warning("Dual values of MILP couldn't be parsed")
-        dual = None
+        sol = io.StringIO("".join(read_until_break(f))[:-2])
+        sol = (
+            pd.read_fwf(sol)[1:]
+            .set_index("Column name")["Activity"]
+            .astype(float)
+            .pipe(set_int_index)
+        )
+        f.close()
+        return Solution(sol, dual, objective)
 
-    solution = io.StringIO("".join(read_until_break(f))[:-2])
-    solution = (
-        pd.read_fwf(solution)[1:]
-        .set_index("Column name")["Activity"]
-        .astype(float)
-        .pipe(set_int_index)
-    )
-    f.close()
+    solution = get_solution(status, get_solver_solution)
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=solution,
-        dual=dual,
-        objective=objective,
-    )
+    return Result(status, solution)
 
 
 def run_highs(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -303,29 +319,31 @@ def run_highs(
     Returns
     -------
     status : string,
-        "ok" or "warning"
+        SolverStatus.ok or SolverStatus.warning
     termination_condition : string,
         Contains "optimal", "infeasible",
     variables_sol : series
     constraints_dual : series
     objective : float
     """
+    CONDITION_MAP = {}
+
     if warmstart_fn:
         logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
 
     if io_api is None or (io_api == "lp"):
-        Model.to_file(problem_fn)
+        model.to_file(problem_fn)
         h = highspy.Highs()
         h.readModel(maybe_convert_path(problem_fn))
     elif io_api == "direct":
-        h = Model.to_highspy()
+        h = model.to_highspy()
     else:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
         )
 
     if log_fn is None:
-        log_fn = Model.solver_dir / "highs.log"
+        log_fn = model.solver_dir / "highs.log"
     solver_options["log_file"] = maybe_convert_path(log_fn)
     logger.info(f"Log file at {solver_options['log_file']}.")
 
@@ -334,29 +352,35 @@ def run_highs(
 
     h.run()
 
-    termination_condition = h.modelStatusToString(h.getModelStatus()).lower()
-    status = "ok" if "optimal" in termination_condition else "warning"
-    objective = h.getObjectiveValue()
-    solution = h.getSolution()
+    condition = h.modelStatusToString(h.getModelStatus()).lower()
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
 
-    if io_api == "direct":
-        sol = pd.Series(solution.col_value, Model.matrices.vlabels)
-        dual = pd.Series(solution.row_value, Model.matrices.clabels)
-    else:
-        sol = pd.Series(solution.col_value, h.getLp().col_names_).pipe(set_int_index)
-        dual = pd.Series(solution.row_value, h.getLp().row_names_).pipe(set_int_index)
+    def get_solver_solution() -> Solution:
+        objective = h.getObjectiveValue()
+        solution = h.getSolution()
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=sol,
-        dual=dual,
-        objective=objective,
-    )
+        if io_api == "direct":
+            sol = pd.Series(solution.col_value, model.matrices.vlabels)
+            dual = pd.Series(solution.row_value, model.matrices.clabels)
+        else:
+            sol = pd.Series(solution.col_value, h.getLp().col_names_).pipe(
+                set_int_index
+            )
+            dual = pd.Series(solution.row_value, h.getLp().row_names_).pipe(
+                set_int_index
+            )
+
+        return Solution(sol, dual, objective)
+
+    solution = get_solution(status, get_solver_solution)
+
+    return Result(status, solution, h)
 
 
 def run_cplex(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -377,13 +401,15 @@ def run_cplex(
     layered parameters, use a dot as a separator here,
     i.e. `**{'aa.bb.cc' : x}`.
     """
+    CONDITION_MAP = {"integer optimal solution": "optimal"}
+
     if io_api is not None and (io_api != "lp"):
         logger.warning(
             f"IO setting '{io_api}' not available for cplex solver. "
             "Falling back to `lp`."
         )
 
-    Model.to_file(problem_fn)
+    model.to_file(problem_fn)
 
     m = cplex.Cplex()
 
@@ -416,44 +442,40 @@ def run_cplex(
     if log_fn is not None:
         log_f.close()
 
-    termination_condition = m.solution.get_status_string()
-    if "optimal" in termination_condition:
-        status = "ok"
-        termination_condition = "optimal"
-    else:
-        status = "warning"
-        return dict(status=status, termination_condition=termination_condition)
+    condition = m.solution.get_status_string()
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
 
-    if (status == "ok") and basis_fn and is_lp:
-        try:
-            m.solution.basis.write(basis_fn)
-        except cplex.exceptions.errors.CplexSolverError:
-            logger.info("No model basis stored")
+    def get_solver_solution() -> Solution:
+        if basis_fn and is_lp:
+            try:
+                m.solution.basis.write(basis_fn)
+            except cplex.exceptions.errors.CplexSolverError:
+                logger.info("No model basis stored")
 
-    objective = m.solution.get_objective_value()
+        objective = m.solution.get_objective_value()
 
-    solution = pd.Series(m.solution.get_values(), m.variables.get_names())
-    solution = set_int_index(solution)
+        solution = pd.Series(m.solution.get_values(), m.variables.get_names())
+        solution = set_int_index(solution)
 
-    if is_lp:
-        dual = pd.Series(m.solution.get_dual_values(), m.linear_constraints.get_names())
-        dual = set_int_index(dual)
-    else:
-        logger.warning("Dual values of MILP couldn't be parsed")
-        dual = None
+        if is_lp:
+            dual = pd.Series(
+                m.solution.get_dual_values(), m.linear_constraints.get_names()
+            )
+            dual = set_int_index(dual)
+        else:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+        return Solution(solution, dual, objective)
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=solution,
-        dual=dual,
-        objective=objective,
-        model=m,
-    )
+    solution = get_solution(status, get_solver_solution)
+
+    return Result(status, solution, m)
 
 
 def run_gurobi(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -468,6 +490,27 @@ def run_gurobi(
 
     This function communicates with gurobi using the gurubipy package.
     """
+    # see https://www.gurobi.com/documentation/10.0/refman/optimization_status_codes.html
+    CONDITION_MAP = {
+        1: "unknown",
+        2: "optimal",
+        3: "infeasible",
+        4: "infeasible_or_unbounded",
+        5: "unbounded",
+        6: "other",
+        7: "iteration_limit",
+        8: "terminated_by_limit",
+        9: "time_limit",
+        10: "optimal",
+        11: "user_interrupt",
+        12: "other",
+        13: "suboptimal",
+        14: "unknown",
+        15: "terminated_by_limit",
+        16: "internal_solver_error",
+        17: "internal_solver_error",
+    }
+
     # disable logging for this part, as gurobi output is doubled otherwise
     logging.disable(50)
 
@@ -476,12 +519,12 @@ def run_gurobi(
     basis_fn = maybe_convert_path(basis_fn)
 
     if io_api is None or (io_api == "lp"):
-        problem_fn = Model.to_file(problem_fn)
+        problem_fn = model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
         m = gurobipy.read(problem_fn)
     elif io_api == "direct":
         problem_fn = None
-        m = Model.to_gurobipy()
+        m = model.to_gurobipy()
     else:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
@@ -504,53 +547,33 @@ def run_gurobi(
         except gurobipy.GurobiError as err:
             logger.info("No model basis stored. Raised error: ", err)
 
-    Status = gurobipy.GRB.Status
-    statusmap = {
-        getattr(Status, s): s.lower() for s in Status.__dir__() if not s.startswith("_")
-    }
-    termination_condition = statusmap[m.status]
+    condition = m.status
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
 
-    if termination_condition == "optimal":
-        status = "ok"
-    elif termination_condition == "suboptimal":
-        status = "warning"
-    elif termination_condition == "inf_or_unbd":
-        status = "warning"
-        termination_condition = "infeasible or unbounded"
-    else:
-        status = "warning"
+    def get_solver_solution() -> Solution:
+        objective = m.ObjVal
 
-    if termination_condition not in ["optimal", "suboptimal"]:
-        return dict(
-            status=status,
-            termination_condition=termination_condition,
-            model=m,
-        )
+        sol = pd.Series({v.VarName: v.x for v in m.getVars()})
+        sol = set_int_index(sol)
 
-    objective = m.ObjVal
+        try:
+            dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
+            dual = set_int_index(dual)
+        except AttributeError:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
 
-    solution = pd.Series({v.VarName: v.x for v in m.getVars()})
-    solution = set_int_index(solution)
+        return Solution(sol, dual, objective)
 
-    try:
-        dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()})
-        dual = set_int_index(dual)
-    except AttributeError:
-        logger.warning("Dual values of MILP couldn't be parsed")
-        dual = None
+    solution = get_solution(status, get_solver_solution)
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=solution,
-        dual=dual,
-        objective=objective,
-        model=m,
-    )
+    return Result(status, solution, m)
 
 
 def run_xpress(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
@@ -571,13 +594,23 @@ def run_xpress(
     For more information on solver options:
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
+    CONDITION_MAP = {
+        "lp_optimal": "optimal",
+        "mip_optimal": "optimal",
+        "lp_infeasible": "infeasible",
+        "lp_infeas": "infeasible",
+        "mip_infeasible": "infeasible",
+        "lp_unbounded": "unbounded",
+        "mip_unbounded": "unbounded",
+    }
+
     if io_api is not None and (io_api != "lp"):
         logger.warning(
             f"IO setting '{io_api}' not available for xpress solver. "
             "Falling back to `lp`."
         )
 
-    problem_fn = Model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn)
 
     m = xpress.problem()
 
@@ -603,53 +636,37 @@ def run_xpress(
         except Exception as err:
             logger.info("No model basis stored. Raised error: ", err)
 
-    termination_condition = m.getProbStatusString()
+    condition = m.getProbStatusString()
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
 
-    if termination_condition == "mip_optimal" or termination_condition == "lp_optimal":
-        status = "ok"
-        termination_condition = "optimal"
-    elif (
-        termination_condition == "mip_unbounded"
-        or termination_condition == "mip_infeasible"
-        or termination_condition == "lp_unbounded"
-        or termination_condition == "lp_infeasible"
-        or termination_condition == "lp_infeas"
-    ):
-        status = "warning"
-        termination_condition = "infeasible or unbounded"
-    else:
-        status = "warning"
+    def get_solver_solution() -> Solution:
 
-    if termination_condition not in ["optimal"]:
-        return dict(status=status, termination_condition=termination_condition)
+        objective = m.getObjVal()
 
-    objective = m.getObjVal()
+        var = [str(v) for v in m.getVariable()]
 
-    var = [str(v) for v in m.getVariable()]
+        sol = pd.Series(m.getSolution(var), index=var)
+        sol = set_int_index(sol)
 
-    solution = pd.Series(m.getSolution(var), index=var)
-    solution = set_int_index(solution)
+        try:
+            dual = [str(d) for d in m.getConstraint()]
+            dual = pd.Series(m.getDual(dual), index=dual)
+            dual = set_int_index(dual)
+        except xpress.SolverError:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
 
-    try:
-        dual = [str(d) for d in m.getConstraint()]
-        dual = pd.Series(m.getDual(dual), index=dual)
-        dual = set_int_index(dual)
-    except xpress.SolverError:
-        logger.warning("Dual values of MILP couldn't be parsed")
-        dual = None
+        return Solution(sol, dual, objective)
 
-    return dict(
-        status=status,
-        termination_condition=termination_condition,
-        solution=solution,
-        dual=dual,
-        objective=objective,
-        model=m,
-    )
+    solution = get_solution(status, get_solver_solution)
+
+    return Result(status, solution, m)
 
 
 def run_pips(
-    Model,
+    model,
     io_api=None,
     problem_fn=None,
     solution_fn=None,
