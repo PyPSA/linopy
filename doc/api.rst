@@ -161,6 +161,7 @@ Solving
 .. autosummary::
     :toctree: generated/
 
+    model.Model.solve
     constant.SolverStatus
     constant.TerminationCondition
     constant.Status
