@@ -72,9 +72,9 @@ io_structure = dict(
 )
 
 
-def get_solution(status, func):
+def safe_get_solution(status, func):
     """
-    Get solution from solver, if status is unknown try to parse it.
+    Get solution from function call, if status is unknown still try to run it.
     """
     if status.is_ok:
         return func()
@@ -187,7 +187,7 @@ def run_cbc(
         dual = df[~variables_b][3].pipe(set_int_index)
         return Solution(sol, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution)
 
@@ -284,7 +284,7 @@ def run_glpk(
         f.close()
         return Solution(sol, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution)
 
@@ -374,7 +374,7 @@ def run_highs(
 
         return Solution(sol, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution, h)
 
@@ -469,7 +469,7 @@ def run_cplex(
             dual = pd.Series(dtype=float)
         return Solution(solution, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution, m)
 
@@ -567,7 +567,7 @@ def run_gurobi(
 
         return Solution(sol, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution, m)
 
@@ -660,7 +660,7 @@ def run_xpress(
 
         return Solution(sol, dual, objective)
 
-    solution = get_solution(status, get_solver_solution)
+    solution = safe_get_solution(status, get_solver_solution)
 
     return Result(status, solution, m)
 
