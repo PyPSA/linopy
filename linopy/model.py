@@ -19,7 +19,7 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import best_int, maybe_replace_signs, replace_by_map
-from linopy.constants import SolverStatus, TerminationCondition
+from linopy.constants import ModelStatus, TerminationCondition
 from linopy.constraints import (
     AnonymousConstraint,
     AnonymousScalarConstraint,
@@ -193,7 +193,7 @@ class Model:
 
     @status.setter
     def status(self, value):
-        self._status = SolverStatus[value].value
+        self._status = ModelStatus[value].value
 
     @property
     def termination_condition(self):

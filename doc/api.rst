@@ -154,3 +154,15 @@ Solvers
     solvers.run_cplex
     solvers.run_gurobi
     solvers.run_xpress
+
+Solving
+=======
+
+.. autosummary::
+    :toctree: generated/
+
+    constant.SolverStatus
+    constant.TerminationCondition
+    constant.Status
+    constant.Solution
+    constant.Result

@@ -33,7 +33,27 @@ sign_replace_dict = {
 }
 
 
+class ModelStatus(Enum):
+    """
+    Model status.
+
+    The set of possible model status is a superset of the solver status
+    set.
+    """
+
+    ok = "ok"
+    warning = "warning"
+    error = "error"
+    aborted = "aborted"
+    unknown = "unknown"
+    initialized = "initialized"
+
+
 class SolverStatus(Enum):
+    """
+    Solver status.
+    """
+
     ok = "ok"
     warning = "warning"
     error = "error"
@@ -58,6 +78,10 @@ class SolverStatus(Enum):
 
 
 class TerminationCondition(Enum):
+    """
+    Termination condition of the solver.
+    """
+
     # UNKNOWN
     unknown = "unknown"
 
@@ -121,6 +145,10 @@ STATUS_TO_TERMINATION_CONDITION_MAP = {
 
 @dataclass
 class Status:
+    """
+    Status and termination condition of the solver.
+    """
+
     status: SolverStatus
     termination_condition: TerminationCondition
     legacy_status: str = ""
@@ -148,6 +176,10 @@ class Status:
 
 @dataclass
 class Solution:
+    """
+    Solution returned by the solver.
+    """
+
     primal: pd.Series = field(default_factory=pd.Series)
     dual: pd.Series = field(default_factory=pd.Series)
     objective: float = np.nan
@@ -155,6 +187,10 @@ class Solution:
 
 @dataclass
 class Result:
+    """
+    Result of the optimization.
+    """
+
     status: Status
     solution: Optional[Solution] = None
     solver_model: Optional[Any] = None
