@@ -541,7 +541,11 @@ class Constraints:
 
             shape = (ncons, nvars)  # same as model.nvars/ncons but already there
 
-        return coo_matrix((data, (rows, cols)), shape=shape)
+        # Group repeated variables in the same constraint
+        df = pd.DataFrame({"data": data, "rows": rows, "cols": cols})
+        df = df.groupby(["rows", "cols"], as_index=False).sum()
+
+        return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
 
 
 class AnonymousConstraint:

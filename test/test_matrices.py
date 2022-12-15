@@ -50,3 +50,16 @@ def test_basic_matrices_masked():
     assert m.matrices.clabels.shape == m.matrices.sense.shape
     assert m.matrices.vlabels.shape == m.matrices.ub.shape
     assert m.matrices.vlabels.shape == m.matrices.lb.shape
+
+
+def test_matrices_duplicated_variables():
+    m = Model()
+
+    x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+    y = m.add_variables(4, pd.Series([8, 10]), name="y")
+    z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
+    m.add_constraints(x + x + y + y + z + z == 0)
+
+    A = m.matrices.A.todense()
+    assert A[0, 0] == 2
+    assert np.isin(np.unique(A), [0, 2]).all()
