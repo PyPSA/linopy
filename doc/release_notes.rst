@@ -4,6 +4,7 @@ Release Notes
 Upcoming Release
 ----------------
 
+* Linopy now defines and uses a fixed set of solver status and termination codes. This allows for a more consistent and reliable handling of solver results. The new codes are defined in the `linopy.consants` module. The implementation is inspired by https://github.com/0b11001111 and the implementation in this `PyPSA fork <https://github.com/0b11001111/PyPSA/blob/innoptem-lopf/pypsa/linear_program/solver.py>`_
 * Integer variables are now fully supported.
 * Support exporting problems to MPS file via fast highspy MPS-writer.
 * The internal data structure of linopy classes were updated to a safer design. Instead of being defined as inherited xarray classes, the class `Variable`, `LinearExpression` and `Constraint` are now dataclasses with containing the xarray objects in the data field. This allows the package to have more flexible function design and a reduced set of wrapped functions that are sensible to use in the optimization context.
@@ -23,7 +24,7 @@ Version 0.0.14
 
 **New Features**
 
-* Linopy now uses [highspy](https://pypi.org/project/highspy/) as an interface to the HiGHS solver. This enables a direct and fast communication without needing to write an intermediate LP file.
+* Linopy now uses `highspy <https://pypi.org/project/highspy/>` as an interface to the HiGHS solver. This enables a direct and fast communication without needing to write an intermediate LP file.
 
 
 Version 0.0.13
