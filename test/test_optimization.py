@@ -80,6 +80,19 @@ def model_with_inf():
 
 
 @pytest.fixture
+def model_with_duplicated_variables():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(coords=[lower.index], name="x")
+
+    m.add_constraints(x + x, GREATER_EQUAL, 10)
+    m.objective = 1 * x
+
+    return m
+
+
+@pytest.fixture
 def milp_binary_model():
     m = Model()
 
@@ -218,6 +231,13 @@ def test_default_settings_chunked(model_chunked, solver, io_api):
     status, condition = model_chunked.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model_chunked.objective_value, 3.3)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
+    status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
+    assert status == "ok"
+    assert all(model_with_duplicated_variables.solution["x"] == 5)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

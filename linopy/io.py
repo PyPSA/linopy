@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
@@ -102,6 +103,10 @@ def constraints_to_file(m, f, log=False):
 
         if not c.size:
             continue
+        # Group repeated variables in the same constraint
+        df = pd.DataFrame({"coeffs": c, "labels": l, "vars": v})
+        df = df.groupby(["labels", "vars"], as_index=False).sum()
+        c, l, v = df.coeffs.values, df.labels.values, df.vars.values
 
         diff_con = l[:-1] != l[1:]
         new_con_b = concatenate([asarray([True]), diff_con])
@@ -323,6 +328,9 @@ def to_highspy(m):
 def to_block_files(m, fn):
     """
     Write out the linopy model to a block structured output.
+
+    Experimental: This function does not support grouping duplicated variables
+    in one constraint row yet!
     """
     if fn is None:
         fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
@@ -389,7 +397,7 @@ def to_block_files(m, fn):
 
     def filtered(arr, mask, key):
         """
-        Set coefficients to zero for mask, keep others unchanged.
+        Set coefficients to zero where mask is False, keep others unchanged.
 
         PIPS requires this information to set the shape of sub-matrices.
         """

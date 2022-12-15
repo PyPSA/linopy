@@ -700,6 +700,7 @@ class LinearExpression:
 
         if not np.issubdtype(self.vars.dtype, np.integer):
             return self.assign(vars=self.vars.fillna(-1).astype(int))
+
         return self
 
     def equals(self, other: "LinearExpression"):
