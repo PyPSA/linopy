@@ -27,32 +27,10 @@ Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
 The full list of solver options is documented at
 https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set.
 
-**Installation on Linux**
-
-The script work for version HiGHS 1.2. The installation steps are
-
-.. code:: bash
-
-    sudo apt-get install cmake  # if not installed
-    git clone git@github.com:ERGO-Code/HiGHS.git
-    cd HiGHS
-    git checkout v1.2
-    mkdir build
-    cd build
-    cmake ..
-    make
-    ctest
-
-If you have problems with running the tests, make sure you are in a clean environment. If you have `conda` installations in your base environment, you can try building HiGHS from a freshly created `conda` environment.
-
-After the build, add the paths of executables and library to your `.bashrc`:
-
-.. code:: bash
-
-    export PATH="${PATH}:/foo/HiGHS/build/bin"
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/foo/HiGHS/build/lib"
-    source .bashrc
-
+Install it via pip:
+```
+pip install highspy
+```
 
 
 .. PIPS-IMP++

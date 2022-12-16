@@ -124,7 +124,7 @@ class Variable:
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
         if not self.labels.ndim:
-            return ScalarVariable(self.data.item())
+            return ScalarVariable(self.labels.item())
         assert self.labels.ndim == len(
             keys
         ), f"expected {self.labels.ndim} keys, got {len(keys)}."
