@@ -14,23 +14,21 @@ Installing solvers
 
 Please click on the links to get further installation information. In the following we provide additional installation guides for a subset of the above listed solvers.
 
+For installing the solvers which are available via pip, you can simply run
 
-Particular solver instructions
-------------------------------
+.. code:: bash
 
-HiGHS
-~~~~~
+    pip install linopy[solvers]
 
-HiGHS is an "open source serial and parallel solvers for large-scale sparse linear programming".
 
-Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
-The full list of solver options is documented at
-https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set.
+and additionally for the HiGHS solver
 
-Install it via pip:
-```
-pip install highspy
-```
+.. code:: bash
+
+    pip install highspy
+
+
+which is not yet available on all platforms.
 
 
 .. PIPS-IMP++
