@@ -162,8 +162,8 @@ Solving
     :toctree: generated/
 
     model.Model.solve
-    constant.SolverStatus
-    constant.TerminationCondition
-    constant.Status
-    constant.Solution
-    constant.Result
+    constants.SolverStatus
+    constants.TerminationCondition
+    constants.Status
+    constants.Solution
+    constants.Result
