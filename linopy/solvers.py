@@ -51,6 +51,14 @@ if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 
     available_solvers.append("cbc")
 
 try:
+    import pyscipopt as scip
+
+    available_solvers.append("scip")
+except (ModuleNotFoundError, ImportError):
+    pass
+
+
+try:
     import cplex
 
     available_solvers.append("cplex")
@@ -590,6 +598,87 @@ def run_gurobi(
             dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float)
             dual = set_int_index(dual)
         except AttributeError:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+
+    return Result(status, solution, m)
+
+
+def run_scip(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the scip solver.
+
+    This function communicates with scip using the pyscipopt package.
+    """
+    # see ...
+    CONDITION_MAP = {}
+
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if io_api is None or (io_api == "lp"):
+        problem_fn = model.to_file(problem_fn)
+        problem_fn = maybe_convert_path(problem_fn)
+        m = scip.Model()
+        m.readProblem(problem_fn)
+    elif io_api == "direct":
+        raise NotImplementedError("Direct API not implemented for SCIP")
+    else:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+        )
+
+    if solver_options is not None:
+        for key, value in solver_options.items():
+            model.setRealParam(key, value)
+    if log_fn is not None:
+        m.setLogfile(log_fn)
+
+    if warmstart_fn:
+        logger.warning("Warmstart not implemented for SCIP")
+
+    # In order to retrieve the dual values, we need to turn off presolve
+    m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
+
+    m.optimize()
+    logging.disable(1)
+
+    if basis_fn:
+        logger.warning("Basis not implemented for SCIP")
+
+    condition = m.getStatus()
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.getObjVal()
+
+        s = m.getSols()[0]
+        sol = pd.Series({v.name: s[v] for v in m.getVars()})
+        sol = set_int_index(sol)
+
+        cons = m.getConss()
+        if len(cons) != 0:
+            dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
+            dual = dual[dual.index.str.startswith("c")]
+            dual = set_int_index(dual)
+        else:
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
