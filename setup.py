@@ -61,6 +61,7 @@ setup(
         "solvers": [
             "gurobipy",
             "highspy",
+            "pyscipopt",
             "cplex",
             "xpress",
         ],
