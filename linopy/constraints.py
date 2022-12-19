@@ -262,7 +262,8 @@ class Constraints:
         """
         Provide method for the key-autocompletions in IPython.
 
-        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        See
+        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
         For the details.
         """
         return list(self)

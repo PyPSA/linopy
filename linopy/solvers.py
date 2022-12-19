@@ -167,7 +167,6 @@ def run_cbc(
     status.legacy_status = data
 
     def get_solver_solution():
-
         objective = float(data[len("Optimal - objective value ") :])
 
         with open(solution_fn, "rb") as f:
@@ -642,7 +641,6 @@ def run_xpress(
     status.legacy_status = condition
 
     def get_solver_solution() -> Solution:
-
         objective = m.getObjVal()
 
         var = [str(v) for v in m.getVariable()]

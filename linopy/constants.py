@@ -206,7 +206,6 @@ class Result:
         )
 
     def info(self) -> str:
-
         status = self.status
 
         if status.is_ok:
