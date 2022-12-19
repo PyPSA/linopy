@@ -302,6 +302,16 @@ def test_linear_expression_shift(v):
     assert (shifted.vars.loc[:1] == -1).all()
 
 
+def test_linear_expression_diff(v):
+    diff = v.to_linexpr().diff("dim_2")
+    assert diff.nterm == 2
+
+
+def test_linear_expression_diff(v):
+    diff = v.diff("dim_2")
+    assert diff.nterm == 2
+
+
 def test_linear_expression_groupby(v):
     expr = 1 * v
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
