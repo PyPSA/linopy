@@ -1194,10 +1194,14 @@ class Model:
 
     def compute_set_of_infeasible_constraints(self):
         """
-        Print out the infeasible subset of constraints.
+        Compute a set of infeasible constraints.
 
-        This is a prelimary function and is only implemented for gurobi
-        so far.
+        This method requires gurobipy to be running.
+
+        Returns
+        -------
+        labels : xr.DataArray
+            Labels of the infeasible constraints. Labels with value -1 are not in the set.
         """
         import gurobipy
 
@@ -1209,9 +1213,17 @@ class Model:
         solver_model.computeIIS()
         f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
         solver_model.write(f.name)
-        print(f.read().decode())
-        f.close()
-        os.unlink(f.name)
+        labels = []
+        for line in f.readlines():
+            line = line.decode()
+            if line.startswith(" c"):
+                labels.append(int(line.split(":")[0][2:]))
+        cons = self.constraints.labels.isin(np.array(labels))
+        subset = self.constraints.labels.where(cons, -1)
+        subset = subset.drop_vars(
+            [k for (k, v) in (subset == -1).all().items() if v.item()]
+        )
+        return subset
 
     to_netcdf = to_netcdf
 
