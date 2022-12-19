@@ -334,11 +334,10 @@ class Constraints:
 
     def sanitize_zeros(self):
         """
-        Filter out terms with zero coefficient.
+        Filter out terms with zero and close-to-zero coefficient.
         """
         for name in self:
-            term_dim = name + "_term"
-            not_zero = self.coeffs[name] != 0
+            not_zero = abs(self.coeffs[name]) > 1e-10
             self.vars[name] = self.vars[name].where(not_zero, -1)
             self.coeffs[name] = self.coeffs[name].where(not_zero)
 

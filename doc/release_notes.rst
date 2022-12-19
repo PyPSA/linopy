@@ -10,6 +10,8 @@ Upcoming Release
 * Support exporting problems to MPS file via fast highspy MPS-writer.
 * The internal data structure of linopy classes were updated to a safer design. Instead of being defined as inherited xarray classes, the class `Variable`, `LinearExpression` and `Constraint` are now dataclasses with containing the xarray objects in the data field. This allows the package to have more flexible function design and a reduced set of wrapped functions that are sensible to use in the optimization context.
 * The class `Variable` and `LinearExpression` have new functions `groupby` and `rolling` imitating the corresponding xarray functions but with safe type inheritance and application of appended operations.
+* Coefficients very close to zero (`< 1e-10`) are now automatically set to zero to avoid numerical issues with solvers.
+* Coefficients of variables are no also allowed to be `np.nan`. These coefficients are ignored in the LP file writing.
 
 
 Version 0.0.15

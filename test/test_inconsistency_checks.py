@@ -40,20 +40,6 @@ def test_nan_in_variable_upper():
         m.solve()
 
 
-def test_nan_in_constraint_coeffs():
-    m = Model()
-
-    x = m.add_variables(name="x")
-    y = m.add_variables(name="y")
-
-    m.add_constraints(np.nan * x + 6 * y, GREATER_EQUAL, 10)
-    m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
-
-    m.add_objective(2 * y + x)
-    with pytest.raises(ValueError):
-        m.solve()
-
-
 def test_nan_in_constraint_sign():
     m = Model()
 
