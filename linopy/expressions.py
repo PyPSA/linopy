@@ -495,6 +495,26 @@ class LinearExpression:
         cond = _expr_unwrap(cond)
         return self.__class__(self.data.where(cond, other=other, **kwargs))
 
+    def diff(self, dim, n=1):
+        """
+        Calculate the n-th order discrete difference along given axis.
+
+        This operation call ``xarray.Dataset.diff`` but ensures preserving the
+        linopy.LinearExpression type.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to calculate the finite difference.
+        n : int, optional
+            The number of times values are differenced.
+
+        Returns
+        -------
+        linopy.LinearExpression
+        """
+        return self - self.shift({dim: n})
+
     def groupby(
         self,
         group,
@@ -532,6 +552,7 @@ class LinearExpression:
         )
         return LinearExpressionGroupby(groups)
 
+    @deprecated("0.1.0", "0.1.2", details="Use groupby (followed by sum) instead.")
     def groupby_sum(self, group):
         """
         Sum expression over groups.
@@ -597,6 +618,7 @@ class LinearExpression:
         )
         return LinearExpressionRolling(rolling)
 
+    @deprecated("0.1.0", "0.1.2", details="Use rolling (followed by sum) instead.")
     def rolling_sum(self, **kwargs):
         """
         Rolling sum of the linear expression.

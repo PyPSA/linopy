@@ -442,6 +442,26 @@ class Variable:
         """
         return self.to_linexpr().sum(dims)
 
+    def diff(self, dim, n=1):
+        """
+        Calculate the n-th order discrete difference along the given dimension.
+
+        This function works exactly in the same way as ``LinearExpression.diff()``.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to calculate the finite difference.
+        n : int, default: 1
+            The number of times values are differenced.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            Finite difference expression.
+        """
+        return self.to_linexpr().diff(dim, n)
+
     def where(self, cond, other=-1, **kwargs):
         """
         Filter variables based on a condition.
