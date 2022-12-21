@@ -441,11 +441,19 @@ class Model:
                         " while the broadcasted array is of size > 1."
                     )
         else:
+            # check if lower and upper and non-defaults
+            if (lower != -inf) or (upper != inf):
+                raise ValueError(
+                    "Argument lower and upper not valid for binary variables."
+                )
             # for general compatibility when ravelling all values set non-nan
             lower = DataArray(-inf, coords=coords, **kwargs)
             upper = DataArray(inf, coords=coords, **kwargs)
 
         labels = DataArray(coords=coords).assign_attrs(binary=binary, integer=integer)
+        # ensure order of dims is the same
+        lower = lower.transpose(*[d for d in labels.dims if d in lower.dims])
+        upper = upper.transpose(*[d for d in labels.dims if d in upper.dims])
 
         self.check_force_dim_names(labels)
 

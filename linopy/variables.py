@@ -14,7 +14,7 @@ import dask
 import numpy as np
 import pandas as pd
 from deprecation import deprecated
-from numpy import floating, inf, issubdtype
+from numpy import arange, floating, hstack, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
 from xarray.core import indexing, utils
 
@@ -156,24 +156,78 @@ class Variable:
 
     def __repr__(self):
         """
-        Get the string representation of the variables.
+        Print the variable arrays.
         """
-        data_string = "Variable labels:\n" + self.labels.__repr__().split("\n", 1)[1]
-        extend_line = "-" * len(self.name)
-        return (
-            f"Variable '{self.name}':\n"
-            f"------------{extend_line}\n\n"
-            f"{data_string}"
-        )
+        lower = self.lower.values
+        upper = self.upper.values
+        labels = self.labels.values
+        dims = self.dims
+        ndim = self.ndim
+        name = self.name
+        size = labels.size
+        vartype = self.type
 
-    def _repr_html_(self):
-        """
-        Get the html representation of the variables.
-        """
-        # return self.__repr__()
-        data_string = self.labels._repr_html_()
-        data_string = data_string.replace("xarray.DataArray", "linopy.Variable")
-        return data_string
+        # don't loop over all values if not necessary
+        if size == 1:
+            header = f"{vartype}\n{'-' * len(vartype)}"
+            lower = lower.item()
+            upper = upper.item()
+            label = labels.item()
+            label_string = f"label: {label}" if label != -1 else "masked"
+            if vartype == "Binary Variable":
+                return f"{header}\n {name} \t| {label_string}"
+            else:
+                return f"{header}\n{lower} ≤ {name} ≤ {upper} \t| {label_string}"
+
+        # print only a few values
+        max_print = 14
+        split_at = max_print // 2
+        if size > max_print:
+            values_to_print = np.hstack(
+                [np.arange(split_at), np.arange(size - split_at, size)]
+            )
+        else:
+            values_to_print = np.arange(size)
+
+        # create string, we use numpy to get the indexes
+        data_string = ""
+        idx = np.unravel_index(values_to_print, labels.shape)
+        indexes = np.stack(idx)
+        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+
+        # loop over all values to print
+        for i in range(len(values_to_print)):
+            # this is the index for the labels array
+            ix = tuple(indexes[..., i])
+            # lower and upper bounds might only be defined for some dimensions
+            lix = tuple(ix[i] for i in range(ndim) if dims[i] in self.lower.dims)
+            uix = tuple(ix[i] for i in range(ndim) if dims[i] in self.upper.dims)
+
+            # create coordinate string
+            coord = ", ".join([str(c[i]) for c in coords])
+            var = f"{name}[{coord}]"
+            label = labels[ix]
+
+            label_string = f"label: {label}" if label != -1 else "masked"
+            if vartype == "Binary Variable":
+                data_string += f"\n {var}  | {label_string}"
+            else:
+                data_string += (
+                    f"\n{lower[lix]} ≤  {var} ≤ {upper[uix]} \t| {label_string}"
+                )
+
+            if i == split_at - 1 and size > max_print:
+                data_string += "\n\t\t..."
+
+        # create shape string
+        shape_string = ", ".join(
+            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+        )
+        shape_string = f"({shape_string})"
+        header = f"{vartype} {shape_string}\n" + "-" * (
+            len(vartype) + len(shape_string) + 1
+        )
+        return f"{header}\n{data_string}"
 
     def __neg__(self):
         """
@@ -356,6 +410,23 @@ class Variable:
         Rolling sum of variable.
         """
         return self.to_linexpr().rolling_sum(**kwargs)
+
+    @property
+    def type(self):
+        """
+        Type of the variable.
+
+        Returns
+        -------
+        str
+            Type of the variable.
+        """
+        if self.attrs["integer"]:
+            return "Integer Variable"
+        elif self.attrs["binary"]:
+            return "Binary Variable"
+        else:
+            return "Continuous Variable"
 
     @property
     @has_assigned_model
