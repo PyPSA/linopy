@@ -166,23 +166,56 @@ class LinearExpression:
         """
         Get the string representation of the expression.
         """
-        ds_string = self.data.__repr__().split("\n", 1)[1]
-        ds_string = ds_string.replace("Data variables:\n", "Data:\n")
-        nterm = getattr(self, "nterm", 0)
-        return (
-            f"Linear Expression with {nterm} term(s):\n"
-            f"----------------------------------\n\n{ds_string}"
-        )
+        size = self.size
+        nterm = self.nterm
+        nexprs = size // nterm
 
-    def _repr_html_(self):
-        """
-        Get the html representation of the expression.
-        """
-        # return self.__repr__()
-        ds_string = self.data._repr_html_()
-        ds_string = ds_string.replace("Data variables:\n", "Data:\n")
-        ds_string = ds_string.replace("xarray.Dataset", "linopy.LinearExpression")
-        return ds_string
+        # don't loop over all values if not necessary
+        if size == nterm:
+            expr = list(zip(self.coeffs.values, self.vars.values))
+            expr_string = " ".join(f"{coeff:+} χ[{var}]" for coeff, var in expr)
+            header = "Linear Expression:\n------------------"
+            return f"{header}\n{expr_string}"
+
+        # print only a few values
+        max_print = 14
+        split_at = max_print // 2
+        if nexprs > max_print:
+            values_to_print = np.hstack(
+                [np.arange(split_at), np.arange(nexprs - split_at, nexprs)]
+            )
+        else:
+            values_to_print = np.arange(nexprs)
+
+        # create string, we use numpy to get the indexes
+        idx = np.unravel_index(values_to_print, self.shape[:-1])
+        indexes = np.stack(idx)
+        coords = [
+            self.indexes[dim][idx[i]]
+            for i, dim in enumerate(self.vars.dims)
+            if not dim.startswith("_")
+        ]
+
+        # loop over all values to print
+        data_string = ""
+        for i in range(len(values_to_print)):
+            ix = tuple(indexes[..., i])
+            coord = ", ".join([str(c[i]) for c in coords])
+
+            expr = list(zip(self.coeffs.values[ix], self.vars.values[ix]))
+            data_string += f"\n[{coord}]:  "
+            data_string += " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+
+            if i == split_at - 1 and nexprs > max_print:
+                data_string += "\n\t\t..."
+
+        # create shape string
+        shape_string = ", ".join(
+            [f"{k}: {v}" for k, v in self.dims.items() if not k.startswith("_")]
+        )
+        shape_string = f"({shape_string})"
+        header = f"Linear Expression {shape_string}:\n{'-' * (19 + len(shape_string))}"
+        return f"{header}\n{data_string}"
 
     def __add__(self, other):
         """

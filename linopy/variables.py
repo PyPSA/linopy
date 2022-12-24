@@ -173,7 +173,7 @@ class Variable:
             lower = lower.item()
             upper = upper.item()
             label = labels.item()
-            label_string = f"label: {label}" if label != -1 else "masked"
+            label_string = f"χ[{label}]" if label != -1 else "masked"
             if vartype == "Binary Variable":
                 return f"{header}\n {name} \t| {label_string}"
             else:
@@ -208,7 +208,7 @@ class Variable:
             var = f"{name}[{coord}]"
             label = labels[ix]
 
-            label_string = f"label: {label}" if label != -1 else "masked"
+            label_string = f"χ[{label}]" if label != -1 else "masked"
             if vartype == "Binary Variable":
                 data_string += f"\n {var}  | {label_string}"
             else:
