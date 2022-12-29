@@ -22,15 +22,22 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     _merge_inplace,
+    forward_as_properties,
     has_optimized_model,
+    head_tail_range,
     is_constant,
     maybe_replace_signs,
+    print_single_constraint_label,
+    print_single_expression,
     replace_by_map,
 )
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
 @dataclass(repr=False)
+@forward_as_properties(
+    lhs=["attrs", "coords", "dims", "indexes", "nterm", "ndim", "size"]
+)
 class Constraint:
     """
     Projection to a single constraint in a model.
@@ -39,29 +46,60 @@ class Constraint:
     functions can be applied to it.
     """
 
-    name: str
-    model: Any
+    labels: DataArray = field(default_factory=DataArray)
+    model: Any = None
+    name: str = None
 
     def __repr__(self):
         """
-        Get the string representation of the constraints.
+        Get the string representation of the Constraint.
         """
-        data_string = "Constraint labels:\n" + self.labels.__repr__().split("\n", 1)[1]
-        extend_line = "-" * len(self.name)
-        return (
-            f"Constraint '{self.name}':\n"
-            f"--------------{extend_line}\n\n"
-            f"{data_string}"
-        )
 
-    def _repr_html_(self):
-        """
-        Get the html representation of the variables.
-        """
-        # return self.__repr__()
-        data_string = self.labels._repr_html_()
-        data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
-        return data_string
+        # return single if only one exist
+        if self.size == self.nterm:
+            expr_string = print_single_expression(
+                self.lhs.coeffs.values, self.lhs.vars.values
+            )
+            label_string = print_single_constraint_label(self.labels)
+            header = "Constraint:\n-----------"
+            return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()} \t| {label_string}"
+
+        # print only a few values
+        nexprs = self.size // self.nterm
+        max_prints = 14
+        split_at = max_prints // 2
+        to_print = head_tail_range(nexprs, max_prints)
+        coords = self.lhs.unravel_coords(to_print)
+
+        # loop over all values to print
+        data_string = ""
+        for i, coord in enumerate(coords):
+            # sign and rhs might only be defined for some dimensions
+            sign_coord = tuple(
+                c for i, c in enumerate(coord) if list(self.dims)[i] in self.sign.dims
+            )
+            rhs_coord = tuple(
+                c for i, c in enumerate(coord) if list(self.dims)[i] in self.rhs.dims
+            )
+
+            coord_string = "[" + ", ".join([str(c) for c in coord]) + "]"
+            expr_string = print_single_expression(
+                self.coeffs[coord].values, self.vars[coord].values
+            )
+            sign_string = f"{self.sign[sign_coord].values}"
+            rhs_string = f"{self.rhs[rhs_coord].values}"
+            label_string = print_single_constraint_label(self.labels[coord].values)
+
+            data_string += f"\n{coord_string}:  {expr_string} {sign_string} {rhs_string} | {label_string}"
+
+            if i == split_at - 1 and nexprs > max_prints:
+                data_string += "\n\t\t..."
+
+        # create shape string
+        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
+        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
+        header = f"Constraint {shape_string}:\n{'-' * (12 + len(shape_string))}"
+        return f"{header}\n{data_string}"
 
     @deprecated(details="Use the `labels` property instead of `to_array`")
     def to_array(self):
@@ -69,14 +107,6 @@ class Constraint:
         Convert the variable array to a xarray.DataArray.
         """
         return self.labels
-
-    @property
-    def labels(self):
-        return self.model.constraints.labels[self.name]
-
-    @labels.setter
-    def labels(self, value):
-        raise RuntimeError("Labels are read-only")
 
     @property
     def coeffs(self):
@@ -242,7 +272,7 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return Constraint(names, model=self.model)
+            return Constraint(self.labels[names], model=self.model, name=names)
 
         return self.__class__(
             self.labels[names],
@@ -548,58 +578,82 @@ class Constraints:
         return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
 
 
+@dataclass(repr=False, frozen=True)
+@forward_as_properties(
+    lhs=["attrs", "coords", "dims", "indexes", "nterm", "ndim", "size"]
+)
 class AnonymousConstraint:
     """
     A constraint container used for storing multiple constraint arrays.
     """
 
-    __slots__ = ("_lhs", "_sign", "_rhs")
+    lhs: "expressions.LinearExpression"
+    sign: Union[DataArray, str]
+    rhs: Union[DataArray, float, int]
 
-    def __init__(self, lhs, sign, rhs):
+    def __post_init__(self):
         """
         Initialize a anonymous constraint.
         """
-        if isinstance(rhs, (variables.Variable, expressions.LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
-        lhs, self._rhs = xr.align(lhs.data, DataArray(rhs))
-        self._lhs = expressions.LinearExpression(lhs)
-        self._sign = DataArray(sign)
-
-    @property
-    def lhs(self):
-        return self._lhs
-
-    @property
-    def sign(self):
-        return self._sign
-
-    @property
-    def rhs(self):
-        return self._rhs
+        if isinstance(self.rhs, (variables.Variable, expressions.LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(self.rhs)}).")
+        lhs_data, rhs = xr.align(self.lhs.data, DataArray(self.rhs))
+        object.__setattr__(self, "lhs", expressions.LinearExpression(lhs_data))
+        object.__setattr__(self, "rhs", rhs)
+        object.__setattr__(self, "sign", DataArray(self.sign))
 
     def __repr__(self):
         """
-        Get the string representation of the expression.
+        Get the string representation of the Anonymous Constraint.
         """
-        lhs_string = self.lhs.to_dataset().__repr__()  # .split("\n", 1)[1]
-        lhs_string = lhs_string.split("Data variables:\n", 1)[1]
-        lhs_string = lhs_string.replace("    coeffs", "coeffs")
-        lhs_string = lhs_string.replace("    vars", "vars")
-        if self.sign.size == 1:
-            sign_string = self.sign.item()
-        else:
-            sign_string = self.sign.__repr__().split("\n", 1)[1]
-        if self.rhs.size == 1:
-            rhs_string = self.rhs.item()
-        else:
-            rhs_string = self.rhs.__repr__().split("\n", 1)[1]
-        return (
-            f"Anonymous Constraint:\n"
-            f"---------------------\n"
-            f"\n{lhs_string}"
-            f"\n{sign_string}"
-            f"\n{rhs_string}"
+
+        # return single if only one exist
+        if self.size == self.nterm:
+            expr_string = print_single_expression(
+                self.lhs.coeffs.values, self.lhs.vars.values
+            )
+            header = "AnonymousConstraint:\n-----------"
+            return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
+
+        # print only a few values
+        nexprs = self.size // self.nterm
+        max_prints = 14
+        split_at = max_prints // 2
+        to_print = head_tail_range(nexprs, max_prints)
+        coords = self.lhs.unravel_coords(to_print)
+
+        # loop over all values to print
+        data_string = ""
+        for i, coord in enumerate(coords):
+            # sign and rhs might only be defined for some dimensions
+            sign_coord = tuple(
+                c for i, c in enumerate(coord) if list(self.dims)[i] in self.sign.dims
+            )
+            rhs_coord = tuple(
+                c for i, c in enumerate(coord) if list(self.dims)[i] in self.rhs.dims
+            )
+
+            coord_string = "[" + ", ".join([str(c) for c in coord]) + "]"
+            expr_string = print_single_expression(
+                self.lhs.coeffs[coord].values, self.lhs.vars[coord].values
+            )
+            sign_string = f"{self.sign[sign_coord].values}"
+            rhs_string = f"{self.rhs[rhs_coord].values}"
+
+            data_string += (
+                f"\n{coord_string}:  {expr_string} {sign_string} {rhs_string}"
+            )
+
+            if i == split_at - 1 and nexprs > max_prints:
+                data_string += "\n\t\t..."
+
+        # create shape string
+        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
+        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
+        header = (
+            f"AnonymousConstraint {shape_string}:\n{'-' * (21 + len(shape_string))}"
         )
+        return f"{header}\n{data_string}"
 
     def from_rule(model, rule, coords):
         """

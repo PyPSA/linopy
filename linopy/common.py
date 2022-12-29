@@ -9,6 +9,7 @@ This module contains commonly used functions.
 from functools import partialmethod, update_wrapper, wraps
 
 import numpy as np
+from numpy import arange, hstack
 from xarray import DataArray, apply_ufunc, merge
 
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
@@ -72,6 +73,44 @@ def best_int(max_value):
     for t in (np.int8, np.int16, np.int32, np.int64):
         if max_value <= np.iinfo(t).max:
             return t
+
+
+def head_tail_range(stop, max_number_of_values=14):
+    split_at = max_number_of_values // 2
+    if stop > max_number_of_values:
+        return hstack([arange(split_at), arange(stop - split_at, stop)])
+    else:
+        return arange(stop)
+
+
+def print_single_variable_label(label):
+    """
+    Print single variable label.
+    """
+    return f"χ[{label}]" if label != -1 else "masked"
+
+
+def print_single_constraint_label(label):
+    """
+    Print single constraint label.
+    """
+    return f"γ[{label}]" if label != -1 else "masked"
+
+
+def print_single_expression(c, v):
+    """
+    Print a single linear expression based on the coefficients and variables.
+    """
+    # catch case that to many terms would be printed
+    if len(c) > 6:
+        expr = list(zip(c[:3], v[:3]))
+        res = " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+        res += "... "
+        expr = list(zip(c[-3:], v[-3:]))
+        res += " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+        return res
+    expr = list(zip(c, v))
+    return " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
 
 
 def has_assigned_model(func):

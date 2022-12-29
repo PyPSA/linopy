@@ -18,12 +18,17 @@ import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
 from deprecation import deprecated
-from numpy import array, nan
+from numpy import arange, array, hstack, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 
 from linopy import constraints, variables
-from linopy.common import as_dataarray, forward_as_properties
+from linopy.common import (
+    as_dataarray,
+    forward_as_properties,
+    head_tail_range,
+    print_single_expression,
+)
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
@@ -99,7 +104,7 @@ class LinearExpressionRolling:
 
 
 @dataclass(repr=False)
-@forward_as_properties(data=["attrs", "coords", "dims", "indexes"])
+@forward_as_properties(data=["attrs", "coords", "indexes"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -162,6 +167,15 @@ class LinearExpression:
 
         self.data = ds
 
+    def unravel_coords(self, index):
+        idx = np.unravel_index(index, self.shape[:-1])
+        coords = [
+            self.indexes[dim][idx[i]]
+            for i, dim in enumerate(self.vars.dims)
+            if not dim.startswith("_")
+        ]
+        return list(zip(*coords))
+
     def __repr__(self):
         """
         Get the string representation of the expression.
@@ -172,48 +186,32 @@ class LinearExpression:
 
         # don't loop over all values if not necessary
         if size == nterm:
-            expr = list(zip(self.coeffs.values, self.vars.values))
-            expr_string = " ".join(f"{coeff:+} χ[{var}]" for coeff, var in expr)
-            header = "Linear Expression:\n------------------"
-            return f"{header}\n{expr_string}"
+            expr_string = print_single_expression(self.coeffs.values, self.vars.values)
+            return f"Linear Expression:\n------------------\n{expr_string}"
 
         # print only a few values
-        max_print = 14
-        split_at = max_print // 2
-        if nexprs > max_print:
-            values_to_print = np.hstack(
-                [np.arange(split_at), np.arange(nexprs - split_at, nexprs)]
-            )
-        else:
-            values_to_print = np.arange(nexprs)
-
-        # create string, we use numpy to get the indexes
-        idx = np.unravel_index(values_to_print, self.shape[:-1])
-        indexes = np.stack(idx)
-        coords = [
-            self.indexes[dim][idx[i]]
-            for i, dim in enumerate(self.vars.dims)
-            if not dim.startswith("_")
-        ]
+        max_prints = 14
+        split_at = max_prints // 2
+        to_print = head_tail_range(nexprs, max_prints)
+        coords = self.unravel_coords(to_print)
 
         # loop over all values to print
         data_string = ""
-        for i in range(len(values_to_print)):
-            ix = tuple(indexes[..., i])
-            coord = ", ".join([str(c[i]) for c in coords])
+        for i, coord in enumerate(coords):
 
-            expr = list(zip(self.coeffs.values[ix], self.vars.values[ix]))
-            data_string += f"\n[{coord}]:  "
-            data_string += " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+            coord_string = "[" + ", ".join([str(c) for c in coord]) + "]"
+            expr_string = print_single_expression(
+                self.coeffs[coord].values, self.vars[coord].values
+            )
 
-            if i == split_at - 1 and nexprs > max_print:
+            data_string += f"\n{coord_string}:  {expr_string}"
+
+            if i == split_at - 1 and nexprs > max_prints:
                 data_string += "\n\t\t..."
 
         # create shape string
-        shape_string = ", ".join(
-            [f"{k}: {v}" for k, v in self.dims.items() if not k.startswith("_")]
-        )
-        shape_string = f"({shape_string})"
+        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
+        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
         header = f"Linear Expression {shape_string}:\n{'-' * (19 + len(shape_string))}"
         return f"{header}\n{data_string}"
 
@@ -296,6 +294,11 @@ class LinearExpression:
         Convert the expression to a xarray.Dataset.
         """
         return self.data
+
+    @property
+    def dims(self):
+        # do explicitly sort as in vars (same as in coeffs)
+        return {k: self.data.dims[k] for k in self.vars.dims}
 
     @property
     def vars(self):
