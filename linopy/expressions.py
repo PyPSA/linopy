@@ -38,7 +38,7 @@ def exprwrap(method, *default_args, **new_default_kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return expr.__class__(
-            method(_expr_unwrap(expr), *default_args, *args, **kwargs)
+            expr.model, method(_expr_unwrap(expr), *default_args, *args, **kwargs)
         )
 
     _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
@@ -66,10 +66,11 @@ class LinearExpressionGroupby:
     """
 
     groupby: xr.core.groupby.DatasetGroupBy
+    model: Any
 
     def map(self, func, shortcut=False, args=(), **kwargs):
         return LinearExpression(
-            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs)
+            self.model, self.groupby.map(func, shortcut=shortcut, args=args, **kwargs)
         )
 
     def sum(self, **kwargs):
@@ -92,6 +93,7 @@ class LinearExpressionRolling:
     """
 
     rolling: xr.core.rolling.DataArrayRolling
+    model: Any
 
     def sum(self, **kwargs):
         ds = (
@@ -100,10 +102,9 @@ class LinearExpressionRolling:
             .stack(_term=["_stacked_term", "_rolling_term"])
             .reset_index("_term", drop=True)
         )
-        return LinearExpression(ds)
+        return LinearExpression(self.model, ds)
 
 
-@dataclass(repr=False)
 @forward_as_properties(data=["attrs", "coords", "indexes"])
 class LinearExpression:
     """
@@ -143,15 +144,14 @@ class LinearExpression:
     <class 'linopy.expressions.LinearExpression'>
     """
 
-    data: Dataset
-    __slots__ = ("data",)
+    __slots__ = ("data", "model")
 
     fill_value = {"vars": -1, "coeffs": np.nan}
 
     __array_ufunc__ = None
     __array_priority__ = 10000
 
-    def __init__(self, data_vars=None, coords=None, attrs=None):
+    def __init__(self, model, data_vars=None, coords=None, attrs=None):
         ds = Dataset(data_vars, coords, attrs)
 
         if not len(ds):
@@ -165,6 +165,7 @@ class LinearExpression:
         (ds,) = xr.broadcast(ds)
         ds = ds.transpose(..., "_term")
 
+        self.model = model
         self.data = ds
 
     def unravel_coords(self, index):
@@ -180,13 +181,13 @@ class LinearExpression:
         """
         Get the string representation of the expression.
         """
-        size = self.size
-        nterm = self.nterm
-        nexprs = size // nterm
+        nexprs = self.size // self.nterm
 
         # don't loop over all values if not necessary
-        if size == nterm:
-            expr_string = print_single_expression(self.coeffs.values, self.vars.values)
+        if self.size == self.nterm:
+            expr_string = print_single_expression(
+                self.coeffs.values, self.vars.values, self.model
+            )
             return f"Linear Expression:\n------------------\n{expr_string}"
 
         # print only a few values
@@ -201,7 +202,7 @@ class LinearExpression:
 
             coord_string = "[" + ", ".join([str(c) for c in coord]) + "]"
             expr_string = print_single_expression(
-                self.coeffs[coord].values, self.vars[coord].values
+                self.coeffs[coord].values, self.vars[coord].values, self.model
             )
 
             data_string += f"\n{coord_string}:  {expr_string}"
@@ -217,29 +218,25 @@ class LinearExpression:
 
     def __add__(self, other):
         """
-        Add a expression to others.
+        Add an expression to others.
         """
-        if isinstance(other, variables.Variable):
-            other = LinearExpression.from_tuples((1, other))
-        if not isinstance(other, LinearExpression):
+        if not isinstance(other, (LinearExpression, variables.Variable)):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
+        if isinstance(other, variables.Variable):
+            other = LinearExpression.from_tuples((1, other))
         return merge(self, other)
 
     def __sub__(self, other):
         """
-        Subtract others form expression.
+        Subtract others from expression.
         """
-        if isinstance(other, variables.Variable):
-            other = LinearExpression.from_tuples((-1, other))
-        elif isinstance(other, LinearExpression):
-            other = -other
-        else:
+        if not isinstance(other, (LinearExpression, variables.Variable)):
             raise TypeError(
-                "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
+                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
-        return merge(self, other)
+        return merge(self, -other)
 
     def __neg__(self):
         """
@@ -354,7 +351,7 @@ class LinearExpression:
             Summed expression.
         """
 
-        res = self.__class__(self._sum(self, dims=dims))
+        res = self.__class__(self.model, self._sum(self, dims=dims))
 
         if drop_zeros:
             res = res.densify_terms()
@@ -366,6 +363,9 @@ class LinearExpression:
         """
         Create a linear expression by using tuples of coefficients and
         variables.
+
+        The function internally checks that all variables in the tuples belong to the same
+        reference model.
 
         Parameters
         ----------
@@ -398,8 +398,18 @@ class LinearExpression:
         """
         # when assigning arrays to Datasets it is taken as coordinates
         # support numpy arrays and convert them to dataarrays
-        ds_list = []
+        exprs = []
+        model = None
         for (c, v) in tuples:
+            if not isinstance(v, variables.Variable):
+                raise TypeError(f"Expected type `linopy.Variable`, got {type(v)}")
+            # check that reference models are consistent
+            if model is None:
+                model = v.model
+            # TODO: Ensure equality of models
+            # else:
+            # assert model == model
+
             if isinstance(v, variables.ScalarVariable):
                 v = v.label
             elif isinstance(v, variables.Variable):
@@ -416,12 +426,13 @@ class LinearExpression:
             else:
                 c = as_dataarray(c)
             ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
-            ds_list.append(ds)
+            expr = cls(model, ds)
+            exprs.append(expr)
 
-        if len(ds_list) > 1:
-            return merge(ds_list, cls=cls)
+        if len(exprs) > 1:
+            return merge(exprs, cls=cls)
         else:
-            return cls(ds_list[0])
+            return exprs[0]
 
     def from_rule(model, rule, coords):
         """
@@ -482,9 +493,9 @@ class LinearExpression:
         exprs = []
         placeholder = ScalarLinearExpression((np.nan,), (-1,))
         exprs = [rule(model, *coord) or placeholder for coord in combinations]
-        return LinearExpression._from_scalarexpression_list(exprs, coords)
+        return LinearExpression._from_scalarexpression_list(exprs, coords, model)
 
-    def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates):
+    def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates, model):
         """
         Create a LinearExpression from a list of lists with different lengths.
         """
@@ -501,7 +512,7 @@ class LinearExpression:
         vars = DataArray(vars, coords, dims=("_term", *coords))
         ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
 
-        return LinearExpression(ds)
+        return LinearExpression(model, ds)
 
     def where(self, cond, other=xr.core.dtypes.NA, **kwargs):
         """
@@ -529,7 +540,7 @@ class LinearExpression:
         else:
             other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
-        return self.__class__(self.data.where(cond, other=other, **kwargs))
+        return self.__class__(self.model, self.data.where(cond, other=other, **kwargs))
 
     def diff(self, dim, n=1):
         """
@@ -586,7 +597,7 @@ class LinearExpression:
         groups = ds.groupby(
             group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
         )
-        return LinearExpressionGroupby(groups)
+        return LinearExpressionGroupby(groups, model=self.model)
 
     @deprecated("0.1.0", "0.1.2", details="Use groupby (followed by sum) instead.")
     def groupby_sum(self, group):
@@ -615,7 +626,7 @@ class LinearExpression:
             ds = ds.assign_coords(_term=np.arange(len(ds._term)))
             return ds
 
-        return self.__class__(groups.map(func))  # .reset_index('_term')
+        return self.__class__(self.model, groups.map(func))  # .reset_index('_term')
 
     def rolling(
         self,
@@ -652,7 +663,7 @@ class LinearExpression:
         rolling = ds.rolling(
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
-        return LinearExpressionRolling(rolling)
+        return LinearExpressionRolling(rolling, model=self.model)
 
     @deprecated("0.1.0", "0.1.2", details="Use rolling (followed by sum) instead.")
     def rolling_sum(self, **kwargs):
@@ -685,7 +696,7 @@ class LinearExpression:
             .stack(_term=["_stacked_term", "_rolling_term"])
             .reset_index("_term", drop=True)
         )
-        return self.__class__(ds).assign_attrs(self.attrs)
+        return self.__class__(self.model, ds).assign_attrs(self.attrs)
 
     @property
     def nterm(self):
@@ -745,7 +756,7 @@ class LinearExpression:
         cdata[tuple(mod_nnz)] = data.coeffs.data[nnz]
         data.coeffs.data = cdata
 
-        return self.__class__(data.sel(_term=slice(0, nterm)))
+        return self.__class__(self.model, data.sel(_term=slice(0, nterm)))
 
     def sanitize(self):
         """
@@ -847,12 +858,12 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
     -------
     res : linopy.LinearExpression
     """
-
     if len(exprs) == 1:
         exprs = exprs[0]  # assume one list of mergeable objects is given
     else:
         exprs = list(exprs)
 
+    model = exprs[0].model
     exprs = [e.data if isinstance(e, cls) else e for e in exprs]
 
     if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
@@ -864,7 +875,7 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
     if "_term" in ds.coords:
         ds = ds.reset_index("_term", drop=True)
 
-    return cls(ds)
+    return cls(model, ds)
 
 
 @dataclass
@@ -872,6 +883,7 @@ class ScalarLinearExpression:
     coeffs: tuple
     vars: tuple
     coords: dict = None
+    model: Any = None
 
     def __add__(self, other):
         if isinstance(other, variables.ScalarVariable):
@@ -959,4 +971,4 @@ class ScalarLinearExpression:
     def to_linexpr(self):
         coeffs = xr.DataArray(list(self.coeffs), dims="_term")
         vars = xr.DataArray(list(self.vars), dims="_term")
-        return LinearExpression({"coeffs": coeffs, "vars": vars})
+        return LinearExpression(self.model, {"coeffs": coeffs, "vars": vars})

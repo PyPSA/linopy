@@ -49,7 +49,6 @@ def c(m):
 
 def test_constraint_repr(c):
     c.__repr__()
-    c._repr_html_()
 
 
 def test_constraints_repr(m):
@@ -122,6 +121,7 @@ def test_constraint_from_rule(m, x, y):
     con = AnonymousConstraint.from_rule(m, bound, coords)
     assert isinstance(con, AnonymousConstraint)
     assert con.lhs.nterm == 2
+    repr(con)  # test repr
 
 
 def test_constraint_from_rule_with_none_return(m, x, y):
@@ -135,6 +135,7 @@ def test_constraint_from_rule_with_none_return(m, x, y):
     assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
     assert (con.lhs.vars.loc[1, :] != -1).all()
+    repr(con)  # test repr
 
 
 def test_constraint_vars_getter(c, x):
@@ -217,8 +218,8 @@ def test_constraint_rhs_setter_invalid(c, x):
 
 
 def test_constraint_labels_setter_invalid(c):
-    # Test that assigning labels raises RuntimeError
-    with pytest.raises(RuntimeError):
+    # Test that assigning labels raises FrozenInstanceError
+    with pytest.raises(AttributeError):
         c.labels = c.labels
 
 

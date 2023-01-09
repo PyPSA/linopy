@@ -102,7 +102,7 @@ class Model:
         """
         self._variables = Variables(model=self)
         self._constraints = Constraints(model=self)
-        self._objective = LinearExpression()
+        self._objective = LinearExpression(model=self)
         self._parameters = Dataset()
 
         self._solution = Dataset()
@@ -409,14 +409,16 @@ class Model:
         >>> m.add_variables(lower=0, coords=[time], name="x")
         Variable 'x':
         -------------
-        <BLANKLINE>
-        Variable labels:
-        array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        Coordinates:
-          * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
-        Attributes:
-            binary:   False
-            integer:  False
+        +0 ≤  x[0] ≤ inf
+        +0 ≤  x[1] ≤ inf
+        +0 ≤  x[2] ≤ inf
+        +0 ≤  x[3] ≤ inf
+        +0 ≤  x[4] ≤ inf
+        +0 ≤  x[5] ≤ inf
+        +0 ≤  x[6] ≤ inf
+        +0 ≤  x[7] ≤ inf
+        +0 ≤  x[8] ≤ inf
+        +0 ≤  x[9] ≤ inf
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -458,7 +460,8 @@ class Model:
         self.check_force_dim_names(labels)
 
         start = self._xCounter
-        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        end = start + labels.size
+        labels.data = np.arange(start, end).reshape(labels.shape)
         self._xCounter += labels.size
 
         if mask is not None:
@@ -473,8 +476,7 @@ class Model:
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
 
-        self._variables.add(name, labels, lower, upper)
-
+        self.variables.add(name, labels, lower, upper, start=start, end=end)
         return self.variables[name]
 
     def add_constraints(
@@ -520,6 +522,8 @@ class Model:
         labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
         """
+        labels = None
+
         if name is None:
             name = "con" + str(self._connameCounter)
             self._connameCounter += 1
@@ -541,6 +545,7 @@ class Model:
                     "Passing arguments `sign` and `rhs` together with a constraint"
                     " is ambiguous."
                 )
+            labels = lhs.labels  # returns an empty data array of correct shape
             sign = lhs.sign
             rhs = lhs.rhs
             lhs = lhs.lhs
@@ -563,7 +568,8 @@ class Model:
         sign = maybe_replace_signs(DataArray(sign))
         rhs = DataArray(rhs)
 
-        labels = (lhs.vars.chunk() + rhs).sum("_term")
+        if labels is None:
+            labels = (lhs.vars.chunk() + rhs).sum("_term")
 
         self.check_force_dim_names(labels)
 
@@ -586,7 +592,7 @@ class Model:
             rhs = rhs.chunk(self.chunk)
             labels = labels.chunk(self.chunk)
 
-        self._constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
+        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
         return self.constraints[name]
 
@@ -615,7 +621,7 @@ class Model:
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         elif isinstance(expr, DataArray):
-            expr = LinearExpression(expr)
+            expr = LinearExpression(self, expr)
         assert isinstance(expr, LinearExpression)
 
         if self.chunk is not None:
@@ -814,11 +820,11 @@ class Model:
             rule, coords = args
             return LinearExpression.from_rule(self, rule, coords)
         if isinstance(args, tuple):
-            args = [
+            tuples = [
                 (c, self.variables[v]) if isinstance(v, str) else (c, v)
                 for (c, v) in args
             ]
-            return LinearExpression.from_tuples(*args, chunk=self.chunk)
+            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
         else:
             raise TypeError(f"Not supported type {args}.")
 
@@ -828,7 +834,7 @@ class Model:
         kwargs.setdefault("engine", "python")
         resolvers = kwargs.pop("resolvers", None)
         kwargs["level"] = kwargs.pop("level", 0) + 1
-        resolvers = [self.variables.labels, self.parameters]
+        resolvers = [self.variables, self.parameters]
         kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
         return pd_eval(expr, inplace=False, **kwargs)
 

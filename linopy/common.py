@@ -83,34 +83,35 @@ def head_tail_range(stop, max_number_of_values=14):
         return arange(stop)
 
 
-def print_single_variable_label(label):
-    """
-    Print single variable label.
-    """
-    return f"χ[{label}]" if label != -1 else "masked"
+def print_single_variable(lower, upper, var, vartype):
+    if vartype == "Binary Variable":
+        return f"\n {var}"
+    else:
+        return f"\n{lower} ≤  {var} ≤ {upper}"
 
 
-def print_single_constraint_label(label):
-    """
-    Print single constraint label.
-    """
-    return f"γ[{label}]" if label != -1 else "masked"
-
-
-def print_single_expression(c, v):
+def print_single_expression(c, v, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
     # catch case that to many terms would be printed
+    v = model.variables.get_label_position(v)
+
+    def print_line(expr):
+        res = ""
+        for coeff, (name, coord) in expr:
+            res += f" {coeff:+} {name}{coord if len(coord) else ''} "
+        return res if res else " None"
+
     if len(c) > 6:
         expr = list(zip(c[:3], v[:3]))
-        res = " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+        res = print_line(expr)
         res += "... "
         expr = list(zip(c[-3:], v[-3:]))
-        res += " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+        res += print_line(expr)
         return res
     expr = list(zip(c, v))
-    return " ".join(f"{coeff:+} χ[{var}] " for coeff, var in expr)
+    return print_line(expr)
 
 
 def has_assigned_model(func):

@@ -1,4 +1,5 @@
 import pandas as pd
+import xarray as xr
 
 from linopy import Model
 
@@ -6,6 +7,7 @@ m = Model()
 
 lower = pd.Series(0, range(10))
 upper = pd.DataFrame(10, range(10), range(10))
+types = pd.Index(list("abcdefgh"), name="types")
 
 u = m.add_variables(0, upper, name="u")
 v = m.add_variables(lower, upper, name="v")
@@ -14,96 +16,67 @@ y = m.add_variables(0, 10, name="y")
 z = m.add_variables(name="z", binary=True)
 a = m.add_variables(coords=[lower.index], name="a", binary=True)
 b = m.add_variables(coords=[lower.index], name="b", integer=True)
-
-# create constraint for each variable
-cu = m.add_constraints(1 * u >= 0, name="cu")
-cv = m.add_constraints(1 * v >= 0, name="cv")
-cx = m.add_constraints(1 * x >= 0, name="cx")
-cy = m.add_constraints(1 * y >= 0, name="cy")
-cz = m.add_constraints(1 * z >= 0, name="cz")
-ca = m.add_constraints(1 * a >= 0, name="ca")
-cav = m.add_constraints(1 * a + 1 * v >= 0, name="cav")
+c_mask = xr.DataArray(False, coords=upper.axes)
+c_mask[:, 5:] = True
+c = m.add_variables(lower, upper, name="c", mask=c_mask)
+d = m.add_variables(0, 10, coords=[types], name="d")
 
 
-def test_variable_repr_u():
-    repr(u)
+# create linear expression for each variable
+lu = 1 * u
+lv = 1 * v
+lx = 1 * x
+ly = 1 * y
+lz = 1 * z
+la = 1 * a
+lb = 1 * b
+lc = 1 * c
+lav = 1 * a + 1 * v
 
 
-def test_variable_repr_v():
-    repr(v)
+# create anonymous constraint for linear expression
+cu_ = lu >= 0
+cv_ = lv >= 0
+cx_ = lx >= 0
+cy_ = ly >= 0
+cz_ = lz >= 0
+ca_ = la >= 0
+cb_ = lb >= 0
+cc_ = lc >= 0
+cav_ = lav >= 0
 
 
-def test_variable_repr_x():
-    repr(x)
+# add constraint for each variable
+cu = m.add_constraints(cu_, name="cu")
+cv = m.add_constraints(cv_, name="cv")
+cx = m.add_constraints(cx_, name="cx")
+cy = m.add_constraints(cy_, name="cy")
+cz = m.add_constraints(cz_, name="cz")
+ca = m.add_constraints(ca_, name="ca")
+cb = m.add_constraints(cb_, name="cb")
+cc = m.add_constraints(cc_, name="cc")
+cav = m.add_constraints(cav_, name="cav")
 
 
-def test_variable_repr_y():
-    repr(y)
+def test_variable_repr():
+    for var in [u, v, x, y, z, a, b, c, d]:
+        repr(var)
 
 
-def test_variable_repr_z():
-    repr(z)
-
-
-def test_variable_repr_a():
-    repr(a)
-
-
-def test_linear_expression_u():
-    repr(u.to_linexpr())
-
-
-def test_linear_expression_v():
-    repr(v.to_linexpr())
-
-
-def test_linear_expression_x():
-    repr(x.to_linexpr())
-
-
-def test_linear_expression_y():
-    repr(y.to_linexpr())
+def test_linear_expression_repr():
+    for expr in [lu, lv, lx, ly, lz, la, lb, lc, lav]:
+        repr(expr)
 
 
 def test_linear_expression_long():
     repr(x.sum())
 
 
-def test_constraint_u():
-    repr(u >= 0)
+def test_anonymous_constraint_repr():
+    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cav_]:
+        repr(con)
 
 
-def test_constraint_v():
-    repr(v >= 0)
-
-
-def test_constraint_x():
-    repr(x >= 0)
-
-
-def test_constraint_y():
-    repr(y >= 0)
-
-
-def test_constraint_cu():
-    repr(cu)
-
-
-def test_constraint_cv():
-    repr(cv)
-
-
-def test_constraint_cx():
-    repr(cx)
-
-
-def test_constraint_cy():
-    repr(cy)
-
-
-def test_constraint_cz():
-    repr(cz)
-
-
-def test_constraint_ca():
-    repr(ca)
+def test_constraint_repr():
+    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cav]:
+        repr(con)

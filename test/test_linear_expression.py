@@ -59,7 +59,6 @@ def u(m):
 def test_repr(m):
     expr = m.linexpr((10, "x"), (1, "y"))
     expr.__repr__()
-    expr._repr_html_()
 
 
 def test_linexpr_with_scalars(m):
@@ -168,6 +167,7 @@ def test_linear_expression_from_rule(m, x, y):
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 2
+    repr(expr)  # test repr
 
 
 def test_linear_expression_from_rule_with_return_none(m, x, y):
@@ -182,6 +182,7 @@ def test_linear_expression_from_rule_with_return_none(m, x, y):
     assert (expr.vars[1] != -1).all()
     assert expr.coeffs[0].isnull().all()
     assert expr.coeffs[1].notnull().all()
+    repr(expr)  # test repr
 
 
 def test_linear_expression_addition(x, y, z):

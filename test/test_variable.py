@@ -37,7 +37,6 @@ def z(m):
 
 def test_variable_repr(x):
     x.__repr__()
-    x._repr_html_()
 
 
 def test_variable_getter(x):
