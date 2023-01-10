@@ -33,7 +33,6 @@ from linopy.common import (
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
-@dataclass(repr=False)
 @forward_as_properties(
     labels=[
         "attrs",
@@ -56,9 +55,24 @@ class Constraint:
     functions can be applied to it.
     """
 
-    _labels: DataArray = field(default_factory=DataArray)
-    _model: Any = None
-    _name: str = None
+    __slots__ = ("_model", "_name", "_labels")
+
+    def __init__(self, labels: DataArray, model: Any, name: str):
+        """
+        Initialize the Constraint.
+
+        Parameters
+        ----------
+        labels : xarray.DataArray
+            labels of the constraint.
+        model : linopy.Model
+            Underlying model.
+        name : str
+            Name of the constraint.
+        """
+        self._labels = labels
+        self._model = model
+        self._name = name
 
     @property
     def labels(self):
@@ -85,13 +99,17 @@ class Constraint:
         """
         Get the string representation of the Constraint.
         """
+        # add fallback repr
+        if self.lhs.model is None:
+            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
+            return f"{header}\nlhs:\n{self.lhs.data}\n\nsign:\n{self.sign}\n\nrhs:\n{self.rhs}"
 
         # return single if only one exist
         if self.size == self.nterm:
             expr_string = print_single_expression(
                 self.lhs.coeffs.values, self.lhs.vars.values, self.lhs.model
             )
-            header = f"{self.type}" + "-" * (len(self.type) + 1)
+            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
             return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
         # print only a few values
@@ -225,7 +243,7 @@ class Constraint:
         coeffs = self.coeffs.rename({term_dim: "_term"})
         vars = self.vars.rename({term_dim: "_term"})
         ds = Dataset({"coeffs": coeffs, "vars": vars})
-        return expressions.LinearExpression(self.model, ds)
+        return expressions.LinearExpression(ds, self.model)
 
     @lhs.setter
     def lhs(self, value):
@@ -676,7 +694,7 @@ class AnonymousConstraint:
         lhs_data, rhs = xr.align(self.lhs.data, DataArray(self.rhs))
         self._labels = (self.lhs.vars.chunk() + self.rhs).sum("_term")
         self._labels.data = np.full(self.labels.shape, np.nan)
-        self._lhs = expressions.LinearExpression(self.lhs.model, lhs_data)
+        self._lhs = expressions.LinearExpression(lhs_data, self.lhs.model)
         self._rhs = rhs
         self._sign = DataArray(self.sign)
 

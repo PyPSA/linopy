@@ -76,16 +76,6 @@ def test_variable_lower_getter(z):
     assert z.lower.item() == 0
 
 
-def test_variable_getter_without_model():
-    data = xr.DataArray(range(10)).rename("var")
-    v = linopy.variables.Variable(data)
-
-    with pytest.raises(AttributeError):
-        v.upper
-    with pytest.raises(AttributeError):
-        v.lower
-
-
 def test_variable_upper_setter(z):
     z.upper = 20
     assert z.upper.item() == 20

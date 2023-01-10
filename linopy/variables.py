@@ -22,7 +22,6 @@ import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
     forward_as_properties,
-    has_assigned_model,
     has_optimized_model,
     is_constant,
     print_single_variable,
@@ -34,7 +33,9 @@ def varwrap(method, *default_args, **new_default_kwargs):
     def _varwrap(var, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        return var.__class__(method(var.labels, *default_args, *args, **kwargs))
+        return var.__class__(
+            method(var.labels, *default_args, *args, **kwargs), var.model
+        )
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -49,7 +50,6 @@ def _var_unwrap(var):
     return var
 
 
-@dataclass(repr=False)
 @forward_as_properties(
     labels=[
         "attrs",
@@ -112,10 +112,30 @@ class Variable:
     Further operations like taking the negative and subtracting are supported.
     """
 
-    _labels: DataArray = field(default_factory=DataArray)
-    _model: Any = None
-
+    __slots__ = ("_labels", "_model")
     __array_ufunc__ = None
+
+    def __init__(self, labels: DataArray, model: Any):
+        """
+        Initialize the Constraint.
+
+        Parameters
+        ----------
+        labels : xarray.DataArray
+            labels of the constraint.
+        model : linopy.Model
+            Underlying model.
+        """
+        from linopy.model import Model
+
+        if not isinstance(labels, DataArray):
+            raise TypeError(f"labels must be a DataArray, got {type(labels)}")
+
+        if not isinstance(model, Model):
+            raise TypeError(f"model must be a Model, got {type(model)}")
+
+        self._labels = labels
+        self._model = model
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
@@ -444,7 +464,6 @@ class Variable:
         return (self.labels != -1).astype(bool)
 
     @property
-    @has_assigned_model
     def upper(self):
         """
         Get the upper bounds of the variables.
@@ -455,7 +474,6 @@ class Variable:
         return self.model.variables.upper[self.name]
 
     @upper.setter
-    @has_assigned_model
     @is_constant
     def upper(self, value):
         """
@@ -470,7 +488,6 @@ class Variable:
         self.model.variables.upper[self.name] = value
 
     @property
-    @has_assigned_model
     def lower(self):
         """
         Get the lower bounds of the variables.
@@ -481,7 +498,6 @@ class Variable:
         return self.model.variables.lower[self.name]
 
     @lower.setter
-    @has_assigned_model
     @is_constant
     def lower(self, value):
         """
@@ -570,7 +586,7 @@ class Variable:
         -------
         linopy.Variable
         """
-        return self.__class__(self.labels.where(cond, other, **kwargs))
+        return self.__class__(self.labels.where(cond, other, **kwargs), self.model)
 
     def sanitize(self):
         """
@@ -581,7 +597,7 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            return self.__class__(self.labels.fillna(-1).astype(int))
+            return self.__class__(self.labels.fillna(-1).astype(int), self.model)
         return self
 
     def equals(self, other):
@@ -940,6 +956,9 @@ class Variables:
 class ScalarVariable:
     label: int
     coords: dict = None
+
+    def __repr__(self) -> str:
+        return f"ScalarVariable: label={self.label}"
 
     def to_scalar_linexpr(self, coeff=1):
         if not isinstance(coeff, (int, np.integer, float)):

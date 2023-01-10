@@ -56,6 +56,10 @@ def u(m):
     return m.variables["u"]
 
 
+def test_empty_linexpr(m):
+    LinearExpression(None, m)
+
+
 def test_repr(m):
     expr = m.linexpr((10, "x"), (1, "y"))
     expr.__repr__()
@@ -75,8 +79,8 @@ def test_linexpr_with_series(m, v):
     isinstance(expr, LinearExpression)
 
 
-def test_linexpr_with_dataframe(m, v):
-    lhs = pd.DataFrame({"a": np.arange(20)}).T, v
+def test_linexpr_with_dataframe(m, z):
+    lhs = pd.DataFrame(z.labels), z
     expr = m.linexpr(lhs)
     isinstance(expr, LinearExpression)
 

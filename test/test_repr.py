@@ -72,9 +72,17 @@ def test_linear_expression_long():
     repr(x.sum())
 
 
+def test_scalar_linear_expression_repr():
+    repr(1 * u[0, 0])
+
+
 def test_anonymous_constraint_repr():
     for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cav_]:
         repr(con)
+
+
+def test_scalar_constraint_repr():
+    repr(1 * u[0, 0] >= 0)
 
 
 def test_constraint_repr():

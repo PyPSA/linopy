@@ -114,20 +114,6 @@ def print_single_expression(c, v, model):
     return print_line(expr)
 
 
-def has_assigned_model(func):
-    """
-    Check if a reference model is set.
-    """
-
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if self.model is None:
-            raise AttributeError("No reference model set.")
-        return func(self, *args, **kwargs)
-
-    return wrapper
-
-
 def has_optimized_model(func):
     """
     Check if a reference model is set.

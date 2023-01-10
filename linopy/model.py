@@ -102,7 +102,7 @@ class Model:
         """
         self._variables = Variables(model=self)
         self._constraints = Constraints(model=self)
-        self._objective = LinearExpression(model=self)
+        self._objective = LinearExpression(None, self)
         self._parameters = Dataset()
 
         self._solution = Dataset()
@@ -621,7 +621,7 @@ class Model:
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
         elif isinstance(expr, DataArray):
-            expr = LinearExpression(self, expr)
+            expr = LinearExpression(expr, self)
         assert isinstance(expr, LinearExpression)
 
         if self.chunk is not None:
