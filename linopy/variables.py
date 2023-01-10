@@ -131,10 +131,10 @@ class Variable:
         from linopy.model import Model
 
         if not isinstance(labels, DataArray):
-            raise TypeError(f"labels must be a DataArray, got {type(labels)}")
+            raise ValueError(f"labels must be a DataArray, got {type(labels)}")
 
         if not isinstance(model, Model):
-            raise TypeError(f"model must be a Model, got {type(model)}")
+            raise ValueError(f"model must be a Model, got {type(model)}")
 
         self._labels = labels
         self._model = model

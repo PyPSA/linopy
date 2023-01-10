@@ -106,3 +106,16 @@ def test_remove_constraint():
     m.add_constraints(x, EQUAL, 0, name="x")
     m.remove_constraints("x")
     assert not len(m.constraints.labels)
+
+
+def test_removed_eval_funcs():
+    m = Model()
+
+    with pytest.raises(NotImplementedError):
+        m.vareval("")
+
+    with pytest.raises(NotImplementedError):
+        m.lineval("")
+
+    with pytest.raises(NotImplementedError):
+        m.coneval("")

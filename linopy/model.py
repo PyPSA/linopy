@@ -619,8 +619,6 @@ class Model:
 
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
-        elif isinstance(expr, DataArray):
-            expr = LinearExpression(expr, self)
         assert isinstance(expr, LinearExpression)
 
         if self.chunk is not None:

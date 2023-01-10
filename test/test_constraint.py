@@ -55,6 +55,10 @@ def test_constraints_repr(m):
     m.constraints.__repr__()
 
 
+def test_constraint_name(c):
+    assert c.name == "c"
+
+
 def test_empty_constraints_repr():
     # test empty contraints
     Model().constraints.__repr__()
@@ -108,6 +112,18 @@ def test_anonymous_constraint_from_variable_eq(x):
     assert isinstance(con.lhs, LinearExpression)
     assert con.sign.item() == EQUAL
     assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_from_linear_expression_fail(x, y):
+    expr = 10 * x + y
+    with pytest.raises(TypeError):
+        expr == x
+
+
+def test_anonymous_scalar_constraint_from_linear_expression_fail(x, y):
+    expr = 10 * x[0] + y[1]
+    with pytest.raises(TypeError):
+        expr == x[0]
 
 
 def test_constraint_from_rule(m, x, y):

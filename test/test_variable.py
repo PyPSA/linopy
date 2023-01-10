@@ -39,8 +39,18 @@ def test_variable_repr(x):
     x.__repr__()
 
 
-def test_variable_getter(x):
+def test_wrong_variable_init(m, x):
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels.values, m)
+
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels, None)
+
+
+def test_variable_getter(x, z):
     assert isinstance(x[0], linopy.variables.ScalarVariable)
+
+    assert isinstance(z[0], linopy.variables.ScalarVariable)
 
     with pytest.raises(AssertionError):
         x[0, 0]

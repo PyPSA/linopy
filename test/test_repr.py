@@ -66,6 +66,10 @@ def test_variable_repr():
         repr(var)
 
 
+def test_scalar_variable_repr():
+    repr(u[0, 0])
+
+
 def test_linear_expression_repr():
     for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav]:
         repr(expr)

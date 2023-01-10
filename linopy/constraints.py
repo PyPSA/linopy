@@ -99,11 +99,6 @@ class Constraint:
         """
         Get the string representation of the Constraint.
         """
-        # add fallback repr
-        if self.lhs.model is None:
-            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
-            return f"{header}\nlhs:\n{self.lhs.data}\n\nsign:\n{self.sign}\n\nrhs:\n{self.rhs}"
-
         # return single if only one exist
         if self.size == self.nterm:
             expr_string = print_single_expression(
