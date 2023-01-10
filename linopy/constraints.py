@@ -162,7 +162,7 @@ class Constraint:
         header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
             len(self.type) + len(shape_string) + len(mask_string) + 1
         )
-        return f"{header}\n{data_string}"
+        return f"{header}{data_string}"
 
     @deprecated(details="Use the `labels` property instead of `to_array`")
     def to_array(self):

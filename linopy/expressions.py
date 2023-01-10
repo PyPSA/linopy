@@ -202,7 +202,7 @@ class LinearExpression:
             expr_string = print_single_expression(
                 self.coeffs.values, self.vars.values, self.model
             )
-            return f"LinearExpression:\n------------------\n{expr_string}"
+            return f"LinearExpression:\n-----------------\n{expr_string}"
 
         # print only a few values
         max_prints = 14
@@ -227,8 +227,8 @@ class LinearExpression:
         # create shape string
         nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
         shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
-        header = f"LinearExpression {shape_string}:\n{'-' * (19 + len(shape_string))}"
-        return f"{header}\n{data_string}"
+        header = f"LinearExpression {shape_string}:\n{'-' * (18 + len(shape_string))}"
+        return f"{header}{data_string}"
 
     def __add__(self, other):
         """
