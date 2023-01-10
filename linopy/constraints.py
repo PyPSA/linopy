@@ -688,7 +688,7 @@ class AnonymousConstraint:
         if isinstance(self.rhs, (variables.Variable, expressions.LinearExpression)):
             raise TypeError(f"Assigned rhs must be a constant, got {type(self.rhs)}).")
         lhs_data, rhs = xr.align(self.lhs.data, DataArray(self.rhs))
-        self._labels = (self.lhs.vars.chunk() + self.rhs).sum("_term")
+        self._labels = (lhs_data.vars.chunk() + rhs).sum("_term")
         self._labels.data = np.full(self.labels.shape, np.nan)
         self._lhs = expressions.LinearExpression(lhs_data, self.lhs.model)
         self._rhs = rhs
@@ -834,7 +834,7 @@ class AnonymousScalarConstraint:
         """
         Initialize a anonymous scalar constraint.
         """
-        if not isinstance(rhs, (int, float)):
+        if not isinstance(rhs, (int, float, np.float32, np.float64)):
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
         self._lhs = lhs
         self._sign = sign
