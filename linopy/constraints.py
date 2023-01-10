@@ -24,9 +24,9 @@ from linopy.common import (
     _merge_inplace,
     forward_as_properties,
     has_optimized_model,
-    head_tail_range,
     is_constant,
     maybe_replace_signs,
+    print_coord,
     print_single_expression,
     replace_by_map,
 )
@@ -139,7 +139,8 @@ class Constraint:
                 ix[i] for i in range(self.ndim) if self.dims[i] in self.rhs.dims
             )
 
-            coord_string = "[" + ", ".join([str(c[i]) for c in coords]) + "]"
+            coord = [c[i] for c in coords]
+            coord_string = print_coord(coord)
             expr_string = print_single_expression(
                 self.coeffs.values[ix], self.vars.values[ix], self.lhs.model
             )
@@ -752,7 +753,8 @@ class AnonymousConstraint:
         """
         return self._rhs
 
-    def from_rule(model, rule, coords):
+    @classmethod
+    def from_rule(cls, model, rule, coords):
         """
         Create a constraint from a rule and a set of coordinates.
 
@@ -808,7 +810,7 @@ class AnonymousConstraint:
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        placeholder_lhs = expressions.ScalarLinearExpression((np.nan,), (-1,))
+        placeholder_lhs = expressions.ScalarLinearExpression((np.nan,), (-1,), model)
         placeholder = AnonymousScalarConstraint(placeholder_lhs, "=", np.nan)
         cons = [rule(model, *coord) or placeholder for coord in combinations]
         exprs = [con.lhs for con in cons]
@@ -818,10 +820,9 @@ class AnonymousConstraint:
         )
         sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
-        return AnonymousConstraint(lhs, sign, rhs)
+        return cls(lhs, sign, rhs)
 
 
-@dataclass
 class AnonymousScalarConstraint:
     """
     Container for anonymous scalar constraint.
@@ -830,9 +831,49 @@ class AnonymousScalarConstraint:
     (rhs) for exactly one constraint.
     """
 
-    lhs: "expressions.ScalarLinearExpression"
-    sign: str
-    rhs: float
+    _lhs: "expressions.ScalarLinearExpression"
+    _sign: str
+    _rhs: float
+
+    def __init__(self, lhs, sign, rhs):
+        """
+        Initialize a anonymous scalar constraint.
+        """
+        if not isinstance(rhs, (int, float)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
+        self._lhs = lhs
+        self._sign = sign
+        self._rhs = rhs
+
+    def __repr__(self):
+        """
+        Get the representation of the AnonymousScalarConstraint.
+        """
+        expr_string = print_single_expression(
+            self.lhs.coeffs, self.lhs.vars, self.lhs.model
+        )
+        return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
+
+    @property
+    def lhs(self):
+        """
+        Get the left hand side of the constraint.
+        """
+        return self._lhs
+
+    @property
+    def sign(self):
+        """
+        Get the sign of the constraint.
+        """
+        return self._sign
+
+    @property
+    def rhs(self):
+        """
+        Get the right hand side of the constraint.
+        """
+        return self._rhs
 
     def to_anonymous_constraint(self):
         return AnonymousConstraint(self.lhs.to_linexpr(), self.sign, self.rhs)

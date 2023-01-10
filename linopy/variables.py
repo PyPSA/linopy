@@ -7,6 +7,7 @@ This module contains variable related definitions of the package.
 
 import functools
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence, Union
 
@@ -24,6 +25,7 @@ from linopy.common import (
     forward_as_properties,
     has_optimized_model,
     is_constant,
+    print_coord,
     print_single_variable,
 )
 
@@ -145,13 +147,13 @@ class Variable:
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
         if not self.labels.ndim:
-            return ScalarVariable(self.labels.item())
+            return ScalarVariable(self.labels.item(), self.model)
         assert self.labels.ndim == len(
             keys
         ), f"expected {self.labels.ndim} keys, got {len(keys)}."
         key = dict(zip(self.labels.dims, keys))
         selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.labels.data[tuple(selector)])
+        return ScalarVariable(self.labels.data[tuple(selector)], self.model)
 
     @property
     def loc(self):
@@ -217,7 +219,8 @@ class Variable:
             )
 
             # create coordinate string
-            coord_string = ", ".join([str(c[i]) for c in coords])
+            coord = [c[i] for c in coords]
+            coord_string = print_coord(coord)
             var_string = f"{self.name}[{coord_string}]"
             data_string += print_single_variable(
                 lower[lix], upper[uix], var_string, self.type
@@ -830,7 +833,7 @@ class Variables:
         """
         coords = []
         return_list = True
-        if isinstance(values, int):
+        if not isinstance(values, Iterable):
             values = [values]
             return_list = False
 
@@ -952,18 +955,44 @@ class Variables:
         return res
 
 
-@dataclass
 class ScalarVariable:
-    label: int
-    coords: dict = None
+    """
+    A scalar variable container.
+
+    In contrast to the Variable class, a ScalarVariable only contains
+    only one label. Use this class to create a expression or constraint
+    in a rule.
+    """
+
+    __slots__ = ("_label", "_model")
+
+    def __init__(self, label: int, model: Any):
+        self._label = label
+        self._model = model
 
     def __repr__(self) -> str:
-        return f"ScalarVariable: label={self.label}"
+        name, coord = self.model.variables.get_label_position(self.label)
+        coord_string = print_coord(coord)
+        return f"ScalarVariable: {name}{coord_string}"
+
+    @property
+    def label(self):
+        """
+        Get the label of the variable.
+        """
+        return self._label
+
+    @property
+    def model(self):
+        """
+        Get the model to which the variable belongs.
+        """
+        return self._model
 
     def to_scalar_linexpr(self, coeff=1):
         if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
-        return expressions.ScalarLinearExpression((coeff,), (self.label,))
+        return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
     def to_linexpr(self, coeff=1):
         return self.to_scalar_linexpr(coeff).to_linexpr()

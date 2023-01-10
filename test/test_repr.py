@@ -31,6 +31,7 @@ lz = 1 * z
 la = 1 * a
 lb = 1 * b
 lc = 1 * c
+ld = 1 * d
 lav = 1 * a + 1 * v
 
 
@@ -43,6 +44,7 @@ cz_ = lz >= 0
 ca_ = la >= 0
 cb_ = lb >= 0
 cc_ = lc >= 0
+cd_ = ld >= 0
 cav_ = lav >= 0
 
 
@@ -55,6 +57,7 @@ cz = m.add_constraints(cz_, name="cz")
 ca = m.add_constraints(ca_, name="ca")
 cb = m.add_constraints(cb_, name="cb")
 cc = m.add_constraints(cc_, name="cc")
+cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
 
 
@@ -64,7 +67,7 @@ def test_variable_repr():
 
 
 def test_linear_expression_repr():
-    for expr in [lu, lv, lx, ly, lz, la, lb, lc, lav]:
+    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav]:
         repr(expr)
 
 
@@ -77,7 +80,7 @@ def test_scalar_linear_expression_repr():
 
 
 def test_anonymous_constraint_repr():
-    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cav_]:
+    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_]:
         repr(con)
 
 
@@ -86,5 +89,5 @@ def test_scalar_constraint_repr():
 
 
 def test_constraint_repr():
-    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cav]:
+    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav]:
         repr(con)

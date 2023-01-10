@@ -27,6 +27,7 @@ from linopy.common import (
     as_dataarray,
     forward_as_properties,
     head_tail_range,
+    print_coord,
     print_single_expression,
 )
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
@@ -213,9 +214,9 @@ class LinearExpression:
         data_string = ""
         for i, coord in enumerate(coords):
 
-            coord_string = "[" + ", ".join([str(c) for c in coord]) + "]"
+            coord_string = print_coord(coord)
             expr_string = print_single_expression(
-                self.coeffs[coord].values, self.vars[coord].values, self.model
+                self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
             )
 
             data_string += f"\n{coord_string}:  {expr_string}"
@@ -460,7 +461,8 @@ class LinearExpression:
         else:
             return exprs[0]
 
-    def from_rule(model, rule, coords):
+    @classmethod
+    def from_rule(cls, model, rule, coords):
         """
         Create a linear expression from a rule and a set of coordinates.
 
@@ -517,9 +519,9 @@ class LinearExpression:
 
         combinations = product(*[c.values for c in coords.values()])
         exprs = []
-        placeholder = ScalarLinearExpression((np.nan,), (-1,))
+        placeholder = ScalarLinearExpression((np.nan,), (-1,), model)
         exprs = [rule(model, *coord) or placeholder for coord in combinations]
-        return LinearExpression._from_scalarexpression_list(exprs, coords, model)
+        return cls._from_scalarexpression_list(exprs, coords, model)
 
     def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates, model):
         """
@@ -909,17 +911,43 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
     return cls(ds, model)
 
 
-@dataclass
 class ScalarLinearExpression:
-    coeffs: tuple
-    vars: tuple
-    coords: dict = None
+    """
+    A scalar linear expression container.
+
+    In contrast to the LinearExpression class, a ScalarLinearExpression
+    only contains only one label. Use this class to create a constraint
+    in a rule.
+    """
+
+    __slots__ = ("_coeffs", "_vars", "_model")
+
+    def __init__(self, coeffs, vars, model):
+        self._coeffs = coeffs
+        self._vars = vars
+        self._model = model
+
+    def __repr__(self) -> str:
+        expr_string = print_single_expression(self.coeffs, self.vars, self.model)
+        return f"ScalarLinearExpression: {expr_string}"
+
+    @property
+    def coeffs(self):
+        return self._coeffs
+
+    @property
+    def vars(self):
+        return self._vars
+
+    @property
+    def model(self):
+        return self._model
 
     def __add__(self, other):
         if isinstance(other, variables.ScalarVariable):
             coeffs = self.coeffs + (1,)
             vars = self.vars + (other.label,)
-            return ScalarLinearExpression(coeffs, vars)
+            return ScalarLinearExpression(coeffs, vars, self.model)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
@@ -927,7 +955,7 @@ class ScalarLinearExpression:
 
         coeffs = self.coeffs + other.coeffs
         vars = self.vars + other.vars
-        return ScalarLinearExpression(coeffs, vars)
+        return ScalarLinearExpression(coeffs, vars, self.model)
 
     def __radd__(self, other):
         # This is needed for using python's sum function
@@ -947,11 +975,15 @@ class ScalarLinearExpression:
             )
 
         return ScalarLinearExpression(
-            self.coeffs + tuple(-c for c in other.coeffs), self.vars + other.vars
+            self.coeffs + tuple(-c for c in other.coeffs),
+            self.vars + other.vars,
+            self.model,
         )
 
     def __neg__(self):
-        return ScalarLinearExpression(tuple(-c for c in self.coeffs), self.vars)
+        return ScalarLinearExpression(
+            tuple(-c for c in self.coeffs), self.vars, self.model
+        )
 
     def __mul__(self, other):
         if not isinstance(other, (int, np.integer, float)):
@@ -959,7 +991,9 @@ class ScalarLinearExpression:
                 "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
             )
 
-        return ScalarLinearExpression(tuple(other * c for c in self.coeffs), self.vars)
+        return ScalarLinearExpression(
+            tuple(other * c for c in self.coeffs), self.vars, self.model
+        )
 
     def __rmul__(self, other):
         return self.__mul__(other)

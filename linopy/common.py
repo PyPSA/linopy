@@ -83,6 +83,13 @@ def head_tail_range(stop, max_number_of_values=14):
         return arange(stop)
 
 
+def print_coord(coord):
+    if len(coord):
+        return "[" + ", ".join([str(c) for c in coord]) + "]"
+    else:
+        return ""
+
+
 def print_single_variable(lower, upper, var, vartype):
     if vartype == "Binary Variable":
         return f"\n {var}"
@@ -100,7 +107,8 @@ def print_single_expression(c, v, model):
     def print_line(expr):
         res = ""
         for coeff, (name, coord) in expr:
-            res += f" {coeff:+} {name}{coord if len(coord) else ''} "
+            coord_string = print_coord(coord)
+            res += f" {coeff:+} {name}{coord_string} "
         return res if res else " None"
 
     if len(c) > 6:
