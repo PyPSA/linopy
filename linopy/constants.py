@@ -6,7 +6,7 @@ Linopy module for defining constant values used within the package.
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -174,14 +174,18 @@ class Status:
         return self.status == SolverStatus.ok
 
 
+def _pd_series_float() -> pd.Series:
+    return pd.Series(dtype=float)
+
+
 @dataclass
 class Solution:
     """
     Solution returned by the solver.
     """
 
-    primal: pd.Series = field(default_factory=pd.Series)
-    dual: pd.Series = field(default_factory=pd.Series)
+    primal: pd.Series = field(default_factory=_pd_series_float)
+    dual: pd.Series = field(default_factory=_pd_series_float)
     objective: float = np.nan
 
 

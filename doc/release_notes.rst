@@ -4,6 +4,7 @@ Release Notes
 Upcoming Release
 ----------------
 
+* The classes Variable, LinearExpression and Constraint now have a `__repr__` method. This allows for a better representation of the class in the console.
 * Linopy now defines and uses a fixed set of solver status and termination codes. This allows for a more consistent and reliable handling of solver results. The new codes are defined in the `linopy.consants` module. The implementation is inspired by https://github.com/0b11001111 and the implementation in this `PyPSA fork <https://github.com/0b11001111/PyPSA/blob/innoptem-lopf/pypsa/linear_program/solver.py>`_
 * The automated summation of repeated variables in one constraint is now supported. Before the implementation for constraints like `x + x + x <= 5` was only working for solvers with a corresponding fallback computation. This is now fixed.
 * Integer variables are now fully supported.
@@ -12,7 +13,8 @@ Upcoming Release
 * The class `Variable` and `LinearExpression` have new functions `groupby` and `rolling` imitating the corresponding xarray functions but with safe type inheritance and application of appended operations.
 * Coefficients very close to zero (`< 1e-10`) are now automatically set to zero to avoid numerical issues with solvers.
 * Coefficients of variables are no also allowed to be `np.nan`. These coefficients are ignored in the LP file writing.
-
+* The classes Variable, LinearExpression, Constraint, ScalarVariable, ScalarLinearExpression and ScalarConstraint now require the model in the initialization (mostly internal code is affected).
+* The `eval` module was removed in favor of arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
 
 Version 0.0.15
 --------------

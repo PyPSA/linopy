@@ -4,7 +4,6 @@
 Module containing all import/export functionalities.
 """
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
@@ -519,7 +518,7 @@ def read_netcdf(path, **kwargs):
 
     for attr in m.dataset_attrs:
         setattr(m, attr, get_and_rename(all_ds, attr))
-    m._objective = LinearExpression(get_and_rename(all_ds, "objective"))
+    m._objective = LinearExpression(get_and_rename(all_ds, "objective"), m)
 
     for k in m.scalar_attrs:
         setattr(m, k, all_ds.attrs.pop(k))

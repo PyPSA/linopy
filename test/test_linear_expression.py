@@ -56,10 +56,38 @@ def u(m):
     return m.variables["u"]
 
 
+def test_empty_linexpr(m):
+    LinearExpression(None, m)
+
+
+def test_linexpr_with_wrong_data(m):
+    with pytest.raises(ValueError):
+        LinearExpression(1, m)
+
+    with pytest.raises(ValueError):
+        LinearExpression(xr.Dataset({"a": [1]}), m)
+
+    coeffs = xr.DataArray([1, 2], dims=["a"])
+    vars = xr.DataArray([1, 2], dims=["a"])
+    data = xr.Dataset({"coeffs": coeffs, "vars": vars})
+    with pytest.raises(ValueError):
+        LinearExpression(data, m)
+
+    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name="_term")]
+    coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    data = xr.Dataset({"coeffs": coeffs, "vars": vars})
+    with pytest.raises(ValueError):
+        LinearExpression(data, None)
+
+
 def test_repr(m):
     expr = m.linexpr((10, "x"), (1, "y"))
     expr.__repr__()
-    expr._repr_html_()
+
+
+def test_fill_value():
+    isinstance(LinearExpression.fill_value, dict)
 
 
 def test_linexpr_with_scalars(m):
@@ -76,8 +104,8 @@ def test_linexpr_with_series(m, v):
     isinstance(expr, LinearExpression)
 
 
-def test_linexpr_with_dataframe(m, v):
-    lhs = pd.DataFrame({"a": np.arange(20)}).T, v
+def test_linexpr_with_dataframe(m, z):
+    lhs = pd.DataFrame(z.labels), z
     expr = m.linexpr(lhs)
     isinstance(expr, LinearExpression)
 
@@ -135,7 +163,7 @@ def test_linear_expression_multi_indexed(u):
     assert isinstance(expr, LinearExpression)
 
 
-def test_linear_expression_with_errors(x):
+def test_linear_expression_with_errors(m, x):
     with pytest.raises(TypeError):
         x.to_linexpr(x)
 
@@ -157,17 +185,21 @@ def test_linear_expression_with_errors(x):
     with pytest.raises(TypeError):
         x / (1 * x)
 
+    with pytest.raises(TypeError):
+        m.linexpr((10, x.labels), (1, "y"))
+
 
 def test_linear_expression_from_rule(m, x, y):
     def bound(m, i):
         if i == 1:
-            return (i - 1) * x[i - 1] + y[i]
+            return (i - 1) * x[i - 1] + y[i] + 1 * x[i]
         else:
             return i * x[i] - y[i]
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
-    assert expr.nterm == 2
+    assert expr.nterm == 3
+    repr(expr)  # test repr
 
 
 def test_linear_expression_from_rule_with_return_none(m, x, y):
@@ -182,6 +214,7 @@ def test_linear_expression_from_rule_with_return_none(m, x, y):
     assert (expr.vars[1] != -1).all()
     assert expr.coeffs[0].isnull().all()
     assert expr.coeffs[1].notnull().all()
+    repr(expr)  # test repr
 
 
 def test_linear_expression_addition(x, y, z):

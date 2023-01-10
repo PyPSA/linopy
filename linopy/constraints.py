@@ -22,15 +22,31 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     _merge_inplace,
+    forward_as_properties,
     has_optimized_model,
     is_constant,
     maybe_replace_signs,
+    print_coord,
+    print_single_expression,
     replace_by_map,
 )
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
-@dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "name",
+        "shape",
+        "size",
+        "values",
+        "dims",
+        "ndim",
+    ],
+    lhs=["nterm"],
+)
 class Constraint:
     """
     Projection to a single constraint in a model.
@@ -39,29 +55,109 @@ class Constraint:
     functions can be applied to it.
     """
 
-    name: str
-    model: Any
+    __slots__ = ("_model", "_name", "_labels")
+
+    def __init__(self, labels: DataArray, model: Any, name: str):
+        """
+        Initialize the Constraint.
+
+        Parameters
+        ----------
+        labels : xarray.DataArray
+            labels of the constraint.
+        model : linopy.Model
+            Underlying model.
+        name : str
+            Name of the constraint.
+        """
+        self._labels = labels
+        self._model = model
+        self._name = name
+
+    @property
+    def labels(self):
+        """
+        Get the labels of the constraint.
+        """
+        return self._labels
+
+    @property
+    def model(self):
+        """
+        Get the model of the constraint.
+        """
+        return self._model
+
+    @property
+    def name(self):
+        """
+        Get the name of the constraint.
+        """
+        return self._name
 
     def __repr__(self):
         """
-        Get the string representation of the constraints.
+        Get the string representation of the Constraint.
         """
-        data_string = "Constraint labels:\n" + self.labels.__repr__().split("\n", 1)[1]
-        extend_line = "-" * len(self.name)
-        return (
-            f"Constraint '{self.name}':\n"
-            f"--------------{extend_line}\n\n"
-            f"{data_string}"
-        )
+        # return single if only one exist
+        if self.size == self.nterm:
+            expr_string = print_single_expression(
+                self.lhs.coeffs.values, self.lhs.vars.values, self.lhs.model
+            )
+            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
+            return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
-    def _repr_html_(self):
-        """
-        Get the html representation of the variables.
-        """
-        # return self.__repr__()
-        data_string = self.labels._repr_html_()
-        data_string = data_string.replace("xarray.DataArray", "linopy.Constraint")
-        return data_string
+        # print only a few values
+        max_print = 14
+        split_at = max_print // 2
+        to_print = np.flatnonzero(self.mask)
+        truncate = len(to_print) > max_print
+        if truncate:
+            to_print = np.hstack([to_print[:split_at], to_print[-split_at:]])
+
+        # create string, we use numpy to get the indexes
+        data_string = ""
+        idx = np.unravel_index(to_print, self.shape)
+        indexes = np.stack(idx)
+        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+
+        # loop over all values to LinearExpression(print
+        data_string = ""
+        for i in range(len(to_print)):
+            # this is the index for the labels array
+            ix = tuple(indexes[..., i])
+            # sign and rhs might only be defined for some dimensions
+            six = tuple(
+                ix[i] for i in range(self.ndim) if self.dims[i] in self.sign.dims
+            )
+            rix = tuple(
+                ix[i] for i in range(self.ndim) if self.dims[i] in self.rhs.dims
+            )
+
+            coord = [c[i] for c in coords]
+            coord_string = print_coord(coord)
+            expr_string = print_single_expression(
+                self.coeffs.values[ix], self.vars.values[ix], self.lhs.model
+            )
+            sign_string = f"{self.sign.values[six]}"
+            rhs_string = f"{self.rhs.values[rix]}"
+
+            data_string += f"\n{self.name}{coord_string}:  {expr_string} {sign_string} {rhs_string}"
+
+            if i == split_at - 1 and truncate:
+                data_string += "\n\t\t..."
+
+        # create shape string
+        shape_string = ", ".join(
+            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+        )
+        shape_string = f"({shape_string})"
+        n_masked = (~self.mask).sum().item()
+        mask_string = f" - {n_masked} masked entries" if n_masked else ""
+        header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
+            len(self.type) + len(shape_string) + len(mask_string) + 1
+        )
+        return f"{header}{data_string}"
 
     @deprecated(details="Use the `labels` property instead of `to_array`")
     def to_array(self):
@@ -71,12 +167,25 @@ class Constraint:
         return self.labels
 
     @property
-    def labels(self):
-        return self.model.constraints.labels[self.name]
+    def type(self):
+        """
+        Get the type of the constraint.
+        """
+        return "Constraint"
 
-    @labels.setter
-    def labels(self, value):
-        raise RuntimeError("Labels are read-only")
+    @property
+    def mask(self):
+        """
+        Get the mask of the constraint.
+
+        The mask indicates on which coordinates the constraint array is enabled
+        (True) and disabled (False).
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        return (self.labels != -1).astype(bool)
 
     @property
     def coeffs(self):
@@ -129,7 +238,8 @@ class Constraint:
         term_dim = self.name + "_term"
         coeffs = self.coeffs.rename({term_dim: "_term"})
         vars = self.vars.rename({term_dim: "_term"})
-        return expressions.LinearExpression(Dataset({"coeffs": coeffs, "vars": vars}))
+        ds = Dataset({"coeffs": coeffs, "vars": vars})
+        return expressions.LinearExpression(ds, self.model)
 
     @lhs.setter
     def lhs(self, value):
@@ -242,7 +352,7 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return Constraint(names, model=self.model)
+            return Constraint(self.labels[names], self.model, names)
 
         return self.__class__(
             self.labels[names],
@@ -548,60 +658,98 @@ class Constraints:
         return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
 
 
+@dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "shape",
+        "size",
+        "values",
+        "dims",
+        "ndim",
+    ],
+    lhs=["nterm", "coeffs", "vars"],
+)
 class AnonymousConstraint:
     """
     A constraint container used for storing multiple constraint arrays.
     """
 
-    __slots__ = ("_lhs", "_sign", "_rhs")
+    _lhs: "expressions.LinearExpression"
+    _sign: Union[DataArray, str]
+    _rhs: Union[DataArray, float, int]
 
-    def __init__(self, lhs, sign, rhs):
+    def __post_init__(self):
         """
         Initialize a anonymous constraint.
         """
-        if isinstance(rhs, (variables.Variable, expressions.LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
-        lhs, self._rhs = xr.align(lhs.data, DataArray(rhs))
-        self._lhs = expressions.LinearExpression(lhs)
-        self._sign = DataArray(sign)
+        if isinstance(self.rhs, (variables.Variable, expressions.LinearExpression)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(self.rhs)}).")
+        lhs_data, rhs = xr.align(self.lhs.data, DataArray(self.rhs))
+        self._labels = (self.lhs.vars.chunk() + self.rhs).sum("_term")
+        self._labels.data = np.full(self.labels.shape, np.nan)
+        self._lhs = expressions.LinearExpression(lhs_data, self.lhs.model)
+        self._rhs = rhs
+        self._sign = DataArray(self.sign)
+
+    def __repr__(self):
+        """
+        Get the representation of the AnonymousConstraint.
+        """
+        return Constraint.__repr__(self)
+
+    @property
+    def name(self):
+        return ""
+
+    @property
+    def type(self):
+        """
+        Get the type of the constraint.
+        """
+        # needed for __repr__ compatibility.
+        return "AnomymousConstraint"
+
+    @property
+    def mask(self):
+        """
+        Get the mask of the constraint.
+        """
+        # needed for __repr__ compatibility.
+        return xr.full_like(self.labels, True, dtype=bool)
+
+    @property
+    def labels(self):
+        """
+        Get the labels of the constraint.
+        """
+        return self._labels
 
     @property
     def lhs(self):
+        """
+        Get the left hand side of the constraint.
+        """
         return self._lhs
 
     @property
     def sign(self):
+        """
+        Get the sign of the constraint.
+        """
         return self._sign
 
     @property
     def rhs(self):
+        """
+        Get the right hand side of the constraint.
+        """
         return self._rhs
 
-    def __repr__(self):
-        """
-        Get the string representation of the expression.
-        """
-        lhs_string = self.lhs.to_dataset().__repr__()  # .split("\n", 1)[1]
-        lhs_string = lhs_string.split("Data variables:\n", 1)[1]
-        lhs_string = lhs_string.replace("    coeffs", "coeffs")
-        lhs_string = lhs_string.replace("    vars", "vars")
-        if self.sign.size == 1:
-            sign_string = self.sign.item()
-        else:
-            sign_string = self.sign.__repr__().split("\n", 1)[1]
-        if self.rhs.size == 1:
-            rhs_string = self.rhs.item()
-        else:
-            rhs_string = self.rhs.__repr__().split("\n", 1)[1]
-        return (
-            f"Anonymous Constraint:\n"
-            f"---------------------\n"
-            f"\n{lhs_string}"
-            f"\n{sign_string}"
-            f"\n{rhs_string}"
-        )
-
-    def from_rule(model, rule, coords):
+    @classmethod
+    def from_rule(cls, model, rule, coords):
         """
         Create a constraint from a rule and a set of coordinates.
 
@@ -657,18 +805,19 @@ class AnonymousConstraint:
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        placeholder_lhs = expressions.ScalarLinearExpression((np.nan,), (-1,))
+        placeholder_lhs = expressions.ScalarLinearExpression((np.nan,), (-1,), model)
         placeholder = AnonymousScalarConstraint(placeholder_lhs, "=", np.nan)
         cons = [rule(model, *coord) or placeholder for coord in combinations]
         exprs = [con.lhs for con in cons]
 
-        lhs = expressions.LinearExpression._from_scalarexpression_list(exprs, coords)
+        lhs = expressions.LinearExpression._from_scalarexpression_list(
+            exprs, coords, model
+        )
         sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
-        return AnonymousConstraint(lhs, sign, rhs)
+        return cls(lhs, sign, rhs)
 
 
-@dataclass
 class AnonymousScalarConstraint:
     """
     Container for anonymous scalar constraint.
@@ -677,9 +826,49 @@ class AnonymousScalarConstraint:
     (rhs) for exactly one constraint.
     """
 
-    lhs: "expressions.ScalarLinearExpression"
-    sign: str
-    rhs: float
+    _lhs: "expressions.ScalarLinearExpression"
+    _sign: str
+    _rhs: float
+
+    def __init__(self, lhs, sign, rhs):
+        """
+        Initialize a anonymous scalar constraint.
+        """
+        if not isinstance(rhs, (int, float)):
+            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
+        self._lhs = lhs
+        self._sign = sign
+        self._rhs = rhs
+
+    def __repr__(self):
+        """
+        Get the representation of the AnonymousScalarConstraint.
+        """
+        expr_string = print_single_expression(
+            self.lhs.coeffs, self.lhs.vars, self.lhs.model
+        )
+        return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
+
+    @property
+    def lhs(self):
+        """
+        Get the left hand side of the constraint.
+        """
+        return self._lhs
+
+    @property
+    def sign(self):
+        """
+        Get the sign of the constraint.
+        """
+        return self._sign
+
+    @property
+    def rhs(self):
+        """
+        Get the right hand side of the constraint.
+        """
+        return self._rhs
 
     def to_anonymous_constraint(self):
         return AnonymousConstraint(self.lhs.to_linexpr(), self.sign, self.rhs)

@@ -37,11 +37,20 @@ def z(m):
 
 def test_variable_repr(x):
     x.__repr__()
-    x._repr_html_()
 
 
-def test_variable_getter(x):
+def test_wrong_variable_init(m, x):
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels.values, m)
+
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels, None)
+
+
+def test_variable_getter(x, z):
     assert isinstance(x[0], linopy.variables.ScalarVariable)
+
+    assert isinstance(z[0], linopy.variables.ScalarVariable)
 
     with pytest.raises(AssertionError):
         x[0, 0]
@@ -75,16 +84,6 @@ def test_variable_upper_getter(z):
 
 def test_variable_lower_getter(z):
     assert z.lower.item() == 0
-
-
-def test_variable_getter_without_model():
-    data = xr.DataArray(range(10)).rename("var")
-    v = linopy.variables.Variable(data)
-
-    with pytest.raises(AttributeError):
-        v.upper
-    with pytest.raises(AttributeError):
-        v.lower
 
 
 def test_variable_upper_setter(z):

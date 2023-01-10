@@ -9,6 +9,7 @@ This module contains commonly used functions.
 from functools import partialmethod, update_wrapper, wraps
 
 import numpy as np
+from numpy import arange, hstack
 from xarray import DataArray, apply_ufunc, merge
 
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
@@ -74,18 +75,51 @@ def best_int(max_value):
             return t
 
 
-def has_assigned_model(func):
-    """
-    Check if a reference model is set.
-    """
+def head_tail_range(stop, max_number_of_values=14):
+    split_at = max_number_of_values // 2
+    if stop > max_number_of_values:
+        return hstack([arange(split_at), arange(stop - split_at, stop)])
+    else:
+        return arange(stop)
 
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if self.model is None:
-            raise AttributeError("No reference model set.")
-        return func(self, *args, **kwargs)
 
-    return wrapper
+def print_coord(coord):
+    if len(coord):
+        return "[" + ", ".join([str(c) for c in coord]) + "]"
+    else:
+        return ""
+
+
+def print_single_variable(lower, upper, var, vartype):
+    if vartype == "Binary Variable":
+        return f"\n {var}"
+    else:
+        return f"\n{lower} ≤  {var} ≤ {upper}"
+
+
+def print_single_expression(c, v, model):
+    """
+    Print a single linear expression based on the coefficients and variables.
+    """
+    # catch case that to many terms would be printed
+    v = model.variables.get_label_position(v)
+
+    def print_line(expr):
+        res = ""
+        for coeff, (name, coord) in expr:
+            coord_string = print_coord(coord)
+            res += f" {coeff:+} {name}{coord_string} "
+        return res if res else " None"
+
+    if len(c) > 6:
+        expr = list(zip(c[:3], v[:3]))
+        res = print_line(expr)
+        res += "... "
+        expr = list(zip(c[-3:], v[-3:]))
+        res += print_line(expr)
+        return res
+    expr = list(zip(c, v))
+    return print_line(expr)
 
 
 def has_optimized_model(func):
