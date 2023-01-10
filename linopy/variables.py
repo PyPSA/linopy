@@ -221,7 +221,7 @@ class Variable:
             # create coordinate string
             coord = [c[i] for c in coords]
             coord_string = print_coord(coord)
-            var_string = f"{self.name}[{coord_string}]"
+            var_string = f"{self.name}{coord_string}"
             data_string += print_single_variable(
                 lower[lix], upper[uix], var_string, self.type
             )
@@ -239,7 +239,7 @@ class Variable:
         header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
             len(self.type) + len(shape_string) + len(mask_string) + 1
         )
-        return f"{header}\n{data_string}"
+        return f"{header}{data_string}"
 
     def __neg__(self):
         """

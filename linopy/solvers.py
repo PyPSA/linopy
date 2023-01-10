@@ -361,15 +361,15 @@ def run_highs(
         solution = h.getSolution()
 
         if io_api == "direct":
-            sol = pd.Series(solution.col_value, model.matrices.vlabels)
-            dual = pd.Series(solution.row_value, model.matrices.clabels)
+            sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
+            dual = pd.Series(solution.row_value, model.matrices.clabels, dtype=float)
         else:
-            sol = pd.Series(solution.col_value, h.getLp().col_names_).pipe(
+            sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float).pipe(
                 set_int_index
             )
-            dual = pd.Series(solution.row_value, h.getLp().row_names_).pipe(
-                set_int_index
-            )
+            dual = pd.Series(
+                solution.row_value, h.getLp().row_names_, dtype=float
+            ).pipe(set_int_index)
 
         return Solution(sol, dual, objective)
 
@@ -460,7 +460,9 @@ def run_cplex(
 
         if is_lp:
             dual = pd.Series(
-                m.solution.get_dual_values(), m.linear_constraints.get_names()
+                m.solution.get_dual_values(),
+                m.linear_constraints.get_names(),
+                dtype=float,
             )
             dual = set_int_index(dual)
         else:

@@ -25,7 +25,6 @@ from linopy.constraints import (
     AnonymousScalarConstraint,
     Constraints,
 )
-from linopy.eval import Expr
 from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
@@ -407,18 +406,18 @@ class Model:
         >>> m = Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
-        Variable 'x':
-        -------------
-        +0 ≤  x[0] ≤ inf
-        +0 ≤  x[1] ≤ inf
-        +0 ≤  x[2] ≤ inf
-        +0 ≤  x[3] ≤ inf
-        +0 ≤  x[4] ≤ inf
-        +0 ≤  x[5] ≤ inf
-        +0 ≤  x[6] ≤ inf
-        +0 ≤  x[7] ≤ inf
-        +0 ≤  x[8] ≤ inf
-        +0 ≤  x[9] ≤ inf
+        Continuous Variable (Time: 10)
+        ------------------------------
+        0 ≤  x[0] ≤ inf
+        0 ≤  x[1] ≤ inf
+        0 ≤  x[2] ≤ inf
+        0 ≤  x[3] ≤ inf
+        0 ≤  x[4] ≤ inf
+        0 ≤  x[5] ≤ inf
+        0 ≤  x[6] ≤ inf
+        0 ≤  x[7] ≤ inf
+        0 ≤  x[8] ≤ inf
+        0 ≤  x[9] ≤ inf
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -828,176 +827,21 @@ class Model:
         else:
             raise TypeError(f"Not supported type {args}.")
 
-    def _eval(self, expr: str, **kwargs):
-        from pandas.core.computation.eval import eval as pd_eval
-
-        kwargs.setdefault("engine", "python")
-        resolvers = kwargs.pop("resolvers", None)
-        kwargs["level"] = kwargs.pop("level", 0) + 1
-        resolvers = [self.variables, self.parameters]
-        kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
-        return pd_eval(expr, inplace=False, **kwargs)
-
     def vareval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Define a variable based a string expression (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a variable definition
-            (lower and upper bounds!).
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `model.add_constraints`.
-
-
-        Returns
-        -------
-        linopy.Variable
-            Variable which was added to the model.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.vareval("@lower <= x <= @upper")  # doctest:+SKIP
-
-        This is the same as
-
-        >>> x = m.add_variables(lower, upper, name="x")
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        kw = Expr(expr).to_variable_kwargs()
-        for k in ["lower", "upper"]:
-            if k in kw:
-                kw[k] = self._eval(kw[k], **eval_kw)
-
-        return self.add_variables(**kw, **kwargs)
+        raise NotImplementedError(
+            "vareval was removed in version `v0.1.0`. Please use m.add_variables() instead."
+        )
 
     def lineval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Evaluate linear expressions given as a string (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a linear expression.
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `LinearExpression.from_tuples`.
-
-        Returns
-        -------
-        A linear expression based on the input string.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.add_variables(lower, upper, name="x")
-        >>> y = m.add_variables(lower, upper, name="y")
-        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
-
-        Now create the linear expression
-
-        >>> con = m.lineval("@c * x - y")
-
-        This is the same as
-
-        >>> con = m.linexpr((c, "x"), (-1, "y"))
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        tuples = Expr(expr).to_string_tuples()
-        tuples = [
-            (self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in tuples
-        ]
-        return self.linexpr(*tuples, **kwargs)
+        raise NotImplementedError(
+            "lineval was removed in version `v0.1.0`. Please use arithmetic expressions instead."
+        )
 
     def coneval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Define a constraint determined by a string expression (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a linear expression.
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `model.add_constraints`.
-
-
-        Returns
-        -------
-        con : xarray.DataArray
-            Array containing the labels of the added constraints.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.add_variables(lower, upper, name="x")
-        >>> y = m.add_variables(lower, upper, name="y")
-        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
-
-        Now create the constraint:
-
-        >>> con = m.coneval("@c * x - y <= 5 ")
-
-        This is the same as
-
-        >>> lhs = m.linexpr((c, "x"), (-1, "y"))
-        >>> con = m.add_constraints(lhs, linopy.LESS_EQUAL, 5)
-
-        or
-
-        >>> con = m.add_constraints(c * x - y <= 5)
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        (lhs, sign, rhs), kw = Expr(expr).to_constraint_args_kwargs()
-        lhs = [(self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in lhs]
-        lhs = self.linexpr(*lhs)
-        rhs = self._eval(rhs, **eval_kw)
-        return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
+        raise NotImplementedError(
+            "coneval was removed in version `v0.1.0`. Please use arithmetic "
+            "expressions and m.add_constraints() instead."
+        )
 
     @property
     def coefficientrange(self):
