@@ -14,7 +14,7 @@ Upcoming Release
 * Coefficients very close to zero (`< 1e-10`) are now automatically set to zero to avoid numerical issues with solvers.
 * Coefficients of variables are no also allowed to be `np.nan`. These coefficients are ignored in the LP file writing.
 * The classes Variable, LinearExpression, Constraint, ScalarVariable, ScalarLinearExpression and ScalarConstraint now require the model in the initialization (mostly internal code is affected).
-
+* The `eval` module was removed in favor of arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
 
 Version 0.0.15
 --------------

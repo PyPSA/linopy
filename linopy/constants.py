@@ -6,7 +6,7 @@ Linopy module for defining constant values used within the package.
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd

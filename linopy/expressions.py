@@ -18,7 +18,7 @@ import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
 from deprecation import deprecated
-from numpy import arange, array, hstack, nan
+from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 

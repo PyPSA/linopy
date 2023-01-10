@@ -4,7 +4,6 @@
 Module containing all import/export functionalities.
 """
 import logging
-import os
 import shutil
 import time
 from pathlib import Path

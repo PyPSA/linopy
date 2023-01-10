@@ -8,9 +8,7 @@ import logging
 import os
 import re
 import subprocess as sub
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Union
 
 import pandas as pd
 
@@ -82,7 +80,7 @@ def safe_get_solution(status, func):
         try:
             logger.warning("Solution status unknown. Trying to parse solution.")
             return func()
-        except Exception as e:
+        except Exception:
             pass
     return Solution()
 
