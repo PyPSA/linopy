@@ -564,7 +564,7 @@ class LinearExpression:
         # Cannot set `other` if drop=True
         if other is xr.core.dtypes.NA:
             if not kwargs.get("drop", False):
-                other = self.fill_value
+                other = self._fill_value
         else:
             other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
@@ -714,7 +714,7 @@ class LinearExpression:
 
         vars = xr.DataArray.rolling(self.vars, **kwargs).construct(
             "_rolling_term",
-            fill_value=self.fill_value["vars"],
+            fill_value=self._fill_value["vars"],
             keep_attrs=True,
         )
 
@@ -833,7 +833,7 @@ class LinearExpression:
 
     ffill = exprwrap(Dataset.ffill)
 
-    fillna = exprwrap(Dataset.fillna, value=fill_value)
+    fillna = exprwrap(Dataset.fillna, value=_fill_value)
 
     sel = exprwrap(Dataset.sel)
 
@@ -841,7 +841,7 @@ class LinearExpression:
 
     shift = exprwrap(Dataset.shift)
 
-    reindex = exprwrap(Dataset.reindex, fill_value=fill_value)
+    reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
 
     rename_dims = exprwrap(Dataset.rename_dims)
 
@@ -897,8 +897,7 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
     if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
         exprs = [expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs]
 
-    fill_value = cls.fill_value
-    kwargs = dict(fill_value=fill_value, coords="minimal", compat="override")
+    kwargs = dict(fill_value=cls._fill_value, coords="minimal", compat="override")
     ds = xr.concat(exprs, dim, **kwargs)
     if "_term" in ds.coords:
         ds = ds.reset_index("_term", drop=True)
