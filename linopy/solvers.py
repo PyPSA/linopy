@@ -27,10 +27,10 @@ if os.name == "nt":
 else:
     which = "which"
 
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL).returncode == 0:
+if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 
-if sub.run([which, "cbc"], stdout=sub.DEVNULL).returncode == 0:
+if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
 try:
