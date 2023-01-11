@@ -834,7 +834,7 @@ class AnonymousScalarConstraint:
         """
         Initialize a anonymous scalar constraint.
         """
-        if not isinstance(rhs, (int, float, np.float32, np.float64)):
+        if not isinstance(rhs, (int, float, np.float32, np.float64, np.integer)):
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
         self._lhs = lhs
         self._sign = sign
