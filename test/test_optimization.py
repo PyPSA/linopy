@@ -234,6 +234,21 @@ def test_default_settings_chunked(model_chunked, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_solver_options(model, solver, io_api):
+    time_limit_option = {
+        "cbc": {"sec": 1},
+        "gurobi": {"TimeLimit": 1},
+        "glpk": {"tmlim": 1},
+        "cplex": {"timelimit": 1},
+        "scip": {"time_limit": 1},
+        "xpress": {"maxtime": 1},
+        "highs": {"time_limit": 1},
+    }
+    status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])
+    assert status == "ok"
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"

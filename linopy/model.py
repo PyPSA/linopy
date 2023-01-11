@@ -993,6 +993,12 @@ class Model:
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
 
+        if solver_options:
+            options_string = "\n".join(
+                f" - {k}: {v}" for k, v in solver_options.items()
+            )
+            logger.info(f"Solver options:\n{options_string}")
+
         problem_fn = self.get_problem_file(problem_fn)
         solution_fn = self.get_solution_file(solution_fn)
 

@@ -133,7 +133,11 @@ def run_cbc(
     if warmstart_fn:
         command += f"-basisI {warmstart_fn} "
 
-    command += " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+    if solver_options:
+        command += (
+            " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+            + " "
+        )
     command += f"-solve -solu {solution_fn} "
 
     if basis_fn:
@@ -141,6 +145,8 @@ def run_cbc(
 
     if not os.path.exists(solution_fn):
         os.mknod(solution_fn)
+
+    command = command.strip()
 
     if log_fn is None:
         p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
@@ -224,14 +230,19 @@ def run_glpk(
     problem_fn = model.to_file(problem_fn)
 
     # TODO use --nopresol argument for non-optimal solution output
-    command = f"glpsol --lp {problem_fn} --output {solution_fn}"
+    command = f"glpsol --lp {problem_fn} --output {solution_fn} "
     if log_fn is not None:
-        command += f" --log {log_fn}"
+        command += f"--log {log_fn} "
     if warmstart_fn:
-        command += f" --ini {warmstart_fn}"
+        command += f"--ini {warmstart_fn} "
     if basis_fn:
-        command += f" -w {basis_fn}"
-    command += " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+        command += f"-w {basis_fn} "
+    if solver_options:
+        command += (
+            " ".join("--" + " ".join([k, str(v)]) for k, v in solver_options.items())
+            + " "
+        )
+    command = command.strip()
 
     p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
     if log_fn is None:
