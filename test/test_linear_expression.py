@@ -80,6 +80,10 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, None)
 
+    with pytest.raises(ValueError):
+        data = (1 * m["x"]).data.reset_index("dim_0")
+        LinearExpression(data, None)
+
 
 def test_repr(m):
     expr = m.linexpr((10, "x"), (1, "y"))

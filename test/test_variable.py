@@ -39,6 +39,14 @@ def test_variable_repr(x):
     x.__repr__()
 
 
+def test_variable_labels(x):
+    isinstance(x.labels, xr.DataArray)
+
+
+def test_variable_data(x):
+    isinstance(x.data, xr.DataArray)
+
+
 def test_wrong_variable_init(m, x):
     with pytest.raises(ValueError):
         linopy.Variable(x.labels.values, m)
@@ -132,7 +140,7 @@ def test_variable_sum(x):
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.values[9] == -1
+    assert x.values[9] == x.fill_value
 
     x = x.where([True] * 4 + [False] * 6, x[0])
     assert isinstance(x, linopy.variables.Variable)
