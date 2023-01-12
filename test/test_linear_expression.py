@@ -80,9 +80,13 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, None)
 
+    lhs = 1 * m["x"]
+    vars = xr.DataArray(lhs.vars.values, dims=["dim_0", "_term"])
+    coeffs = xr.DataArray(lhs.coeffs.values, dims=["dim_0", "_term"])
+    data = xr.Dataset({"vars": vars, "coeffs": coeffs})
     with pytest.raises(ValueError):
-        data = (1 * m["x"]).data.reset_index("dim_0")
-        LinearExpression(data, None)
+        # test missing coords
+        LinearExpression(data, m)
 
 
 def test_repr(m):

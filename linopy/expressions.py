@@ -175,7 +175,8 @@ class LinearExpression:
         missing_coords = set(data.dims) - set(data.coords) - {term_dim}
         if missing_coords:
             raise ValueError(
-                f"Dimensions {missing_coords} have no coordinates, please add them."
+                f"Dimensions {missing_coords} have no coordinates. For "
+                "consistency all dimensions must have coordinates."
             )
 
         if np.issubdtype(data.vars, np.floating):
