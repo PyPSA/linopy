@@ -8,7 +8,7 @@ from linopy import Model
 m = Model()
 
 lower = pd.Series(0, range(10))
-upper = pd.DataFrame(10, range(10), range(10))
+upper = pd.DataFrame(np.arange(10, 110).reshape(10, 10), range(10), range(10))
 types = pd.Index(list("abcdefgh"), name="types")
 
 u = m.add_variables(0, upper, name="u")

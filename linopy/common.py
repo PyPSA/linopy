@@ -75,6 +75,11 @@ def best_int(max_value):
             return t
 
 
+def dictsel(d, keys):
+    "Reduce dictionary to keys that appear in selection."
+    return {k: v for k, v in d.items() if k in keys}
+
+
 def head_tail_range(stop, max_number_of_values=14):
     split_at = max_number_of_values // 2
     if stop > max_number_of_values:
@@ -84,6 +89,8 @@ def head_tail_range(stop, max_number_of_values=14):
 
 
 def print_coord(coord):
+    if isinstance(coord, dict):
+        coord = coord.values()
     if len(coord):
         return "[" + ", ".join([str(c) for c in coord]) + "]"
     else:

@@ -22,6 +22,7 @@ from xarray.core import indexing, utils
 import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
+    dictsel,
     forward_as_properties,
     has_optimized_model,
     head_tail_range,
@@ -185,19 +186,10 @@ class Variable:
         Print the variable arrays.
         """
         # don't loop over all values if not necessary
-        # TODO: check that we can skip this
-        if self.size == 1:
+        if not self.coords:
             header = f"Variable\n{'-' * len('Variable')}"
-            if self.lower.size > 1:
-                coord = {k: v for k, v in self.coords.items() if k in self.lower.dims}
-                lower = self.lower.sel(coord).item()
-            else:
-                lower = self.lower.item()
-            if self.upper.size > 1:
-                coord = {k: v for k, v in self.coords.items() if k in self.upper.dims}
-                upper = self.upper.sel(coord).item()
-            else:
-                upper = self.upper.item()
+            lower = self.lower.item()
+            upper = self.upper.item()
             coord = []
             data_string = print_single_variable(self, self.name, coord, lower, upper)
             return f"{header}\n{data_string}"
@@ -208,10 +200,16 @@ class Variable:
         to_print = head_tail_range(self.size, max_print)
 
         # create string, we use numpy to get the indexes
-        idx = np.unravel_index(to_print, self.shape)
-        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
-        coords = list(zip(*coords))
-        labels = np.ravel(self.labels.values)[to_print]
+        if self.shape:
+            idx = np.unravel_index(to_print, self.shape)
+            labels = np.ravel(self.labels.values)[to_print]
+            coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+            coords = list(zip(*coords))
+        else:
+            # case a single variable was selected
+            idx = [0]
+            labels = np.ravel(self.labels.values)
+            coords = [[c.item() for c in self.coords.values()]]
 
         data_string = ""
         for i, coord in enumerate(coords):
@@ -221,16 +219,8 @@ class Variable:
 
             if label != -1:
                 vname, vcoord = self.model.variables.get_label_position(label)
-
-                # get lower and upper bounds, which might have less dimensions
-                lcoord = [
-                    c for i, c in enumerate(vcoord) if self.dims[i] in self.lower.dims
-                ]
-                ucoord = [
-                    c for i, c in enumerate(vcoord) if self.dims[i] in self.upper.dims
-                ]
-                lower = self.lower.loc[tuple(lcoord)].item()
-                upper = self.upper.loc[tuple(ucoord)].item()
+                lower = self.lower.sel(dictsel(vcoord, self.lower.dims)).item()
+                upper = self.upper.sel(dictsel(vcoord, self.upper.dims)).item()
                 var_string = print_single_variable(self, vname, vcoord, lower, upper)
             else:
                 var_string = "None"
@@ -241,10 +231,13 @@ class Variable:
                 data_string += "\n\t\t..."
 
         # create shape string
-        shape_string = ", ".join(
-            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-        )
-        shape_string = f"({shape_string})"
+        if self.shape:
+            shape_string = ", ".join(
+                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+            )
+            shape_string = f"({shape_string})"
+        else:
+            shape_string = ""
         n_masked = (~self.mask).sum().item()
         mask_string = f" - {n_masked} masked entries" if n_masked else ""
         header = f"Variable {shape_string}{mask_string}\n" + "-" * (
@@ -916,9 +909,10 @@ class Variables:
                     index = np.unravel_index(value - start, labels.shape)
 
                     # Extract the coordinates from the indices
-                    coord = [
-                        labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
-                    ]
+                    coord = {
+                        dim: labels.indexes[dim][i]
+                        for dim, i in zip(labels.dims, index)
+                    }
 
                     # Add the name of the DataArray and the coordinates to the result list
                     coords.append((name, coord))

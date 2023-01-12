@@ -22,6 +22,7 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     _merge_inplace,
+    dictsel,
     forward_as_properties,
     has_optimized_model,
     is_constant,
@@ -118,29 +119,20 @@ class Constraint:
         # create string, we use numpy to get the indexes
         data_string = ""
         idx = np.unravel_index(to_print, self.shape)
-        indexes = np.stack(idx)
-        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+        coords = [self.indexes[dim][idx[i]] for i, dim in enumerate(self.dims)]
 
         # loop over all values to LinearExpression(print
         data_string = ""
         for i in range(len(to_print)):
-            # this is the index for the labels array
-            ix = tuple(indexes[..., i])
-            # sign and rhs might only be defined for some dimensions
-            six = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.sign.dims
-            )
-            rix = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.rhs.dims
-            )
-
-            coord = [c[i] for c in coords]
+            coord = {dim: c[i] for dim, c in zip(self.dims, coords)}
             coord_string = print_coord(coord)
             expr_string = print_single_expression(
-                self.coeffs.values[ix], self.vars.values[ix], self.lhs.model
+                self.coeffs.sel(coord).values,
+                self.vars.sel(coord).values,
+                self.lhs.model,
             )
-            sign_string = f"{self.sign.values[six]}"
-            rhs_string = f"{self.rhs.values[rix]}"
+            sign_string = f"{self.sign.sel(**dictsel(coord, self.sign.dims)).item()}"
+            rhs_string = f"{self.rhs.sel(**dictsel(coord, self.sign.dims)).item()}"
 
             data_string += f"\n{self.name}{coord_string}:  {expr_string} {sign_string} {rhs_string}"
 
