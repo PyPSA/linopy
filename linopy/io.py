@@ -461,9 +461,12 @@ def to_netcdf(m, *args, **kwargs):
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
     """
+    from linopy.expressions import LinearExpression
 
     def get_and_rename(m, attr, prefix=""):
         ds = getattr(m, attr)
+        if isinstance(ds, LinearExpression):
+            ds = ds.data
         return ds.rename({v: prefix + attr + "-" + v for v in ds})
 
     vars = [

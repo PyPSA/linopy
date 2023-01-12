@@ -433,6 +433,14 @@ class Variable:
         return self._labels
 
     @property
+    def data(self):
+        """
+        Get the data of the variable.
+        """
+        # Needed for compatibility with linopy.merge
+        return self.labels
+
+    @property
     def model(self):
         """
         Return the model of the variable.

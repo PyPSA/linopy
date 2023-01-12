@@ -134,6 +134,14 @@ def test_variable_where(x):
     assert isinstance(x, linopy.variables.Variable)
     assert x.values[9] == -1
 
+    x = x.where([True] * 4 + [False] * 6, x[0])
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[9] == x[0].label
+
+    x = x.where([True] * 4 + [False] * 6, x.loc[0])
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[9] == x[0].label
+
 
 def test_variable_shift(x):
     x = x.shift(first=3)

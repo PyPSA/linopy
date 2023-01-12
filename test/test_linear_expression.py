@@ -133,6 +133,9 @@ def test_linear_expression_with_multiplication(x):
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
 
+    expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
+    assert isinstance(expr, LinearExpression)
+
 
 def test_linear_expression_with_addition(m, x, y):
     expr = 10 * x + y
@@ -427,6 +430,17 @@ def test_merge(x, y, z):
     res = merge(expr1, expr2, dim="dim_1")
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
+
+
+def test_rename(x, y, z):
+    expr = 10 * x + y + z
+    renamed = expr.rename({"dim_0": "dim_5"})
+    assert set(renamed.dims) == {"dim_1", "dim_5", "_term"}
+    assert renamed.nterm == 3
+
+    renamed = expr.rename({"dim_0": "dim_1", "dim_1": "dim_2"})
+    assert set(renamed.dims) == {"dim_1", "dim_2", "_term"}
+    assert renamed.nterm == 3
 
 
 # -------------------------------- deprecated -------------------------------- #
