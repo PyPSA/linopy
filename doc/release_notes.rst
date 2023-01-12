@@ -16,6 +16,7 @@ Upcoming Release
 * The classes Variable, LinearExpression, Constraint, ScalarVariable, ScalarLinearExpression and ScalarConstraint now require the model in the initialization (mostly internal code is affected).
 * The `eval` module was removed in favor of arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
 * Solver options are now printed out in the console when solving a model.
+* If a variable with indexes differing from the model internal indexes are assigned, linopy will raise a warning and align the variable to the model indexes.
 
 Version 0.0.15
 --------------

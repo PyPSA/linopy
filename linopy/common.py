@@ -90,11 +90,15 @@ def print_coord(coord):
         return ""
 
 
-def print_single_variable(lower, upper, var, vartype):
-    if vartype == "Binary Variable":
-        return f"\n {var}"
+def print_single_variable(variable, name, coord, lower, upper):
+    if name in variable.model.variables._integer_variables:
+        bounds = "Z ⋂ " + f"[{lower},...,{upper}]"
+    elif name in variable.model.variables._binary_variables:
+        bounds = "{0, 1}"
     else:
-        return f"\n{lower} ≤  {var} ≤ {upper}"
+        bounds = f"[{lower}, {upper}]"
+
+    return f"{name}{print_coord(coord)} ∈ {bounds}"
 
 
 def print_single_expression(c, v, model):

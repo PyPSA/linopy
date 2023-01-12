@@ -205,9 +205,9 @@ class LinearExpression:
             return f"LinearExpression:\n-----------------\n{expr_string}"
 
         # print only a few values
-        max_prints = 14
-        split_at = max_prints // 2
-        to_print = head_tail_range(nexprs, max_prints)
+        max_print = 14
+        split_at = max_print // 2
+        to_print = head_tail_range(nexprs, max_print)
         coords = self.unravel_coords(to_print)
 
         # loop over all values to print
@@ -221,7 +221,7 @@ class LinearExpression:
 
             data_string += f"\n{coord_string}:  {expr_string}"
 
-            if i == split_at - 1 and nexprs > max_prints:
+            if i == split_at - 1 and nexprs > max_print:
                 data_string += "\n\t\t..."
 
         # create shape string

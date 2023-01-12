@@ -8,6 +8,7 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 
@@ -406,18 +407,18 @@ class Model:
         >>> m = Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
-        Continuous Variable (Time: 10)
-        ------------------------------
-        0 ≤  x[0] ≤ inf
-        0 ≤  x[1] ≤ inf
-        0 ≤  x[2] ≤ inf
-        0 ≤  x[3] ≤ inf
-        0 ≤  x[4] ≤ inf
-        0 ≤  x[5] ≤ inf
-        0 ≤  x[6] ≤ inf
-        0 ≤  x[7] ≤ inf
-        0 ≤  x[8] ≤ inf
-        0 ≤  x[9] ≤ inf
+        Variable (Time: 10)
+        -------------------
+        [0]: x[0] ∈ [0, inf]
+        [1]: x[1] ∈ [0, inf]
+        [2]: x[2] ∈ [0, inf]
+        [3]: x[3] ∈ [0, inf]
+        [4]: x[4] ∈ [0, inf]
+        [5]: x[5] ∈ [0, inf]
+        [6]: x[6] ∈ [0, inf]
+        [7]: x[7] ∈ [0, inf]
+        [8]: x[8] ∈ [0, inf]
+        [9]: x[9] ∈ [0, inf]
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -451,10 +452,36 @@ class Model:
             lower = DataArray(-inf, coords=coords, **kwargs)
             upper = DataArray(inf, coords=coords, **kwargs)
 
-        labels = DataArray(coords=coords).assign_attrs(binary=binary, integer=integer)
+        labels = DataArray(-2, coords=coords).assign_attrs(
+            binary=binary, integer=integer
+        )
+
         # ensure order of dims is the same
         lower = lower.transpose(*[d for d in labels.dims if d in lower.dims])
         upper = upper.transpose(*[d for d in labels.dims if d in upper.dims])
+
+        if mask is not None:
+            mask = DataArray(mask).astype(bool)
+            mask, _ = xr.align(mask, labels, join="right")
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
+
+        # It is important to end up with monotonically increasing labels in the
+        # model's variables container as we use it for indirect indexing.
+        labels_reindexed = labels.reindex_like(self.variables.labels, fill_value=-1)
+        if not labels.equals(labels_reindexed):
+            warnings.warn(
+                f"Reindexing variable {name} to match existing coordinates.",
+                UserWarning,
+            )
+            labels = labels_reindexed
+            lower = lower.reindex_like(labels)
+            upper = upper.reindex_like(labels)
+            if mask is None:
+                mask = labels != -1
+            else:
+                mask = mask.reindex_like(labels_reindexed, fill_value=False)
 
         self.check_force_dim_names(labels)
 
@@ -464,10 +491,6 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
-            mask = DataArray(mask)
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         if self.chunk:

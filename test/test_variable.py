@@ -142,8 +142,11 @@ def test_variable_shift(x):
 
 
 def test_variable_bfill(x):
-    result = x.bfill("first")
-    assert isinstance(result, linopy.variables.Variable)
+    x = x.where([False] * 4 + [True] * 6)
+    x = x.bfill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[2] == x.values[4]
+    assert x.values[2] != x.values[5]
 
 
 def test_variable_broadcast_like(x):
@@ -152,8 +155,11 @@ def test_variable_broadcast_like(x):
 
 
 def test_variable_ffill(x):
-    result = x.ffill("first")
-    assert isinstance(result, linopy.variables.Variable)
+    x = x.where([True] * 4 + [False] * 6)
+    x = x.ffill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[9] == x.values[3]
+    assert x.values[3] != x.values[2]
 
 
 def test_variable_fillna(x):

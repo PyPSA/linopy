@@ -1,4 +1,6 @@
+import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from linopy import Model
@@ -20,6 +22,14 @@ c_mask = xr.DataArray(False, coords=upper.axes)
 c_mask[:, 5:] = True
 c = m.add_variables(lower, upper, name="c", mask=c_mask)
 d = m.add_variables(0, 10, coords=[types], name="d")
+
+# add variable with indexes to reindex
+with pytest.warns(UserWarning):
+    e = m.add_variables(0, upper[5:], name="e")
+
+    f_mask = np.full_like(upper[:5], True, dtype=bool)
+    f_mask[:3] = False
+    f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
 
 # create linear expression for each variable
@@ -62,12 +72,20 @@ cav = m.add_constraints(cav_, name="cav")
 
 
 def test_variable_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
+    for var in [u, v, x, y, z, a, b, c, d, e, f]:
         repr(var)
 
 
 def test_scalar_variable_repr():
-    repr(u[0, 0])
+    for var in [u, v, x, y, z, a, b, c, d]:
+        coord = tuple([var.indexes[c][0] for c in var.dims])
+        repr(var[coord])
+
+
+def test_single_variable_repr():
+    for var in [u, v, x, y, z, a, b, c, d]:
+        coord = tuple([var.indexes[c][0] for c in var.dims])
+        repr(var.loc[coord])
 
 
 def test_linear_expression_repr():
