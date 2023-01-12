@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Printing out long LinearExpression is now accelerated in the `__repr__` function.
+* Multiplication of LinearExpression's with pandas object was stabilized.
 
 Version 0.1
 -----------

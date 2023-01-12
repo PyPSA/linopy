@@ -216,11 +216,14 @@ class Variable:
 
             label = labels[i]
             coord_string = print_coord(coord)
+            variables = self.model.variables
 
             if label != -1:
                 vname, vcoord = self.model.variables.get_label_position(label)
-                lower = self.lower.sel(dictsel(vcoord, self.lower.dims)).item()
-                upper = self.upper.sel(dictsel(vcoord, self.upper.dims)).item()
+                lower = variables[vname].lower
+                lower = lower.sel(dictsel(vcoord, lower.dims)).item()
+                upper = variables[vname].upper
+                upper = upper.sel(dictsel(vcoord, upper.dims)).item()
                 var_string = print_single_variable(self, vname, vcoord, lower, upper)
             else:
                 var_string = "None"

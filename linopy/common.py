@@ -113,8 +113,6 @@ def print_single_expression(c, v, model):
     Print a single linear expression based on the coefficients and variables.
     """
     # catch case that to many terms would be printed
-    v = model.variables.get_label_position(v)
-
     def print_line(expr):
         res = ""
         for coeff, (name, coord) in expr:
@@ -123,13 +121,13 @@ def print_single_expression(c, v, model):
         return res if res else " None"
 
     if len(c) > 6:
-        expr = list(zip(c[:3], v[:3]))
+        expr = list(zip(c[:3], model.variables.get_label_position(v[:3])))
         res = print_line(expr)
         res += "... "
-        expr = list(zip(c[-3:], v[-3:]))
+        expr = list(zip(c[-3:], model.variables.get_label_position(v[-3:])))
         res += print_line(expr)
         return res
-    expr = list(zip(c, v))
+    expr = list(zip(c, model.variables.get_label_position(v)))
     return print_line(expr)
 
 

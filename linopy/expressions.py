@@ -277,8 +277,10 @@ class LinearExpression:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
+        if isinstance(other, (pd.Series, pd.DataFrame)):
+            other = xr.DataArray(other)
         coeffs = other * self.coeffs
-        assert coeffs.shape == self.coeffs.shape
+        assert set(coeffs.shape) == set(self.coeffs.shape)
         return self.assign(coeffs=coeffs)
 
     def __rmul__(self, other):
