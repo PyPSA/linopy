@@ -75,6 +75,11 @@ def best_int(max_value):
             return t
 
 
+def dictsel(d, keys):
+    "Reduce dictionary to keys that appear in selection."
+    return {k: v for k, v in d.items() if k in keys}
+
+
 def head_tail_range(stop, max_number_of_values=14):
     split_at = max_number_of_values // 2
     if stop > max_number_of_values:
@@ -84,17 +89,23 @@ def head_tail_range(stop, max_number_of_values=14):
 
 
 def print_coord(coord):
+    if isinstance(coord, dict):
+        coord = coord.values()
     if len(coord):
         return "[" + ", ".join([str(c) for c in coord]) + "]"
     else:
         return ""
 
 
-def print_single_variable(lower, upper, var, vartype):
-    if vartype == "Binary Variable":
-        return f"\n {var}"
+def print_single_variable(variable, name, coord, lower, upper):
+    if name in variable.model.variables._integer_variables:
+        bounds = "Z ⋂ " + f"[{lower},...,{upper}]"
+    elif name in variable.model.variables._binary_variables:
+        bounds = "{0, 1}"
     else:
-        return f"\n{lower} ≤  {var} ≤ {upper}"
+        bounds = f"[{lower}, {upper}]"
+
+    return f"{name}{print_coord(coord)} ∈ {bounds}"
 
 
 def print_single_expression(c, v, model):

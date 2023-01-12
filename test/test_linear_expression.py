@@ -80,6 +80,14 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, None)
 
+    lhs = 1 * m["x"]
+    vars = xr.DataArray(lhs.vars.values, dims=["dim_0", "_term"])
+    coeffs = xr.DataArray(lhs.coeffs.values, dims=["dim_0", "_term"])
+    data = xr.Dataset({"vars": vars, "coeffs": coeffs})
+    with pytest.raises(ValueError):
+        # test missing coords
+        LinearExpression(data, m)
+
 
 def test_repr(m):
     expr = m.linexpr((10, "x"), (1, "y"))
@@ -131,6 +139,9 @@ def test_linear_expression_with_multiplication(x):
     assert isinstance(expr, LinearExpression)
 
     expr = np.array([1, 2]) * x
+    assert isinstance(expr, LinearExpression)
+
+    expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
     assert isinstance(expr, LinearExpression)
 
 
@@ -429,27 +440,42 @@ def test_merge(x, y, z):
     assert res.sel(dim_1=0).vars[2].item() == -1
 
 
+def test_rename(x, y, z):
+    expr = 10 * x + y + z
+    renamed = expr.rename({"dim_0": "dim_5"})
+    assert set(renamed.dims) == {"dim_1", "dim_5", "_term"}
+    assert renamed.nterm == 3
+
+    renamed = expr.rename({"dim_0": "dim_1", "dim_1": "dim_2"})
+    assert set(renamed.dims) == {"dim_1", "dim_2", "_term"}
+    assert renamed.nterm == 3
+
+
 # -------------------------------- deprecated -------------------------------- #
 
 
 def test_rolling_sum_variable_deprecated(v):
-    rolled = v.rolling_sum(dim_2=2)
+    with pytest.warns(DeprecationWarning):
+        rolled = v.rolling_sum(dim_2=2)
     assert rolled.nterm == 2
 
 
 def test_linear_expression_rolling_sum_deprecated(x, v):
-    rolled = v.to_linexpr().rolling_sum(dim_2=2)
+    with pytest.warns(DeprecationWarning):
+        rolled = v.to_linexpr().rolling_sum(dim_2=2)
     assert rolled.nterm == 2
 
     # multi-dimensional rolling with non-scalar _term dimension
     expr = 10 * x + v
-    rolled = expr.rolling_sum(dim_2=3)
+    with pytest.warns(DeprecationWarning):
+        rolled = expr.rolling_sum(dim_2=3)
     assert rolled.nterm == 6
 
 
 def test_variable_groupby_sum_deprecated(v):
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.groupby_sum(groups)
+    with pytest.warns(DeprecationWarning):
+        grouped = v.groupby_sum(groups)
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.data._term.size == 10
@@ -457,14 +483,16 @@ def test_variable_groupby_sum_deprecated(v):
 
 def test_linear_expression_groupby_sum_deprecated(v):
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.to_linexpr().groupby_sum(groups)
+    with pytest.warns(DeprecationWarning):
+        grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.data._term.size == 10
 
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = v.to_linexpr().groupby_sum(groups)
+    with pytest.warns(DeprecationWarning):
+        grouped = v.to_linexpr().groupby_sum(groups)
     assert "group" in grouped.dims
     # first group must be full with vars
     assert (grouped.data.sel(group=1) > 0).all()

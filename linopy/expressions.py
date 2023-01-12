@@ -166,15 +166,24 @@ class LinearExpression:
         if not set(data).issuperset({"coeffs", "vars"}):
             raise ValueError("data must contain the variables 'coeffs' and 'vars'")
 
+        term_dims = [d for d in data.dims if d.endswith("_term")]
+        if not term_dims:
+            raise ValueError("data must contain one dimension ending with '_term'")
+        term_dim = term_dims[0]
+
         # make sure that all non-helper dims have coordinates
-        if not all(dim in data.coords for dim in data.dims if not dim.startswith("_")):
-            raise ValueError("data must have coordinates for all non-helper dimensions")
+        missing_coords = set(data.dims) - set(data.coords) - {term_dim}
+        if missing_coords:
+            raise ValueError(
+                f"Dimensions {missing_coords} have no coordinates. For "
+                "consistency all dimensions must have coordinates."
+            )
 
         if np.issubdtype(data.vars, np.floating):
             data["vars"] = data.vars.fillna(-1).astype(int)
 
         (data,) = xr.broadcast(data)
-        data = data.transpose(..., "_term")
+        data = data.transpose(..., term_dim)
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -205,9 +214,9 @@ class LinearExpression:
             return f"LinearExpression:\n-----------------\n{expr_string}"
 
         # print only a few values
-        max_prints = 14
-        split_at = max_prints // 2
-        to_print = head_tail_range(nexprs, max_prints)
+        max_print = 14
+        split_at = max_print // 2
+        to_print = head_tail_range(nexprs, max_print)
         coords = self.unravel_coords(to_print)
 
         # loop over all values to print
@@ -221,7 +230,7 @@ class LinearExpression:
 
             data_string += f"\n{coord_string}:  {expr_string}"
 
-            if i == split_at - 1 and nexprs > max_prints:
+            if i == split_at - 1 and nexprs > max_print:
                 data_string += "\n\t\t..."
 
         # create shape string
@@ -452,6 +461,11 @@ class LinearExpression:
                     c = DataArray(c, v.coords)
             else:
                 c = as_dataarray(c)
+                # if a dimension is not in the coords, add it as a range index
+                for i, dim in enumerate(c.dims):
+                    if dim not in c.coords:
+                        c = c.assign_coords(**{dim: pd.RangeIndex(c.shape[i])})
+
             ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
             expr = cls(ds, model)
             exprs.append(expr)
@@ -803,10 +817,6 @@ class LinearExpression:
     def equals(self, other: "LinearExpression"):
         return self.data.equals(_expr_unwrap(other))
 
-    # TODO: make this return a LinearExpression (needs refactoring of __init__)
-    def rename(self, name_dict=None, **names) -> Dataset:
-        return self.data.rename(name_dict, **names)
-
     def __iter__(self):
         return self.data.__iter__()
 
@@ -842,6 +852,8 @@ class LinearExpression:
     shift = exprwrap(Dataset.shift)
 
     reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
+
+    rename = exprwrap(Dataset.rename)
 
     rename_dims = exprwrap(Dataset.rename_dims)
 
@@ -894,8 +906,11 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
     model = exprs[0].model
     exprs = [e.data if isinstance(e, cls) else e for e in exprs]
 
-    if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
-        exprs = [expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs]
+    if cls == LinearExpression:
+        if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
+            exprs = [
+                expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs
+            ]
 
     kwargs = dict(fill_value=cls._fill_value, coords="minimal", compat="override")
     ds = xr.concat(exprs, dim, **kwargs)

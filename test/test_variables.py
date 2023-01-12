@@ -30,7 +30,8 @@ def test_variables_assignment_with_merge():
     Test the merger of a variables with same dimension name but with different
     lengths.
 
-    Missing values should be filled up with -1.
+    New coordinates are aligned to the existing ones. Thus this should
+    raise a warning.
     """
     m = Model()
 
@@ -38,8 +39,10 @@ def test_variables_assignment_with_merge():
     m.add_variables(upper)
 
     upper = pd.Series(np.ones((12)))
-    m.add_variables(upper)
-    assert m.variables.labels.var0[-1].item() == -1
+    with pytest.warns(UserWarning):
+        m.add_variables(upper)
+
+    assert m.variables.labels.var0[-1].item() != -1
 
 
 def test_scalar_variables_name_counter():

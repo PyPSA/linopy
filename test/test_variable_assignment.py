@@ -105,8 +105,8 @@ def test_variable_assignment_chunked():
 
 
 def test_variable_assignment_different_coords():
-    # set a variable with different set of coordinates, this should be properly
-    # merged
+    # set a variable with different set of coordinates
+    # since v0.1 new coordinates are reindexed to the old ones
     m = Model()
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.Series(np.ones((10)))
@@ -114,10 +114,12 @@ def test_variable_assignment_different_coords():
 
     lower = pd.DataFrame(np.zeros((20, 10)))
     upper = pd.Series(np.ones((20)))
-    m.add_variables(lower, upper, name="y")
-    assert m.variables.labels.y.shape == (20, 10)
+    with pytest.warns(UserWarning):
+        m.add_variables(lower, upper, name="y")
+
+    assert m.variables.labels.y.shape == (10, 10)
     # x should now be aligned to new coords and contain 100 nans
-    assert m.variables.labels.x.shape == (20, 10)
+    assert m.variables.labels.x.shape == (10, 10)
     assert (m.variables.labels.x != -1).sum() == 100
 
 

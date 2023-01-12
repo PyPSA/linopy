@@ -22,8 +22,10 @@ from xarray.core import indexing, utils
 import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
+    dictsel,
     forward_as_properties,
     has_optimized_model,
+    head_tail_range,
     is_constant,
     print_coord,
     print_single_variable,
@@ -117,6 +119,8 @@ class Variable:
     __slots__ = ("_labels", "_model")
     __array_ufunc__ = None
 
+    _fill_value = -1
+
     def __init__(self, labels: DataArray, model: Any):
         """
         Initialize the Constraint.
@@ -181,63 +185,63 @@ class Variable:
         """
         Print the variable arrays.
         """
-        lower = self.lower.values
-        upper = self.upper.values
-
         # don't loop over all values if not necessary
-        if self.size == 1:
-            header = f"{self.type}\n{'-' * len(self.type)}"
-            lower = lower.item()
-            upper = upper.item()
-            data_string = print_single_variable(lower, upper, self.name, self.type)
+        if not self.coords:
+            header = f"Variable\n{'-' * len('Variable')}"
+            lower = self.lower.item()
+            upper = self.upper.item()
+            coord = []
+            data_string = print_single_variable(self, self.name, coord, lower, upper)
             return f"{header}\n{data_string}"
 
         # print only a few values
         max_print = 14
         split_at = max_print // 2
-        to_print = np.flatnonzero(self.mask)
-        truncate = len(to_print) > max_print
-        if truncate:
-            to_print = np.hstack([to_print[:split_at], to_print[-split_at:]])
+        to_print = head_tail_range(self.size, max_print)
 
         # create string, we use numpy to get the indexes
+        if self.shape:
+            idx = np.unravel_index(to_print, self.shape)
+            labels = np.ravel(self.labels.values)[to_print]
+            coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+            coords = list(zip(*coords))
+        else:
+            # case a single variable was selected
+            idx = [0]
+            labels = np.ravel(self.labels.values)
+            coords = [[c.item() for c in self.coords.values()]]
+
         data_string = ""
-        idx = np.unravel_index(to_print, self.shape)
-        indexes = np.stack(idx)
-        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+        for i, coord in enumerate(coords):
 
-        # loop over all values to print
-        for i in range(len(to_print)):
-            # this is the index for the labels array
-            ix = tuple(indexes[..., i])
-            # lower and upper bounds might only be defined for some dimensions
-            lix = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.lower.dims
-            )
-            uix = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.upper.dims
-            )
-
-            # create coordinate string
-            coord = [c[i] for c in coords]
+            label = labels[i]
             coord_string = print_coord(coord)
-            var_string = f"{self.name}{coord_string}"
-            data_string += print_single_variable(
-                lower[lix], upper[uix], var_string, self.type
-            )
 
-            if i == split_at - 1 and truncate:
+            if label != -1:
+                vname, vcoord = self.model.variables.get_label_position(label)
+                lower = self.lower.sel(dictsel(vcoord, self.lower.dims)).item()
+                upper = self.upper.sel(dictsel(vcoord, self.upper.dims)).item()
+                var_string = print_single_variable(self, vname, vcoord, lower, upper)
+            else:
+                var_string = "None"
+
+            data_string += f"\n{coord_string}: {var_string}"
+
+            if i == split_at - 1 and self.size > max_print:
                 data_string += "\n\t\t..."
 
         # create shape string
-        shape_string = ", ".join(
-            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-        )
-        shape_string = f"({shape_string})"
+        if self.shape:
+            shape_string = ", ".join(
+                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+            )
+            shape_string = f"({shape_string})"
+        else:
+            shape_string = ""
         n_masked = (~self.mask).sum().item()
         mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
-            len(self.type) + len(shape_string) + len(mask_string) + 1
+        header = f"Variable {shape_string}{mask_string}\n" + "-" * (
+            len("Variable") + len(shape_string) + len(mask_string) + 1
         )
         return f"{header}{data_string}"
 
@@ -429,6 +433,14 @@ class Variable:
         return self._labels
 
     @property
+    def data(self):
+        """
+        Get the data of the variable.
+        """
+        # Needed for compatibility with linopy.merge
+        return self.labels
+
+    @property
     def model(self):
         """
         Return the model of the variable.
@@ -452,6 +464,14 @@ class Variable:
         else:
             return "Continuous Variable"
 
+    @classmethod
+    @property
+    def fill_value(self):
+        """
+        Return the fill value of the variable.
+        """
+        return self._fill_value
+
     @property
     def mask(self):
         """
@@ -464,7 +484,7 @@ class Variable:
         -------
         xr.DataArray
         """
-        return (self.labels != -1).astype(bool)
+        return (self.labels != self._fill_value).astype(bool)
 
     @property
     def upper(self):
@@ -589,7 +609,63 @@ class Variable:
         -------
         linopy.Variable
         """
+        if isinstance(other, Variable):
+            other = other.labels
+        elif isinstance(other, ScalarVariable):
+            other = other.label
         return self.__class__(self.labels.where(cond, other, **kwargs), self.model)
+
+    def ffill(self, dim, limit=None):
+        """
+        Forward fill the variable along a dimension.
+
+        This operation call ``xarray.DataArray.ffill`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to forward fill.
+        limit : int, optional
+            Maximum number of consecutive NaN values to forward fill. Must be greater than or equal to 0.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        labels = (
+            self.labels.where(self.labels != -1)
+            .ffill(dim, limit=limit)
+            .fillna(-1)
+            .astype(int)
+        )
+        return self.__class__(labels, self.model)
+
+    def bfill(self, dim, limit=None):
+        """
+        Backward fill the variable along a dimension.
+
+        This operation call ``xarray.DataArray.bfill`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to backward fill.
+        limit : int, optional
+            Maximum number of consecutive NaN values to backward fill. Must be greater than or equal to 0.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        labels = (
+            self.labels.where(self.labels != -1)
+            .bfill(dim, limit=limit)
+            .fillna(-1)
+            .astype(int)
+        )
+        return self.__class__(labels, self.model)
 
     def sanitize(self):
         """
@@ -611,10 +687,6 @@ class Variable:
 
     assign_coords = varwrap(DataArray.assign_coords)
 
-    astype = varwrap(DataArray.astype)
-
-    bfill = varwrap(DataArray.bfill)
-
     broadcast_like = varwrap(DataArray.broadcast_like)
 
     compute = varwrap(DataArray.compute)
@@ -624,8 +696,6 @@ class Variable:
     drop_sel = varwrap(DataArray.drop_sel)
 
     drop_isel = varwrap(DataArray.drop_isel)
-
-    ffill = varwrap(DataArray.ffill)
 
     fillna = varwrap(DataArray.fillna)
 
@@ -847,9 +917,10 @@ class Variables:
                     index = np.unravel_index(value - start, labels.shape)
 
                     # Extract the coordinates from the indices
-                    coord = [
-                        labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
-                    ]
+                    coord = {
+                        dim: labels.indexes[dim][i]
+                        for dim, i in zip(labels.dims, index)
+                    }
 
                     # Add the name of the DataArray and the coordinates to the result list
                     coords.append((name, coord))
@@ -971,6 +1042,8 @@ class ScalarVariable:
         self._model = model
 
     def __repr__(self) -> str:
+        if self.label == -1:
+            return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
         coord_string = print_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
