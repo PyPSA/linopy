@@ -337,7 +337,7 @@ def run_highs(
         line = line.decode()
 
         if line.startswith("Model   status"):
-            model_status = line[len("Model   status      : ") : -1].lower()
+            model_status = line[len("Model   status      : ") : -2].lower()
             if "optimal" in model_status:
                 status = "ok"
                 termination_condition = model_status
@@ -361,14 +361,15 @@ def run_highs(
     f = open(solution_fn, "rb")
     f.readline()
     trimmed = re.sub(rb"\*\*\s+", b"", f.read())
-    sol, sentinel, dual = trimmed.partition(bytes("Rows\n", "utf-8"))
+    sol, sentinel, dual = trimmed.partition(bytes("Rows\r\n", "utf-8"))
     f.close()
 
-    sol = pd.read_fwf(io.BytesIO(sol))
+    sol = pd.read_fwf(io.BytesIO(sol), infer_nrows=1e9)
     sol = sol.set_index("Name")["Primal"].pipe(set_int_index)
 
-    dual = pd.read_fwf(io.BytesIO(dual))["Dual"]
+    dual = pd.read_fwf(io.BytesIO(dual), infer_nrows=1e9).iloc[:-2]["Dual"]
     dual.index = Model.constraints.ravel("labels", filter_missings=True)
+    dual.fillna(0, inplace=True)
 
     return dict(
         status=status,

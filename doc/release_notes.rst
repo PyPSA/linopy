@@ -15,7 +15,7 @@ Version 0.0.13
 **Bug Fixes**
 
 * Filtering out zeros is now an optional feature in the `solve` function. The previous behavior of filtering just before the LP file writing, lead to unexpected errors for constraints with only zero terms.
-
+* Solving with HiGHS is now functional
 
 Version 0.0.12
 --------------
