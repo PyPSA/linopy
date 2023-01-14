@@ -31,6 +31,7 @@ from linopy.common import (
     print_single_expression,
     replace_by_map,
 )
+from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
@@ -111,7 +112,7 @@ class Constraint:
             return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
         # print only a few values
-        max_print = 14
+        max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = np.flatnonzero(self.mask)
         truncate = len(to_print) > max_print

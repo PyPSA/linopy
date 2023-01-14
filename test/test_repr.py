@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import Model, options
 
 m = Model()
 
@@ -113,3 +113,12 @@ def test_scalar_constraint_repr():
 def test_constraint_repr():
     for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav]:
         repr(con)
+
+
+def test_print_options():
+    for o in [v, lv, cv_, cv]:
+        default_repr = repr(o)
+        with options as opts:
+            opts.set_value(display_max_rows=20)
+            longer_repr = repr(o)
+        assert len(default_repr) < len(longer_repr)

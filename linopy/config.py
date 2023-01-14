@@ -36,6 +36,12 @@ class OptionSettings:
     def reset(self):
         self._current_values = self._defaults.copy()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.reset()
+
     def __repr__(self):
         settings = "\n ".join(
             f"{name}={value}" for name, value in self._current_values.items()

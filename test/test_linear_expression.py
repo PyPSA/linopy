@@ -440,6 +440,16 @@ def test_merge(x, y, z):
     assert res.sel(dim_1=0).vars[2].item() == -1
 
 
+def test_linear_expression_outer_sum(x, y):
+    expr = x + y
+    expr2 = sum([x, y])
+    assert_linequal(expr, expr2)
+
+    expr = 1 * x + 2 * y
+    expr2 = sum([1 * x, 2 * y])
+    assert_linequal(expr, expr2)
+
+
 def test_rename(x, y, z):
     expr = 10 * x + y + z
     renamed = expr.rename({"dim_0": "dim_5"})
