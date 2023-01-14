@@ -30,6 +30,7 @@ from linopy.common import (
     print_coord,
     print_single_variable,
 )
+from linopy.config import options
 
 
 def varwrap(method, *default_args, **new_default_kwargs):
@@ -195,9 +196,10 @@ class Variable:
             return f"{header}\n{data_string}"
 
         # print only a few values
-        max_print = 14
+        max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = head_tail_range(self.size, max_print)
+        truncate = self.size > max_print
 
         # create string, we use numpy to get the indexes
         if self.shape:
@@ -211,12 +213,17 @@ class Variable:
             labels = np.ravel(self.labels.values)
             coords = [[c.item() for c in self.coords.values()]]
 
-        data_string = ""
+        coord_strings = []
+        var_strings = []
+        bound_strings = []
+        trunc_strings = []
         for i, coord in enumerate(coords):
 
             label = labels[i]
-            coord_string = print_coord(coord)
             variables = self.model.variables
+
+            coord_string = print_coord(coord) + ":"
+            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
 
             if label != -1:
                 vname, vcoord = self.model.variables.get_label_position(label)
@@ -224,14 +231,25 @@ class Variable:
                 lower = lower.sel(dictsel(vcoord, lower.dims)).item()
                 upper = variables[vname].upper
                 upper = upper.sel(dictsel(vcoord, upper.dims)).item()
-                var_string = print_single_variable(self, vname, vcoord, lower, upper)
+                var_string, bound_string = print_single_variable(
+                    self, vname, vcoord, lower, upper
+                )
+
             else:
                 var_string = "None"
+                bound_string = ""
 
-            data_string += f"\n{coord_string}: {var_string}"
+            coord_strings.append(coord_string)
+            var_strings.append(var_string)
+            bound_strings.append(bound_string)
+            trunc_strings.append(trunc_string)
 
-            if i == split_at - 1 and self.size > max_print:
-                data_string += "\n\t\t..."
+        coord_width = max(len(c) for c in coord_strings)
+        var_width = max(len(v) for v in var_strings)
+
+        data_string = ""
+        for c, v, b, t in zip(coord_strings, var_strings, bound_strings, trunc_strings):
+            data_string += f"\n{c:<{coord_width}} {v:<{var_width}} {b}{t}"
 
         # create shape string
         if self.shape:
