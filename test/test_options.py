@@ -49,6 +49,10 @@ def test_setitem(options):
         options["d"] = 20
 
 
+def test_repr(options):
+    repr(options)
+
+
 def test_with_statement(options):
     with options as o:
         o.set_value(a=3)

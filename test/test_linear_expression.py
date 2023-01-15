@@ -251,7 +251,7 @@ def test_linear_expression_addition_invalid(x, y, z):
         expr - 10
 
 
-def test_linear_expression_substraction(x, y, z):
+def test_linear_expression_substraction(x, y, z, v):
     expr = 10 * x + y
     other = 2 * y - z
     res = expr - other
@@ -262,7 +262,7 @@ def test_linear_expression_substraction(x, y, z):
     assert res.data.notnull().all().to_array().all()
 
 
-def test_linear_expression_sum(x, y, z):
+def test_linear_expression_sum(x, y, z, v):
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -275,6 +275,11 @@ def test_linear_expression_sum(x, y, z):
     assert res.data.notnull().all().to_array().all()
 
     assert_linequal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+
+    # test special case otherride coords
+    expr = v.loc[:9] + v.loc[10:]
+    assert expr.nterm == 2
+    assert len(expr.coords["dim_2"]) == 10
 
 
 def test_linear_expression_sum_drop_zeros(z):
@@ -348,11 +353,6 @@ def test_linear_expression_shift(v):
 
 def test_linear_expression_diff(v):
     diff = v.to_linexpr().diff("dim_2")
-    assert diff.nterm == 2
-
-
-def test_linear_expression_diff(v):
-    diff = v.diff("dim_2")
     assert diff.nterm == 2
 
 

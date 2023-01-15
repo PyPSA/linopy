@@ -266,7 +266,7 @@ class LinearExpression:
         if other == 0:
             return self
         else:
-            raise NotImplementedError
+            return NotImplemented
 
     def __sub__(self, other):
         """
@@ -909,9 +909,10 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
     Merge multiple linear expression together.
 
     This function is a bit faster than summing over multiple linear expressions.
-    In case that the a list of LinearExpression with exactly the same shape,
-    the concatenation uses the coordinates of the first object as a basis
-    which overrides the coordinates of the consecutive objects.
+    In case a list of LinearExpression with exactly the same shape is passed
+    and the dimension to concatenate on is "_term", the concatenation uses
+    the coordinates of the first object as a basis which overrides the
+    coordinates of the consecutive objects.
 
 
     Parameters
@@ -923,7 +924,9 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
     cls : type
         Type of the resulting expression.
     **kwargs
-        Additional keyword arguments passed to xarray.concat.
+        Additional keyword arguments passed to xarray.concat. Defaults to
+        {coords: "minimal", compat: "override"} or, in the special case described
+        above, to {coords: "minimal", compat: "override", "join": "override"}.
 
     Returns
     -------
@@ -934,23 +937,25 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
     else:
         exprs = list(exprs)
 
-    all_same_dims = all(e.dims == exprs[0].non_helper_dims for e in exprs)
+    override = False
+    if cls == LinearExpression and dim == "_term":
+        override = all(e.non_helper_dims == exprs[0].non_helper_dims for e in exprs)
 
     model = exprs[0].model
-    exprs = [e.data if isinstance(e, cls) else e for e in exprs]
+    ds_list = [e.data if isinstance(e, cls) else e for e in exprs]
 
     if cls == LinearExpression:
-        if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
-            exprs = [
-                expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs
+        if not all(len(ds._term) == len(ds_list[0]._term) for ds in ds_list[1:]):
+            ds_list = [
+                ds.assign_coords(_term=np.arange(len(ds._term))) for ds in ds_list
             ]
 
     if not kwargs:
         kwargs = dict(fill_value=cls._fill_value, coords="minimal", compat="override")
-        if all_same_dims and cls == LinearExpression:
+        if override:
             kwargs.update(dict(join="override"))
 
-    ds = xr.concat(exprs, dim, **kwargs)
+    ds = xr.concat(ds_list, dim, **kwargs)
 
     if "_term" in ds.coords:
         ds = ds.reset_index("_term", drop=True)

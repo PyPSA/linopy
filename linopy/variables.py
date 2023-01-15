@@ -326,7 +326,7 @@ class Variable:
         if other == 0:
             return self
         else:
-            raise NotImplementedError
+            return NotImplemented
 
     def __sub__(self, other):
         """
@@ -1109,7 +1109,7 @@ class ScalarVariable:
         if other == 0:
             return self
         else:
-            raise NotImplementedError
+            return NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other
