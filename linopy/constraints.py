@@ -31,6 +31,7 @@ from linopy.common import (
     print_single_expression,
     replace_by_map,
 )
+from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
@@ -105,11 +106,13 @@ class Constraint:
             expr_string = print_single_expression(
                 self.lhs.coeffs.values, self.lhs.vars.values, self.lhs.model
             )
-            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
+            header = f"{self.type} `{self.name}`\n" + "-" * (
+                len(self.type) + len(self.name) + 3
+            )
             return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
         # print only a few values
-        max_print = 14
+        max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = np.flatnonzero(self.mask)
         truncate = len(to_print) > max_print
@@ -122,22 +125,37 @@ class Constraint:
         coords = [self.indexes[dim][idx[i]] for i, dim in enumerate(self.dims)]
 
         # loop over all values to LinearExpression(print
-        data_string = ""
+        coord_strings = []
+        expr_strings = []
+        sign_strings = []
+        rhs_strings = []
+        trunc_strings = []
         for i in range(len(to_print)):
             coord = {dim: c[i] for dim, c in zip(self.dims, coords)}
-            coord_string = print_coord(coord)
+            coord_string = print_coord(coord) + ":"
             expr_string = print_single_expression(
                 self.coeffs.sel(coord).values,
                 self.vars.sel(coord).values,
                 self.lhs.model,
             )
             sign_string = f"{self.sign.sel(**dictsel(coord, self.sign.dims)).item()}"
-            rhs_string = f"{self.rhs.sel(**dictsel(coord, self.sign.dims)).item()}"
+            rhs_string = f"{self.rhs.sel(**dictsel(coord, self.rhs.dims)).item()}"
+            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
 
-            data_string += f"\n{self.name}{coord_string}:  {expr_string} {sign_string} {rhs_string}"
+            coord_strings.append(coord_string)
+            expr_strings.append(expr_string)
+            sign_strings.append(sign_string)
+            rhs_strings.append(rhs_string)
+            trunc_strings.append(trunc_string)
 
-            if i == split_at - 1 and truncate:
-                data_string += "\n\t\t..."
+        coord_width = max(len(c) for c in coord_strings)
+        expr_width = max(len(e) for e in expr_strings)
+
+        data_string = ""
+        for c, e, s, r, t in zip(
+            coord_strings, expr_strings, sign_strings, rhs_strings, trunc_strings
+        ):
+            data_string += f"\n{c:<{coord_width}} {e:<{expr_width}} {s:<2} {r}{t}"
 
         # create shape string
         shape_string = ", ".join(
@@ -146,8 +164,8 @@ class Constraint:
         shape_string = f"({shape_string})"
         n_masked = (~self.mask).sum().item()
         mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
-            len(self.type) + len(shape_string) + len(mask_string) + 1
+        header = f"{self.type} `{self.name}` {shape_string}{mask_string}\n" + "-" * (
+            len(self.type) + len(self.name) + len(shape_string) + len(mask_string) + 4
         )
         return f"{header}{data_string}"
 

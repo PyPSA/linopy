@@ -12,6 +12,7 @@ import numpy as np
 from numpy import arange, hstack
 from xarray import DataArray, apply_ufunc, merge
 
+from linopy.config import options
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
 
 
@@ -105,7 +106,7 @@ def print_single_variable(variable, name, coord, lower, upper):
     else:
         bounds = f"[{lower}, {upper}]"
 
-    return f"{name}{print_coord(coord)} ∈ {bounds}"
+    return f"{name}{print_coord(coord)}", f"∈ {bounds}"
 
 
 def print_single_expression(c, v, model):
@@ -115,17 +116,26 @@ def print_single_expression(c, v, model):
     # catch case that to many terms would be printed
     def print_line(expr):
         res = ""
-        for coeff, (name, coord) in expr:
+        for i, (coeff, (name, coord)) in enumerate(expr):
             coord_string = print_coord(coord)
-            res += f" {coeff:+} {name}{coord_string} "
+            if i:
+                res += f" {float(coeff):+.4} {name}{coord_string} "
+            else:
+                res += f" {float(coeff):.4} {name}{coord_string} "
         return res if res else " None"
 
-    if len(c) > 6:
-        expr = list(zip(c[:3], model.variables.get_label_position(v[:3])))
+    max_terms = options.get_value("display_max_terms")
+    if len(c) > max_terms:
+        truncate = max_terms // 2
+        expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
         res = print_line(expr)
         res += "... "
-        expr = list(zip(c[-3:], model.variables.get_label_position(v[-3:])))
-        res += print_line(expr)
+        expr = list(
+            zip(c[-truncate:], model.variables.get_label_position(v[-truncate:]))
+        )
+        residual = print_line(expr)
+        if residual != " None":
+            res += residual
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
     return print_line(expr)

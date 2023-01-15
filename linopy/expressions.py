@@ -30,6 +30,7 @@ from linopy.common import (
     print_coord,
     print_single_expression,
 )
+from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
@@ -214,24 +215,33 @@ class LinearExpression:
             return f"LinearExpression:\n-----------------\n{expr_string}"
 
         # print only a few values
-        max_print = 14
+        max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = head_tail_range(nexprs, max_print)
+        truncate = nexprs > max_print
         coords = self.unravel_coords(to_print)
 
         # loop over all values to print
-        data_string = ""
+        coord_strings = []
+        expr_strings = []
+        trunc_strings = []
         for i, coord in enumerate(coords):
 
-            coord_string = print_coord(coord)
+            coord_string = print_coord(coord) + ":"
             expr_string = print_single_expression(
                 self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
             )
+            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
 
-            data_string += f"\n{coord_string}:  {expr_string}"
+            coord_strings.append(coord_string)
+            expr_strings.append(expr_string)
+            trunc_strings.append(trunc_string)
 
-            if i == split_at - 1 and nexprs > max_print:
-                data_string += "\n\t\t..."
+        coord_width = max(len(c) for c in coord_strings)
+
+        data_string = ""
+        for c, e, t in zip(coord_strings, expr_strings, trunc_strings):
+            data_string += f"\n{c:<{coord_width}} {e}{t}"
 
         # create shape string
         nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
@@ -250,6 +260,13 @@ class LinearExpression:
         if isinstance(other, variables.Variable):
             other = LinearExpression.from_tuples((1, other))
         return merge(self, other)
+
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+        else:
+            return NotImplemented
 
     def __sub__(self, other):
         """
@@ -279,7 +296,7 @@ class LinearExpression:
             )
         if isinstance(other, (pd.Series, pd.DataFrame)):
             other = xr.DataArray(other)
-        coeffs = other * self.coeffs
+        coeffs = self.coeffs * other
         assert set(coeffs.shape) == set(self.coeffs.shape)
         return self.assign(coeffs=coeffs)
 
@@ -334,6 +351,10 @@ class LinearExpression:
     def dims(self):
         # do explicitly sort as in vars (same as in coeffs)
         return {k: self.data.dims[k] for k in self.vars.dims}
+
+    @property
+    def non_helper_dims(self):
+        return {k: self.data.dims[k] for k in self.dims if not k.startswith("_")}
 
     @property
     def vars(self):
@@ -883,11 +904,16 @@ def _pd_dataframe_wo_axes_names(df):
     return False
 
 
-def merge(*exprs, dim="_term", cls=LinearExpression):
+def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
     """
     Merge multiple linear expression together.
 
     This function is a bit faster than summing over multiple linear expressions.
+    In case a list of LinearExpression with exactly the same shape is passed
+    and the dimension to concatenate on is "_term", the concatenation uses
+    the coordinates of the first object as a basis which overrides the
+    coordinates of the consecutive objects.
+
 
     Parameters
     ----------
@@ -895,27 +921,42 @@ def merge(*exprs, dim="_term", cls=LinearExpression):
         List of linear expressions to merge.
     dim : str
         Dimension along which the expressions should be concatenated.
+    cls : type
+        Type of the resulting expression.
+    **kwargs
+        Additional keyword arguments passed to xarray.concat. Defaults to
+        {coords: "minimal", compat: "override"} or, in the special case described
+        above, to {coords: "minimal", compat: "override", "join": "override"}.
 
     Returns
     -------
     res : linopy.LinearExpression
     """
     if len(exprs) == 1:
-        exprs = exprs[0]  # assume one list of mergeable objects is given
+        exprs = exprs[0]  # assume a list of mergeable objects is given
     else:
         exprs = list(exprs)
 
+    override = False
+    if cls == LinearExpression and dim == "_term":
+        override = all(e.non_helper_dims == exprs[0].non_helper_dims for e in exprs)
+
     model = exprs[0].model
-    exprs = [e.data if isinstance(e, cls) else e for e in exprs]
+    ds_list = [e.data if isinstance(e, cls) else e for e in exprs]
 
     if cls == LinearExpression:
-        if not all(len(expr._term) == len(exprs[0]._term) for expr in exprs[1:]):
-            exprs = [
-                expr.assign_coords(_term=np.arange(len(expr._term))) for expr in exprs
+        if not all(len(ds._term) == len(ds_list[0]._term) for ds in ds_list[1:]):
+            ds_list = [
+                ds.assign_coords(_term=np.arange(len(ds._term))) for ds in ds_list
             ]
 
-    kwargs = dict(fill_value=cls._fill_value, coords="minimal", compat="override")
-    ds = xr.concat(exprs, dim, **kwargs)
+    if not kwargs:
+        kwargs = dict(fill_value=cls._fill_value, coords="minimal", compat="override")
+        if override:
+            kwargs.update(dict(join="override"))
+
+    ds = xr.concat(ds_list, dim, **kwargs)
+
     if "_term" in ds.coords:
         ds = ds.reset_index("_term", drop=True)
 

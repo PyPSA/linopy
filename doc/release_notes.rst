@@ -6,6 +6,9 @@ Upcoming Release
 
 * Printing out long LinearExpression is now accelerated in the `__repr__` function.
 * Multiplication of LinearExpression's with pandas object was stabilized.
+* A options handler was introduced that allows the user to change the maximum of printed lines and terms in the display of Variable's, LinearExpression's and Constraint's.
+* If LinearExpression of exactly the same shape are joined together (in arithmetic operations), the coordinates of the first object is used to override the coordinates of the consecutive objects.
+
 
 Version 0.1
 -----------

@@ -10,6 +10,7 @@ Created on Wed Mar 10 11:03:06 2021.
 # we need to extend their __mul__ functions with a quick special case
 import linopy.monkey_patch_xarray
 from linopy import model, remote
+from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 from linopy.expressions import merge
 from linopy.io import read_netcdf
