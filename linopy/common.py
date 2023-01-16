@@ -124,6 +124,9 @@ def print_single_expression(c, v, model):
                 res += f" {float(coeff):.4} {name}{coord_string} "
         return res if res else " None"
 
+    mask = v != -1
+    c, v = c[mask], v[mask]
+
     max_terms = options.get_value("display_max_terms")
     if len(c) > max_terms:
         truncate = max_terms // 2
