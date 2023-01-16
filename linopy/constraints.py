@@ -25,6 +25,7 @@ from linopy.common import (
     dictsel,
     forward_as_properties,
     has_optimized_model,
+    head_tail_range,
     is_constant,
     maybe_replace_signs,
     print_coord,
@@ -111,10 +112,27 @@ class Constraint:
             )
             return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
-        # print only a few values
+        # create header string
+        shape_string = ", ".join(
+            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+        )
+        shape_string = f"({shape_string})"
+        n_masked = (~self.mask).sum().item()
+        mask_string = f" - {n_masked} masked entries" if n_masked else ""
+        header = f"{self.type} `{self.name}` {shape_string}{mask_string}\n" + "-" * (
+            len(self.type) + len(self.name) + len(shape_string) + len(mask_string) + 4
+        )
+
+        # create data string, print only a few values
         max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = np.flatnonzero(self.mask)
+        if not len(to_print):
+            # case that all entries are masked
+            to_print = head_tail_range(self.size, max_print)
+            data_string = "None"
+            return f"{header}\n{data_string}"
+
         truncate = len(to_print) > max_print
         if truncate:
             to_print = np.hstack([to_print[:split_at], to_print[-split_at:]])
@@ -157,16 +175,6 @@ class Constraint:
         ):
             data_string += f"\n{c:<{coord_width}} {e:<{expr_width}} {s:<2} {r}{t}"
 
-        # create shape string
-        shape_string = ", ".join(
-            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-        )
-        shape_string = f"({shape_string})"
-        n_masked = (~self.mask).sum().item()
-        mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"{self.type} `{self.name}` {shape_string}{mask_string}\n" + "-" * (
-            len(self.type) + len(self.name) + len(shape_string) + len(mask_string) + 4
-        )
         return f"{header}{data_string}"
 
     @deprecated(details="Use the `labels` property instead of `to_array`")

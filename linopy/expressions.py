@@ -214,7 +214,12 @@ class LinearExpression:
             )
             return f"LinearExpression:\n-----------------\n{expr_string}"
 
-        # print only a few values
+        # create header string
+        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
+        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
+        header = f"LinearExpression {shape_string}:\n{'-' * (18 + len(shape_string))}"
+
+        # create data string, print only a few values
         max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = head_tail_range(nexprs, max_print)
@@ -243,10 +248,6 @@ class LinearExpression:
         for c, e, t in zip(coord_strings, expr_strings, trunc_strings):
             data_string += f"\n{c:<{coord_width}} {e}{t}"
 
-        # create shape string
-        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
-        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
-        header = f"LinearExpression {shape_string}:\n{'-' * (18 + len(shape_string))}"
         return f"{header}{data_string}"
 
     def __add__(self, other):
