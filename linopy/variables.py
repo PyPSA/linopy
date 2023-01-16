@@ -195,7 +195,21 @@ class Variable:
             data_string = print_single_variable(self, self.name, coord, lower, upper)
             return f"{header}\n{data_string}"
 
-        # print only a few values
+        # create header string
+        if self.shape:
+            shape_string = ", ".join(
+                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+            )
+            shape_string = f"({shape_string})"
+        else:
+            shape_string = ""
+        n_masked = (~self.mask).sum().item()
+        mask_string = f" - {n_masked} masked entries" if n_masked else ""
+        header = f"Variable {shape_string}{mask_string}\n" + "-" * (
+            len("Variable") + len(shape_string) + len(mask_string) + 1
+        )
+
+        # create data string, print only a few values
         max_print = options["display_max_rows"]
         split_at = max_print // 2
         to_print = head_tail_range(self.size, max_print)
@@ -251,19 +265,6 @@ class Variable:
         for c, v, b, t in zip(coord_strings, var_strings, bound_strings, trunc_strings):
             data_string += f"\n{c:<{coord_width}} {v:<{var_width}} {b}{t}"
 
-        # create shape string
-        if self.shape:
-            shape_string = ", ".join(
-                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-            )
-            shape_string = f"({shape_string})"
-        else:
-            shape_string = ""
-        n_masked = (~self.mask).sum().item()
-        mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"Variable {shape_string}{mask_string}\n" + "-" * (
-            len("Variable") + len(shape_string) + len(mask_string) + 1
-        )
         return f"{header}{data_string}"
 
     def __neg__(self):

@@ -69,6 +69,7 @@ cb = m.add_constraints(cb_, name="cb")
 cc = m.add_constraints(cc_, name="cc")
 cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
+cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.data, False))
 
 
 def test_variable_repr():
@@ -111,7 +112,7 @@ def test_scalar_constraint_repr():
 
 
 def test_constraint_repr():
-    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav]:
+    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cu_masked]:
         repr(con)
 
 
