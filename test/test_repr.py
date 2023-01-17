@@ -99,7 +99,15 @@ def test_linear_expression_long():
 
 
 def test_scalar_linear_expression_repr():
-    repr(1 * u[0, 0])
+    for var in [u, v, x, y, z, a, b, c, d]:
+        coord = tuple([var.indexes[c][0] for c in var.dims])
+        repr(1 * var[coord])
+
+
+def test_single_linear_repr():
+    for var in [u, v, x, y, z, a, b, c, d]:
+        coord = tuple([var.indexes[c][0] for c in var.dims])
+        repr(1 * var.loc[coord])
 
 
 def test_anonymous_constraint_repr():
@@ -109,6 +117,13 @@ def test_anonymous_constraint_repr():
 
 def test_scalar_constraint_repr():
     repr(1 * u[0, 0] >= 0)
+
+
+def test_single_constraint_repr():
+    for var in [u, v, x, y, z, a, b, c, d]:
+        coord = tuple([var.indexes[c][0] for c in var.dims])
+        repr(1 * var.loc[coord] == 0)
+        repr(1 * var.loc[coord] - var.loc[coord] == 0)
 
 
 def test_constraint_repr():

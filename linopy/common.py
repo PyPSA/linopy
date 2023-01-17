@@ -115,14 +115,16 @@ def print_single_expression(c, v, model):
     """
     # catch case that to many terms would be printed
     def print_line(expr):
-        res = ""
+        res = []
         for i, (coeff, (name, coord)) in enumerate(expr):
             coord_string = print_coord(coord)
             if i:
-                res += f" {float(coeff):+.4} {name}{coord_string} "
+                # split sign and coefficient
+                coeff_string = f"{float(coeff):+.4}"
+                res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
             else:
-                res += f" {float(coeff):.4} {name}{coord_string} "
-        return res if res else " None"
+                res.append(f"{float(coeff):.4} {name}{coord_string}")
+        return " ".join(res) if len(res) else "None"
 
     if isinstance(c, np.ndarray):
         mask = v != -1
@@ -133,7 +135,7 @@ def print_single_expression(c, v, model):
         truncate = max_terms // 2
         expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
         res = print_line(expr)
-        res += "... "
+        res += " ... "
         expr = list(
             zip(c[-truncate:], model.variables.get_label_position(v[-truncate:]))
         )

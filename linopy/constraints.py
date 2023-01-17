@@ -103,25 +103,25 @@ class Constraint:
         Get the string representation of the Constraint.
         """
         # return single if only one exist
-        if self.size == self.nterm:
+        if self.lhs.size == self.nterm:
             expr_string = print_single_expression(
                 self.lhs.coeffs.values, self.lhs.vars.values, self.lhs.model
             )
-            header = f"{self.type} `{self.name}`\n" + "-" * (
-                len(self.type) + len(self.name) + 3
-            )
+            name_string = f" `{self.name}`" if self.name else ""
+            header_string = str(self.type) + name_string
+            header = f"{header_string}\n" + "-" * (len(header_string))
             return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
 
         # create header string
+        name_string = f"`{self.name}`" if self.name else ""
         shape_string = ", ".join(
             [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
         )
         shape_string = f"({shape_string})"
         n_masked = (~self.mask).sum().item()
         mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"{self.type} `{self.name}` {shape_string}{mask_string}\n" + "-" * (
-            len(self.type) + len(self.name) + len(shape_string) + len(mask_string) + 4
-        )
+        header_string = f"{self.type} {name_string} {shape_string}" + mask_string
+        header = f"{header_string}\n" + "-" * (len(header_string))
 
         # create data string, print only a few values
         max_print = options["display_max_rows"]
