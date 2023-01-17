@@ -192,8 +192,10 @@ class Variable:
             lower = self.lower.item()
             upper = self.upper.item()
             coord = []
-            data_string = print_single_variable(self, self.name, coord, lower, upper)
-            return f"{header}\n{data_string}"
+            var_string, bound_string = print_single_variable(
+                self, self.name, coord, lower, upper
+            )
+            return f"{header}\n{var_string} {bound_string}"
 
         # create header string
         if self.shape:
