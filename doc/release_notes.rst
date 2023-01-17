@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.1.2
+-------------
+
 
 * Fix display for constraint with single entry and no coordinates.
 
