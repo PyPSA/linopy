@@ -55,15 +55,13 @@ setup(
             "pre-commit",
             "paramiko",
             "gurobipy",
-            # until available for windows/mac
-            # "highspy",
+            "highspy",
             "cplex",
             "xpress",
         ],
         "solvers": [
             "gurobipy",
-            # until available for windows/mac
-            # "highspy",
+            "highspy",
             "cplex",
             "xpress",
         ],

@@ -917,7 +917,7 @@ class Model:
 
     def solve(
         self,
-        solver_name="gurobi",
+        solver_name="highs",
         io_api=None,
         problem_fn=None,
         solution_fn=None,
