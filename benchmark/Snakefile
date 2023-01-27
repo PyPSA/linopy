@@ -4,7 +4,7 @@ import pyomo
 NRANGE = [10, 20, 50, 100, 200, 300, 400, 500, 600, 800, 1000]
 #NRANGE = [10, 20]
 SOLVERS = ["gurobi"]
-APIS = ['pyomo', 'linopy', 'jump', 'solver']
+APIS = ['pyomo', 'linopy', 'jump', 'solver', 'pulp']
 INTEGERLABELS = True
 
 
@@ -20,6 +20,7 @@ rule benchmark_linopy:
         "benchmarks/{solver}/linopy-time.csv"
     script: "scripts/benchmark_linopy.py"
 
+
 # For memory benchmarks, use single processes
 rule benchmark_linopy_single:
     params:
@@ -30,6 +31,26 @@ rule benchmark_linopy_single:
     script: "scripts/run-linopy.py"
 
 
+# For memory benchmarks, use single processes
+rule benchmark_pulp_single:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    benchmark:
+        "benchmarks/{solver}/pulp/{N}.txt"
+    script: "scripts/run-pulp.py"
+
+
+# For time benchmarks, use one process for all runs (skip import and jit compilation times)
+rule benchmark_pulp:
+    params:
+        nrange = NRANGE,
+        integerlabels = INTEGERLABELS
+    output:
+        "benchmarks/{solver}/pulp-time.csv"
+    script: "scripts/benchmark_pulp.py"
+
+
 # For time benchmarks, use one process for all runs (skip import and jit compilation times)
 rule benchmark_pyomo:
     params:
@@ -38,6 +59,7 @@ rule benchmark_pyomo:
     output:
         "benchmarks/{solver}/pyomo-time.csv"
     script: "scripts/benchmark_pyomo.py"
+
 
 # For memory benchmarks, use single processes
 rule benchmark_pyomo_single:
