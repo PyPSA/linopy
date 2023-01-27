@@ -8,6 +8,7 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 
@@ -18,13 +19,18 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import best_int, replace_by_map
-from linopy.constraints import AnonymousConstraint, Constraints
-from linopy.eval import Expr
-from linopy.expressions import LinearExpression
-from linopy.io import to_block_files, to_file, to_netcdf
+from linopy.common import best_int, maybe_replace_signs, replace_by_map
+from linopy.constants import ModelStatus, TerminationCondition
+from linopy.constraints import (
+    AnonymousConstraint,
+    AnonymousScalarConstraint,
+    Constraints,
+)
+from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
+from linopy.matrices import MatrixAccessor
 from linopy.solvers import available_solvers
-from linopy.variables import Variable, Variables
+from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,7 @@ class Model:
         "_force_dim_names",
         "_solver_dir",
         "solver_model",
+        "matrices",
     )
 
     def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
@@ -95,7 +102,7 @@ class Model:
         """
         self._variables = Variables(model=self)
         self._constraints = Constraints(model=self)
-        self._objective = LinearExpression()
+        self._objective = LinearExpression(None, self)
         self._parameters = Dataset()
 
         self._solution = Dataset()
@@ -113,6 +120,8 @@ class Model:
         self._chunk = chunk
         self._force_dim_names = bool(force_dim_names)
         self._solver_dir = Path(gettempdir() if solver_dir is None else solver_dir)
+
+        self.matrices = MatrixAccessor(self)
 
     @property
     def variables(self):
@@ -144,7 +153,7 @@ class Model:
         """
         Parameters assigned to the model.
 
-        The parameters serve as an expta field where additional data may
+        The parameters serve as an extra field where additional data may
         be stored.
         """
         return self._parameters
@@ -184,8 +193,7 @@ class Model:
 
     @status.setter
     def status(self, value):
-        assert value in ["initialized", "ok", "warning"]
-        self._status = value
+        self._status = ModelStatus[value].value
 
     @property
     def termination_condition(self):
@@ -196,7 +204,7 @@ class Model:
 
     @termination_condition.setter
     def termination_condition(self, value):
-        self._termination_condition = str(value)
+        self._termination_condition = TerminationCondition[value].value
 
     @property
     def objective_value(self):
@@ -298,7 +306,7 @@ class Model:
         """
         Get a model variable by the name.
         """
-        return Variable(self.variables[key], model=self)
+        return self.variables[key]
 
     def check_force_dim_names(self, ds):
         """
@@ -338,6 +346,7 @@ class Model:
         name=None,
         mask=None,
         binary=False,
+        integer=False,
         **kwargs,
     ):
         """
@@ -373,6 +382,9 @@ class Model:
         binary : bool
             Whether the new variable is a binary variable which are used for
             Mixed-Integer problems.
+        integer : bool
+            Whether the new variable is a integer variable which are used for
+            Mixed-Integer problems.
         **kwargs :
             Additional keyword arguments are passed to the DataArray creation.
 
@@ -395,15 +407,18 @@ class Model:
         >>> m = Model()
         >>> time = pd.RangeIndex(10, name="Time")
         >>> m.add_variables(lower=0, coords=[time], name="x")
-        Variable 'x':
-        -------------
-        <BLANKLINE>
-        Variable labels:
-        array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        Coordinates:
-          * Time     (Time) int64 0 1 2 3 4 5 6 7 8 9
-        Attributes:
-            binary:   False
+        Variable (Time: 10)
+        -------------------
+        [0]: x[0] ∈ [0, inf]
+        [1]: x[1] ∈ [0, inf]
+        [2]: x[2] ∈ [0, inf]
+        [3]: x[3] ∈ [0, inf]
+        [4]: x[4] ∈ [0, inf]
+        [5]: x[5] ∈ [0, inf]
+        [6]: x[6] ∈ [0, inf]
+        [7]: x[7] ∈ [0, inf]
+        [8]: x[8] ∈ [0, inf]
+        [9]: x[9] ∈ [0, inf]
         """
         if name is None:
             name = "var" + str(self._varnameCounter)
@@ -411,6 +426,9 @@ class Model:
 
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
+
+        if binary and integer:
+            raise ValueError("Variable cannot be both binary and integer.")
 
         if not binary:
             lower = DataArray(lower, coords=coords, **kwargs)
@@ -425,23 +443,54 @@ class Model:
                         " while the broadcasted array is of size > 1."
                     )
         else:
+            # check if lower and upper and non-defaults
+            if (lower != -inf) or (upper != inf):
+                raise ValueError(
+                    "Argument lower and upper not valid for binary variables."
+                )
             # for general compatibility when ravelling all values set non-nan
             lower = DataArray(-inf, coords=coords, **kwargs)
             upper = DataArray(inf, coords=coords, **kwargs)
 
-        labels = DataArray(coords=coords).assign_attrs(binary=binary)
+        labels = DataArray(-2, coords=coords).assign_attrs(
+            binary=binary, integer=integer
+        )
+
+        # ensure order of dims is the same
+        lower = lower.transpose(*[d for d in labels.dims if d in lower.dims])
+        upper = upper.transpose(*[d for d in labels.dims if d in upper.dims])
+
+        if mask is not None:
+            mask = DataArray(mask).astype(bool)
+            mask, _ = xr.align(mask, labels, join="right")
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
+
+        # It is important to end up with monotonically increasing labels in the
+        # model's variables container as we use it for indirect indexing.
+        labels_reindexed = labels.reindex_like(self.variables.labels, fill_value=-1)
+        if not labels.equals(labels_reindexed):
+            warnings.warn(
+                f"Reindexing variable {name} to match existing coordinates.",
+                UserWarning,
+            )
+            labels = labels_reindexed
+            lower = lower.reindex_like(labels)
+            upper = upper.reindex_like(labels)
+            if mask is None:
+                mask = labels != -1
+            else:
+                mask = mask.reindex_like(labels_reindexed, fill_value=False)
 
         self.check_force_dim_names(labels)
 
         start = self._xCounter
-        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        end = start + labels.size
+        labels.data = np.arange(start, end).reshape(labels.shape)
         self._xCounter += labels.size
 
         if mask is not None:
-            mask = DataArray(mask)
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         if self.chunk:
@@ -449,8 +498,7 @@ class Model:
             lower = lower.chunk(self.chunk)
             upper = upper.chunk(self.chunk)
 
-        self._variables.add(name, labels, lower, upper)
-
+        self.variables.add(name, labels, lower, upper, start=start, end=end)
         return self.variables[name]
 
     def add_constraints(
@@ -496,6 +544,8 @@ class Model:
         labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
         """
+        labels = None
+
         if name is None:
             name = "con" + str(self._connameCounter)
             self._connameCounter += 1
@@ -508,12 +558,16 @@ class Model:
             rule = lhs
             lhs = AnonymousConstraint.from_rule(self, rule, coords)
 
+        if isinstance(lhs, AnonymousScalarConstraint):
+            lhs = lhs.to_anonymous_constraint()
+
         if isinstance(lhs, AnonymousConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(
                     "Passing arguments `sign` and `rhs` together with a constraint"
                     " is ambiguous."
                 )
+            labels = lhs.labels  # returns an empty data array of correct shape
             sign = lhs.sign
             rhs = lhs.rhs
             lhs = lhs.lhs
@@ -523,10 +577,9 @@ class Model:
                     "Argument `sign` and `rhs` must not be None if first argument "
                     " is an expression."
                 )
-
         if isinstance(lhs, (list, tuple)):
             lhs = self.linexpr(*lhs)
-        elif isinstance(lhs, Variable):
+        elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
             lhs = lhs.to_linexpr()
         assert isinstance(lhs, LinearExpression)
 
@@ -534,13 +587,11 @@ class Model:
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
 
         lhs = lhs.sanitize()
-        sign = DataArray(sign)
+        sign = maybe_replace_signs(DataArray(sign))
         rhs = DataArray(rhs)
 
-        if (sign == "==").any():
-            raise ValueError('Sign "==" not supported, use "=" instead.')
-
-        labels = (lhs.vars.chunk() + rhs).sum("_term")
+        if labels is None:
+            labels = (lhs.vars.chunk() + rhs).sum("_term")
 
         self.check_force_dim_names(labels)
 
@@ -555,7 +606,7 @@ class Model:
             ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
-        lhs = lhs.rename({"_term": f"{name}_term"})
+        lhs = lhs.data.rename({"_term": f"{name}_term"})
 
         if self.chunk:
             lhs = lhs.chunk(self.chunk)
@@ -563,7 +614,7 @@ class Model:
             rhs = rhs.chunk(self.chunk)
             labels = labels.chunk(self.chunk)
 
-        self._constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
+        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
 
         return self.constraints[name]
 
@@ -591,8 +642,6 @@ class Model:
 
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
-        elif isinstance(expr, DataArray):
-            expr = LinearExpression(expr)
         assert isinstance(expr, LinearExpression)
 
         if self.chunk is not None:
@@ -651,6 +700,13 @@ class Model:
         Get all binary variables.
         """
         return self.variables.binaries
+
+    @property
+    def integers(self):
+        """
+        Get all integer variables.
+        """
+        return self.variables.integers
 
     @property
     def non_binaries(self):
@@ -784,184 +840,29 @@ class Model:
             rule, coords = args
             return LinearExpression.from_rule(self, rule, coords)
         if isinstance(args, tuple):
-            args = [
+            tuples = [
                 (c, self.variables[v]) if isinstance(v, str) else (c, v)
                 for (c, v) in args
             ]
-            return LinearExpression.from_tuples(*args, chunk=self.chunk)
+            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
         else:
             raise TypeError(f"Not supported type {args}.")
 
-    def _eval(self, expr: str, **kwargs):
-        from pandas.core.computation.eval import eval as pd_eval
-
-        kwargs.setdefault("engine", "python")
-        resolvers = kwargs.pop("resolvers", None)
-        kwargs["level"] = kwargs.pop("level", 0) + 1
-        resolvers = [self.variables.labels, self.parameters]
-        kwargs["resolvers"] = kwargs.get("resolvers", ()) + tuple(resolvers)
-        return pd_eval(expr, inplace=False, **kwargs)
-
     def vareval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Define a variable based a string expression (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a variable definition
-            (lower and upper bounds!).
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `model.add_constraints`.
-
-
-        Returns
-        -------
-        linopy.Variable
-            Variable which was added to the model.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.vareval("@lower <= x <= @upper")  # doctest:+SKIP
-
-        This is the same as
-
-        >>> x = m.add_variables(lower, upper, name="x")
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        kw = Expr(expr).to_variable_kwargs()
-        for k in ["lower", "upper"]:
-            if k in kw:
-                kw[k] = self._eval(kw[k], **eval_kw)
-
-        return self.add_variables(**kw, **kwargs)
+        raise NotImplementedError(
+            "vareval was removed in version `v0.1.0`. Please use m.add_variables() instead."
+        )
 
     def lineval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Evaluate linear expressions given as a string (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a linear expression.
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `LinearExpression.from_tuples`.
-
-        Returns
-        -------
-        A linear expression based on the input string.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.add_variables(lower, upper, name="x")
-        >>> y = m.add_variables(lower, upper, name="y")
-        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
-
-        Now create the linear expression
-
-        >>> con = m.lineval("@c * x - y")
-
-        This is the same as
-
-        >>> con = m.linexpr((c, "x"), (-1, "y"))
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        tuples = Expr(expr).to_string_tuples()
-        tuples = [
-            (self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in tuples
-        ]
-        return self.linexpr(*tuples, **kwargs)
+        raise NotImplementedError(
+            "lineval was removed in version `v0.1.0`. Please use arithmetic expressions instead."
+        )
 
     def coneval(self, expr: str, eval_kw=None, **kwargs):
-        """
-        Define a constraint determined by a string expression (experimental).
-
-        The function mirrors the behavior of `pandas.DataFrame.eval()`, e.g.
-        global variables can be referenced with a @-suffix, model attributes
-        such as parameters and variables can be referenced by the key.
-
-        Parameters
-        ----------
-        expr : str
-            Valid string to be compiled as a linear expression.
-        eval_kw : dict
-            Keyword arguments to be passed to `pandas.eval`.
-        **kwargs :
-            Keyword arguments to be passed to `model.add_constraints`.
-
-
-        Returns
-        -------
-        con : xarray.DataArray
-            Array containing the labels of the added constraints.
-
-
-        Examples
-        --------
-
-        >>> import linopy, xarray as xr
-        >>> m = linopy.Model()
-        >>> lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-        >>> upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-        >>> x = m.add_variables(lower, upper, name="x")
-        >>> y = m.add_variables(lower, upper, name="y")
-        >>> c = xr.DataArray(np.random.rand(10, 10), coords=[range(10), range(10)])
-
-        Now create the constraint:
-
-        >>> con = m.coneval("@c * x - y <= 5 ")
-
-        This is the same as
-
-        >>> lhs = m.linexpr((c, "x"), (-1, "y"))
-        >>> con = m.add_constraints(lhs, "<=", 5)
-
-        or
-
-        >>> con = m.add_constraints(c * x - y <= 5)
-        """
-        if eval_kw is None:
-            eval_kw = {}
-
-        eval_kw["level"] = eval_kw.pop("level", 1) + 1
-
-        (lhs, sign, rhs), kw = Expr(expr).to_constraint_args_kwargs()
-        lhs = [(self._eval(c, **eval_kw), self._eval(v, **eval_kw)) for (c, v) in lhs]
-        lhs = self.linexpr(*lhs)
-        rhs = self._eval(rhs, **eval_kw)
-        return self.add_constraints(lhs, sign, rhs, **kw, **kwargs)
+        raise NotImplementedError(
+            "coneval was removed in version `v0.1.0`. Please use arithmetic "
+            "expressions and m.add_constraints() instead."
+        )
 
     @property
     def coefficientrange(self):
@@ -1024,6 +925,7 @@ class Model:
         basis_fn=None,
         warmstart_fn=None,
         keep_files=False,
+        sanitize_zeros=True,
         remote=None,
         **solver_options,
     ):
@@ -1066,6 +968,10 @@ class Model:
             Whether to keep all temporary files like lp file, solution file.
             This argument is ignored for the logger file `log_fn`. The default
             is False.
+        sanitize_zeros : bool, optional
+            Whether to set terms with zero coeffficient as missing.
+            This will remove unneeded overhead in the lp file writing.
+            The default is True.
         remote : linopy.remote.RemoteHandler
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
@@ -1089,6 +995,7 @@ class Model:
                 basis_fn=basis_fn,
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
                 **solver_options,
             )
 
@@ -1109,12 +1016,21 @@ class Model:
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
 
+        if solver_options:
+            options_string = "\n".join(
+                f" - {k}: {v}" for k, v in solver_options.items()
+            )
+            logger.info(f"Solver options:\n{options_string}")
+
         problem_fn = self.get_problem_file(problem_fn)
         solution_fn = self.get_solution_file(solution_fn)
 
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+
         try:
             func = getattr(solvers, f"run_{solver_name}")
-            res = func(
+            result = func(
                 self,
                 io_api,
                 problem_fn,
@@ -1131,30 +1047,18 @@ class Model:
                     if os.path.exists(fn) and not keep_files:
                         os.remove(fn)
 
-        status = res.pop("status")
-        termination_condition = res.pop("termination_condition")
-        obj = res.pop("objective", None)
-        self.solver_model = res.pop("model", None)
+        result.info()
 
-        if status == "ok" and termination_condition == "optimal":
-            logger.info(f" Optimization successful. Objective value: {obj:.2e}")
-        elif status == "warning" and termination_condition == "suboptimal":
-            logger.warning(
-                f"Optimization solution is sub-optimal. Objective value: {obj:.2e}"
-            )
-        else:
-            logger.warning(
-                f"Optimization failed with status `{status}` and "
-                f"termination condition `{termination_condition}`."
-            )
-            return status, termination_condition
+        self.objective_value = result.solution.objective
+        self.status = result.status.status.value
+        self.termination_condition = result.status.termination_condition.value
+        self.solver_model = result.solver_model
 
-        self.objective_value = obj
-        self.status = status
-        self.termination_condition = termination_condition
+        if not result.status.is_ok:
+            return result.status.status.value, result.status.termination_condition.value
 
         # map solution and dual to original shape which includes missing values
-        sol = res["solution"]
+        sol = result.solution.primal.copy()
         sol.loc[-1] = nan
 
         for name, labels in self.variables.labels.items():
@@ -1162,8 +1066,8 @@ class Model:
             vals = sol[idx].values.reshape(labels.shape)
             self.solution[name] = xr.DataArray(vals, labels.coords)
 
-        if res["dual"] is not None:
-            dual = res["dual"]
+        if not result.solution.dual.empty:
+            dual = result.solution.dual.copy()
             dual.loc[-1] = nan
 
             for name, labels in self.constraints.labels.items():
@@ -1171,14 +1075,18 @@ class Model:
                 vals = dual[idx].values.reshape(labels.shape)
                 self.dual[name] = xr.DataArray(vals, labels.coords)
 
-        return status, termination_condition
+        return result.status.status.value, result.status.termination_condition.value
 
     def compute_set_of_infeasible_constraints(self):
         """
-        Print out the infeasible subset of constraints.
+        Compute a set of infeasible constraints.
 
-        This is a prelimary function and is only implemented for gurobi
-        so far.
+        This method requires gurobipy to be running.
+
+        Returns
+        -------
+        labels : xr.DataArray
+            Labels of the infeasible constraints. Labels with value -1 are not in the set.
         """
         import gurobipy
 
@@ -1190,12 +1098,24 @@ class Model:
         solver_model.computeIIS()
         f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
         solver_model.write(f.name)
-        print(f.read().decode())
-        f.close()
-        os.unlink(f.name)
+        labels = []
+        for line in f.readlines():
+            line = line.decode()
+            if line.startswith(" c"):
+                labels.append(int(line.split(":")[0][2:]))
+        cons = self.constraints.labels.isin(np.array(labels))
+        subset = self.constraints.labels.where(cons, -1)
+        subset = subset.drop_vars(
+            [k for (k, v) in (subset == -1).all().items() if v.item()]
+        )
+        return subset
 
     to_netcdf = to_netcdf
 
     to_file = to_file
+
+    to_gurobipy = to_gurobipy
+
+    to_highspy = to_highspy
 
     to_block_files = to_block_files

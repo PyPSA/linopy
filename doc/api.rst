@@ -20,7 +20,6 @@ Creating a model
     model.Model.add_objective
     model.Model.linexpr
     model.Model.remove_constraints
-    model.Model.remove_constraints
 
 Creating a model with ``eval`` strings (experimental)
 =====================================================
@@ -65,6 +64,7 @@ Variables
     variables.Variables.remove
     variables.Variables.binaries
     variables.Variables.non_binaries
+    variables.Variables.integers
     variables.Variables.iter_ravel
     variables.Variables.ravel
     variables.Variables.get_blocks
@@ -154,3 +154,16 @@ Solvers
     solvers.run_cplex
     solvers.run_gurobi
     solvers.run_xpress
+
+Solving
+=======
+
+.. autosummary::
+    :toctree: generated/
+
+    model.Model.solve
+    constants.SolverStatus
+    constants.TerminationCondition
+    constants.Status
+    constants.Solution
+    constants.Result

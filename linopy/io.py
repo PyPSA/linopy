@@ -4,16 +4,19 @@
 Module containing all import/export functionalities.
 """
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import pandas as pd
 import xarray as xr
-from numpy import asarray, concatenate
+from numpy import asarray, concatenate, ones_like, zeros_like
 from tqdm import tqdm
+
+from linopy import solvers
+from linopy.constants import EQUAL, GREATER_EQUAL
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,10 @@ def constraints_to_file(m, f, log=False):
 
         if not c.size:
             continue
+        # Group repeated variables in the same constraint
+        df = pd.DataFrame({"coeffs": c, "labels": l, "vars": v})
+        df = df.groupby(["labels", "vars"], as_index=False).sum()
+        c, l, v = df.coeffs.values, df.labels.values, df.vars.values
 
         diff_con = l[:-1] != l[1:]
         new_con_b = concatenate([asarray([True]), diff_con])
@@ -163,35 +170,166 @@ def binaries_to_file(m, f, log=False):
         del bounds
 
 
+def integers_to_file(m, f, log=False):
+    """
+    Write out integers of a model to a lp file.
+    """
+    f.write("\n\ngeneral\n\n")
+    labels = m.integers.iter_ravel("labels", filter_missings=True)
+
+    if len(m.variables._integer_variables) == 0:
+        return
+
+    iterate = labels
+    if log:
+        iterate = tqdm(iterate, "Writing integer variables.", len(m.integers.labels))
+
+    for l in iterate:
+
+        if not l.size:
+            continue
+
+        bounds = "x" + int_to_str(l)
+        f.write("\n".join(bounds))
+        f.write("\n")
+        del bounds
+
+
 def to_file(m, fn):
     """
-    Write out a model to a lp file.
+    Write out a model to a lp or mps file.
     """
-    fn = m.get_problem_file(fn)
+    fn = Path(m.get_problem_file(fn))
 
-    if os.path.exists(fn):
-        os.remove(fn)  # ensure a clear file
+    if fn.exists():
+        fn.unlink()
 
-    log = m._xCounter > 10000
+    if fn.suffix == ".lp":
 
-    with open(fn, mode="w") as f:
+        log = m._xCounter > 10000
 
-        start = time.time()
+        with open(fn, mode="w") as f:
 
-        objective_to_file(m, f, log)
-        constraints_to_file(m, f, log)
-        bounds_to_file(m, f, log)
-        binaries_to_file(m, f, log)
-        f.write("end\n")
+            start = time.time()
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+            objective_to_file(m, f, log)
+            constraints_to_file(m, f, log)
+            bounds_to_file(m, f, log)
+            binaries_to_file(m, f, log)
+            integers_to_file(m, f, log)
+            f.write("end\n")
+
+            logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+    elif fn.suffix == ".mps":
+        if "highs" in solvers.available_solvers:
+            # Use very fast highspy implementation
+            # Might be replaced by custom writer, however needs C bindings for performance
+            h = m.to_highspy()
+            h.writeModel(str(fn))
+        else:
+            raise RuntimeError(
+                "Package highspy not installed. This is required to exporting to MPS file."
+            )
+
+    else:
+
+        raise ValueError(
+            f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
+        )
 
     return fn
+
+
+def to_gurobipy(m):
+    """
+    Export the model to gurobipy.
+
+    This function does not write the model to intermediate files but directly
+    passes it to gurobipy. Note that for large models this is not
+    computationally efficient.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : gurobipy.Model
+    """
+    import gurobipy
+
+    m.constraints.sanitize_missings()
+    model = gurobipy.Model()
+
+    M = m.matrices
+
+    names = "x" + M.vlabels.astype(str).astype(object)
+    kwargs = {}
+    if len(m.binaries.labels) + len(m.integers.labels):
+        kwargs["vtype"] = M.vtypes
+    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
+
+    model.setObjective(M.c @ x)
+
+    names = "c" + M.clabels.astype(str).astype(object)
+    c = model.addMConstr(M.A, x, M.sense, M.b)
+    c.setAttr("ConstrName", list(names))
+
+    model.update()
+    return model
+
+
+def to_highspy(m):
+    """
+    Export the model to highspy.
+
+    This function does not write the model to intermediate files but directly
+    passes it to highspy.
+
+    Note, this function does not track variable and constraint labels.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : highspy.Highs
+    """
+    import highspy
+
+    M = m.matrices
+    h = highspy.Highs()
+    h.addVars(len(M.vlabels), M.lb, M.ub)
+    if len(m.binaries.labels) + len(m.integers.labels):
+        vtypes = M.vtypes
+        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
+        n = len(labels)
+        h.changeColsIntegrality(n, labels, ones_like(labels))
+        if len(m.binaries.labels):
+            labels = np.arange(len(vtypes))[vtypes == "B"]
+            n = len(labels)
+            h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
+    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
+    A = M.A.tocsr()
+    num_cons = A.shape[0]
+    lower = np.where(M.sense != "<", M.b, -np.inf)
+    upper = np.where(M.sense != ">", M.b, np.inf)
+    h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+    lp = h.getLp()
+    lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
+    lp.col_names_ = "x" + M.vlabels.astype(str).astype(object)
+    h.passModel(lp)
+    return h
 
 
 def to_block_files(m, fn):
     """
     Write out the linopy model to a block structured output.
+
+    Experimental: This function does not support grouping duplicated variables
+    in one constraint row yet!
     """
     if fn is None:
         fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
@@ -228,8 +366,8 @@ def to_block_files(m, fn):
     # Write out rhs
     blocks = cons.ravel("blocks", filter_missings=True)
     rhs = cons.ravel("rhs", filter_missings=True)
-    is_equality = cons.ravel(cons.sign == "=", filter_missings=True)
-    is_lower_bound = cons.ravel(cons.sign == ">=", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == EQUAL, filter_missings=True)
+    is_lower_bound = cons.ravel(cons.sign == GREATER_EQUAL, filter_missings=True)
 
     for n in tqdm(range(N + 2), desc="Write RHS"):
         is_blockn = blocks == n
@@ -249,38 +387,56 @@ def to_block_files(m, fn):
     # Write out constraints
     conblocks = cons.ravel("blocks", "vars", filter_missings=True)
     varblocks = cons.ravel("var_blocks", "vars", filter_missings=True)
-    is_equality = cons.ravel(cons.sign == "=", "vars", filter_missings=True)
+    is_equality = cons.ravel(cons.sign == EQUAL, "vars", filter_missings=True)
 
     is_varblock_0 = varblocks == 0
     is_conblock_L = conblocks == N + 1
 
-    for key, suffix in zip(["labels", "coeffs", "vars"], ["row", "data", "col"]):
+    keys = ["labels", "coeffs", "vars"]
+
+    def filtered(arr, mask, key):
+        """
+        Set coefficients to zero where mask is False, keep others unchanged.
+
+        PIPS requires this information to set the shape of sub-matrices.
+        """
+        assert key in keys
+        if key == "coeffs":
+            return np.where(mask, arr, 0)
+        return arr
+
+    for key, suffix in zip(keys, ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True)
         for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
 
             is_conblock_n = conblocks == n
             is_varblock_n = varblocks == n
 
-            mask = is_conblock_n & is_varblock_0
-            arr[mask & is_equality].tofile(path / f"block{n}" / f"A_{suffix}", sep="\n")
-            arr[mask & ~is_equality].tofile(
+            mask = is_conblock_n & is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
+                path / f"block{n}" / f"A_{suffix}", sep="\n"
+            )
+            mask = is_conblock_n & ~is_equality
+            filtered(arr[mask], is_varblock_0[mask], key).tofile(
                 path / f"block{n}" / f"C_{suffix}", sep="\n"
             )
 
-            mask = is_conblock_L & is_varblock_n
-            arr[mask & is_equality].tofile(
+            mask = is_conblock_L & is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
                 path / f"block{n}" / f"BL_{suffix}", sep="\n"
             )
-            arr[mask & ~is_equality].tofile(
+            mask = is_conblock_L & ~is_equality
+            filtered(arr[mask], is_varblock_n[mask], key).tofile(
                 path / f"block{n}" / f"DL_{suffix}", sep="\n"
             )
 
             if n:
-                mask = is_conblock_n & is_varblock_n
-                arr[mask & is_equality].tofile(
+                mask = is_conblock_n & is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
                     path / f"block{n}" / f"B_{suffix}", sep="\n"
                 )
-                arr[mask & ~is_equality].tofile(
+                mask = is_conblock_n & ~is_equality
+                filtered(arr[mask], is_varblock_n[mask], key).tofile(
                     path / f"block{n}" / f"D_{suffix}", sep="\n"
                 )
 
@@ -305,9 +461,12 @@ def to_netcdf(m, *args, **kwargs):
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
     """
+    from linopy.expressions import LinearExpression
 
     def get_and_rename(m, attr, prefix=""):
         ds = getattr(m, attr)
+        if isinstance(ds, LinearExpression):
+            ds = ds.data
         return ds.rename({v: prefix + attr + "-" + v for v in ds})
 
     vars = [
@@ -362,7 +521,7 @@ def read_netcdf(path, **kwargs):
 
     for attr in m.dataset_attrs:
         setattr(m, attr, get_and_rename(all_ds, attr))
-    m._objective = LinearExpression(get_and_rename(all_ds, "objective"))
+    m._objective = LinearExpression(get_and_rename(all_ds, "objective"), m)
 
     for k in m.scalar_attrs:
         setattr(m, k, all_ds.attrs.pop(k))

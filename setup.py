@@ -25,14 +25,14 @@ setup(
     license="GPLv3",
     packages=find_packages(exclude=["doc", "test"]),
     include_package_data=True,
-    python_requires="~=3.7",
+    python_requires="~=3.8",
     install_requires=[
         "numpy",
         "scipy",
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray<=2022.03.",
+        "xarray>=2022.9.0",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",
@@ -54,6 +54,18 @@ setup(
             "pytest-cov",
             "pre-commit",
             "paramiko",
+            "gurobipy",
+            # until available for windows/mac
+            # "highspy",
+            "cplex",
+            "xpress",
+        ],
+        "solvers": [
+            "gurobipy",
+            # until available for windows/mac
+            # "highspy",
+            "cplex",
+            "xpress",
         ],
     },
     classifiers=[

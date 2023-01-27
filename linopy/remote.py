@@ -92,13 +92,14 @@ class RemoteHandler:
     >>> import linopy
     >>> from linopy import Model
     >>> from numpy import arange
+    >>> from xarray import DataArray
     >>>
     >>> N = 10
     >>> m = Model()
     >>> coords = [arange(N), arange(N)]
     >>> x = m.add_variables(coords=coords)
     >>> y = m.add_variables(coords=coords)
-    >>> con1 = m.add_constraints(x - y >= arange(N))
+    >>> con1 = m.add_constraints(x - y >= DataArray(arange(N)))
     >>> con2 = m.add_constraints(x + y >= 0)
     >>> obj = m.add_objective((2 * x + y).sum())
     >>>

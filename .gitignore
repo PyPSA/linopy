@@ -13,6 +13,7 @@ doc/generated
 doc/api
 .vscode
 Highs.log
+paper/
 
 benchmark/*.pdf
 benchmark/benchmarks

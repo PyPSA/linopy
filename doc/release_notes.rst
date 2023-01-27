@@ -4,6 +4,88 @@ Release Notes
 .. Upcoming Release
 .. ----------------
 
+Version 0.1.2
+-------------
+
+
+* Fix display for constraint with single entry and no coordinates.
+
+
+Version 0.1.1
+-------------
+
+
+* Printing out long LinearExpression is now accelerated in the `__repr__` function.
+* Multiplication of LinearExpression's with pandas object was stabilized.
+* A options handler was introduced that allows the user to change the maximum of printed lines and terms in the display of Variable's, LinearExpression's and Constraint's.
+* If LinearExpression of exactly the same shape are joined together (in arithmetic operations), the coordinates of the first object is used to override the coordinates of the consecutive objects.
+
+
+Version 0.1
+-----------
+
+This is the first major-minor release of linopy!  With this release, the package should more stable and consistent. The main changes are:
+
+* The classes Variable, LinearExpression and Constraint now have a `__repr__` method. This allows for a better representation of the classes in the console.
+* Linopy now defines and uses a fixed set of solver status and termination codes. This allows for a more consistent and reliable handling of solver results. The new codes are defined in the `linopy.constants` module. The implementation is inspired by https://github.com/0b11001111 and the implementation in this `PyPSA fork <https://github.com/0b11001111/PyPSA/blob/innoptem-lopf/pypsa/linear_program/solver.py>`_
+* The automated summation of repeated variables in one constraint is now supported. Before the implementation for constraints like `x + x + x <= 5` was only working for solvers with a corresponding fallback computation. This is now fixed.
+* Integer variables are now fully supported.
+* Support exporting problems to MPS file via fast highspy MPS-writer (highspy installation required).
+* The internal data structure of linopy classes were updated to a safer design. Instead of being defined as inherited xarray classes, the class `Variable`, `LinearExpression` and `Constraint` are now no inherited classes but contain the xarray objects in the `data` field. This allows the package to have more flexible function design and a reduced set of wrapped functions that are sensible to use in the optimization context.
+* The class `Variable` and `LinearExpression` have new functions `groupby` and `rolling` imitating the corresponding xarray functions but with safe type inheritance and application of appended operations.
+* Coefficients very close to zero (`< 1e-10`) are now automatically set to zero to avoid numerical issues with solvers.
+* Coefficients of variables are no also allowed to be `np.nan`. These coefficients are ignored in the LP file writing.
+* The classes Variable, LinearExpression, Constraint, ScalarVariable, ScalarLinearExpression and ScalarConstraint now require the model in the initialization (mostly internal code is affected).
+* The `eval` module was removed in favor of arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
+* Solver options are now printed out in the console when solving a model.
+* If a variable with indexes differing from the model internal indexes are assigned, linopy will raise a warning and align the variable to the model indexes.
+
+Version 0.0.15
+--------------
+
+* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
+* Returning None type in `from_rule` assignment is now supported.
+* Python 3.11 is now supported
+* Xarray versions higher and lower `v2022.06.` are now supported.
+
+Version 0.0.14
+--------------
+
+**New Features**
+
+* Linopy now uses `highspy <https://pypi.org/project/highspy/>` as an interface to the HiGHS solver. This enables a direct and fast communication without needing to write an intermediate LP file.
+
+
+Version 0.0.13
+--------------
+
+**New Features**
+
+* The function `LinearExpression.from_tuples` now allows `ScalarVariable` as input.
+* For compatibility reasons, the function `groupby_sum` now allows `pandas.Series` as input.
+
+**Bug Fixes**
+
+* Filtering out zeros is now an optional feature in the `solve` function. The previous behavior of filtering just before the LP file writing, lead to unexpected errors for constraints with only zero terms.
+
+
+Version 0.0.12
+--------------
+
+**New Features**
+
+* A new module was created to export basic mathematical quantities such as `lb`, `ub`, `c` vectors and the `A` matrix. Use it with the `matrices` accessor in `linopy.Model`.
+* For `Constraints`` and `Variables`` a `ipython` autocompletion function for getting items was added.
+* Inplace updates for constraints are now more flexible.
+* AnonymousConstraint can now built from comparison operations of variables with constants, e.g. `x >= 5`.
+* The `Model.add_constraints` function now support input of type `ScalarVariable`, `ScalarLinearExpression` and `ScalarConstraint`.
+* Terms with zero coefficient are now filtered out before writing to file to avoid unnecessary overhead.
+* The function `sanitize_zeros` was added to `Constraints`. Use this to filter out zero coefficient terms.
+
+**Bug Fixes**
+
+* Solving with `gurobi` and `io_api="direct"` lead to wrong objective assignment if the objective contained non-unique variables. This is fixed in this version.
+
 Version 0.0.11
 --------------
 

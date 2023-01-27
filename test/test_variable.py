@@ -10,16 +10,55 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from xarray.testing import assert_equal
 
 import linopy
 from linopy import Model
 
 
-def test_variable_getter():
+@pytest.fixture
+def m():
     m = Model()
-    x = m.add_variables(coords=[range(10)])
+    m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
+    m.add_variables(0, 10, name="z")
+    return m
 
+
+@pytest.fixture
+def x(m):
+    return m.variables["x"]
+
+
+@pytest.fixture
+def z(m):
+    return m.variables["z"]
+
+
+def test_variable_repr(x):
+    x.__repr__()
+
+
+def test_variable_labels(x):
+    isinstance(x.labels, xr.DataArray)
+
+
+def test_variable_data(x):
+    isinstance(x.data, xr.DataArray)
+
+
+def test_wrong_variable_init(m, x):
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels.values, m)
+
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels, None)
+
+
+def test_variable_getter(x, z):
     assert isinstance(x[0], linopy.variables.ScalarVariable)
+
+    assert isinstance(z[0], linopy.variables.ScalarVariable)
 
     with pytest.raises(AssertionError):
         x[0, 0]
@@ -31,131 +70,122 @@ def test_variable_getter():
         x[[1, 2, 3]]
 
 
-def test_variable_repr():
-    m = Model()
-    m.variables.__repr__()
-
-    x = m.add_variables()
-    x.__repr__()
-    x._repr_html_()
-
-    m.variables.__repr__()
-
-    y = m.add_variables(coords=[pd.Index([1, 2, 3], name="time")], name="y")
-    y.__repr__()
-    y._repr_html_()
-
-    m.variables.__repr__()
+def test_variable_loc(x):
+    assert isinstance(x.loc[[1, 2, 3]], linopy.Variable)
 
 
-def test_variable_bound_accessor():
-    m = Model()
-    x = m.add_variables(0, 10)
-    assert x.upper.item() == 10
-    assert x.lower.item() == 0
+def test_variable_sel(x):
+    assert isinstance(x.sel(first=[1, 2, 3]), linopy.Variable)
 
 
-def test_variable_modification():
-    m = Model()
-    x = m.add_variables(0, 10)
-    x.upper = 20
-    assert x.upper.item() == 20
-
-    x.lower = 8
-    assert x.lower == 8
+def test_variable_isel(x):
+    assert isinstance(x.isel(first=[1, 2, 3]), linopy.Variable)
+    assert_equal(
+        x.isel(first=[0, 1]).labels,
+        x.sel(first=[0, 1]).labels,
+    )
 
 
-def test_variable_modification_M():
-    m = Model()
-    lower = pd.Series(0, index=range(10))
-    upper = pd.Series(range(10, 20), index=range(10))
-    x = m.add_variables(lower, upper)
+def test_variable_upper_getter(z):
+    assert z.upper.item() == 10
 
-    new_upper = pd.Series(range(25, 35), index=range(10))
-    x.upper = new_upper
+
+def test_variable_lower_getter(z):
+    assert z.lower.item() == 0
+
+
+def test_variable_upper_setter(z):
+    z.upper = 20
+    assert z.upper.item() == 20
+
+
+def test_variable_lower_setter(z):
+    z.lower = 8
+    assert z.lower == 8
+
+
+def test_variable_upper_setter_with_array(x):
+    idx = pd.RangeIndex(10, name="first")
+    upper = pd.Series(range(25, 35), index=idx)
+    x.upper = upper
     assert isinstance(x.upper, xr.DataArray)
-    assert (x.upper == new_upper).all()
+    assert (x.upper == upper).all()
 
-    new_lower = pd.Series(range(15, 25), index=range(10))
-    x.lower = new_lower
+
+def test_variable_upper_setter_with_array_invalid_dim(x):
+    with pytest.raises(ValueError):
+        upper = pd.Series(range(25, 35))
+        x.upper = upper
+
+
+def test_variable_lower_setter_with_array(x):
+    idx = pd.RangeIndex(10, name="first")
+    lower = pd.Series(range(15, 25), index=idx)
+    x.lower = lower
     assert isinstance(x.lower, xr.DataArray)
-    assert (x.lower == new_lower).all()
+    assert (x.lower == lower).all()
 
 
-def test_variable_sum():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
+def test_variable_lower_setter_with_array_invalid_dim(x):
+    with pytest.raises(ValueError):
+        lower = pd.Series(range(15, 25))
+        x.lower = lower
+
+
+def test_variable_sum(x):
     res = x.sum()
     assert res.nterm == 10
 
 
-def test_nvars():
-    m = Model()
-    m.add_variables(coords=[range(10)])
-    assert m.variables.nvars == 10
-
-    mask = pd.Series([True] * 5 + [False] * 5)
-    m.add_variables(coords=[range(10)], mask=mask)
-    assert m.variables.nvars == 15
-
-
-def test_variable_where():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
+def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
+    assert x.values[9] == x.fill_value
 
-
-def test_variable_shift():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
-    x = x.shift(dim_0=3)
+    x = x.where([True] * 4 + [False] * 6, x[0])
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[0].item() == -1
+    assert x.values[9] == x[0].label
+
+    x = x.where([True] * 4 + [False] * 6, x.loc[0])
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[9] == x[0].label
 
 
-def test_variable_sanitize():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
+def test_variable_shift(x):
+    x = x.shift(first=3)
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[0] == -1
+
+
+def test_variable_bfill(x):
+    x = x.where([False] * 4 + [True] * 6)
+    x = x.bfill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[2] == x.values[4]
+    assert x.values[2] != x.values[5]
+
+
+def test_variable_broadcast_like(x):
+    result = x.broadcast_like(x.labels)
+    assert isinstance(result, linopy.variables.Variable)
+
+
+def test_variable_ffill(x):
+    x = x.where([True] * 4 + [False] * 6)
+    x = x.ffill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.values[9] == x.values[3]
+    assert x.values[3] != x.values[2]
+
+
+def test_variable_fillna(x):
+    result = x.fillna(-1)
+    assert isinstance(result, linopy.variables.Variable)
+
+
+def test_variable_sanitize(x):
     # convert intentionally to float with nans
     x = x.where([True] * 4 + [False] * 6, np.nan)
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
-    assert x.loc[9].item() == -1
-
-
-def test_variable_type_preservation():
-    m = Model()
-    x = m.add_variables(coords=[range(10)])
-
-    assert isinstance(x.bfill("dim_0"), linopy.variables.Variable)
-    assert isinstance(x.broadcast_like(x.to_array()), linopy.variables.Variable)
-    assert isinstance(x.clip(max=20), linopy.variables.Variable)
-    assert isinstance(x.ffill("dim_0"), linopy.variables.Variable)
-    assert isinstance(x.fillna(-1), linopy.variables.Variable)
-
-
-def test_variable_getter_without_model():
-    data = xr.DataArray(range(10)).rename("var")
-    v = linopy.variables.Variable(data)
-
-    with pytest.raises(AttributeError):
-        v.upper
-    with pytest.raises(AttributeError):
-        v.lower
-
-
-def test_get_name_by_label():
-    m = Model()
-    m.add_variables(coords=[range(10)], name="x")
-    m.add_variables(coords=[range(10)], name="asd")
-
-    assert m.variables.get_name_by_label(4) == "x"
-    assert m.variables.get_name_by_label(14) == "asd"
-
-    with pytest.raises(ValueError):
-        m.variables.get_name_by_label(30)
-
-    with pytest.raises(ValueError):
-        m.variables.get_name_by_label("asd")
+    assert x.values[9] == -1

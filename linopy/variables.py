@@ -7,10 +7,9 @@ This module contains variable related definitions of the package.
 
 import functools
 import re
-from dataclasses import dataclass
-from distutils.log import warn
-from typing import Any, Sequence, Union
-from warnings import warn
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Sequence, Union
 
 import dask
 import numpy as np
@@ -18,23 +17,30 @@ import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, zeros_like
+from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
     _merge_inplace,
-    has_assigned_model,
+    dictsel,
+    forward_as_properties,
     has_optimized_model,
+    head_tail_range,
     is_constant,
+    print_coord,
+    print_single_variable,
 )
+from linopy.config import options
 
 
 def varwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
-    def _varwrap(obj, *args, **kwargs):
+    def _varwrap(var, *args, **kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
-        obj = DataArray(obj)
-        return Variable(method(obj, *default_args, *args, **kwargs))
+        return var.__class__(
+            method(var.labels, *default_args, *args, **kwargs), var.model
+        )
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
     if new_default_kwargs:
@@ -43,7 +49,26 @@ def varwrap(method, *default_args, **new_default_kwargs):
     return _varwrap
 
 
-class Variable(DataArray):
+def _var_unwrap(var):
+    if isinstance(var, Variable):
+        return var.labels
+    return var
+
+
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "name",
+        "shape",
+        "size",
+        "values",
+        "dims",
+        "ndim",
+    ]
+)
+class Variable:
     """
     Variable container for storing variable labels.
 
@@ -92,77 +117,157 @@ class Variable(DataArray):
     Further operations like taking the negative and subtracting are supported.
     """
 
-    __slots__ = ("_cache", "_coords", "_indexes", "_name", "_variable", "model")
-
-    def __init__(self, *args, **kwargs):
-
-        # workaround until https://github.com/pydata/xarray/pull/5984 is merged
-        if isinstance(args[0], DataArray):
-            da = args[0]
-            args = (da.data, da.coords)
-            kwargs.update({"attrs": da.attrs, "name": da.name})
-
-        self.model = kwargs.pop("model", None)
-        super().__init__(*args, **kwargs)
-        assert self.name is not None, "Variable data does not have a name."
-
-    # We have to set the _reduce_method to None, in order to overwrite basic
-    # reduction functions as `sum`. There might be a better solution (?).
-    _reduce_method = None
-
-    # Disable array function, only function defined below are supported
-    # and set priority higher than pandas/xarray/numpy
+    __slots__ = ("_labels", "_model")
     __array_ufunc__ = None
-    __array_priority__ = 10000
+
+    _fill_value = -1
+
+    def __init__(self, labels: DataArray, model: Any):
+        """
+        Initialize the Constraint.
+
+        Parameters
+        ----------
+        labels : xarray.DataArray
+            labels of the constraint.
+        model : linopy.Model
+            Underlying model.
+        """
+        from linopy.model import Model
+
+        if not isinstance(labels, DataArray):
+            raise ValueError(f"labels must be a DataArray, got {type(labels)}")
+
+        if not isinstance(model, Model):
+            raise ValueError(f"model must be a Model, got {type(model)}")
+
+        self._labels = labels
+        self._model = model
 
     def __getitem__(self, keys) -> "ScalarVariable":
         keys = (keys,) if not isinstance(keys, tuple) else keys
-        assert all(map(np.isscalar, keys)), (
+        assert all(map(pd.api.types.is_scalar, keys)), (
             "The get function of Variable is different as of xarray.DataArray. "
             "Set single values for each dimension in order to obtain a "
             "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
         )
-        if not self.ndim:
-            return ScalarVariable(self.data.item())
-        assert self.ndim == len(keys), f"expected {self.ndim} keys, got {len(keys)}."
-        key = dict(zip(self.dims, keys))
-        selector = [self.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.data[tuple(selector)])
+        if not self.labels.ndim:
+            return ScalarVariable(self.labels.item(), self.model)
+        assert self.labels.ndim == len(
+            keys
+        ), f"expected {self.labels.ndim} keys, got {len(keys)}."
+        key = dict(zip(self.labels.dims, keys))
+        selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(self.labels.data[tuple(selector)], self.model)
 
+    @property
+    def loc(self):
+        return _LocIndexer(self)
+
+    @deprecated(details="Use `labels` instead of `to_array()`")
     def to_array(self):
         """
         Convert the variable array to a xarray.DataArray.
         """
-        return DataArray(self)
+        return self.labels
+
+    def to_pandas(self):
+        return self.labels.to_pandas()
 
     def to_linexpr(self, coefficient=1):
         """
         Create a linear exprssion from the variables.
         """
+        if isinstance(coefficient, (expressions.LinearExpression, Variable)):
+            raise TypeError(f"unsupported type of coefficient: {type(coefficient)}")
         return expressions.LinearExpression.from_tuples((coefficient, self))
 
     def __repr__(self):
         """
-        Get the string representation of the variables.
+        Print the variable arrays.
         """
-        data_string = (
-            "Variable labels:\n" + self.to_array().__repr__().split("\n", 1)[1]
-        )
-        extend_line = "-" * len(self.name)
-        return (
-            f"Variable '{self.name}':\n"
-            f"------------{extend_line}\n\n"
-            f"{data_string}"
+        # don't loop over all values if not necessary
+        if not self.coords:
+            header = f"Variable\n{'-' * len('Variable')}"
+            lower = self.lower.item()
+            upper = self.upper.item()
+            coord = []
+            var_string, bound_string = print_single_variable(
+                self, self.name, coord, lower, upper
+            )
+            return f"{header}\n{var_string} {bound_string}"
+
+        # create header string
+        if self.shape:
+            shape_string = ", ".join(
+                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
+            )
+            shape_string = f"({shape_string})"
+        else:
+            shape_string = ""
+        n_masked = (~self.mask).sum().item()
+        mask_string = f" - {n_masked} masked entries" if n_masked else ""
+        header = f"Variable {shape_string}{mask_string}\n" + "-" * (
+            len("Variable") + len(shape_string) + len(mask_string) + 1
         )
 
-    def _repr_html_(self):
-        """
-        Get the html representation of the variables.
-        """
-        # return self.__repr__()
-        data_string = self.to_array()._repr_html_()
-        data_string = data_string.replace("xarray.DataArray", "linopy.Variable")
-        return data_string
+        # create data string, print only a few values
+        max_print = options["display_max_rows"]
+        split_at = max_print // 2
+        to_print = head_tail_range(self.size, max_print)
+        truncate = self.size > max_print
+
+        # create string, we use numpy to get the indexes
+        if self.shape:
+            idx = np.unravel_index(to_print, self.shape)
+            labels = np.ravel(self.labels.values)[to_print]
+            coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
+            coords = list(zip(*coords))
+        else:
+            # case a single variable was selected
+            idx = [0]
+            labels = np.ravel(self.labels.values)
+            coords = [[c.item() for c in self.coords.values()]]
+
+        coord_strings = []
+        var_strings = []
+        bound_strings = []
+        trunc_strings = []
+        for i, coord in enumerate(coords):
+
+            label = labels[i]
+            variables = self.model.variables
+
+            coord_string = print_coord(coord) + ":"
+            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
+
+            if label != -1:
+                vname, vcoord = self.model.variables.get_label_position(label)
+                lower = variables[vname].lower
+                lower = lower.sel(dictsel(vcoord, lower.dims)).item()
+                upper = variables[vname].upper
+                upper = upper.sel(dictsel(vcoord, upper.dims)).item()
+                var_string, bound_string = print_single_variable(
+                    self, vname, vcoord, lower, upper
+                )
+
+            else:
+                var_string = "None"
+                bound_string = ""
+
+            coord_strings.append(coord_string)
+            var_strings.append(var_string)
+            bound_strings.append(bound_string)
+            trunc_strings.append(trunc_string)
+
+        coord_width = max(len(c) for c in coord_strings)
+        var_width = max(len(v) for v in var_strings)
+
+        data_string = ""
+        for c, v, b, t in zip(coord_strings, var_strings, bound_strings, trunc_strings):
+            data_string += f"\n{c:<{coord_width}} {v:<{var_width}} {b}{t}"
+
+        return f"{header}{data_string}"
 
     def __neg__(self):
         """
@@ -170,25 +275,47 @@ class Variable(DataArray):
         """
         return self.to_linexpr(-1)
 
-    def __mul__(self, coefficient):
+    def __mul__(self, other):
         """
         Multiply variables with a coefficient.
         """
-        return self.to_linexpr(coefficient)
+        if isinstance(other, (expressions.LinearExpression, Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for *: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self.to_linexpr(other)
 
-    def __rmul__(self, coefficient):
+    def __rmul__(self, other):
         """
         Right-multiply variables with a coefficient.
         """
-        return self.to_linexpr(coefficient)
+        return self.to_linexpr(other)
+
+    def __div__(self, other):
+        """
+        Divide variables with a coefficient.
+        """
+        if isinstance(other, (expressions.LinearExpression, Variable)):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self.to_linexpr(1 / other)
+
+    def __truediv__(self, coefficient):
+        """
+        True divide variables with a coefficient.
+        """
+        return self.__div__(coefficient)
 
     def __add__(self, other):
         """
         Add variables to linear expressions or other variables.
         """
-        if isinstance(
-            other, (Variable, DataArray, pd.DataFrame, pd.Series, np.ndarray)
-        ):
+        if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, expressions.LinearExpression):
             return self.to_linexpr() + other
@@ -196,6 +323,13 @@ class Variable(DataArray):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
+
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+        else:
+            return NotImplemented
 
     def __sub__(self, other):
         """
@@ -209,6 +343,50 @@ class Variable(DataArray):
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
+
+    def __le__(self, other):
+        return self.to_linexpr().__le__(other)
+
+    def __ge__(self, other):
+        return self.to_linexpr().__ge__(other)
+
+    def __eq__(self, other):
+        return self.to_linexpr().__eq__(other)
+
+    def groupby(
+        self,
+        group,
+        squeeze: "bool" = True,
+        restore_coord_dims: "bool" = None,
+    ):
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        squeeze : bool, optional
+            If "group" is a dimension of any arrays in this dataset, `squeeze`
+            controls whether the subarrays have a dimension of length 1 along
+            that dimension or if the dimension is squeezed out.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        return self.to_linexpr().groupby(
+            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+        )
 
     def groupby_sum(self, group):
         """
@@ -228,11 +406,40 @@ class Variable(DataArray):
         """
         return self.to_linexpr().groupby_sum(group)
 
-    def group_terms(self, group):
-        warn(
-            'The function "group_terms" was renamed to "groupby_sum" and will be remove in v0.0.10.'
+    def rolling(
+        self,
+        dim: "Mapping[Any, int]" = None,
+        min_periods: "int" = None,
+        center: "bool | Mapping[Any, bool]" = False,
+        **window_kwargs: "int",
+    ) -> "expressions.LinearExpressionRolling":
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        return self.to_linexpr().rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
-        return self.groupby_sum(group)
 
     def rolling_sum(self, **kwargs):
         """
@@ -250,7 +457,67 @@ class Variable(DataArray):
         return self.to_linexpr().rolling_sum(**kwargs)
 
     @property
-    @has_assigned_model
+    def labels(self):
+        """
+        Return the labels of the variable.
+        """
+        return self._labels
+
+    @property
+    def data(self):
+        """
+        Get the data of the variable.
+        """
+        # Needed for compatibility with linopy.merge
+        return self.labels
+
+    @property
+    def model(self):
+        """
+        Return the model of the variable.
+        """
+        return self._model
+
+    @property
+    def type(self):
+        """
+        Type of the variable.
+
+        Returns
+        -------
+        str
+            Type of the variable.
+        """
+        if self.attrs["integer"]:
+            return "Integer Variable"
+        elif self.attrs["binary"]:
+            return "Binary Variable"
+        else:
+            return "Continuous Variable"
+
+    @classmethod
+    @property
+    def fill_value(self):
+        """
+        Return the fill value of the variable.
+        """
+        return self._fill_value
+
+    @property
+    def mask(self):
+        """
+        Get the mask of the variable.
+
+        The mask indicates on which coordinates the variable array is enabled
+        (True) and disabled (False).
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        return (self.labels != self._fill_value).astype(bool)
+
+    @property
     def upper(self):
         """
         Get the upper bounds of the variables.
@@ -261,7 +528,6 @@ class Variable(DataArray):
         return self.model.variables.upper[self.name]
 
     @upper.setter
-    @has_assigned_model
     @is_constant
     def upper(self, value):
         """
@@ -270,11 +536,12 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.upper)
+        if not set(value.dims).issubset(self.model.variables[self.name].dims):
+            raise ValueError("Cannot assign new dimensions to existing variable.")
         self.model.variables.upper[self.name] = value
 
     @property
-    @has_assigned_model
     def lower(self):
         """
         Get the lower bounds of the variables.
@@ -285,7 +552,6 @@ class Variable(DataArray):
         return self.model.variables.lower[self.name]
 
     @lower.setter
-    @has_assigned_model
     @is_constant
     def lower(self, value):
         """
@@ -294,7 +560,9 @@ class Variable(DataArray):
         The function raises an error in case no model is set as a
         reference.
         """
-        value = DataArray(value).broadcast_like(self)
+        value = DataArray(value).broadcast_like(self.lower)
+        if not set(value.dims).issubset(self.model.variables[self.name].dims):
+            raise ValueError("Cannot assign new dimensions to existing variable.")
         self.model.variables.lower[self.name] = value
 
     @property
@@ -330,6 +598,26 @@ class Variable(DataArray):
         """
         return self.to_linexpr().sum(dims)
 
+    def diff(self, dim, n=1):
+        """
+        Calculate the n-th order discrete difference along the given dimension.
+
+        This function works exactly in the same way as ``LinearExpression.diff()``.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to calculate the finite difference.
+        n : int, default: 1
+            The number of times values are differenced.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            Finite difference expression.
+        """
+        return self.to_linexpr().diff(dim, n)
+
     def where(self, cond, other=-1, **kwargs):
         """
         Filter variables based on a condition.
@@ -352,7 +640,63 @@ class Variable(DataArray):
         -------
         linopy.Variable
         """
-        return self.__class__(DataArray.where(self, cond, other, **kwargs))
+        if isinstance(other, Variable):
+            other = other.labels
+        elif isinstance(other, ScalarVariable):
+            other = other.label
+        return self.__class__(self.labels.where(cond, other, **kwargs), self.model)
+
+    def ffill(self, dim, limit=None):
+        """
+        Forward fill the variable along a dimension.
+
+        This operation call ``xarray.DataArray.ffill`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to forward fill.
+        limit : int, optional
+            Maximum number of consecutive NaN values to forward fill. Must be greater than or equal to 0.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        labels = (
+            self.labels.where(self.labels != -1)
+            .ffill(dim, limit=limit)
+            .fillna(-1)
+            .astype(int)
+        )
+        return self.__class__(labels, self.model)
+
+    def bfill(self, dim, limit=None):
+        """
+        Backward fill the variable along a dimension.
+
+        This operation call ``xarray.DataArray.bfill`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        dim : str
+            Dimension over which to backward fill.
+        limit : int, optional
+            Maximum number of consecutive NaN values to backward fill. Must be greater than or equal to 0.
+
+        Returns
+        -------
+        linopy.Variable
+        """
+        labels = (
+            self.labels.where(self.labels != -1)
+            .bfill(dim, limit=limit)
+            .fillna(-1)
+            .astype(int)
+        )
+        return self.__class__(labels, self.model)
 
     def sanitize(self):
         """
@@ -362,40 +706,74 @@ class Variable(DataArray):
         -------
         linopy.Variable
         """
-        if issubdtype(self.dtype, floating):
-            return self.fillna(-1).astype(int)
+        if issubdtype(self.labels.dtype, floating):
+            return self.__class__(self.labels.fillna(-1).astype(int), self.model)
         return self
 
-    # Wrapped function which would convert variable to dataarray
-    astype = varwrap(DataArray.astype)
+    def equals(self, other):
+        return self.labels.equals(_var_unwrap(other))
 
-    bfill = varwrap(DataArray.bfill)
+    # Wrapped function which would convert variable to dataarray
+    assign_attrs = varwrap(DataArray.assign_attrs)
+
+    assign_coords = varwrap(DataArray.assign_coords)
 
     broadcast_like = varwrap(DataArray.broadcast_like)
 
-    clip = varwrap(DataArray.clip)
+    compute = varwrap(DataArray.compute)
 
-    ffill = varwrap(DataArray.ffill)
+    drop = varwrap(DataArray.drop)
+
+    drop_sel = varwrap(DataArray.drop_sel)
+
+    drop_isel = varwrap(DataArray.drop_isel)
 
     fillna = varwrap(DataArray.fillna)
 
+    sel = varwrap(DataArray.sel)
+
+    isel = varwrap(DataArray.isel)
+
     shift = varwrap(DataArray.shift, fill_value=-1)
+
+    rename = varwrap(DataArray.rename)
 
     roll = varwrap(DataArray.roll)
 
-    rolling = varwrap(DataArray.rolling)
+
+class _LocIndexer:
+    __slots__ = ("variable",)
+
+    def __init__(self, variable: Variable):
+        self.variable = variable
+
+    def __getitem__(self, key) -> DataArray:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.variable.ndim)
+            key = dict(zip(self.variable.dims, labels))
+        return self.variable.sel(key)
 
 
 @dataclass(repr=False)
+@forward_as_properties(
+    labels=[
+        "attrs",
+        "coords",
+        "indexes",
+        "dims",
+    ]
+)
 class Variables:
     """
     A variables container used for storing multiple variable arrays.
     """
 
-    labels: Dataset = Dataset()
-    lower: Dataset = Dataset()
-    upper: Dataset = Dataset()
-    blocks: Dataset = Dataset()
+    labels: Dataset = field(default_factory=Dataset)
+    lower: Dataset = field(default_factory=Dataset)
+    upper: Dataset = field(default_factory=Dataset)
+    blocks: Dataset = field(default_factory=Dataset)
+    ranges: Dataset = field(default_factory=Dataset)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
@@ -405,7 +783,7 @@ class Variables:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
         if isinstance(names, str):
-            return Variable(self.labels[names], model=self.model)
+            return Variable(self.labels[names], self.model)
 
         return self.__class__(
             self.labels[names], self.lower[names], self.upper[names], self.model
@@ -436,13 +814,34 @@ class Variables:
 
     _merge_inplace = _merge_inplace
 
-    def add(self, name, labels: DataArray, lower: DataArray, upper: DataArray):
+    def _ipython_key_completions_(self):
+        """
+        Provide method for the key-autocompletions in IPython.
+
+        See
+        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        return list(self)
+
+    def add(
+        self,
+        name,
+        labels: DataArray,
+        lower: DataArray,
+        upper: DataArray,
+        start=None,
+        end=None,
+    ):
         """
         Add variable `name`.
         """
         self._merge_inplace("labels", labels, name, fill_value=-1)
         self._merge_inplace("lower", lower, name, fill_value=-inf)
         self._merge_inplace("upper", upper, name, fill_value=inf)
+        start = start or int(labels.min())
+        end = end or int(labels.max())
+        self.ranges[name] = DataArray([start, end], dims=["_start_stop"])
 
     def remove(self, name):
         """
@@ -485,6 +884,17 @@ class Variables:
         """
         return self[self._non_binary_variables]
 
+    @property
+    def _integer_variables(self):
+        return [v for v in self if self[v].attrs["integer"]]
+
+    @property
+    def integers(self):
+        """
+        Get all integers variables.
+        """
+        return self[self._integer_variables]
+
     def get_name_by_label(self, label):
         """
         Get the variable name of the variable containing the passed label.
@@ -511,6 +921,42 @@ class Variables:
             if label in labels:
                 return name
         raise ValueError(f"No variable found containing the label {label}.")
+
+    def get_label_range(self, name: str):
+        """
+        Get starting and ending label for a variable.
+        """
+        return list(self.ranges[name].values)
+
+    def get_label_position(self, values):
+        """
+        Get tuple of name and coordinate for variable labels.
+        """
+        coords = []
+        return_list = True
+        if not isinstance(values, Iterable):
+            values = [values]
+            return_list = False
+
+        for value in values:
+            for name, labels in self.labels.items():
+
+                start, stop = self.get_label_range(name)
+
+                if value >= start and value < stop:
+
+                    index = np.unravel_index(value - start, labels.shape)
+
+                    # Extract the coordinates from the indices
+                    coord = {
+                        dim: labels.indexes[dim][i]
+                        for dim, i in zip(labels.dims, index)
+                    }
+
+                    # Add the name of the DataArray and the coordinates to the result list
+                    coords.append((name, coord))
+
+        return coords if return_list else coords[0]
 
     def iter_ravel(self, key, filter_missings=False):
         """
@@ -611,39 +1057,83 @@ class Variables:
         return res
 
 
-@dataclass
 class ScalarVariable:
-    label: int
-    coords: dict = None
+    """
+    A scalar variable container.
+
+    In contrast to the Variable class, a ScalarVariable only contains
+    only one label. Use this class to create a expression or constraint
+    in a rule.
+    """
+
+    __slots__ = ("_label", "_model")
+
+    def __init__(self, label: int, model: Any):
+        self._label = label
+        self._model = model
+
+    def __repr__(self) -> str:
+        if self.label == -1:
+            return "ScalarVariable: None"
+        name, coord = self.model.variables.get_label_position(self.label)
+        coord_string = print_coord(coord)
+        return f"ScalarVariable: {name}{coord_string}"
+
+    @property
+    def label(self):
+        """
+        Get the label of the variable.
+        """
+        return self._label
+
+    @property
+    def model(self):
+        """
+        Get the model to which the variable belongs.
+        """
+        return self._model
+
+    def to_scalar_linexpr(self, coeff=1):
+        if not isinstance(coeff, (int, np.integer, float)):
+            raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
+        return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
     def to_linexpr(self, coeff=1):
-        if not isinstance(coeff, (int, float)):
-            raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
-        return expressions.ScalarLinearExpression((coeff,), (self.label,))
+        return self.to_scalar_linexpr(coeff).to_linexpr()
 
     def __neg__(self):
-        return self.to_linexpr(-1)
+        return self.to_scalar_linexpr(-1)
 
     def __add__(self, other):
-        return self.to_linexpr(1) + other
+        return self.to_scalar_linexpr(1) + other
+
+    def __radd__(self, other):
+        # This is needed for using python's sum function
+        if other == 0:
+            return self
+        else:
+            return NotImplemented
 
     def __sub__(self, other):
-        return self.to_linexpr(1) - other
+        return self.to_scalar_linexpr(1) - other
 
     def __mul__(self, coeff):
-        return self.to_linexpr(coeff)
+        return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff):
-        return self.to_linexpr(coeff)
+        return self.to_scalar_linexpr(coeff)
 
     def __div__(self, coeff):
-        return self.to_linexpr(1 / coeff)
+        return self.to_scalar_linexpr(1 / coeff)
+
+    def __truediv__(self, coeff):
+        return self.__div__(coeff)
 
     def __le__(self, other):
-        return self.to_linexpr(1).__le__(other)
+        return self.to_scalar_linexpr(1).__le__(other)
 
     def __ge__(self, other):
-        return self.to_linexpr(1).__ge__(other)
+        return self.to_scalar_linexpr(1).__ge__(other)
 
     def __eq__(self, other):
-        return self.to_linexpr(1).__eq__(other)
+        return self.to_scalar_linexpr(1).__eq__(other)

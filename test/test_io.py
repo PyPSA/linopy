@@ -11,24 +11,33 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import Model, available_solvers, read_netcdf
-from linopy.io import float_to_str, int_to_str
+from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
+from linopy.io import int_to_str
 
 
-def test_str_arrays():
+@pytest.fixture
+def m():
     m = Model()
 
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y")
 
-    da = int_to_str(x.values)
+    m.add_constraints(x + y, LESS_EQUAL, 10)
+
+    m.add_objective(2 * x + 3 * y)
+
+    return m
+
+
+def test_str_arrays(m):
+    da = int_to_str(m.variables["x"].values)
     assert da.dtype == object
 
 
 def test_str_arrays_chunked():
     m = Model(chunk="auto")
 
-    x = m.add_variables(4, pd.Series([8, 10]))
+    m.add_variables(4, pd.Series([8, 10]))
     y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T)
 
     da = int_to_str(y.compute().values)
@@ -38,23 +47,19 @@ def test_str_arrays_chunked():
 def test_str_arrays_with_nans():
     m = Model()
 
-    x = m.add_variables(4, pd.Series([8, 10]), name="x")
-    # now expand the second dimension, expended values of x will be nan
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]), name="y")
-    assert m["x"].data[-1].item() == -1
+    m.add_variables(4, pd.Series([8, 10]), name="x")
+    # now expand the second dimension, expanded values of x will be nan
 
-    da = int_to_str(m["x"].values)
+    with pytest.warns(UserWarning):
+        m.add_variables(0, pd.DataFrame([[1, 2]]), name="y")
+
+    assert m["y"].values[-1, -1] == -1
+
+    da = int_to_str(m["y"].values)
     assert da.dtype == object
 
 
-def test_to_netcdf(tmp_path):
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-    m.add_constraints(x + y, "<=", 10)
-    m.add_objective(2 * x + 3 * y)
-
+def test_to_netcdf(m, tmp_path):
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
@@ -67,22 +72,43 @@ def test_to_netcdf(tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file(tmp_path):
+def test_to_file_lp(m, tmp_path):
     import gurobipy
-
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]))
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]))
-
-    m.add_constraints(x + y, "<=", 10)
-
-    m.add_objective(2 * x + 3 * y)
 
     fn = tmp_path / "test.lp"
     m.to_file(fn)
 
     gurobipy.read(str(fn))
+
+
+@pytest.mark.skipif(
+    not {"gurobi", "highs"}.issubset(available_solvers),
+    reason="Gurobipy of highspy not installed",
+)
+def test_to_file_mps(m, tmp_path):
+    import gurobipy
+
+    fn = tmp_path / "test.mps"
+    m.to_file(fn)
+
+    gurobipy.read(str(fn))
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_invalid(m, tmp_path):
+    with pytest.raises(ValueError):
+        fn = tmp_path / "test.failedtype"
+        m.to_file(fn)
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_gurobipy(m):
+    m.to_gurobipy()
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_highspy(m):
+    m.to_highspy()
 
 
 def test_to_blocks(tmp_path):
@@ -93,7 +119,7 @@ def test_to_blocks(tmp_path):
     x = m.add_variables(lower, upper)
     y = m.add_variables(lower, upper)
 
-    m.add_constraints(x + y, "<=", 10)
+    m.add_constraints(x + y, LESS_EQUAL, 10)
 
     m.add_objective(2 * x + 3 * y)
 
