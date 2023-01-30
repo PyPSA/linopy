@@ -14,12 +14,9 @@ from numpy import arange, cos, sin
 from linopy import Model
 
 
-def model(n, solver, integerlabels):
+def model(n, solver):
     m = Model()
-    if integerlabels:
-        N, M = [arange(n), arange(n)]
-    else:
-        N, M = [arange(n).astype(float), arange(n).astype(str)]
+    N, M = [arange(n), arange(n)]
     x = m.add_variables(coords=[N, M])
     y = m.add_variables(coords=[N, M])
     m.add_constraints(x - y >= N)
@@ -32,12 +29,11 @@ def model(n, solver, integerlabels):
 
 if __name__ == "__main__":
     solver = snakemake.wildcards.solver
-    integerlabels = snakemake.params.integerlabels
 
     # dry run first
-    model(2, solver, integerlabels)
+    model(2, solver)
 
-    res = profile(snakemake.params.nrange, model, solver, integerlabels)
+    res = profile(snakemake.params.nrange, model, solver)
     res["API"] = "linopy"
     res = res.rename_axis("N").reset_index()
 

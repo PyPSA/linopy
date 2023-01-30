@@ -13,14 +13,10 @@ from pyomo.environ import ConcreteModel, Constraint, Objective, Set, Var
 from pyomo.opt import SolverFactory
 
 
-def model(n, solver, integerlabels):
+def model(n, solver):
     m = ConcreteModel()
-    if integerlabels:
-        m.i = Set(initialize=arange(n))
-        m.j = Set(initialize=arange(n))
-    else:
-        m.i = Set(initialize=arange(n).astype(float))
-        m.j = Set(initialize=arange(n).astype(str))
+    m.i = Set(initialize=arange(n))
+    m.j = Set(initialize=arange(n))
 
     m.x = Var(m.i, m.j, bounds=(None, None))
     m.y = Var(m.i, m.j, bounds=(None, None))
@@ -45,12 +41,11 @@ def model(n, solver, integerlabels):
 
 if __name__ == "__main__":
     solver = snakemake.wildcards.solver
-    integerlabels = snakemake.params.integerlabels
 
     # dry run first
-    model(2, solver, integerlabels)
+    model(2, solver)
 
-    res = profile(snakemake.params.nrange, model, solver, integerlabels)
+    res = profile(snakemake.params.nrange, model, solver)
     res["API"] = "pyomo"
     res = res.rename_axis("N").reset_index()
 
