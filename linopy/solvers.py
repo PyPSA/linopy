@@ -209,11 +209,14 @@ def run_glpk(
     """
     Solve a linear problem using the glpk solver.
 
-    This function reads the linear problem file and passes it to the glpk
-    solver. If the solution is successful it returns variable solutions and
+    This function reads the linear problem file and passes it to the
+    glpk
+    solver. If the solution is successful it returns variable solutions
+    and
     constraint dual values.
 
     For more information on the glpk solver options:
+
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
     CONDITION_MAP = {
@@ -604,6 +607,7 @@ def run_xpress(
     must be installed for using this function.
 
     For more information on solver options:
+
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
     CONDITION_MAP = {

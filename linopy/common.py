@@ -151,7 +151,6 @@ def has_optimized_model(func):
     """
     Check if a reference model is set.
     """
-
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if self.model is None:
