@@ -2,9 +2,8 @@ import linopy
 import pyomo
 
 NRANGE = [20, 50, 100, 180, 400, 600, 800, 1200]
-#NRANGE = [10, 20]
 SOLVERS = ["gurobi"]
-APIS = ['linopy', 'jump', 'pyomo', 'pulp', 'gurobipy', 'solver']
+APIS = ['linopy', 'jump', 'pyomo', 'cvxpy', 'pulp', 'gurobipy', 'solver'] # ortools not working for gurobi v10 yet
 
 
 rule all:
@@ -62,6 +61,34 @@ rule benchmark_pulp:
     output:
         benchmark = "benchmarks/{solver}/pulp.csv"
     script: "scripts/concat-benchmarks.py"
+
+
+# CVXPY
+rule benchmark_time_cvxpy:
+    params:
+        nrange = NRANGE,
+    output:
+        "benchmarks/{solver}/cvxpy/time.csv"
+    script: "scripts/benchmark_cvxpy.py"
+
+rule benchmark_memory_single_cvxpy:
+    params:
+        nrange = NRANGE,
+    benchmark:
+        "benchmarks/{solver}/cvxpy/memory-{N}.txt"
+    script: "scripts/run-cvxpy.py"
+
+rule benchmark_cvxpy:
+    params:
+        nrange = NRANGE,
+        api = "cvxpy",
+    input:
+        memory = lambda w: expand("benchmarks/{solver}/cvxpy/memory-{N}.txt", N=NRANGE, solver=w.solver),
+        time = "benchmarks/{solver}/cvxpy/time.csv",
+    output:
+        benchmark = "benchmarks/{solver}/cvxpy.csv"
+    script: "scripts/concat-benchmarks.py"
+
 
 # PYOMO
 rule benchmark_time_pyomo:
@@ -202,7 +229,8 @@ rule benchmark_gurobi:
 # Merge all benchmarks
 rule merge_benchmarks:
     params:
-        nrange = NRANGE
+        nrange = NRANGE,
+        apis = [api for api in APIS if api != "solver"],
     input:
         benchmarks = lambda w: expand("benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS)
     output:
