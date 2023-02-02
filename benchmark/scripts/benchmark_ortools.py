@@ -71,7 +71,7 @@ elif snakemake.config["benchmark"] == "knapsack":
 
 
 if __name__ == "__main__":
-    solver = snakemake.wildcards.solver
+    solver = snakemake.config["solver"]
 
     # dry run first
     model(2, solver)

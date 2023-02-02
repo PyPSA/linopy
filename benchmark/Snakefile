@@ -2,20 +2,20 @@ configfile: "config.yaml"
 
 
 benchmark = config["benchmark"]
+SOLVER = config["solver"]
 NRANGE = config[benchmark]["nrange"]
-SOLVER = config[benchmark]["solver"]
 APIS = config[benchmark]["apis"]
 
 rule all:
     input:
         expand(
-            "benchmarks/{solver}/benchmark-{kind}.pdf",
-            solver=SOLVER,
+            "benchmarks/{model}/benchmark-{kind}.pdf",
+            model=benchmark,
             kind=["absolute", "overhead"],
         ),
         expand(
-            "benchmarks/{solver}/benchmark_resource-{kind}.pdf",
-            solver=SOLVER,
+            "benchmarks/{model}/benchmark_resource-{kind}.pdf",
+            model=benchmark,
             kind=["absolute", "overhead"],
         ),
 
@@ -25,7 +25,7 @@ rule benchmark_time_linopy:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/linopy/time.csv",
+        "benchmarks/{model}/linopy/time.csv",
     script:
         "scripts/benchmark_linopy.py"
 
@@ -34,7 +34,7 @@ rule benchmark_memory_single_linopy:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/linopy/memory-{N}.txt"
+        "benchmarks/{model}/linopy/memory-{N}.txt"
     script:
         "scripts/run-linopy.py"
 
@@ -45,11 +45,11 @@ rule benchmark_linopy:
         api="linopy",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/linopy/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/linopy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/linopy/time.csv",
+        time="benchmarks/{model}/linopy/time.csv",
     output:
-        benchmark="benchmarks/{solver}/linopy.csv",
+        benchmark="benchmarks/{model}/linopy.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -59,7 +59,7 @@ rule benchmark_time_pulp:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/pulp/time.csv",
+        "benchmarks/{model}/pulp/time.csv",
     script:
         "scripts/benchmark_pulp.py"
 
@@ -68,7 +68,7 @@ rule benchmark_memory_single_pulp:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/pulp/memory-{N}.txt"
+        "benchmarks/{model}/pulp/memory-{N}.txt"
     script:
         "scripts/run-pulp.py"
 
@@ -79,11 +79,11 @@ rule benchmark_pulp:
         api="pulp",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/pulp/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/pulp/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/pulp/time.csv",
+        time="benchmarks/{model}/pulp/time.csv",
     output:
-        benchmark="benchmarks/{solver}/pulp.csv",
+        benchmark="benchmarks/{model}/pulp.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -93,7 +93,7 @@ rule benchmark_time_cvxpy:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/cvxpy/time.csv",
+        "benchmarks/{model}/cvxpy/time.csv",
     script:
         "scripts/benchmark_cvxpy.py"
 
@@ -102,7 +102,7 @@ rule benchmark_memory_single_cvxpy:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/cvxpy/memory-{N}.txt"
+        "benchmarks/{model}/cvxpy/memory-{N}.txt"
     script:
         "scripts/run-cvxpy.py"
 
@@ -113,11 +113,11 @@ rule benchmark_cvxpy:
         api="cvxpy",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/cvxpy/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/cvxpy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/cvxpy/time.csv",
+        time="benchmarks/{model}/cvxpy/time.csv",
     output:
-        benchmark="benchmarks/{solver}/cvxpy.csv",
+        benchmark="benchmarks/{model}/cvxpy.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -127,7 +127,7 @@ rule benchmark_time_pyomo:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/pyomo/time.csv",
+        "benchmarks/{model}/pyomo/time.csv",
     script:
         "scripts/benchmark_pyomo.py"
 
@@ -136,7 +136,7 @@ rule benchmark_memory_single_pyomo:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/pyomo/memory-{N}.txt"
+        "benchmarks/{model}/pyomo/memory-{N}.txt"
     script:
         "scripts/run-pyomo.py"
 
@@ -147,11 +147,11 @@ rule benchmark_pyomo:
         api="pyomo",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/pyomo/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/pyomo/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/pyomo/time.csv",
+        time="benchmarks/{model}/pyomo/time.csv",
     output:
-        benchmark="benchmarks/{solver}/pyomo.csv",
+        benchmark="benchmarks/{model}/pyomo.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -161,7 +161,7 @@ rule benchmark_time_gurobipy:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/gurobipy/time.csv",
+        "benchmarks/{model}/gurobipy/time.csv",
     script:
         "scripts/benchmark_gurobipy.py"
 
@@ -170,7 +170,7 @@ rule benchmark_memory_single_gurobipy:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/gurobipy/memory-{N}.txt"
+        "benchmarks/{model}/gurobipy/memory-{N}.txt"
     script:
         "scripts/run-gurobipy.py"
 
@@ -181,11 +181,11 @@ rule benchmark_gurobipy:
         api="gurobipy",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/gurobipy/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/gurobipy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/gurobipy/time.csv",
+        time="benchmarks/{model}/gurobipy/time.csv",
     output:
-        benchmark="benchmarks/{solver}/gurobipy.csv",
+        benchmark="benchmarks/{model}/gurobipy.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -195,7 +195,7 @@ rule benchmark_time_ortools:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/ortools/time.csv",
+        "benchmarks/{model}/ortools/time.csv",
     script:
         "scripts/benchmark_ortools.py"
 
@@ -204,7 +204,7 @@ rule benchmark_memory_single_ortools:
     params:
         nrange=NRANGE,
     benchmark:
-        "benchmarks/{solver}/ortools/memory-{N}.txt"
+        "benchmarks/{model}/ortools/memory-{N}.txt"
     script:
         "scripts/run-ortools.py"
 
@@ -215,11 +215,11 @@ rule benchmark_ortools:
         api="ortools",
     input:
         memory=lambda w: expand(
-            "benchmarks/{solver}/ortools/memory-{N}.txt", N=NRANGE, solver=w.solver
+            "benchmarks/{model}/ortools/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
-        time="benchmarks/{solver}/ortools/time.csv",
+        time="benchmarks/{model}/ortools/time.csv",
     output:
-        benchmark="benchmarks/{solver}/ortools.csv",
+        benchmark="benchmarks/{model}/ortools.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -229,7 +229,7 @@ rule benchmark_jump:
     params:
         nrange=NRANGE,
     output:
-        "benchmarks/{solver}/jump.csv",
+        "benchmarks/{model}/jump.csv",
     script:
         "scripts/benchmark_jump.jl"
 
@@ -237,25 +237,25 @@ rule benchmark_jump:
 # For benchmarking solver processes only, we have to start from the lp files
 rule write_lp:
     output:
-        expand("benchmarks/lp_files/{N}.lp", N=NRANGE),
+        expand("benchmarks/{model}/lp_files/{N}.lp", model=benchmark, N=NRANGE),
     script:
         "scripts/write-lp-file.py"
 
 
 rule benchmark_memory_single_gurobi:
     input:
-        lp="benchmarks/lp_files/{N}.lp",
+        lp="benchmarks/{model}/lp_files/{N}.lp",
     benchmark:
-        "benchmarks/gurobi/solver/memory-{N}.txt"
+        "benchmarks/{model}/solver/memory-{N}.txt"
     shell:
         "gurobi_cl ResultFile=/dev/null {input.lp}"
 
 
 rule benchmark_time_single_gurobi:
     input:
-        lp="benchmarks/lp_files/{N}.lp",
+        lp="benchmarks/{model}/lp_files/{N}.lp",
     output:
-        time="benchmarks/gurobi/solver/time-{N}.txt",
+        time="benchmarks/{model}/solver/time-{N}.txt",
     run:
         import gurobipy
 
@@ -271,10 +271,10 @@ rule benchmark_gurobi:
         nrange=NRANGE,
         api="Solving Process",
     input:
-        memory=expand("benchmarks/gurobi/solver/memory-{N}.txt", N=NRANGE),
-        time=expand("benchmarks/gurobi/solver/time-{N}.txt", N=NRANGE),
+        memory=expand("benchmarks/{model}/solver/memory-{N}.txt", model=benchmark, N=NRANGE),
+        time=expand("benchmarks/{model}/solver/time-{N}.txt", model=benchmark, N=NRANGE),
     output:
-        benchmark="benchmarks/gurobi/solver.csv",
+        benchmark="benchmarks/{model}/solver.csv",
     script:
         "scripts/concat-benchmarks.py"
 
@@ -286,20 +286,20 @@ rule merge_benchmarks:
         apis=[api for api in APIS if api != "solver"],
     input:
         benchmarks=lambda w: expand(
-            "benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS
+            "benchmarks/{model}/{api}.csv", model=benchmark, api=APIS
         ),
     output:
-        absolute="benchmarks/{solver}/benchmarks-absolute.csv",
-        overhead="benchmarks/{solver}/benchmarks-overhead.csv",
+        absolute="benchmarks/{model}/benchmarks-absolute.csv",
+        overhead="benchmarks/{model}/benchmarks-overhead.csv",
     script:
         "scripts/merge-benchmarks.py"
 
 
 rule plot_benchmarks:
     input:
-        "benchmarks/{solver}/benchmarks-{kind}.csv",
+        "benchmarks/{model}/benchmarks-{kind}.csv",
     output:
-        time_memory = "benchmarks/{solver}/benchmark-{kind}.pdf",
-        resource = "benchmarks/{solver}/benchmark_resource-{kind}.pdf",
+        time_memory = "benchmarks/{model}/benchmark-{kind}.pdf",
+        resource = "benchmarks/{model}/benchmark_resource-{kind}.pdf",
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"

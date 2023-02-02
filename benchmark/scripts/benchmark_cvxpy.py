@@ -46,7 +46,7 @@ def knapsack_model(n, solver):
 
 
 if __name__ == "__main__":
-    solver = snakemake.wildcards.solver
+    solver = snakemake.config["solver"]
 
     if snakemake.config["benchmark"] == "basic":
         model = basic_model

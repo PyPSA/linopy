@@ -6,5 +6,5 @@ elif snakemake.config["benchmark"] == "knapsack":
     model = knapsack_model
 
 n = int(snakemake.wildcards.N)
-solver = snakemake.wildcards.solver
+solver = snakemake.config["solver"]
 model(n, solver)

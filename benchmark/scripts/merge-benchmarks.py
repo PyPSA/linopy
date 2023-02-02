@@ -13,8 +13,12 @@ import pandas as pd
 df = [pd.read_csv(fn, index_col=0) for fn in snakemake.input.benchmarks]
 df = pd.concat(df, ignore_index=True)
 
-df["Number of Variables"] = df.N**2 * 2
-df["Number of Constraints"] = df.N**2 * 2
+if snakemake.config["benchmark"] == "basic":
+    df["Number of Variables"] = df.N**2 * 2
+    df["Number of Constraints"] = df.N**2 * 2
+elif snakemake.config["benchmark"] == "knapsack":
+    df["Number of Variables"] = df.N
+    df["Number of Constraints"] = df.N
 
 solver_memory = df.loc[df.API == "Solving Process", "Memory"].values
 solver_time = df.loc[df.API == "Solving Process", "Time"].values

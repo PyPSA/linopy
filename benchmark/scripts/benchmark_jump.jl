@@ -32,9 +32,9 @@ function knapsack_model(n, solver)
 end
 
 
-if snakemake.wildcards["solver"] == "gurobi"
+if snakemake.config["solver"] == "gurobi"
     solver = Gurobi.Optimizer
-elseif snakemake.wildcards["solver"] == "cbc"
+elseif snakemake.config["solver"] == "cbc"
     using CBC
     solver = CBC.Optimizer
 end
