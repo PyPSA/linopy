@@ -1,0 +1,22 @@
+name: 'linopy-benchmark'
+channels:
+- conda-forge
+- gurobi
+- bioconda
+dependencies:
+- python==3.9
+- pip
+- linopy
+- gurobi
+- ortools-python
+- pyomo
+- pulp
+- seaborn
+- matplotlib
+- snakemake
+- memory_profiler
+- jupyter
+- cvxpy
+
+- pip:
+  - ortools>=9.5

@@ -6,27 +6,39 @@ Created on Mon Feb 14 18:00:44 2022.
 @author: fabian
 """
 
+from pathlib import Path
+
 import pandas as pd
 
 df = [pd.read_csv(fn, index_col=0) for fn in snakemake.input.benchmarks]
 df = pd.concat(df, ignore_index=True)
 
-df_time = [pd.read_csv(fn, index_col=0) for fn in snakemake.input.benchmarks_time]
-df_time = pd.concat(df_time, ignore_index=True)
+if snakemake.config["benchmark"] == "basic":
+    df["Number of Variables"] = df.N**2 * 2
+    df["Number of Constraints"] = df.N**2 * 2
+elif snakemake.config["benchmark"] == "knapsack":
+    df["Number of Variables"] = df.N
+    df["Number of Constraints"] = df.N
 
-# update time benchmarks
-for api in df_time.API.unique():
-    df.loc[df.API == api, "Time"] = df_time.loc[df.API == api, "Time"].values
+solver_memory = df.loc[df.API == "Solving Process", "Memory"].values
+solver_time = df.loc[df.API == "Solving Process", "Time"].values
+
+# Make a correction of the memory usage, some APIs use external processes for the solving process
+api_with_external_process = set(["pyomo"])
+api_with_internal_process = set(snakemake.params.apis).difference(
+    api_with_external_process
+)
 
 
-df["Number of Variables"] = df.N**2 * 2
-df["Number of Constraints"] = df.N**2 * 2
+absolute = df.copy()
+for api in api_with_external_process:
+    absolute.loc[absolute.API == api, "Memory"] += solver_memory
+absolute.to_csv(snakemake.output.absolute)
 
-
-# Make a correction of the memory usage:
-# Pyomo uses external threads for the solving process, this is not counted by the snakemake
-# memory tracking
-solver_usage = df.loc[df.API == "Solving Process", "Memory"].values
-df.loc[df.API == "pyomo", "Memory"] += solver_usage
-
-df.to_csv(snakemake.output[0])
+overhead = df.copy()
+for api in snakemake.params.apis:
+    overhead.loc[overhead.API == api, "Time"] -= solver_time
+for api in api_with_internal_process:
+    overhead.loc[overhead.API == api, "Memory"] -= solver_memory
+overhead = overhead.query("API != 'Solving Process'")
+overhead.to_csv(snakemake.output.overhead)
