@@ -119,7 +119,7 @@ def run_cbc(
     and constraint dual values. For more information on the solver
     options, run 'cbc' in your shell
     """
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for cbc solver. "
             "Falling back to `lp`."
@@ -221,16 +221,17 @@ def run_glpk(
         "undefined": "infeasible_or_unbounded",
     }
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for glpk solver. "
             "Falling back to `lp`."
         )
 
     problem_fn = model.to_file(problem_fn)
+    suffix = problem_fn.suffix[1:]
 
     # TODO use --nopresol argument for non-optimal solution output
-    command = f"glpsol --lp {problem_fn} --output {solution_fn} "
+    command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
     if log_fn is not None:
         command += f"--log {log_fn} "
     if warmstart_fn:
@@ -339,7 +340,7 @@ def run_highs(
     if warmstart_fn:
         logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
 
-    if io_api is None or (io_api == "lp"):
+    if io_api is None or io_api in ["lp", "mps"]:
         model.to_file(problem_fn)
         h = highspy.Highs()
         h.readModel(maybe_convert_path(problem_fn))
@@ -347,7 +348,7 @@ def run_highs(
         h = model.to_highspy()
     else:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     if log_fn is None:
@@ -411,7 +412,7 @@ def run_cplex(
     """
     CONDITION_MAP = {"integer optimal solution": "optimal"}
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for cplex solver. "
             "Falling back to `lp`."
@@ -530,7 +531,7 @@ def run_gurobi(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io_api is None or (io_api == "lp"):
+    if io_api is None or io_api in ["lp", "mps"]:
         problem_fn = model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
         m = gurobipy.read(problem_fn)
@@ -539,7 +540,7 @@ def run_gurobi(
         m = model.to_gurobipy()
     else:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     if solver_options is not None:
@@ -616,7 +617,7 @@ def run_xpress(
         "mip_unbounded": "unbounded",
     }
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for xpress solver. "
             "Falling back to `lp`."
