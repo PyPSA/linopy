@@ -1,9 +1,13 @@
 import pulp
 from common import profile
 from numpy import arange
+from numpy.random import randint, seed
+
+# Random seed for reproducibility
+seed(125)
 
 
-def model(n, solver):
+def basic_model(n, solver):
     m = pulp.LpProblem("Model", pulp.LpMinimize)
 
     m.i = list(range(n))
@@ -20,11 +24,41 @@ def model(n, solver):
 
     solver = pulp.getSolver(solver.upper())
     m.solve(solver)
-    return
+    return pulp.value(m.objective)
+
+
+def knapsack_model(n, solver):
+    # Define the problem
+    m = pulp.LpProblem("Knapsack Problem", pulp.LpMaximize)
+
+    m.i = list(range(n))
+
+    # Define the variables
+    weight = randint(1, 100, size=n)
+    value = randint(1, 100, size=n)
+
+    x = pulp.LpVariable.dicts("x", (m.i,), lowBound=0, upBound=1, cat=pulp.LpInteger)
+
+    # Define the constraints
+    m += pulp.lpSum([weight[i] * x[i] for i in m.i]) <= 200
+
+    # Define the objective function
+    m += pulp.lpSum([value[i] * x[i] for i in m.i])
+
+    # Solve the problem
+    solver = pulp.getSolver(solver.upper())
+    m.solve(solver)
+
+    return pulp.value(m.objective)
 
 
 if __name__ == "__main__":
     solver = snakemake.wildcards.solver
+
+    if snakemake.config["benchmark"] == "basic":
+        model = basic_model
+    elif snakemake.config["benchmark"] == "knapsack":
+        model = knapsack_model
 
     # dry run first
     model(2, solver)

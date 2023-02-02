@@ -7,19 +7,18 @@ import pandas as pd
 
 
 def profile(nrange, func, *args):
-    res = pd.DataFrame(index=nrange, columns=["Time", "Memory"])
+    res = pd.DataFrame(index=nrange, columns=["Time", "Memory", "Objective"])
 
     for N in res.index:
         start = time()
 
-        func(N, *args)
+        objective = func(N, *args)
 
         end = time()
         duration = end - start
 
-        # memory = memory_usage((func, (N, *args)))
-
-        res.loc[N] = duration  # , max(memory)
+        res.loc[N, "Time"] = duration
+        res.loc[N, "Objective"] = objective
 
         gc.collect()
 

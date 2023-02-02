@@ -31,6 +31,7 @@ if benchmark_time is not None:
     if isinstance(benchmark_time, str):
         df_time = pd.read_csv(benchmark_time, index_col=0)
         df["Time"] = df_time.Time.values
+        df["Objective"] = df_time.Objective.values
     else:
         # for solvers we need to read the time from the single output files
         df["Time"] = [float(Path(fn).read_text()) for fn in benchmark_time]

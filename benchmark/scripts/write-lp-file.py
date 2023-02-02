@@ -1,19 +1,35 @@
-import gurobipy
 import pandas as pd
 from numpy import arange
+from numpy.random import randint, seed
 
 from linopy import Model
 
+# Random seed for reproducibility
+seed(125)
 
-def create_model(N):
-    m = Model()
-    coords = [arange(N), arange(N)]
-    x = m.add_variables(coords=coords)
-    y = m.add_variables(coords=coords)
-    m.add_constraints(x - y >= arange(N))
-    m.add_constraints(x + y >= 0)
-    m.add_objective((2 * x).sum() + y.sum())
-    return m
+
+if snakemake.config["benchmark"] == "basic":
+
+    def create_model(n):
+        m = Model()
+        N, M = [arange(n), arange(n)]
+        x = m.add_variables(coords=[N, M])
+        y = m.add_variables(coords=[N, M])
+        m.add_constraints(x - y >= N)
+        m.add_constraints(x + y >= 0)
+        m.add_objective((2 * x).sum() + y.sum())
+        return m
+
+elif snakemake.config["benchmark"] == "knapsack":
+
+    def create_model(n):
+        m = Model()
+        packages = m.add_variables(coords=[arange(n)], binary=True)
+        weight = randint(1, 100, size=n)
+        value = randint(1, 100, size=n)
+        m.add_constraints((weight * packages).sum() <= 200)
+        m.add_objective(-(value * packages).sum())  # use minus because of minimization
+        return m
 
 
 for fn in snakemake.output:

@@ -1,250 +1,305 @@
-import linopy
-import pyomo
+configfile: "config.yaml"
 
-NRANGE = [20, 50, 100, 180, 400, 600, 800, 1200]
-SOLVERS = ["gurobi"]
-APIS = ['linopy', 'jump', 'pyomo', 'cvxpy', 'pulp', 'gurobipy', 'solver'] # ortools not working for gurobi v10 yet
 
+benchmark = config["benchmark"]
+NRANGE = config[benchmark]["nrange"]
+SOLVER = config[benchmark]["solver"]
+APIS = config[benchmark]["apis"]
 
 rule all:
-    input: expand("benchmarks/{solver}/benchmark-{kind}.pdf", solver=SOLVERS, kind=['absolute', 'overhead'])
+    input:
+        expand(
+            "benchmarks/{solver}/benchmark-{kind}.pdf",
+            solver=SOLVER,
+            kind=["absolute", "overhead"],
+        ),
+        expand(
+            "benchmarks/{solver}/benchmark_resource-{kind}.pdf",
+            solver=SOLVER,
+            kind=["absolute", "overhead"],
+        ),
+
 
 # LINOPY
 rule benchmark_time_linopy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/linopy/time.csv"
-    script: "scripts/benchmark_linopy.py"
+        "benchmarks/{solver}/linopy/time.csv",
+    script:
+        "scripts/benchmark_linopy.py"
+
 
 rule benchmark_memory_single_linopy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/linopy/memory-{N}.txt"
-    script: "scripts/run-linopy.py"
+    script:
+        "scripts/run-linopy.py"
+
 
 rule benchmark_linopy:
     params:
-        nrange = NRANGE,
-        api = "linopy",
+        nrange=NRANGE,
+        api="linopy",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/linopy/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/linopy/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/linopy/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/linopy/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/linopy.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/{solver}/linopy.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 # PULP
 rule benchmark_time_pulp:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/pulp/time.csv"
-    script: "scripts/benchmark_pulp.py"
+        "benchmarks/{solver}/pulp/time.csv",
+    script:
+        "scripts/benchmark_pulp.py"
+
 
 rule benchmark_memory_single_pulp:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/pulp/memory-{N}.txt"
-    script: "scripts/run-pulp.py"
+    script:
+        "scripts/run-pulp.py"
+
 
 rule benchmark_pulp:
     params:
-        nrange = NRANGE,
-        api = "pulp",
+        nrange=NRANGE,
+        api="pulp",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/pulp/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/pulp/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/pulp/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/pulp/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/pulp.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/{solver}/pulp.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 # CVXPY
 rule benchmark_time_cvxpy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/cvxpy/time.csv"
-    script: "scripts/benchmark_cvxpy.py"
+        "benchmarks/{solver}/cvxpy/time.csv",
+    script:
+        "scripts/benchmark_cvxpy.py"
+
 
 rule benchmark_memory_single_cvxpy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/cvxpy/memory-{N}.txt"
-    script: "scripts/run-cvxpy.py"
+    script:
+        "scripts/run-cvxpy.py"
+
 
 rule benchmark_cvxpy:
     params:
-        nrange = NRANGE,
-        api = "cvxpy",
+        nrange=NRANGE,
+        api="cvxpy",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/cvxpy/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/cvxpy/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/cvxpy/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/cvxpy/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/cvxpy.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/{solver}/cvxpy.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 # PYOMO
 rule benchmark_time_pyomo:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/pyomo/time.csv"
-    script: "scripts/benchmark_pyomo.py"
+        "benchmarks/{solver}/pyomo/time.csv",
+    script:
+        "scripts/benchmark_pyomo.py"
+
 
 rule benchmark_memory_single_pyomo:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/pyomo/memory-{N}.txt"
-    script: "scripts/run-pyomo.py"
+    script:
+        "scripts/run-pyomo.py"
+
 
 rule benchmark_pyomo:
     params:
-        nrange = NRANGE,
-        api = "pyomo",
+        nrange=NRANGE,
+        api="pyomo",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/pyomo/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/pyomo/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/pyomo/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/pyomo/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/pyomo.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/{solver}/pyomo.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 # GUROBIPY
 rule benchmark_time_gurobipy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/gurobipy/time.csv"
-    script: "scripts/benchmark_gurobipy.py"
+        "benchmarks/{solver}/gurobipy/time.csv",
+    script:
+        "scripts/benchmark_gurobipy.py"
+
 
 rule benchmark_memory_single_gurobipy:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/gurobipy/memory-{N}.txt"
-    script: "scripts/run-gurobipy.py"
+    script:
+        "scripts/run-gurobipy.py"
+
 
 rule benchmark_gurobipy:
     params:
-        nrange = NRANGE,
-        api = "gurobipy",
+        nrange=NRANGE,
+        api="gurobipy",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/gurobipy/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/gurobipy/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/gurobipy/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/gurobipy/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/gurobipy.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/{solver}/gurobipy.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
 
 # ORTOOLS
 rule benchmark_time_ortools:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/ortools/time.csv"
-    script: "scripts/benchmark_ortools.py"
+        "benchmarks/{solver}/ortools/time.csv",
+    script:
+        "scripts/benchmark_ortools.py"
+
 
 rule benchmark_memory_single_ortools:
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     benchmark:
         "benchmarks/{solver}/ortools/memory-{N}.txt"
-    script: "scripts/run-ortools.py"
+    script:
+        "scripts/run-ortools.py"
+
 
 rule benchmark_ortools:
     params:
-        nrange = NRANGE,
-        api = "ortools",
+        nrange=NRANGE,
+        api="ortools",
     input:
-        memory = lambda w: expand("benchmarks/{solver}/ortools/memory-{N}.txt", N=NRANGE, solver=w.solver),
-        time = "benchmarks/{solver}/ortools/time.csv",
+        memory=lambda w: expand(
+            "benchmarks/{solver}/ortools/memory-{N}.txt", N=NRANGE, solver=w.solver
+        ),
+        time="benchmarks/{solver}/ortools/time.csv",
     output:
-        benchmark = "benchmarks/{solver}/ortools.csv"
-    script: "scripts/concat-benchmarks.py"
-
+        benchmark="benchmarks/{solver}/ortools.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 rule benchmark_jump:
     "For time & memory benchmarks, use one process for all runs (skip import and jit compilation times)"
     params:
-        nrange = NRANGE,
+        nrange=NRANGE,
     output:
-        "benchmarks/{solver}/jump.csv"
-    script: "scripts/benchmark_jump.jl"
+        "benchmarks/{solver}/jump.csv",
+    script:
+        "scripts/benchmark_jump.jl"
 
 
 # For benchmarking solver processes only, we have to start from the lp files
 rule write_lp:
     output:
-        expand("benchmarks/lp_files/{N}.lp", N=NRANGE)
-    script: "scripts/write-lp-file.py"
+        expand("benchmarks/lp_files/{N}.lp", N=NRANGE),
+    script:
+        "scripts/write-lp-file.py"
 
 
 rule benchmark_memory_single_gurobi:
     input:
-        lp="benchmarks/lp_files/{N}.lp"
+        lp="benchmarks/lp_files/{N}.lp",
     benchmark:
         "benchmarks/gurobi/solver/memory-{N}.txt"
-    run:
-        import gurobipy
-
-        m = gurobipy.read(input.lp)
-        m.optimize()
+    shell:
+        "gurobi_cl ResultFile=/dev/null {input.lp}"
 
 
 rule benchmark_time_single_gurobi:
     input:
-        lp="benchmarks/lp_files/{N}.lp"
+        lp="benchmarks/lp_files/{N}.lp",
     output:
-        time="benchmarks/gurobi/solver/time-{N}.txt"
+        time="benchmarks/gurobi/solver/time-{N}.txt",
     run:
         import gurobipy
 
         m = gurobipy.read(input.lp)
         m.optimize()
 
-        with open(output.time, 'w') as f:
+        with open(output.time, "w") as f:
             f.write(str(m.RunTime))
 
 
 rule benchmark_gurobi:
     params:
-        nrange = NRANGE,
-        api = "Solving Process",
+        nrange=NRANGE,
+        api="Solving Process",
     input:
-        memory = expand("benchmarks/gurobi/solver/memory-{N}.txt", N=NRANGE),
-        time = expand("benchmarks/gurobi/solver/time-{N}.txt", N=NRANGE),
+        memory=expand("benchmarks/gurobi/solver/memory-{N}.txt", N=NRANGE),
+        time=expand("benchmarks/gurobi/solver/time-{N}.txt", N=NRANGE),
     output:
-        benchmark = "benchmarks/gurobi/solver.csv"
-    script: "scripts/concat-benchmarks.py"
+        benchmark="benchmarks/gurobi/solver.csv",
+    script:
+        "scripts/concat-benchmarks.py"
 
 
 # Merge all benchmarks
 rule merge_benchmarks:
     params:
-        nrange = NRANGE,
-        apis = [api for api in APIS if api != "solver"],
+        nrange=NRANGE,
+        apis=[api for api in APIS if api != "solver"],
     input:
-        benchmarks = lambda w: expand("benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS)
+        benchmarks=lambda w: expand(
+            "benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS
+        ),
     output:
         absolute="benchmarks/{solver}/benchmarks-absolute.csv",
-        overhead="benchmarks/{solver}/benchmarks-overhead.csv"
+        overhead="benchmarks/{solver}/benchmarks-overhead.csv",
     script:
         "scripts/merge-benchmarks.py"
 
 
-
 rule plot_benchmarks:
     input:
-        "benchmarks/{solver}/benchmarks-{kind}.csv"
+        "benchmarks/{solver}/benchmarks-{kind}.csv",
     output:
-        "benchmarks/{solver}/benchmark-{kind}.pdf",
+        time_memory = "benchmarks/{solver}/benchmark-{kind}.pdf",
+        resource = "benchmarks/{solver}/benchmark_resource-{kind}.pdf",
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"

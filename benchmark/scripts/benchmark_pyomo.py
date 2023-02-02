@@ -9,11 +9,24 @@ Created on Fri Nov 19 17:40:33 2021.
 
 from common import profile
 from numpy import arange
-from pyomo.environ import ConcreteModel, Constraint, Objective, Set, Var
+from numpy.random import randint, seed
+from pyomo.environ import (
+    Binary,
+    ConcreteModel,
+    Constraint,
+    Objective,
+    Set,
+    Var,
+    maximize,
+    value,
+)
 from pyomo.opt import SolverFactory
 
+# Random seed for reproducibility
+seed(125)
 
-def model(n, solver):
+
+def basic_model(n, solver):
     m = ConcreteModel()
     m.i = Set(initialize=arange(n))
     m.j = Set(initialize=arange(n))
@@ -36,11 +49,39 @@ def model(n, solver):
 
     opt = SolverFactory(solver)
     opt.solve(m)
-    return
+    return m.obj()
+
+
+def knapsack_model(n, solver):
+    m = ConcreteModel()
+    m.i = Set(initialize=arange(n))
+
+    m.x = Var(m.i, domain=Binary)
+    m.weight = randint(1, 100, size=n)
+    m.value = randint(1, 100, size=n)
+
+    def bound1(m):
+        return sum(m.x[i] * m.weight[i] for i in m.i) <= 200
+
+    def objective(m):
+        return sum(m.x[i] * m.value[i] for i in m.i)
+
+    m.con1 = Constraint(rule=bound1)
+    m.obj = Objective(rule=objective, sense=maximize)
+
+    opt = SolverFactory(solver)
+    opt.solve(m)
+    print(m.obj())
+    return m.obj()
 
 
 if __name__ == "__main__":
     solver = snakemake.wildcards.solver
+
+    if snakemake.config["benchmark"] == "basic":
+        model = basic_model
+    elif snakemake.config["benchmark"] == "knapsack":
+        model = knapsack_model
 
     # dry run first
     model(2, solver)

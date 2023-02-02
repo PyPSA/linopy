@@ -7,7 +7,12 @@ Created on Fri Nov 19 17:40:33 2021.
 """
 
 
-from benchmark_pyomo import model
+from benchmark_pyomo import basic_model, knapsack_model
+
+if snakemake.config["benchmark"] == "basic":
+    model = basic_model
+elif snakemake.config["benchmark"] == "knapsack":
+    model = knapsack_model
 
 n = int(snakemake.wildcards.N)
 solver = snakemake.wildcards.solver

@@ -1,5 +1,9 @@
 from common import profile
+from numpy.random import randint, seed
 from ortools.linear_solver import pywraplp
+
+# Random seed for reproducibility
+seed(125)
 
 
 def model(n, solver):
@@ -31,6 +35,39 @@ def model(n, solver):
     solver.Solve()
 
     return solver
+
+
+def knapsack_model(n, solver):
+    # Create a new linear solver
+    solver = pywraplp.Solver("LinearExample", pywraplp.Solver.GUROBI_LINEAR_PROGRAMMING)
+
+    weight = randint(1, 100, size=n)
+    value = randint(1, 100, size=n)
+
+    # Create variables
+    x = {}
+    for i in range(n):
+        x[i] = solver.BoolVar("x_%d" % i)
+
+    # Create constraints
+    solver.Add(solver.Sum([weight[i] * x[i] for i in range(n)]) <= 200)
+
+    # Create objective
+    obj = solver.Objective()
+    for i in range(n):
+        obj.Add(value[i] * x[i])
+    obj.SetMaximization()
+
+    # Solve the model
+    solver.Solve()
+
+    return solver
+
+
+if snakemake.config["benchmark"] == "basic":
+    model = basic_model
+elif snakemake.config["benchmark"] == "knapsack":
+    model = knapsack_model
 
 
 if __name__ == "__main__":

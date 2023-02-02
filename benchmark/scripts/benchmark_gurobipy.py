@@ -1,9 +1,13 @@
 import gurobipy as gp
 import numpy as np
 from common import profile
+from numpy.random import randint, seed
+
+# Random seed for reproducibility
+seed(125)
 
 
-def model(n, solver):
+def basic_model(n, solver):
     # Create a new model
     m = gp.Model()
 
@@ -21,14 +25,42 @@ def model(n, solver):
     # Optimize the model
     m.optimize()
 
-    return m
+    return m.ObjVal
+
+
+def knapsack_model(n, solver):
+    # Create a new model
+    m = gp.Model()
+
+    weight = randint(1, 100, size=n)
+    value = randint(1, 100, size=n)
+
+    # Create variables
+    x = m.addMVar(n, vtype=gp.GRB.BINARY, name="x")
+
+    # Create constraints
+    m.addConstr(weight @ x <= 200)
+
+    # Create objective
+    obj = value @ x
+    m.setObjective(obj, sense=gp.GRB.MAXIMIZE)
+
+    # Optimize the model
+    m.optimize()
+
+    return m.ObjVal
 
 
 if __name__ == "__main__":
     solver = snakemake.wildcards.solver
 
+    if snakemake.config["benchmark"] == "basic":
+        model = basic_model
+    elif snakemake.config["benchmark"] == "knapsack":
+        model = knapsack_model
+
     # dry run first
-    model(2, solver)
+    model(2, None)
 
     res = profile(snakemake.params.nrange, model, solver)
     res["API"] = "gurobipy"
