@@ -113,6 +113,7 @@ def print_single_expression(c, v, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
+
     # catch case that to many terms would be printed
     def print_line(expr):
         res = []

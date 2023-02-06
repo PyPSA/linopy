@@ -231,7 +231,6 @@ class LinearExpression:
         expr_strings = []
         trunc_strings = []
         for i, coord in enumerate(coords):
-
             coord_string = print_coord(coord) + ":"
             expr_string = print_single_expression(
                 self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
@@ -459,7 +458,7 @@ class LinearExpression:
         # support numpy arrays and convert them to dataarrays
         exprs = []
         model = None
-        for (c, v) in tuples:
+        for c, v in tuples:
             if not isinstance(v, variables.Variable):
                 raise TypeError(f"Expected type `linopy.Variable`, got {type(v)}")
             # check that reference models are consistent

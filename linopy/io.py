@@ -98,8 +98,7 @@ def constraints_to_file(m, f, log=False):
     if log:
         iterate = tqdm(iterate, "Writing constraints.", len(m.constraints.labels))
 
-    for (l, v, c, l_, s_, r_) in iterate:
-
+    for l, v, c, l_, s_, r_ in iterate:
         if not c.size:
             continue
         # Group repeated variables in the same constraint
@@ -134,8 +133,7 @@ def bounds_to_file(m, f, log=False):
     if log:
         iterate = tqdm(iterate, "Writing variables.", len(m.non_binaries.labels))
 
-    for (lo, l, up) in iterate:
-
+    for lo, l, up in iterate:
         if not l.size:
             continue
 
@@ -160,7 +158,6 @@ def binaries_to_file(m, f, log=False):
         iterate = tqdm(iterate, "Writing binaries.", len(m.binaries.labels))
 
     for l in iterate:
-
         if not l.size:
             continue
 
@@ -185,7 +182,6 @@ def integers_to_file(m, f, log=False):
         iterate = tqdm(iterate, "Writing integer variables.", len(m.integers.labels))
 
     for l in iterate:
-
         if not l.size:
             continue
 
@@ -205,11 +201,9 @@ def to_file(m, fn):
         fn.unlink()
 
     if fn.suffix == ".lp":
-
         log = m._xCounter > 10000
 
         with open(fn, mode="w") as f:
-
             start = time.time()
 
             objective_to_file(m, f, log)
@@ -233,7 +227,6 @@ def to_file(m, fn):
             )
 
     else:
-
         raise ValueError(
             f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
         )
@@ -408,7 +401,6 @@ def to_block_files(m, fn):
     for key, suffix in zip(keys, ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True)
         for n in tqdm(range(N + 1), desc=f"Write constraint {key}"):
-
             is_conblock_n = conblocks == n
             is_varblock_n = varblocks == n
 

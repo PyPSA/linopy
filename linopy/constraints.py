@@ -355,7 +355,7 @@ class Constraints:
         # matches string between "Data variables" and "Attributes"/end of string
         coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
         datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
-        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
+        for k, K in zip(self.dataset_attrs, self.dataset_names):
             orig = getattr(self, k).__repr__()
             if k == "labels":
                 r += re.search(coordspattern, orig).group() + "\n"
@@ -575,7 +575,6 @@ class Constraints:
         assert broadcast_like in ["labels", "vars"]
 
         for name, values in getattr(self, broadcast_like).items():
-
             broadcasted = ds[name].broadcast_like(values)
             if values.chunks is not None:
                 broadcasted = broadcasted.chunk(values.chunks)
