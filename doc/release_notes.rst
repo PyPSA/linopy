@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* **Hotfix** dual value retrieval for ``highs``.
+
 
 Version 0.1.2
 -------------
