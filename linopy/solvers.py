@@ -215,7 +215,7 @@ def run_glpk(
     and
     constraint dual values.
 
-    For more information on the glpk solver options:
+    For more information on the glpk solver options, see
 
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
@@ -606,8 +606,7 @@ def run_xpress(
     variable solutions and constraint dual values. The xpress module
     must be installed for using this function.
 
-    For more information on solver options:
-
+    For more information on solver options, see
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
     CONDITION_MAP = {

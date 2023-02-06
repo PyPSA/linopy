@@ -9,11 +9,12 @@ repos:
     rev: 22.12.0
     hooks:
     -   id: black
--   repo: https://github.com/PyCQA/docformatter
-    rev: v1.6.0.rc1
-    hooks:
-    -   id: docformatter
-        args: [--in-place, --make-summary-multi-line, --pre-summary-newline]
+    # Current docformatter version has a problem with urls (it's annoying)
+# -   repo: https://github.com/PyCQA/docformatter
+#     rev: v1.6.0.rc1
+#     hooks:
+#     -   id: docformatter
+#         args: [--in-place, --make-summary-multi-line, --pre-summary-newline]
 -   repo: https://github.com/keewis/blackdoc
     rev: v0.3.8
     hooks:
