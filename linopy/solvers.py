@@ -372,14 +372,14 @@ def run_highs(
 
         if io_api == "direct":
             sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-            dual = pd.Series(solution.row_value, model.matrices.clabels, dtype=float)
+            dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
         else:
             sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float).pipe(
                 set_int_index
             )
-            dual = pd.Series(
-                solution.row_value, h.getLp().row_names_, dtype=float
-            ).pipe(set_int_index)
+            dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float).pipe(
+                set_int_index
+            )
 
         return Solution(sol, dual, objective)
 
