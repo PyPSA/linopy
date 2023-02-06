@@ -410,7 +410,6 @@ class LinearExpression:
         linopy.LinearExpression
             Summed expression.
         """
-
         res = self.__class__(self._sum(self, dims=dims), self.model)
 
         if drop_zeros:
@@ -745,7 +744,6 @@ class LinearExpression:
         -------
         linopy.LinearExpression
         """
-
         coeffs = xr.DataArray.rolling(self.coeffs, **kwargs).construct(
             "_rolling_term", keep_attrs=True
         )
@@ -832,7 +830,6 @@ class LinearExpression:
         -------
         linopy.LinearExpression
         """
-
         if not np.issubdtype(self.vars.dtype, np.integer):
             return self.assign(vars=self.vars.fillna(-1).astype(int))
 
