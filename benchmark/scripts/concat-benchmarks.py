@@ -27,7 +27,6 @@ df = df[["N", "Time", "Memory", "API"]]
 
 benchmark_time = snakemake.input.time
 if benchmark_time is not None:
-
     if isinstance(benchmark_time, str):
         df_time = pd.read_csv(benchmark_time, index_col=0)
         df["Time"] = df_time.Time.values

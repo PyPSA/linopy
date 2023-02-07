@@ -903,7 +903,6 @@ class Model:
         Get a fresh created problem file if problem file is None.
         """
         if problem_fn is None:
-
             if io_api == "mps":
                 suffix = ".mps"
             else:
