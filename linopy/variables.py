@@ -351,12 +351,16 @@ class Variable:
 
     def __eq__(self, other):
         return self.to_linexpr().__eq__(other)
-    
+
     def __gt__(self, other):
-        raise NotImplementedError('Inequalities only ever defined for >= rather than >.')
-    
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
     def __lt__(self, other):
-        raise NotImplementedError('Inequalities only ever defined for >= rather than >.')
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
 
     def groupby(
         self,
@@ -1139,9 +1143,13 @@ class ScalarVariable:
 
     def __eq__(self, other):
         return self.to_scalar_linexpr(1).__eq__(other)
-    
+
     def __gt__(self, other):
-        raise NotImplementedError('Inequalities only ever defined for >= rather than >.')
-    
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
     def __lt__(self, other):
-        raise NotImplementedError('Inequalities only ever defined for >= rather than >.')
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
