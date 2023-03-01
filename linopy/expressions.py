@@ -31,7 +31,7 @@ from linopy.common import (
     print_single_expression,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, CONSTANT
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
@@ -158,6 +158,10 @@ class LinearExpression:
         if data is None:
             da = xr.DataArray([], dims=["_term"])
             data = Dataset({"coeffs": da, "vars": da})
+        if isinstance(data, (int, float)):
+            # should allow arraylike
+            da = xr.DataArray([data], dims=["_term"])
+            data = Dataset({"coeffs": da, "vars": [CONSTANT]})
 
         if not isinstance(data, Dataset):
             raise ValueError(
@@ -253,10 +257,16 @@ class LinearExpression:
         """
         Add an expression to others.
         """
-        if not isinstance(other, (LinearExpression, variables.Variable)):
+
+        if not isinstance(other, (LinearExpression, variables.Variable, int, float)):
+            # possibly should allow array-like numbers: later
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
+    
+        if isinstance(other, (int, float)):
+            # pass through LinearExpression constructor
+            other = LinearExpression(other, model=self.model)
         if isinstance(other, variables.Variable):
             other = LinearExpression.from_tuples((1, other))
         return merge(self, other)

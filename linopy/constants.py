@@ -22,6 +22,8 @@ long_EQUAL = "=="
 short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"
 
+CONSTANT = -42
+
 
 SIGNS = {EQUAL, GREATER_EQUAL, LESS_EQUAL}
 SIGNS_alternative = {long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL}

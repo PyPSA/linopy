@@ -375,3 +375,9 @@ def test_constraints_inequalities(m):
 
 def test_constraints_equalities(m):
     assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
+
+
+def test_constraints_add_constant(m, x):
+    x2 = x + 2
+    x3 = -2 - x
+    m.add_constraints(x3)
