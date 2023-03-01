@@ -386,7 +386,7 @@ class LinearExpression:
         c = self.data.where(self.data.vars == CONSTANT).coeffs
         if c.size==0:
             return 0
-        if c.dims[0] > 1:
+        if c.shape[0] > 1:
             # that would be constants that are not yet summed up - don't know whether that can occur
             raise NotImplementedError('should have been summed up')
             c = c.sum(axis=1)
