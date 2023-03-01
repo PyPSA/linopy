@@ -379,20 +379,20 @@ def test_constraints_equalities(m):
 
 def test_variable_add_constant(m, x):
     x2 = x + 2
-    x3 = -1. - x
+    x3 = -1.0 - x
     x4 = -x2 + x3
     x5 = x2 - x3
 
-    #assert (x5.const.round()==1).all()
+    # assert (x5.const.round()==1).all()
 
 
 def test_linexpr_add_constant(m, x, y):
-    x2 = (x+y) + 2
-    x3 = -2. + (x+y)
+    x2 = (x + y) + 2
+    x3 = -2.0 + (x + y)
 
 
 def test_constraint_w_constant(m, x, y):
-    c1 = -2.+x <= y+1
+    c1 = -2.0 + x <= y + 1
     c2 = x >= y
     c3 = (x-1.)+2 >= 3
     c4 = 0 >= (x-1)+2.

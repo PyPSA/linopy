@@ -31,7 +31,7 @@ from linopy.common import (
     print_single_expression,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, CONSTANT
+from linopy.constants import CONSTANT, EQUAL, GREATER_EQUAL, LESS_EQUAL
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
@@ -165,7 +165,7 @@ class LinearExpression:
             data = Dataset({"coeffs": da, "vars": va})
         elif isinstance(data, DataArray):
             # TODO: fix + robustify
-            va = xr.DataArray([CONSTANT]*len(data), dims=["_term"])
+            va = xr.DataArray([CONSTANT] * len(data), dims=["_term"])
             da = data
             data = Dataset({"coeffs": da, "vars": va})
 
@@ -264,12 +264,14 @@ class LinearExpression:
         Add an expression to others.
         """
 
-        if not isinstance(other, (LinearExpression, variables.Variable, int, float, DataArray)):
+        if not isinstance(
+            other, (LinearExpression, variables.Variable, int, float, DataArray)
+        ):
             # possibly should allow array-like numbers: later
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
-    
+
         if isinstance(other, (int, float, DataArray)):
             # pass through LinearExpression constructor
             other = LinearExpression(other, model=self.model)
@@ -289,7 +291,7 @@ class LinearExpression:
         Subtract others from expression.
         """
         return self.__add__(-other)
-    
+
     def __rsub__(self, other):
         return self.__radd__(-other)
 
@@ -334,7 +336,7 @@ class LinearExpression:
         return self.__div__(other)
 
     def sort_lhs_rhs(self, rhs):
-        new_lhs = (self - rhs)
+        new_lhs = self - rhs
         new_lhs -= new_lhs.const
 
         new_rhs = (rhs - self).const
@@ -384,11 +386,11 @@ class LinearExpression:
         # it should be sufficient and fast to get column index of constant
 
         c = self.data.where(self.data.vars == CONSTANT).coeffs
-        if c.size==0:
+        if c.size == 0:
             return 0
         if c.shape[0] > 1:
             # that would be constants that are not yet summed up - don't know whether that can occur
-            raise NotImplementedError('should have been summed up')
+            raise NotImplementedError("should have been summed up")
             c = c.sum(axis=1)
         return c
 
