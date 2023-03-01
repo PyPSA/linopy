@@ -394,9 +394,9 @@ def test_linexpr_add_constant(m, x, y):
 def test_constraint_w_constant(m, x, y):
     c1 = -2.0 + x <= y + 1
     c2 = x >= y
-    c3 = (x-1.)+2 >= 3
-    c4 = 0 >= (x-1)+2.
-    
+    c3 = (x - 1.0) + 2 >= 3
+    c4 = 0 >= (x - 1) + 2.0
+
     m.add_constraints(c1)
     m.add_constraints(c2)
     m.add_constraints(c3)
