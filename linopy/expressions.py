@@ -163,6 +163,11 @@ class LinearExpression:
             da = xr.DataArray([data], dims=["_term"])
             va = xr.DataArray([CONSTANT], dims=["_term"])
             data = Dataset({"coeffs": da, "vars": va})
+        elif isinstance(data, DataArray):
+            # TODO: fix + robustify
+            va = xr.DataArray([CONSTANT]*len(data), dims=["_term"])
+            da = data
+            data = Dataset({"coeffs": da, "vars": va})
 
         if not isinstance(data, Dataset):
             raise ValueError(
@@ -259,13 +264,13 @@ class LinearExpression:
         Add an expression to others.
         """
 
-        if not isinstance(other, (LinearExpression, variables.Variable, int, float)):
+        if not isinstance(other, (LinearExpression, variables.Variable, int, float, DataArray)):
             # possibly should allow array-like numbers: later
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
     
-        if isinstance(other, (int, float)):
+        if isinstance(other, (int, float, DataArray)):
             # pass through LinearExpression constructor
             other = LinearExpression(other, model=self.model)
         if isinstance(other, variables.Variable):
@@ -336,16 +341,22 @@ class LinearExpression:
         return new_lhs, new_rhs
 
     def __le__(self, rhs):
-        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
-        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
+        if not isinstance(rhs, (int, float)):
+            new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+            return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
+        return constraints.AnonymousConstraint(self, LESS_EQUAL, rhs)
 
     def __ge__(self, rhs):
-        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
-        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
+        if not isinstance(rhs, (int, float)):
+            new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+            return constraints.AnonymousConstraint(new_lhs, GREATER_EQUAL, new_rhs)
+        return constraints.AnonymousConstraint(self, GREATER_EQUAL, rhs)
 
     def __eq__(self, rhs):
-        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
-        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
+        if not isinstance(rhs, (int, float)):
+            new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+            return constraints.AnonymousConstraint(new_lhs, EQUAL, new_rhs)
+        return constraints.AnonymousConstraint(self, EQUAL, rhs)
 
     @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
@@ -369,17 +380,17 @@ class LinearExpression:
 
     @property
     def const(self):
-        # this needs refining...
+        # TODO this needs refining...
         # it should be sufficient and fast to get column index of constant
 
         c = self.data.where(self.data.vars == CONSTANT).coeffs
         if c.size==0:
             return 0
+        if c.dims[0] > 1:
+            # that would be constants that are not yet summed up - don't know whether that can occur
+            raise NotImplementedError('should have been summed up')
+            c = c.sum(axis=1)
         return c
-    
-    def remove_const(self):
-        # creates a copy - probably there's something smarter
-        return self - self.const
 
     @property
     def dims(self):

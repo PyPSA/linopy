@@ -316,7 +316,7 @@ class Variable:
         """
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
-        elif isinstance(other, (expressions.LinearExpression, int, float)):
+        elif isinstance(other, (expressions.LinearExpression, int, float, DataArray)):
             return self.to_linexpr() + other
         else:
             raise TypeError(
