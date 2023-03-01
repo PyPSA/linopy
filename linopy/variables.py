@@ -316,7 +316,7 @@ class Variable:
         """
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
-        elif isinstance(other, expressions.LinearExpression):
+        elif isinstance(other, (expressions.LinearExpression, int, float)):
             return self.to_linexpr() + other
         else:
             raise TypeError(
@@ -328,7 +328,7 @@ class Variable:
         if other == 0:
             return self
         else:
-            return NotImplemented
+            return self.__add__(other)
 
     def __sub__(self, other):
         """
@@ -342,6 +342,9 @@ class Variable:
             raise TypeError(
                 "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
             )
+
+    def __rsub__(self, other):
+        return self.__radd__(-other)
 
     def __le__(self, other):
         return self.to_linexpr().__le__(other)

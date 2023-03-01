@@ -161,7 +161,8 @@ class LinearExpression:
         if isinstance(data, (int, float)):
             # should allow arraylike
             da = xr.DataArray([data], dims=["_term"])
-            data = Dataset({"coeffs": da, "vars": [CONSTANT]})
+            va = xr.DataArray([CONSTANT], dims=["_term"])
+            data = Dataset({"coeffs": da, "vars": va})
 
         if not isinstance(data, Dataset):
             raise ValueError(
@@ -276,17 +277,16 @@ class LinearExpression:
         if other == 0:
             return self
         else:
-            return NotImplemented
+            return self.__add__(other)
 
     def __sub__(self, other):
         """
         Subtract others from expression.
         """
-        if not isinstance(other, (LinearExpression, variables.Variable)):
-            raise TypeError(
-                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
-            )
-        return merge(self, -other)
+        return self.__add__(-other)
+    
+    def __rsub__(self, other):
+        return self.__radd__(-other)
 
     def __neg__(self):
         """
@@ -328,14 +328,24 @@ class LinearExpression:
     def __truediv__(self, other):
         return self.__div__(other)
 
+    def sort_lhs_rhs(self, rhs):
+        new_lhs = (self - rhs)
+        new_lhs -= new_lhs.const
+
+        new_rhs = (rhs - self).const
+        return new_lhs, new_rhs
+
     def __le__(self, rhs):
-        return constraints.AnonymousConstraint(self, LESS_EQUAL, rhs)
+        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
 
     def __ge__(self, rhs):
-        return constraints.AnonymousConstraint(self, GREATER_EQUAL, rhs)
+        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
 
     def __eq__(self, rhs):
-        return constraints.AnonymousConstraint(self, EQUAL, rhs)
+        new_lhs, new_rhs = self.sort_lhs_rhs(rhs)
+        return constraints.AnonymousConstraint(new_lhs, LESS_EQUAL, new_rhs)
 
     @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
@@ -356,6 +366,20 @@ class LinearExpression:
     @property
     def model(self):
         return self._model
+
+    @property
+    def const(self):
+        # this needs refining...
+        # it should be sufficient and fast to get column index of constant
+
+        c = self.data.where(self.data.vars == CONSTANT).coeffs
+        if c.size==0:
+            return 0
+        return c
+    
+    def remove_const(self):
+        # creates a copy - probably there's something smarter
+        return self - self.const
 
     @property
     def dims(self):

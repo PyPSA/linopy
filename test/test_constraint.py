@@ -377,7 +377,27 @@ def test_constraints_equalities(m):
     assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
 
 
-def test_constraints_add_constant(m, x):
+def test_variable_add_constant(m, x):
     x2 = x + 2
-    x3 = -2 - x
-    m.add_constraints(x3)
+    x3 = -1. - x
+    x4 = -x2 + x3
+    x5 = x2 - x3
+
+    #assert (x5.const.round()==1).all()
+
+
+def test_linexpr_add_constant(m, x, y):
+    x2 = (x+y) + 2
+    x3 = -2. + (x+y)
+
+
+def test_constraint_w_constant(m, x, y):
+    c1 = -2.+x <= y+1
+    c2 = x >= y
+    c3 = (x-1.)+2 > 3
+    c4 = 0 >= (x-1)+2.
+    
+    m.add_constraints(c1)
+    m.add_constraints(c2)
+    m.add_constraints(c3)
+    m.add_constraints(c4)
