@@ -4,6 +4,14 @@ Release Notes
 .. Upcoming Release
 .. ----------------
 
+
+Version 0.1.3
+-------------
+
+* **Hotfix** dual value retrieval for ``highs``.
+* The MPS file writing was fixed for ``glpk`` solver. The MPS file writing is now tested against all solvers.
+
+
 Version 0.1.2
 -------------
 

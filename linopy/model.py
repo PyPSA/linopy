@@ -898,14 +898,19 @@ class Model:
         else:
             return solution_fn
 
-    def get_problem_file(self, problem_fn=None):
+    def get_problem_file(self, problem_fn=None, io_api=None):
         """
         Get a fresh created problem file if problem file is None.
         """
         if problem_fn is None:
+            if io_api == "mps":
+                suffix = ".mps"
+            else:
+                suffix = ".lp"
+
             kwargs = dict(
                 prefix="linopy-problem-",
-                suffix=".lp",
+                suffix=suffix,
                 mode="w",
                 dir=self.solver_dir,
                 delete=False,
@@ -942,8 +947,8 @@ class Model:
             The default is 'gurobi'.
         io_api : str, optional
             Api to use for communicating with the solver, must be one of
-            {'lp', 'direct'}. If set to 'lp' the problem is written to an
-            LP file which is then read by the solver. If set to
+            {'lp', 'mps', 'direct'}. If set to 'lp'/'mps' the problem is written to an
+            LP/MPS file which is then read by the solver. If set to
             'direct' the problem is communicated to the solver via the solver
             specific API, e.g. gurobipy. This may lead to faster run times.
             The default is set to 'lp' if available.
@@ -1022,7 +1027,7 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
-        problem_fn = self.get_problem_file(problem_fn)
+        problem_fn = self.get_problem_file(problem_fn, io_api=io_api)
         solution_fn = self.get_solution_file(solution_fn)
 
         if sanitize_zeros:
@@ -1072,7 +1077,10 @@ class Model:
 
             for name, labels in self.constraints.labels.items():
                 idx = np.ravel(labels)
-                vals = dual[idx].values.reshape(labels.shape)
+                try:
+                    vals = dual[idx].values.reshape(labels.shape)
+                except KeyError:
+                    vals = dual.reindex(idx).values.reshape(labels.shape)
                 self.dual[name] = xr.DataArray(vals, labels.coords)
 
         return result.status.status.value, result.status.termination_condition.value

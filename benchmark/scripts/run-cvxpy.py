@@ -1,12 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Nov 19 17:40:33 2021.
-
-@author: fabian
-"""
-
-from benchmark_linopy import basic_model, knapsack_model
+from benchmark_gurobipy import basic_model, knapsack_model
 
 if snakemake.config["benchmark"] == "basic":
     model = basic_model

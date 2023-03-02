@@ -15,6 +15,10 @@ from linopy import GREATER_EQUAL, Model
 from linopy.solvers import available_solvers
 
 params = [(name, "lp") for name in available_solvers]
+# mps io is only supported via highspy
+if "highs" in available_solvers:
+    params += [(name, "mps") for name in available_solvers]
+
 if "gurobi" in available_solvers:
     params.append(("gurobi", "direct"))
 if "highs" in available_solvers:
