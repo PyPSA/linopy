@@ -327,6 +327,16 @@ class LinearExpression:
     def __eq__(self, rhs):
         return constraints.AnonymousConstraint(self, EQUAL, rhs)
 
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
     @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
         """
@@ -1085,6 +1095,16 @@ class ScalarLinearExpression:
             )
 
         return constraints.AnonymousScalarConstraint(self, EQUAL, other)
+
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
 
     def to_linexpr(self):
         coeffs = xr.DataArray(list(self.coeffs), dims="_term")
