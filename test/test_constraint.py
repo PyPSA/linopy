@@ -413,11 +413,12 @@ def test_linexpr_radd_pdSeries(m, x, y):
     x4 = pd.Series(data=1, index=np.arange(10)) - (x + y)
 
 def test_constraint_w_constant_v1(m, x, y):
+    # broadcasts x vs y... intended?
     c1 = x >= y
     m.add_constraints(c1)
 
 def test_constraint_w_constant_v2(m, x, y):
-    c2 = -2.0 + x <= y + 1
+    c2 = -2.0 + x <= x + 1
     m.add_constraints(c2)
 
 def test_constraint_w_constant_v3(m, x, y):

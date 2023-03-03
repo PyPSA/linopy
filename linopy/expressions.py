@@ -404,7 +404,7 @@ class LinearExpression:
             return 0
         else:
             # length should be 1 if merge adds up variables - doesn't seem to be the case atm, not a problem though
-            return self.data.coeffs.data[:, index_const].sum(axis=1)
+            return self.data.coeffs.data[:, index_const].sum(axis=1).T
 
         #c = self.data.isel(self.data.vars == CONSTANT).coeffs
         #if c.size == 0:
