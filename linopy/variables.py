@@ -316,7 +316,17 @@ class Variable:
         """
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
-        elif isinstance(other, (expressions.LinearExpression, int, float, DataArray, np.ndarray, pd.Series)):
+        elif isinstance(
+            other,
+            (
+                expressions.LinearExpression,
+                int,
+                float,
+                DataArray,
+                np.ndarray,
+                pd.Series,
+            ),
+        ):
             return self.to_linexpr() + other
         else:
             raise TypeError(
@@ -328,7 +338,7 @@ class Variable:
         if other == 0:
             return self
         else:
-            #return NotImplemented
+            # return NotImplemented
             return self + other
 
     def __sub__(self, other):

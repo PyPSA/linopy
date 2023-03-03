@@ -9,8 +9,8 @@ Created on Tue Nov  2 22:38:48 2021.
 import numpy as np
 import pandas as pd
 import pytest
-from xarray.testing import assert_equal
 from xarray import DataArray
+from xarray.testing import assert_equal
 
 import linopy
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, LinearExpression, Model
@@ -387,43 +387,54 @@ def test_variable_add_constant(m, x):
     # automatic "adding up" of coeffs of same vars would lead to:
     # assert (x5.const.round()==1).all()
 
+
 def test_variable_add_iterable(m, x):
     x1 = x + np.arange(10)
+
 
 def test_variable_add_pdSeries(m, x):
     x3 = x + pd.Series(data=1, index=np.arange(10))
 
+
 def test_variable_radd_iterable(m, x):
     # problem: DataArray is trying to be smart and handle __add__
     x2 = DataArray(np.arange(10)) - x
-    
+
+
 def test_linexpr_add_constant(m, x, y):
     x2 = (x + y) + 2
     x3 = -2.0 + (x + y)
 
+
 def test_linexpr_add_iterable(m, x, y):
     x2 = (x + y) + np.arange(10)
+
 
 def test_linexpr_radd_iterable(m, x, y):
     # problem: DataArray is trying to be smart and handle __add__
     x3 = DataArray(np.arange(10)) + (x + y)
 
+
 def test_linexpr_radd_pdSeries(m, x, y):
     # problem: Pandas is trying to be smart and handle __add__
     x4 = pd.Series(data=1, index=np.arange(10)) - (x + y)
+
 
 def test_constraint_w_constant_v1(m, x, y):
     c1 = x >= y
     m.add_constraints(c1)
 
+
 def test_constraint_w_constant_v2(m, x, y):
     c2 = -2.0 + x <= y + 1
     m.add_constraints(c2)
 
+
 def test_constraint_w_constant_v3(m, x, y):
-    c3 = (x - 1.) + 2 >= 3
+    c3 = (x - 1.0) + 2 >= 3
     m.add_constraints(c3)
 
+
 def test_constraint_w_constant_v4(m, x, y):
-    c4 = 0 >= (x - 1) + 2.
+    c4 = 0 >= (x - 1) + 2.0
     m.add_constraints(c4)
