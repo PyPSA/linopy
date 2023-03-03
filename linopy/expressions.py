@@ -147,7 +147,7 @@ class LinearExpression:
 
     Adding constants:
     >>> type(-1 - expr + 5)
-    
+
     """
 
     __slots__ = ("_data", "_model")
@@ -177,9 +177,9 @@ class LinearExpression:
             if isinstance(data, pd.Series):
                 da = DataArray(data, dims=["_term"])
             elif isinstance(data, np.ndarray):
-                assert data.ndim == 1, 'restrict to 1-d for now: {data.shape}'
+                assert data.ndim == 1, "restrict to 1-d for now: {data.shape}"
                 da = DataArray(data=data, dims=["_term"])
-            
+
             data = Dataset({"coeffs": da, "vars": va})
 
         if not isinstance(data, Dataset):
@@ -278,7 +278,16 @@ class LinearExpression:
         """
 
         if not isinstance(
-            other, (LinearExpression, variables.Variable, int, float, DataArray, np.ndarray, pd.Series)
+            other,
+            (
+                LinearExpression,
+                variables.Variable,
+                int,
+                float,
+                DataArray,
+                np.ndarray,
+                pd.Series,
+            ),
         ):
             # possibly should allow array-like numbers: later
             raise TypeError(
@@ -297,7 +306,7 @@ class LinearExpression:
         if other == 0:
             return self
         else:
-            #return NotImplemented
+            # return NotImplemented
             return self + other
 
     def __sub__(self, other):
@@ -399,20 +408,20 @@ class LinearExpression:
         # TODO this needs refining...
         # it should be sufficient and fast to get column index of constant
         # fast and ugly:
-        index_const = np.where(self.data.vars.data[0,:] == CONSTANT)[0]
+        index_const = np.where(self.data.vars.data[0, :] == CONSTANT)[0]
         if len(index_const) == 0:
             return 0
         else:
             # length should be 1 if merge adds up variables - doesn't seem to be the case atm, not a problem though
             return self.data.coeffs.data[:, index_const].sum(axis=1).T
 
-        #c = self.data.isel(self.data.vars == CONSTANT).coeffs
-        #if c.size == 0:
+        # c = self.data.isel(self.data.vars == CONSTANT).coeffs
+        # if c.size == 0:
         #    return 0
         if c.shape[0] > 1:
             # that would be constants that are not yet summed up - don't know whether that can occur
             # edit: it's the normal case it seems
-            #raise NotImplementedError("should have been summed up")
+            # raise NotImplementedError("should have been summed up")
             c = c.sum(axis=0)
         return c
 
