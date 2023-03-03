@@ -144,6 +144,10 @@ class LinearExpression:
 
     >>> type(expr.sum(dims="dim_0"))
     <class 'linopy.expressions.LinearExpression'>
+
+    Adding constants:
+    >>> type(-1 - expr + 5)
+    
     """
 
     __slots__ = ("_data", "_model")
@@ -163,10 +167,19 @@ class LinearExpression:
             da = xr.DataArray([data], dims=["_term"])
             va = xr.DataArray([CONSTANT], dims=["_term"])
             data = Dataset({"coeffs": da, "vars": va})
-        elif isinstance(data, DataArray):
+        elif isinstance(data, (DataArray)):
+            va = xr.DataArray([CONSTANT] * len(data), dims=["_term"])
+            data = Dataset({"coeffs": da, "vars": va})
+
+        elif isinstance(data, (pd.Series, np.ndarray)):
             # TODO: fix + robustify
             va = xr.DataArray([CONSTANT] * len(data), dims=["_term"])
-            da = data
+            if isinstance(data, pd.Series):
+                da = DataArray(data, dims=["_term"])
+            elif isinstance(data, np.ndarray):
+                assert data.ndim == 1, 'restrict to 1-d for now: {data.shape}'
+                da = DataArray(data=data, dims=["_term"])
+            
             data = Dataset({"coeffs": da, "vars": va})
 
         if not isinstance(data, Dataset):
@@ -265,14 +278,14 @@ class LinearExpression:
         """
 
         if not isinstance(
-            other, (LinearExpression, variables.Variable, int, float, DataArray)
+            other, (LinearExpression, variables.Variable, int, float, DataArray, np.ndarray, pd.Series)
         ):
             # possibly should allow array-like numbers: later
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
             )
 
-        if isinstance(other, (int, float, DataArray)):
+        if isinstance(other, (int, float, DataArray, np.ndarray, pd.Series)):
             # pass through LinearExpression constructor
             other = LinearExpression(other, model=self.model)
         if isinstance(other, variables.Variable):
@@ -284,16 +297,17 @@ class LinearExpression:
         if other == 0:
             return self
         else:
-            return self.__add__(other)
+            #return NotImplemented
+            return self + other
 
     def __sub__(self, other):
         """
         Subtract others from expression.
         """
-        return self.__add__(-other)
+        return self + (-other)
 
     def __rsub__(self, other):
-        return self.__radd__(-other)
+        return (-self) + other
 
     def __neg__(self):
         """
@@ -337,7 +351,7 @@ class LinearExpression:
 
     def sort_lhs_rhs(self, rhs):
         new_lhs = self - rhs
-        new_lhs -= new_lhs.const
+        new_lhs = new_lhs - new_lhs.const
 
         new_rhs = (rhs - self).const
         return new_lhs, new_rhs
@@ -384,14 +398,22 @@ class LinearExpression:
     def const(self):
         # TODO this needs refining...
         # it should be sufficient and fast to get column index of constant
-
-        c = self.data.where(self.data.vars == CONSTANT).coeffs
-        if c.size == 0:
+        # fast and ugly:
+        index_const = np.where(self.data.vars.data[0,:] == CONSTANT)[0]
+        if len(index_const) == 0:
             return 0
+        else:
+            # length should be 1 if merge adds up variables - doesn't seem to be the case atm, not a problem though
+            return self.data.coeffs.data[:, index_const].sum(axis=1)
+
+        #c = self.data.isel(self.data.vars == CONSTANT).coeffs
+        #if c.size == 0:
+        #    return 0
         if c.shape[0] > 1:
             # that would be constants that are not yet summed up - don't know whether that can occur
-            raise NotImplementedError("should have been summed up")
-            c = c.sum(axis=1)
+            # edit: it's the normal case it seems
+            #raise NotImplementedError("should have been summed up")
+            c = c.sum(axis=0)
         return c
 
     @property
