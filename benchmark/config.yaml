@@ -10,5 +10,5 @@ basic:
 
 knapsack:
   name: knapsack
-  nrange: [1000, 100000, 200000, 500000, 1000000]
+  nrange: [1000, 100000, 200000, 400000, 1000000]
   apis: ['linopy', 'jump', 'pyomo', 'cvxpy', 'pulp', 'gurobipy', 'solver']
