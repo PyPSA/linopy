@@ -24,6 +24,7 @@ rule all:
 rule benchmark_time_linopy:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/linopy/time.csv",
     script:
@@ -35,6 +36,7 @@ rule benchmark_memory_single_linopy:
         nrange=NRANGE,
     benchmark:
         "benchmarks/{model}/linopy/memory-{N}.txt"
+    threads: 4
     script:
         "scripts/run-linopy.py"
 
@@ -48,6 +50,7 @@ rule benchmark_linopy:
             "benchmarks/{model}/linopy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/linopy/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/linopy.csv",
     script:
@@ -58,6 +61,7 @@ rule benchmark_linopy:
 rule benchmark_time_pulp:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/pulp/time.csv",
     script:
@@ -82,6 +86,7 @@ rule benchmark_pulp:
             "benchmarks/{model}/pulp/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/pulp/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/pulp.csv",
     script:
@@ -92,6 +97,7 @@ rule benchmark_pulp:
 rule benchmark_time_cvxpy:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/cvxpy/time.csv",
     script:
@@ -101,6 +107,7 @@ rule benchmark_time_cvxpy:
 rule benchmark_memory_single_cvxpy:
     params:
         nrange=NRANGE,
+    threads: 4
     benchmark:
         "benchmarks/{model}/cvxpy/memory-{N}.txt"
     script:
@@ -116,6 +123,7 @@ rule benchmark_cvxpy:
             "benchmarks/{model}/cvxpy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/cvxpy/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/cvxpy.csv",
     script:
@@ -126,6 +134,7 @@ rule benchmark_cvxpy:
 rule benchmark_time_pyomo:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/pyomo/time.csv",
     script:
@@ -135,6 +144,7 @@ rule benchmark_time_pyomo:
 rule benchmark_memory_single_pyomo:
     params:
         nrange=NRANGE,
+    threads: 4
     benchmark:
         "benchmarks/{model}/pyomo/memory-{N}.txt"
     script:
@@ -150,6 +160,7 @@ rule benchmark_pyomo:
             "benchmarks/{model}/pyomo/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/pyomo/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/pyomo.csv",
     script:
@@ -160,6 +171,7 @@ rule benchmark_pyomo:
 rule benchmark_time_gurobipy:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/gurobipy/time.csv",
     script:
@@ -169,6 +181,7 @@ rule benchmark_time_gurobipy:
 rule benchmark_memory_single_gurobipy:
     params:
         nrange=NRANGE,
+    threads: 4
     benchmark:
         "benchmarks/{model}/gurobipy/memory-{N}.txt"
     script:
@@ -184,6 +197,7 @@ rule benchmark_gurobipy:
             "benchmarks/{model}/gurobipy/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/gurobipy/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/gurobipy.csv",
     script:
@@ -194,6 +208,7 @@ rule benchmark_gurobipy:
 rule benchmark_time_ortools:
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/ortools/time.csv",
     script:
@@ -203,6 +218,7 @@ rule benchmark_time_ortools:
 rule benchmark_memory_single_ortools:
     params:
         nrange=NRANGE,
+    threads: 4
     benchmark:
         "benchmarks/{model}/ortools/memory-{N}.txt"
     script:
@@ -218,6 +234,7 @@ rule benchmark_ortools:
             "benchmarks/{model}/ortools/memory-{N}.txt", N=NRANGE, model=benchmark
         ),
         time="benchmarks/{model}/ortools/time.csv",
+    threads: 4
     output:
         benchmark="benchmarks/{model}/ortools.csv",
     script:
@@ -228,6 +245,7 @@ rule benchmark_jump:
     "For time & memory benchmarks, use one process for all runs (skip import and jit compilation times)"
     params:
         nrange=NRANGE,
+    threads: 4
     output:
         "benchmarks/{model}/jump.csv",
     script:
@@ -245,6 +263,7 @@ rule write_lp:
 rule benchmark_memory_single_gurobi:
     input:
         lp="benchmarks/{model}/lp_files/{N}.lp",
+    threads: 4
     benchmark:
         "benchmarks/{model}/solver/memory-{N}.txt"
     shell:
@@ -254,6 +273,7 @@ rule benchmark_memory_single_gurobi:
 rule benchmark_time_single_gurobi:
     input:
         lp="benchmarks/{model}/lp_files/{N}.lp",
+    threads: 4
     output:
         time="benchmarks/{model}/solver/time-{N}.txt",
     run:
@@ -273,6 +293,7 @@ rule benchmark_gurobi:
     input:
         memory=expand("benchmarks/{model}/solver/memory-{N}.txt", model=benchmark, N=NRANGE),
         time=expand("benchmarks/{model}/solver/time-{N}.txt", model=benchmark, N=NRANGE),
+    threads: 4
     output:
         benchmark="benchmarks/{model}/solver.csv",
     script:
