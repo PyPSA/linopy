@@ -9,12 +9,12 @@ APIS = config[benchmark]["apis"]
 rule all:
     input:
         expand(
-            "benchmarks/{model}/benchmark-{kind}.png",
+            "benchmarks/{model}/benchmark-{kind}.pdf",
             model=benchmark,
             kind=["absolute", "overhead"],
         ),
         expand(
-            "benchmarks/{model}/benchmark_resource-{kind}.png",
+            "benchmarks/{model}/benchmark_resource-{kind}.pdf",
             model=benchmark,
             kind=["absolute", "overhead"],
         ),
