@@ -31,7 +31,7 @@ Make sure to have a working installation of `Julia` and `JuMP`, and optionally i
 Then, run the benchmark with
 
 ```bash
-snakemake --cores 4
+snakemake --cores 4 --jobs 1
 ```
 
 ### Versions Specfications
