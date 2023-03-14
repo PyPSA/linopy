@@ -9,12 +9,12 @@ APIS = config[benchmark]["apis"]
 rule all:
     input:
         expand(
-            "benchmarks/{model}/benchmark-{kind}.pdf",
+            "benchmarks/{model}/benchmark-{kind}.png",
             model=benchmark,
             kind=["absolute", "overhead"],
         ),
         expand(
-            "benchmarks/{model}/benchmark_resource-{kind}.pdf",
+            "benchmarks/{model}/benchmark_resource-{kind}.png",
             model=benchmark,
             kind=["absolute", "overhead"],
         ),
@@ -320,7 +320,7 @@ rule plot_benchmarks:
     input:
         "benchmarks/{model}/benchmarks-{kind}.csv",
     output:
-        time_memory = "benchmarks/{model}/benchmark-{kind}.pdf",
-        resource = "benchmarks/{model}/benchmark_resource-{kind}.pdf",
+        time_memory = "benchmarks/{model}/benchmark-{kind}.{ext}",
+        resource = "benchmarks/{model}/benchmark_resource-{kind}.{ext}",
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"

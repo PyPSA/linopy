@@ -209,11 +209,14 @@ def run_glpk(
     """
     Solve a linear problem using the glpk solver.
 
-    This function reads the linear problem file and passes it to the glpk
-    solver. If the solution is successful it returns variable solutions and
+    This function reads the linear problem file and passes it to the
+    glpk
+    solver. If the solution is successful it returns variable solutions
+    and
     constraint dual values.
 
-    For more information on the glpk solver options:
+    For more information on the glpk solver options, see
+
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
     CONDITION_MAP = {
@@ -372,14 +375,14 @@ def run_highs(
 
         if io_api == "direct":
             sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-            dual = pd.Series(solution.row_value, model.matrices.clabels, dtype=float)
+            dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
         else:
             sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float).pipe(
                 set_int_index
             )
-            dual = pd.Series(
-                solution.row_value, h.getLp().row_names_, dtype=float
-            ).pipe(set_int_index)
+            dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float).pipe(
+                set_int_index
+            )
 
         return Solution(sol, dual, objective)
 
@@ -604,7 +607,7 @@ def run_xpress(
     variable solutions and constraint dual values. The xpress module
     must be installed for using this function.
 
-    For more information on solver options:
+    For more information on solver options, see
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
     CONDITION_MAP = {

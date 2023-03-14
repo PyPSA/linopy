@@ -231,7 +231,6 @@ class LinearExpression:
         expr_strings = []
         trunc_strings = []
         for i, coord in enumerate(coords):
-
             coord_string = print_coord(coord) + ":"
             expr_string = print_single_expression(
                 self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
@@ -328,6 +327,16 @@ class LinearExpression:
     def __eq__(self, rhs):
         return constraints.AnonymousConstraint(self, EQUAL, rhs)
 
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
     @deprecated(details="Use the `data` property instead of `to_dataset`")
     def to_dataset(self):
         """
@@ -410,7 +419,6 @@ class LinearExpression:
         linopy.LinearExpression
             Summed expression.
         """
-
         res = self.__class__(self._sum(self, dims=dims), self.model)
 
         if drop_zeros:
@@ -460,7 +468,7 @@ class LinearExpression:
         # support numpy arrays and convert them to dataarrays
         exprs = []
         model = None
-        for (c, v) in tuples:
+        for c, v in tuples:
             if not isinstance(v, variables.Variable):
                 raise TypeError(f"Expected type `linopy.Variable`, got {type(v)}")
             # check that reference models are consistent
@@ -745,7 +753,6 @@ class LinearExpression:
         -------
         linopy.LinearExpression
         """
-
         coeffs = xr.DataArray.rolling(self.coeffs, **kwargs).construct(
             "_rolling_term", keep_attrs=True
         )
@@ -832,7 +839,6 @@ class LinearExpression:
         -------
         linopy.LinearExpression
         """
-
         if not np.issubdtype(self.vars.dtype, np.integer):
             return self.assign(vars=self.vars.fillna(-1).astype(int))
 
@@ -1089,6 +1095,16 @@ class ScalarLinearExpression:
             )
 
         return constraints.AnonymousScalarConstraint(self, EQUAL, other)
+
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
 
     def to_linexpr(self):
         coeffs = xr.DataArray(list(self.coeffs), dims="_term")

@@ -1,10 +1,10 @@
 # Benchmark
 
-![Resources benchmark](benchmark_resource-overhead.pdf)
+![Resources benchmark](benchmark_resource-overhead.png)
 
-This benchmark compares the performance of `linopy` against similar packages considering memory and time overhead for solving an optimization problem with N variable. The overhead is defined by the resources needed to define the problem, pass it to the solver and retrieve the solution. For reproduce the benchmark, this directory contains all necessary code in a Snakemake workflow. The workflow allows to choose between two different optimization problems to be solved
+This benchmark compares the performance of `linopy` against similar packages considering memory and time overhead for solving an optimization problem with N variables. The overhead is defined by the resources needed to define the problem, pass it to the solver and retrieve the solution. For the sake of reproducibility, this directory contains all necessary code in a Snakemake workflow. The workflow allows to choose between two different optimization problems to be used in the benchmarking:
 
-1. A one-dimensional knapsack problem, which is a simple linear program with the following formulation described [here](https://www.wikiwand.com/en/Knapsack_problem) and used in the figure above. The problem is solved for a range of different values `N` representing the number of packages.  
+1. A one-dimensional knapsack problem, a standard linear program following the formulation described in [here](https://www.wikiwand.com/en/Knapsack_problem). The figure above was created using this problem for benchmarking. The problem is solved for a range of different values `N` representing the number of variables.
 
 2. The second problem choice `"basic"` is a simple linear program with the following formulation
     <p><span class="math display">∑<sub><em>i</em>, <em>j</em></sub>2<em>x</em><sub><em>i</em>, <em>j</em></sub> + <em>y</em><sub><em>i</em>, <em>j</em></sub></span></p>
@@ -25,14 +25,15 @@ conda env create -f environment.yaml
 conda activate linopy-benchmark
 ```
 
-Replace `environment.yaml` by `environment.fixed.yaml` if you want to use the fixed versions of the packages used for creating the figure above and specified below.
+Replace `environment.yaml` by `environment.fixed.yaml` if you want to use the fixed versions of the packages used for creating the figure above. Important package version are specified below.
 Make sure to have a working installation of `Julia` and `JuMP`, and optionally install the version stated below.
 
 Then, run the benchmark with
 
 ```bash
-snakemake --cores 4 --jobs 1
+snakemake --cores 4
 ```
+This will call `snakemake` with 4 cores and finally reproduce the figure above together with other figures in the directory `benchmark/<model-name>`.
 
 ### Versions Specfications
 

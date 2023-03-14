@@ -113,6 +113,7 @@ def print_single_expression(c, v, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
+
     # catch case that to many terms would be printed
     def print_line(expr):
         res = []
@@ -166,6 +167,7 @@ def has_optimized_model(func):
 def is_constant(func):
     from linopy import expressions, variables
 
+    #
     @wraps(func)
     def wrapper(self, arg):
         if isinstance(arg, (variables.Variable, expressions.LinearExpression)):
@@ -176,6 +178,7 @@ def is_constant(func):
 
 
 def forward_as_properties(**routes):
+    #
     def add_accessor(cls, item, attr):
         @property
         def get(self):

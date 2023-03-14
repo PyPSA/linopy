@@ -234,7 +234,6 @@ class Variable:
         bound_strings = []
         trunc_strings = []
         for i, coord in enumerate(coords):
-
             label = labels[i]
             variables = self.model.variables
 
@@ -352,6 +351,16 @@ class Variable:
 
     def __eq__(self, other):
         return self.to_linexpr().__eq__(other)
+
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
 
     def groupby(
         self,
@@ -799,7 +808,7 @@ class Variables:
         # matches string between "Data variables" and "Attributes"/end of string
         coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
         datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
-        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
+        for k, K in zip(self.dataset_attrs, self.dataset_names):
             orig = getattr(self, k).__repr__()
             if k == "labels":
                 r += re.search(coordspattern, orig).group() + "\n"
@@ -940,11 +949,9 @@ class Variables:
 
         for value in values:
             for name, labels in self.labels.items():
-
                 start, stop = self.get_label_range(name)
 
                 if value >= start and value < stop:
-
                     index = np.unravel_index(value - start, labels.shape)
 
                     # Extract the coordinates from the indices
@@ -986,7 +993,6 @@ class Variables:
             raise TypeError("Argument `key` must be of type string or xarray.Dataset")
 
         for name, labels in self.labels.items():
-
             broadcasted = ds[name].broadcast_like(labels)
             if labels.chunks is not None:
                 broadcasted = broadcasted.chunk(labels.chunks)
@@ -1137,3 +1143,13 @@ class ScalarVariable:
 
     def __eq__(self, other):
         return self.to_scalar_linexpr(1).__eq__(other)
+
+    def __gt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )
+
+    def __lt__(self, other):
+        raise NotImplementedError(
+            "Inequalities only ever defined for >= rather than >."
+        )

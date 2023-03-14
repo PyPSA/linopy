@@ -355,7 +355,7 @@ class Constraints:
         # matches string between "Data variables" and "Attributes"/end of string
         coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
         datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
-        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
+        for k, K in zip(self.dataset_attrs, self.dataset_names):
             orig = getattr(self, k).__repr__()
             if k == "labels":
                 r += re.search(coordspattern, orig).group() + "\n"
@@ -575,7 +575,6 @@ class Constraints:
         assert broadcast_like in ["labels", "vars"]
 
         for name, values in getattr(self, broadcast_like).items():
-
             broadcasted = ds[name].broadcast_like(values)
             if values.chunks is not None:
                 broadcasted = broadcasted.chunk(values.chunks)
@@ -635,14 +634,20 @@ class Constraints:
         """
         Construct a constraint matrix in sparse format.
 
-        Missing values, i.e. -1 in labels and vars, are ignored filtered out.
+        Missing values, i.e. -1 in labels and vars, are ignored filtered
+        out.
 
-        If filter_missings is set to True, the index of the rows and columns
-        correspond to the constraint and variable labels stored in the model.
+        If filter_missings is set to True, the index of the rows and
+        columns
+        correspond to the constraint and variable labels stored in the
+        model.
         If set to False, the rows correspond to the constraints given by
-        `m.constraints.ravel('labels', filter_missings=True)` and columns to
-        `m.variables.ravel('labels', filter_missings=True)` where `m` is the
-        underlying model. The matrix has then a shape of (`m.ncons`, `m.nvars`).
+        `m.constraints.ravel('labels', filter_missings=True)` and
+        columns to
+        `m.variables.ravel('labels', filter_missings=True)` where `m` is
+        the
+        underlying model. The matrix has then a shape of (`m.ncons`,
+        `m.nvars`).
         """
         self.sanitize_missings()
 
