@@ -1,6 +1,6 @@
 # Benchmark
 
-![Resources benchmark](benchmark_resource-overhead.pdf)
+![Resources benchmark](benchmark_resource-overhead.png)
 
 This benchmark compares the performance of `linopy` against similar packages considering memory and time overhead for solving an optimization problem with N variable. The overhead is defined by the resources needed to define the problem, pass it to the solver and retrieve the solution. For reproduce the benchmark, this directory contains all necessary code in a Snakemake workflow. The workflow allows to choose between two different optimization problems to be solved
 
