@@ -226,6 +226,9 @@ class LinearExpression:
         truncate = nexprs > max_print
         coords = self.unravel_coords(to_print)
 
+        if not self.size:
+            return f"{header}\nNone"
+
         # loop over all values to print
         coord_strings = []
         expr_strings = []

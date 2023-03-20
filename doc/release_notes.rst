@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Fix representation of empty variables and linear expressions.
 
 
 Version 0.1.3

@@ -229,6 +229,9 @@ class Variable:
             labels = np.ravel(self.labels.values)
             coords = [[c.item() for c in self.coords.values()]]
 
+        if not self.size:
+            return f"{header}\nNone"
+
         coord_strings = []
         var_strings = []
         bound_strings = []
