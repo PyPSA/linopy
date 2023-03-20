@@ -131,6 +131,12 @@ def test_constraint_repr():
         repr(con)
 
 
+def test_empty_repr():
+    repr(u.loc[[]])
+    repr(lu.sel(dim_0=[]))
+    repr(lu.sel(dim_0=[]) >= 0)
+
+
 def test_print_options():
     for o in [v, lv, cv_, cv]:
         default_repr = repr(o)
