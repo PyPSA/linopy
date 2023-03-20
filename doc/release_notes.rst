@@ -5,6 +5,13 @@ Release Notes
 .. ----------------
 
 
+Version 0.1.4
+-------------
+
+* Fix representation of empty variables and linear expressions.
+* The benchmark reported in [here](https://github.com/PyPSA/linopy/tree/master/benchmark) was updated to the latest version of linopy and adjusted to be fully reproducible.
+
+
 Version 0.1.3
 -------------
 
