@@ -6,7 +6,7 @@ repos:
     -   id: trailing-whitespace
     -   id: check-merge-conflict
 -   repo: https://github.com/psf/black
-    rev: 23.1.0
+    rev: 23.3.0
     hooks:
     -   id: black
     # Current docformatter version has a problem with urls (it's annoying)
@@ -29,7 +29,7 @@ repos:
       - id: isort
         args: ["--profile", "black", "--filter-files"]
 -   repo: https://github.com/codespell-project/codespell
-    rev: v2.2.2
+    rev: v2.2.4
     hooks:
     -   id: codespell
         types_or: [python, rst, markdown]
