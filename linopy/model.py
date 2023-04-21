@@ -593,6 +593,29 @@ class Model:
         if labels is None:
             labels = (lhs.vars.chunk() + rhs).sum("_term")
 
+        if mask is not None:
+            mask = DataArray(mask).astype(bool)
+            mask, _ = xr.align(mask, labels, join="right")
+            assert set(mask.dims).issubset(
+                labels.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
+
+        # It is important to end up with monotonically increasing labels in the
+        # model's constraints container as we use it for indirect indexing.
+        labels_reindexed = labels.reindex_like(self.constraints.labels, fill_value=-1)
+        if not labels.equals(labels_reindexed):
+            warnings.warn(
+                f"Reindexing variable {name} to match existing coordinates.",
+                UserWarning,
+            )
+            labels = labels_reindexed
+            lhs = lhs.reindex_like(labels)
+            rhs = rhs.reindex_like(labels)
+            if mask is None:
+                mask = labels != -1
+            else:
+                mask = mask.reindex_like(labels_reindexed, fill_value=False)
+
         self.check_force_dim_names(labels)
 
         start = self._cCounter
@@ -600,10 +623,6 @@ class Model:
         self._cCounter += labels.size
 
         if mask is not None:
-            mask = DataArray(mask)
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
         lhs = lhs.data.rename({"_term": f"{name}_term"})
