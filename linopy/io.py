@@ -40,9 +40,9 @@ def float_to_str(arr, ensure_sign=True):
     Convert numpy array to str typed array.
     """
     if ensure_sign:
-        convert = np.frompyfunc(lambda f: "%+f" % f, 1, 1)
+        convert = np.frompyfunc(lambda f: "%+.12g" % f, 1, 1)
     else:
-        convert = np.frompyfunc(lambda f: "%f" % f, 1, 1)
+        convert = np.frompyfunc(lambda f: "%.12g" % f, 1, 1)
     return convert(arr)
 
 
