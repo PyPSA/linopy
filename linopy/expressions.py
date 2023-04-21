@@ -886,6 +886,8 @@ class LinearExpression:
 
     reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
 
+    reindex_like = exprwrap(Dataset.reindex_like, fill_value=_fill_value)
+
     rename = exprwrap(Dataset.rename)
 
     rename_dims = exprwrap(Dataset.rename_dims)
