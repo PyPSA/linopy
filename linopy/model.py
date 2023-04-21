@@ -472,7 +472,7 @@ class Model:
         labels_reindexed = labels.reindex_like(self.variables.labels, fill_value=-1)
         if not labels.equals(labels_reindexed):
             warnings.warn(
-                f"Reindexing variable {name} to match existing coordinates.",
+                f"Reindexing variable `{name}` to match existing coordinates.",
                 UserWarning,
             )
             labels = labels_reindexed
@@ -605,7 +605,7 @@ class Model:
         labels_reindexed = labels.reindex_like(self.constraints.labels, fill_value=-1)
         if not labels.equals(labels_reindexed):
             warnings.warn(
-                f"Reindexing variable {name} to match existing coordinates.",
+                f"Reindexing constraint `{name}` to match existing coordinates.",
                 UserWarning,
             )
             labels = labels_reindexed

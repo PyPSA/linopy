@@ -22,8 +22,8 @@ def test_constraint_assignment():
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    x = m.add_variables(lower, upper)
-    y = m.add_variables()
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
 
     m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
@@ -42,8 +42,8 @@ def test_anonymous_constraint_assignment():
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
-    x = m.add_variables(lower, upper)
-    y = m.add_variables()
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
     con = 1 * x + 10 * y == 0
     m.add_constraints(con)
 
@@ -84,6 +84,26 @@ def test_constraint_assignment_chunked():
         1,
     )
     assert isinstance(m.constraints.coeffs.c.data, dask.array.core.Array)
+
+
+def test_constraint_assignment_with_reindex():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+
+    shuffled_coords = pd.Index([2, 1, 3, 4, 6, 5, 7, 9, 8, 0], name="first")
+    con = m.variables["x"].loc[shuffled_coords] <= 10
+    with pytest.warns(UserWarning):
+        con_shuffled = m.add_constraints(con, name="con_shuffled")
+
+    assert con_shuffled.indexes["dim_0"].equals(m.constraints["con0"].indexes["dim_0"])
+    # check if labels are monotonically increasing
+    assert np.all(np.diff(np.ravel(con_shuffled.labels)) > 0)
 
 
 def test_wrong_constraint_assignment_repeated():
