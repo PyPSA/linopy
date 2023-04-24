@@ -5,6 +5,7 @@ Linopy constraints module.
 This module contains implementations for the Constraint{s} class.
 """
 
+import functools
 import re
 from dataclasses import dataclass, field
 from itertools import product
@@ -34,6 +35,28 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+
+
+def conwrap(method, *default_args, **new_default_kwargs):
+    @functools.wraps(method)
+    def _conwrap(con, *args, **kwargs):
+        for k, v in new_default_kwargs.items():
+            kwargs.setdefault(k, v)
+        return con.__class__(
+            method(con.labels, *default_args, *args, **kwargs), con.model, con.name
+        )
+
+    _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
+    if new_default_kwargs:
+        _conwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
+
+    return _conwrap
+
+
+def _con_unwrap(con):
+    if isinstance(con, Constraint):
+        return con.labels
+    return con
 
 
 @forward_as_properties(
@@ -320,6 +343,10 @@ class Constraint:
     @property
     def shape(self):
         return self.labels.shape
+
+    sel = conwrap(DataArray.sel)
+
+    isel = conwrap(DataArray.isel)
 
 
 @dataclass(repr=False)
@@ -839,6 +866,41 @@ class AnonymousConstraint:
         sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
         return cls(lhs, sign, rhs)
+
+    def sel(self, indexers=None, **indexer_kwargs):
+        """
+        Select a subset of the AnonymousConstraint array.
+
+        The function mirrors the behavior of the `xarray.Dataset.sel` function.
+        For further information please refer to its docstring.
+
+        Parameters
+        ----------
+        indexers : dict, optional
+            A dict with keys matching the dimensions and values given by scalars, slices or arrays. By default None.
+        **indexers_kwargs : {dim: indexer, ...}, optional
+            The keyword arguments form of ``indexers``.
+            One of indexers or indexers_kwargs must be provided.
+
+        Returns
+        -------
+        AnonymousConstraint
+            A new AnonymousConstraint including all values of the original
+            whose indexes lay within the realm of selection.
+        """
+
+        indexers = xr.core.utils.either_dict_or_kwargs(indexers, indexer_kwargs, "sel")
+
+        lhs_indexers = {k: v for k, v in indexers.items() if k in self.lhs.dims}
+        lhs = self.lhs.sel(lhs_indexers)
+
+        sign_indexers = {k: v for k, v in indexers.items() if k in self.sign.dims}
+        sign = self.sign.sel(sign_indexers)
+
+        rhs_indexers = {k: v for k, v in indexers.items() if k in self.rhs.dims}
+        rhs = self.rhs.sel(rhs_indexers)
+
+        return self.__class__(lhs, sign, rhs)
 
 
 class AnonymousScalarConstraint:
