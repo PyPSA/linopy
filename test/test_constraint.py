@@ -126,6 +126,12 @@ def test_anonymous_scalar_constraint_from_linear_expression_fail(x, y):
         expr == x[0]
 
 
+def test_anonymous_constraint_sel(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    assert isinstance(con.sel(first=[1, 2]), AnonymousConstraint)
+
+
 def test_constraint_from_rule(m, x, y):
     def bound(m, i, j):
         if i % 2:
@@ -237,6 +243,11 @@ def test_constraint_labels_setter_invalid(c):
     # Test that assigning labels raises FrozenInstanceError
     with pytest.raises(AttributeError):
         c.labels = c.labels
+
+
+def test_constraint_sel(c):
+    assert isinstance(c.sel(first=[1, 2]), linopy.constraints.Constraint)
+    assert isinstance(c.isel(first=[1, 2]), linopy.constraints.Constraint)
 
 
 def test_constraint_assignment_with_anonymous_constraints(m, x, y):

@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Add `sel` functions to `Constraint` and `AnonymousConstraint` to allow for selection and inspection of constraints by coordinate.
 
 
 Version 0.1.4
