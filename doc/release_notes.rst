@@ -6,6 +6,7 @@ Upcoming Release
 
 * Add `sel` functions to `Constraint` and `AnonymousConstraint` to allow for selection and inspection of constraints by coordinate.
 * The printout of `Variables` and `Constraints` was refactored to a more concise layout.
+* The solving termination condition "other" is now tagged as solving status "warning".
 
 Version 0.1.4
 -------------
