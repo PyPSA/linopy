@@ -121,7 +121,6 @@ STATUS_TO_TERMINATION_CONDITION_MAP = {
         TerminationCondition.iteration_limit,
         TerminationCondition.time_limit,
         TerminationCondition.terminated_by_limit,
-        TerminationCondition.other,
         TerminationCondition.suboptimal,
     ],
     SolverStatus.warning: [
