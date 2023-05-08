@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Allow addition of 0 to `Variables` and `LinearExpressions`.
 
 Version 0.1.5
 -------------
