@@ -317,6 +317,8 @@ class Variable:
         """
         Add variables to linear expressions or other variables.
         """
+        if other == 0:
+            return self
         if isinstance(other, Variable):
             return expressions.LinearExpression.from_tuples((1, self), (1, other))
         elif isinstance(other, expressions.LinearExpression):

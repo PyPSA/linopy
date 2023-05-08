@@ -256,6 +256,8 @@ class LinearExpression:
         """
         Add an expression to others.
         """
+        if other == 0:
+            return self
         if not isinstance(other, (LinearExpression, variables.Variable)):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
@@ -275,6 +277,8 @@ class LinearExpression:
         """
         Subtract others from expression.
         """
+        if other == 0:
+            return self
         if not isinstance(other, (LinearExpression, variables.Variable)):
             raise TypeError(
                 "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
