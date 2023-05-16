@@ -410,25 +410,7 @@ class LinearExpression:
 
     @property
     def const(self):
-        # TODO this needs refining...
-        # it should be sufficient and fast to get column index of constant
-        # fast and ugly:
-        index_const = np.where(self.data.vars.data[0, :] == CONSTANT)[0]
-        if len(index_const) == 0:
-            return 0
-        else:
-            # length should be 1 if merge adds up variables - doesn't seem to be the case atm, not a problem though
-            return self.data.coeffs.data[:, index_const].sum(axis=1).T
-
-        # c = self.data.isel(self.data.vars == CONSTANT).coeffs
-        # if c.size == 0:
-        #    return 0
-        if c.shape[0] > 1:
-            # that would be constants that are not yet summed up - don't know whether that can occur
-            # edit: it's the normal case it seems
-            # raise NotImplementedError("should have been summed up")
-            c = c.sum(axis=0)
-        return c
+        return self.data.coeffs.where(self.data.vars==CONSTANT).sum(axis=-1)
 
     @property
     def dims(self):

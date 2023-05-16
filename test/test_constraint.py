@@ -378,6 +378,11 @@ def test_constraints_equalities(m):
     assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
 
 
+def test_linexpr_constant_getter(x, y):
+    expr = 10 * x + y + 5
+    con = expr.const
+
+
 def test_variable_add_constant(m, x):
     x2 = x + 2
     x3 = -1.0 - x
