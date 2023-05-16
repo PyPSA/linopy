@@ -430,58 +430,20 @@ class Model:
         if binary and integer:
             raise ValueError("Variable cannot be both binary and integer.")
 
-        if not binary:
-            lower = DataArray(lower, coords=coords, **kwargs)
-            upper = DataArray(upper, coords=coords, **kwargs)
-            if coords is None:
-                # only a lazy calculation for extracting coords, shape and size
-                broadcasted = lower.chunk() + upper.chunk()
-                coords = broadcasted.coords
-                if not coords and broadcasted.size > 1:
-                    raise ValueError(
-                        "Both `lower` and `upper` have missing coordinates"
-                        " while the broadcasted array is of size > 1."
-                    )
-        else:
-            # check if lower and upper and non-defaults
-            if (lower != -inf) or (upper != inf):
-                raise ValueError(
-                    "Argument lower and upper not valid for binary variables."
-                )
-            # for general compatibility when ravelling all values set non-nan
-            lower = DataArray(-inf, coords=coords, **kwargs)
-            upper = DataArray(inf, coords=coords, **kwargs)
+        if binary and ((lower != -inf) or (upper != inf)):
+            raise ValueError("Binary variables cannot have lower or upper bounds.")
 
-        labels = DataArray(-2, coords=coords).assign_attrs(
-            binary=binary, integer=integer
-        )
+        def as_dataarray(x):
+            return x if isinstance(x, DataArray) else DataArray(x, coords=coords)
 
-        # ensure order of dims is the same
-        lower = lower.transpose(*[d for d in labels.dims if d in lower.dims])
-        upper = upper.transpose(*[d for d in labels.dims if d in upper.dims])
+        data = Dataset({"lower": as_dataarray(lower), "upper": as_dataarray(upper)})
 
         if mask is not None:
-            mask = DataArray(mask).astype(bool)
-            mask, _ = xr.align(mask, labels, join="right")
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
+            data = data.assign(mask=as_dataarray(mask).astype(bool))
 
-        # It is important to end up with monotonically increasing labels in the
-        # model's variables container as we use it for indirect indexing.
-        labels_reindexed = labels.reindex_like(self.variables.labels, fill_value=-1)
-        if not labels.equals(labels_reindexed):
-            warnings.warn(
-                f"Reindexing variable `{name}` to match existing coordinates.",
-                UserWarning,
-            )
-            labels = labels_reindexed
-            lower = lower.reindex_like(labels)
-            upper = upper.reindex_like(labels)
-            if mask is None:
-                mask = labels != -1
-            else:
-                mask = mask.reindex_like(labels_reindexed, fill_value=False)
+        (data,) = xr.broadcast(data)
+
+        labels = DataArray(-2, coords=data.coords)
 
         self.check_force_dim_names(labels)
 
@@ -491,15 +453,18 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            labels = labels.where(data.mask, -1)
+
+        data = data.assign(labels=labels).assign_attrs(
+            label_range=(start, end), name=name, binary=binary, integer=integer
+        )
 
         if self.chunk:
-            labels = labels.chunk(self.chunk)
-            lower = lower.chunk(self.chunk)
-            upper = upper.chunk(self.chunk)
+            data = data.chunk(self.chunk)
 
-        self.variables.add(name, labels, lower, upper, start=start, end=end)
-        return self.variables[name]
+        variable = Variable(data, name=name, model=self)
+        self.variables.add(variable)
+        return variable
 
     def add_constraints(
         self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None

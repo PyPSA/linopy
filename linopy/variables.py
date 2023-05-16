@@ -9,19 +9,18 @@ import functools
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence, Union
+from typing import Any, Dict, Mapping, Sequence, Union
 
 import dask
 import numpy as np
 import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, zeros_like
+from xarray import DataArray, Dataset, align, zeros_like
 from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
-    _merge_inplace,
     dictsel,
     forward_as_properties,
     has_optimized_model,
@@ -39,7 +38,7 @@ def varwrap(method, *default_args, **new_default_kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return var.__class__(
-            method(var.labels, *default_args, *args, **kwargs), var.model
+            method(var.data, *default_args, *args, **kwargs), var.model, var.name
         )
 
     _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
@@ -51,22 +50,22 @@ def varwrap(method, *default_args, **new_default_kwargs):
 
 def _var_unwrap(var):
     if isinstance(var, Variable):
-        return var.labels
+        return var.data
     return var
 
 
 @forward_as_properties(
-    labels=[
+    data=[
         "attrs",
         "coords",
         "indexes",
-        "name",
+    ],
+    labels=[
         "shape",
         "size",
-        "values",
         "dims",
         "ndim",
-    ]
+    ],
 )
 class Variable:
     """
@@ -117,31 +116,39 @@ class Variable:
     Further operations like taking the negative and subtracting are supported.
     """
 
-    __slots__ = ("_labels", "_model")
+    __slots__ = ("_data", "_model")
     __array_ufunc__ = None
 
     _fill_value = -1
 
-    def __init__(self, labels: DataArray, model: Any):
+    def __init__(self, data: Dataset, model: Any, name: str):
         """
-        Initialize the Constraint.
+        Initialize the Variable.
 
         Parameters
         ----------
-        labels : xarray.DataArray
-            labels of the constraint.
+        labels : xarray.Dataset
+            data of the variable.
         model : linopy.Model
             Underlying model.
         """
         from linopy.model import Model
 
-        if not isinstance(labels, DataArray):
-            raise ValueError(f"labels must be a DataArray, got {type(labels)}")
+        if not isinstance(data, Dataset):
+            raise ValueError(f"data must be a Dataset, got {type(data)}")
 
         if not isinstance(model, Model):
             raise ValueError(f"model must be a Model, got {type(model)}")
 
-        self._labels = labels
+        # check that `labels`, `lower` and `upper`, `sign` and `mask` are in data
+        for attr in ("labels", "lower", "upper"):
+            if attr not in data:
+                raise ValueError(f"missing '{attr}' in data")
+
+        if "label_range" in data.attrs:
+            data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
+
+        self._data = data
         self._model = model
 
     def __getitem__(self, keys) -> "ScalarVariable":
@@ -164,19 +171,12 @@ class Variable:
     def loc(self):
         return _LocIndexer(self)
 
-    @deprecated(details="Use `labels` instead of `to_array()`")
-    def to_array(self):
-        """
-        Convert the variable array to a xarray.DataArray.
-        """
-        return self.labels
-
     def to_pandas(self):
         return self.labels.to_pandas()
 
     def to_linexpr(self, coefficient=1):
         """
-        Create a linear exprssion from the variables.
+        Create a linear expression from the variables.
         """
         if isinstance(coefficient, (expressions.LinearExpression, Variable)):
             raise TypeError(f"unsupported type of coefficient: {type(coefficient)}")
@@ -205,7 +205,7 @@ class Variable:
             shape_string = f"({shape_string})"
         else:
             shape_string = ""
-        n_masked = (~self.mask).sum().item()
+        n_masked = (~self.mask).sum().item() if self.mask is not None else 0
         mask_string = f" - {n_masked} masked entries" if n_masked else ""
         header = f"Variable {shape_string}{mask_string}\n" + "-" * (
             len("Variable") + len(shape_string) + len(mask_string) + 1
@@ -469,11 +469,18 @@ class Variable:
         return self.to_linexpr().rolling_sum(**kwargs)
 
     @property
+    def name(self):
+        """
+        Return the name of the variable.
+        """
+        return self.attrs["name"]
+
+    @property
     def labels(self):
         """
         Return the labels of the variable.
         """
-        return self._labels
+        return self.data.labels
 
     @property
     def data(self):
@@ -481,7 +488,7 @@ class Variable:
         Get the data of the variable.
         """
         # Needed for compatibility with linopy.merge
-        return self.labels
+        return self._data
 
     @property
     def model(self):
@@ -507,6 +514,13 @@ class Variable:
         else:
             return "Continuous Variable"
 
+    @property
+    def range(self):
+        """
+        Return the range of the variable.
+        """
+        return self.data.attrs["label_range"]
+
     @classmethod
     @property
     def fill_value(self):
@@ -527,7 +541,7 @@ class Variable:
         -------
         xr.DataArray
         """
-        return (self.labels != self._fill_value).astype(bool)
+        return self.data.get("mask")
 
     @property
     def upper(self):
@@ -537,7 +551,7 @@ class Variable:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.variables.upper[self.name]
+        return self.data.upper
 
     @upper.setter
     @is_constant
@@ -551,7 +565,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.upper)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self.model.variables.upper[self.name] = value
+        self.data = self.data.assign(upper=value)
 
     @property
     def lower(self):
@@ -561,7 +575,7 @@ class Variable:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.variables.lower[self.name]
+        return self.data.lower
 
     @lower.setter
     @is_constant
@@ -575,7 +589,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.lower)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self.model.variables.lower[self.name] = value
+        self._data = self.data.assign(lower=value)
 
     @property
     @has_optimized_model
@@ -726,31 +740,31 @@ class Variable:
         return self.labels.equals(_var_unwrap(other))
 
     # Wrapped function which would convert variable to dataarray
-    assign_attrs = varwrap(DataArray.assign_attrs)
+    assign_attrs = varwrap(Dataset.assign_attrs)
 
-    assign_coords = varwrap(DataArray.assign_coords)
+    assign_coords = varwrap(Dataset.assign_coords)
 
-    broadcast_like = varwrap(DataArray.broadcast_like)
+    broadcast_like = varwrap(Dataset.broadcast_like)
 
-    compute = varwrap(DataArray.compute)
+    compute = varwrap(Dataset.compute)
 
-    drop = varwrap(DataArray.drop)
+    drop = varwrap(Dataset.drop)
 
-    drop_sel = varwrap(DataArray.drop_sel)
+    drop_sel = varwrap(Dataset.drop_sel)
 
-    drop_isel = varwrap(DataArray.drop_isel)
+    drop_isel = varwrap(Dataset.drop_isel)
 
-    fillna = varwrap(DataArray.fillna)
+    fillna = varwrap(Dataset.fillna)
 
-    sel = varwrap(DataArray.sel)
+    sel = varwrap(Dataset.sel)
 
-    isel = varwrap(DataArray.isel)
+    isel = varwrap(Dataset.isel)
 
-    shift = varwrap(DataArray.shift, fill_value=-1)
+    shift = varwrap(Dataset.shift, fill_value=-1)
 
-    rename = varwrap(DataArray.rename)
+    rename = varwrap(Dataset.rename)
 
-    roll = varwrap(DataArray.roll)
+    roll = varwrap(Dataset.roll)
 
 
 class _LocIndexer:
@@ -759,7 +773,7 @@ class _LocIndexer:
     def __init__(self, variable: Variable):
         self.variable = variable
 
-    def __getitem__(self, key) -> DataArray:
+    def __getitem__(self, key) -> Dataset:
         if not utils.is_dict_like(key):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.variable.ndim)
@@ -781,11 +795,7 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    labels: Dataset = field(default_factory=Dataset)
-    lower: Dataset = field(default_factory=Dataset)
-    upper: Dataset = field(default_factory=Dataset)
-    blocks: Dataset = field(default_factory=Dataset)
-    ranges: Dataset = field(default_factory=Dataset)
+    variables: Dict[str, Variable] = field(default_factory=dict)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
@@ -795,11 +805,17 @@ class Variables:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
         if isinstance(names, str):
-            return Variable(self.labels[names], self.model)
+            return self.variables[names]
 
         return self.__class__(
-            self.labels[names], self.lower[names], self.upper[names], self.model
+            {name: self.variables[name] for name in names}, self.model
         )
+
+    def __getattr__(self, name: str) -> Variable:
+        try:
+            return self.variables[name]
+        except KeyError:
+            raise AttributeError(f"Variable {name} not found.")
 
     def __repr__(self):
         """
@@ -820,8 +836,6 @@ class Variables:
     def __iter__(self):
         return self.labels.__iter__()
 
-    _merge_inplace = _merge_inplace
-
     def _ipython_key_completions_(self):
         """
         Provide method for the key-autocompletions in IPython.
@@ -832,33 +846,45 @@ class Variables:
         """
         return list(self)
 
-    def add(
-        self,
-        name,
-        labels: DataArray,
-        lower: DataArray,
-        upper: DataArray,
-        start=None,
-        end=None,
-    ):
+    def add(self, variable):
         """
-        Add variable `name`.
+        Add a variable to the variables constrainer.
         """
-        self._merge_inplace("labels", labels, name, fill_value=-1)
-        self._merge_inplace("lower", lower, name, fill_value=-inf)
-        self._merge_inplace("upper", upper, name, fill_value=inf)
-        start = start or int(labels.min())
-        end = end or int(labels.max())
-        self.ranges[name] = DataArray([start, end], dims=["_start_stop"])
+        self.variables[variable.name] = variable
 
     def remove(self, name):
         """
         Remove variable `name` from the variables.
         """
-        for attr in self.dataset_attrs:
-            ds = getattr(self, attr)
-            if name in ds:
-                setattr(self, attr, ds.drop_vars(name))
+        self.variables.pop(name)
+
+    @property
+    def labels(self):
+        """
+        Get the labels of all variables.
+        """
+        return Dataset({name: var.labels for name, var in self.variables.items()})
+
+    @property
+    def lower(self):
+        """
+        Get the lower bounds of all variables.
+        """
+        return Dataset({name: var.lower for name, var in self.variables.items()})
+
+    @property
+    def upper(self):
+        """
+        Get the upper bounds of all variables.
+        """
+        return Dataset({name: var.upper for name, var in self.variables.items()})
+
+    @property
+    def sign(self):
+        """
+        Get the signs of all variables.
+        """
+        return Dataset({name: var.sign for name, var in self.variables.items()})
 
     @property
     def nvars(self):
@@ -934,7 +960,7 @@ class Variables:
         """
         Get starting and ending label for a variable.
         """
-        return list(self.ranges[name].values)
+        return self[name].range
 
     def get_label_position(self, values):
         """
