@@ -384,7 +384,7 @@ def test_variable_add_constant(m, x):
     x4 = -x2 + x3
     x5 = x2 - x3
 
-    # automatic "adding up" of coeffs of same vars would lead to:
+    # automatic "adding up" of coeffs of same vars would allow:
     # assert (x5.const.round()==1).all()
 
 
@@ -411,17 +411,17 @@ def test_linexpr_add_iterable(m, x, y):
 
 
 def test_linexpr_radd_iterable(m, x, y):
-    # problem: DataArray is trying to be smart and handle __add__
-    x3 = DataArray(np.arange(10)) + (x + y)
+    # radd problem: DataArray is trying to be smart and handle __add__
+    x3 = DataArray(np.arange(10)) + x
 
 
 def test_linexpr_radd_pdSeries(m, x, y):
-    # problem: Pandas is trying to be smart and handle __add__
-    x4 = pd.Series(data=1, index=np.arange(10)) - (x + y)
+    # radd problem: Pandas is trying to be smart and handle __add__
+    x4 = pd.Series(data=1, index=np.arange(10)) - x
 
 
 def test_constraint_w_constant_v1(m, x, y):
-    # broadcasts x vs y... intended?
+    # broadcasts x vs y... intended?! Should raise an error probably
     c1 = x >= y
     m.add_constraints(c1)
 

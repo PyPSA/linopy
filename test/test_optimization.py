@@ -40,6 +40,20 @@ def model():
 
 
 @pytest.fixture
+def model_flex():
+    m = Model(chunk=None)
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x -5, GREATER_EQUAL, 5 + 6 * y)
+    m.add_constraints(2 * (2*x + y + 1.5), GREATER_EQUAL, 0)
+
+    m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.fixture
 def model_anonymous_constraint():
     m = Model(chunk=None)
 
@@ -208,6 +222,13 @@ def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model.objective_value, 3.3)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting_flex(model_flex, solver, io_api):
+    status, condition = model_flex.solve(solver, io_api=io_api)
+    assert status == "ok"
+    assert np.isclose(model_flex.objective_value, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
