@@ -186,90 +186,64 @@ class Variable:
         """
         Print the variable arrays.
         """
-        # don't loop over all values if not necessary
-        if not self.coords:
-            header = f"Variable\n{'-' * len('Variable')}"
-            lower = self.lower.item()
-            upper = self.upper.item()
-            coord = []
-            var_string, bound_string = print_single_variable(
-                self, self.name, coord, lower, upper
-            )
-            return f"{header}\n{var_string} {bound_string}"
+        max_lines = options["display_max_rows"]
+        dims = list(self.dims)
+        dim_sizes = list(self.data.sizes.values())
+        total_lines = int(np.prod(dim_sizes))
+        lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
+        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        lines = []
 
-        # create header string
-        if self.shape:
-            shape_string = ", ".join(
-                [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-            )
-            shape_string = f"({shape_string})"
-        else:
-            shape_string = ""
-        n_masked = (~self.mask).sum().item() if self.mask is not None else 0
-        mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"Variable {shape_string}{mask_string}\n" + "-" * (
-            len("Variable") + len(shape_string) + len(mask_string) + 1
-        )
-
-        # create data string, print only a few values
-        max_print = options["display_max_rows"]
-        split_at = max_print // 2
-        to_print = head_tail_range(self.size, max_print)
-        truncate = self.size > max_print
-
-        # create string, we use numpy to get the indexes
-        if self.shape:
-            idx = np.unravel_index(to_print, self.shape)
-            labels = np.ravel(self.labels.values)[to_print]
-            coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
-            coords = list(zip(*coords))
-        else:
-            # case a single variable was selected
-            idx = [0]
-            labels = np.ravel(self.labels.values)
-            coords = [[c.item() for c in self.coords.values()]]
-
-        if not self.size:
-            return f"{header}\nNone"
-
-        coord_strings = []
-        var_strings = []
-        bound_strings = []
-        trunc_strings = []
-        for i, coord in enumerate(coords):
-            label = labels[i]
-            variables = self.model.variables
-
-            coord_string = print_coord(coord) + ":"
-            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
-
-            if label != -1:
-                vname, vcoord = self.model.variables.get_label_position(label)
-                lower = variables[vname].lower
-                lower = lower.sel(dictsel(vcoord, lower.dims)).item()
-                upper = variables[vname].upper
-                upper = upper.sel(dictsel(vcoord, upper.dims)).item()
-                var_string, bound_string = print_single_variable(
-                    self, vname, vcoord, lower, upper
-                )
-
+        def domain(self, lower, upper):
+            if self.attrs["binary"]:
+                return "∈ {0, 1}"
+            elif self.attrs["integer"]:
+                return f"∈ Z ⋂ [{lower},...,{upper}]"
             else:
-                var_string = "None"
-                bound_string = ""
+                return f"∈ [{lower}, {upper}]"
 
-            coord_strings.append(coord_string)
-            var_strings.append(var_string)
-            bound_strings.append(bound_string)
-            trunc_strings.append(trunc_string)
+        if dims:
 
-        coord_width = max(len(c) for c in coord_strings)
-        var_width = max(len(v) for v in var_strings)
+            def generate_indices():
+                if lines_to_skip > 0:
+                    half_lines = max_lines // 2
+                    for i in range(half_lines):
+                        yield np.unravel_index(i, dim_sizes)
+                    yield None
+                    for i in range(total_lines - half_lines, total_lines):
+                        yield np.unravel_index(i, dim_sizes)
+                else:
+                    for i in range(total_lines):
+                        yield np.unravel_index(i, dim_sizes)
 
-        data_string = ""
-        for c, v, b, t in zip(coord_strings, var_strings, bound_strings, trunc_strings):
-            data_string += f"\n{c:<{coord_width}} {v:<{var_width}} {b}{t}"
+            for indices in generate_indices():
+                if indices is None:
+                    lines.append("\t\t...")
+                else:
+                    coord_values = ", ".join(
+                        str(self.data[dims[i]].values[ind])
+                        for i, ind in enumerate(indices)
+                    )
+                    if self.mask is None or self.mask.values[tuple(indices)]:
+                        lower = self.lower.values[tuple(indices)]
+                        upper = self.upper.values[tuple(indices)]
+                        line = f"[{coord_values}]: {self.name}[{coord_values}] {domain(self, lower, upper)}"
+                    else:
+                        line = f"[{coord_values}]: None"
+                    lines.append(line)
 
-        return f"{header}{data_string}"
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            lines.insert(
+                0,
+                f"Variable ({shape_str}){mask_str}\n{'-'* (len(shape_str) + len(mask_str) + 11)}",
+            )
+        else:
+            lines.append(
+                f"Variable\n{'-'*8}\n{self.name} {domain(self, self.lower.item(), self.upper.item())}"
+            )
+
+        return "\n".join(lines)
 
     def __neg__(self):
         """
