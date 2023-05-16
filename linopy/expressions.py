@@ -414,7 +414,7 @@ class LinearExpression:
 
     @property
     def const(self):
-        return self.data.coeffs.where(self.data.vars==CONSTANT).sum(axis=-1)
+        return self.data.coeffs.where(self.data.vars == CONSTANT).sum(axis=-1)
 
     @property
     def dims(self):
