@@ -361,11 +361,11 @@ class LinearExpression:
     def sort_lhs_rhs(self, rhs):
         new_lhs = self - rhs
         # this (next line) would be elegant - but zero coeff variables don't drop from lhs automatically
-        #new_lhs = new_lhs - new_lhs.const
+        # new_lhs = new_lhs - new_lhs.const
         # rather:
-        constant_cols = np.where(new_lhs._data.vars[0]==CONSTANT)[0]
+        constant_cols = np.where(new_lhs._data.vars[0] == CONSTANT)[0]
         if len(constant_cols) > 0:
-            new_lhs = new_lhs.drop_sel({'_term':constant_cols})
+            new_lhs = new_lhs.drop_sel({"_term": constant_cols})
 
         new_rhs = (rhs - self).const
         return new_lhs, new_rhs

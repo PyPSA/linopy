@@ -46,8 +46,8 @@ def model_flex():
     x = m.add_variables(name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(2 * x -5, GREATER_EQUAL, 5 + 6 * y)
-    m.add_constraints(2 * (2*x + y + 1.5), GREATER_EQUAL, 0)
+    m.add_constraints(2 * x - 5, GREATER_EQUAL, 5 + 6 * y)
+    m.add_constraints(2 * (2 * x + y + 1.5), GREATER_EQUAL, 0)
 
     m.add_objective(2 * y + x)
     return m
