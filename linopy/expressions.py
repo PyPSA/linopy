@@ -367,7 +367,11 @@ class LinearExpression:
         if len(constant_cols) > 0:
             new_lhs = new_lhs.drop_sel({"_term": constant_cols})
 
+        # this is a linear expr object with just constants:
         new_rhs = (rhs - self).const
+        # the current implementation wants to see a number... should probably be changed
+        new_rhs = new_rhs.to_numpy()
+
         return new_lhs, new_rhs
 
     def __le__(self, rhs):
