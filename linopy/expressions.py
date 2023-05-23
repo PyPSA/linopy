@@ -322,13 +322,16 @@ class LinearExpression:
         return self.__div__(other)
 
     def __le__(self, rhs):
-        return constraints.AnonymousConstraint(self, LESS_EQUAL, rhs)
+        data = self.data.assign(sign=LESS_EQUAL, rhs=rhs)
+        return constraints.Constraint(data, model=self.model)
 
     def __ge__(self, rhs):
-        return constraints.AnonymousConstraint(self, GREATER_EQUAL, rhs)
+        data = self.data.assign(sign=GREATER_EQUAL, rhs=rhs)
+        return constraints.Constraint(data, model=self.model)
 
     def __eq__(self, rhs):
-        return constraints.AnonymousConstraint(self, EQUAL, rhs)
+        data = self.data.assign(sign=EQUAL, rhs=rhs)
+        return constraints.Constraint(data, model=self.model)
 
     def __gt__(self, other):
         raise NotImplementedError(

@@ -76,9 +76,24 @@ def best_int(max_value):
             return t
 
 
+def generate_indices_for_printout(dim_sizes, max_lines):
+    total_lines = int(np.prod(dim_sizes))
+    lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
+    if lines_to_skip > 0:
+        half_lines = max_lines // 2
+        for i in range(half_lines):
+            yield np.unravel_index(i, dim_sizes)
+        yield None
+        for i in range(total_lines - half_lines, total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
+    else:
+        for i in range(total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
+
+
 def dictsel(d, keys):
     "Reduce dictionary to keys that appear in selection."
-    return {k: v for k, v in d.items() if k in keys}
+    return {key: d[key] for key in keys}
 
 
 def head_tail_range(stop, max_number_of_values=14):

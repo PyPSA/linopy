@@ -19,7 +19,7 @@ from linopy.constants import (
     short_LESS_EQUAL,
     sign_replace_dict,
 )
-from linopy.constraints import AnonymousConstraint
+from linopy.constraints import Constraint
 
 
 @pytest.fixture
@@ -129,7 +129,7 @@ def test_anonymous_scalar_constraint_from_linear_expression_fail(x, y):
 def test_anonymous_constraint_sel(x, y):
     expr = 10 * x + y
     con = expr <= 10
-    assert isinstance(con.sel(first=[1, 2]), AnonymousConstraint)
+    assert isinstance(con.sel(first=[1, 2]), Constraint)
 
 
 def test_constraint_from_rule(m, x, y):
@@ -140,8 +140,8 @@ def test_constraint_from_rule(m, x, y):
             return i * x[i] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
-    con = AnonymousConstraint.from_rule(m, bound, coords)
-    assert isinstance(con, AnonymousConstraint)
+    con = Constraint.from_rule(m, bound, coords)
+    assert isinstance(con, Constraint)
     assert con.lhs.nterm == 2
     repr(con)  # test repr
 
@@ -152,8 +152,8 @@ def test_constraint_from_rule_with_none_return(m, x, y):
             return i * x[i] + y[j] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
-    con = AnonymousConstraint.from_rule(m, bound, coords)
-    assert isinstance(con, AnonymousConstraint)
+    con = Constraint.from_rule(m, bound, coords)
+    assert isinstance(con, Constraint)
     assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
     assert (con.lhs.vars.loc[1, :] != -1).all()

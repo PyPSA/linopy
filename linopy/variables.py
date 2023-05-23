@@ -16,18 +16,16 @@ import numpy as np
 import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, zeros_like
+from xarray import DataArray, Dataset, align, broadcast, zeros_like
 from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
-    dictsel,
     forward_as_properties,
+    generate_indices_for_printout,
     has_optimized_model,
-    head_tail_range,
     is_constant,
     print_coord,
-    print_single_variable,
 )
 from linopy.config import options
 
@@ -145,7 +143,10 @@ class Variable:
             if attr not in data:
                 raise ValueError(f"missing '{attr}' in data")
 
-        if "label_range" in data.attrs:
+        data = data.assign_attrs(name=name)
+        (data,) = broadcast(data)
+
+        if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
         self._data = data
@@ -189,8 +190,6 @@ class Variable:
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
         dim_sizes = list(self.data.sizes.values())
-        total_lines = int(np.prod(dim_sizes))
-        lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
@@ -203,20 +202,7 @@ class Variable:
                 return f"∈ [{lower}, {upper}]"
 
         if dims:
-
-            def generate_indices():
-                if lines_to_skip > 0:
-                    half_lines = max_lines // 2
-                    for i in range(half_lines):
-                        yield np.unravel_index(i, dim_sizes)
-                    yield None
-                    for i in range(total_lines - half_lines, total_lines):
-                        yield np.unravel_index(i, dim_sizes)
-                else:
-                    for i in range(total_lines):
-                        yield np.unravel_index(i, dim_sizes)
-
-            for indices in generate_indices():
+            for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
@@ -224,9 +210,9 @@ class Variable:
                         str(self.data[dims[i]].values[ind])
                         for i, ind in enumerate(indices)
                     )
-                    if self.mask is None or self.mask.values[tuple(indices)]:
-                        lower = self.lower.values[tuple(indices)]
-                        upper = self.upper.values[tuple(indices)]
+                    if self.mask is None or self.mask.values[indices]:
+                        lower = self.lower.values[indices]
+                        upper = self.upper.values[indices]
                         line = f"[{coord_values}]: {self.name}[{coord_values}] {domain(self, lower, upper)}"
                     else:
                         line = f"[{coord_values}]: None"
@@ -539,7 +525,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.upper)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self.data = self.data.assign(upper=value)
+        self.data["upper"] = value
 
     @property
     def lower(self):
@@ -563,7 +549,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.lower)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self._data = self.data.assign(lower=value)
+        self.data["lower"] = value
 
     @property
     @has_optimized_model
@@ -852,13 +838,6 @@ class Variables:
         Get the upper bounds of all variables.
         """
         return Dataset({name: var.upper for name, var in self.variables.items()})
-
-    @property
-    def sign(self):
-        """
-        Get the signs of all variables.
-        """
-        return Dataset({name: var.sign for name, var in self.variables.items()})
 
     @property
     def nvars(self):

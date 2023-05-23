@@ -19,13 +19,9 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import best_int, maybe_replace_signs, replace_by_map
+from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import ModelStatus, TerminationCondition
-from linopy.constraints import (
-    AnonymousConstraint,
-    AnonymousScalarConstraint,
-    Constraints,
-)
+from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
@@ -433,15 +429,10 @@ class Model:
         if binary and ((lower != -inf) or (upper != inf)):
             raise ValueError("Binary variables cannot have lower or upper bounds.")
 
-        def as_dataarray(x):
-            return x if isinstance(x, DataArray) else DataArray(x, coords=coords)
-
         data = Dataset({"lower": as_dataarray(lower), "upper": as_dataarray(upper)})
 
         if mask is not None:
             data = data.assign(mask=as_dataarray(mask).astype(bool))
-
-        (data,) = xr.broadcast(data)
 
         labels = DataArray(-2, coords=data.coords)
 
@@ -480,7 +471,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.AnonymousConstraint/callable
+        lhs : linopy.LinearExpression/linopy.Constraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -509,98 +500,88 @@ class Model:
         labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
         """
-        labels = None
 
-        if name is None:
-            name = "con" + str(self._connameCounter)
-            self._connameCounter += 1
+        def assert_sign_rhs_are_None(lhs, sign, rhs):
+            if sign is not None or rhs is not None:
+                msg = f"Passing arguments `sign` and `rhs` together with a {type(lhs)} is ambiguous."
+                raise ValueError(msg)
+
+        def assert_sign_rhs_not_None(lhs, sign, rhs):
+            if sign is None or rhs is None:
+                msg = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
+                raise ValueError(msg)
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
+        elif name is None:
+            name = "con" + str(self._connameCounter)
+            self._connameCounter += 1
+        if sign is not None:
+            sign = maybe_replace_signs(as_dataarray(sign))
+        if rhs is not None:
+            rhs = as_dataarray(rhs)
+
+        data = None
 
         if callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
-            lhs = AnonymousConstraint.from_rule(self, rule, coords)
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = Constraint.from_rule(self, rule, coords).data
 
         if isinstance(lhs, AnonymousScalarConstraint):
-            lhs = lhs.to_anonymous_constraint()
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = lhs.to_constraint().data
 
-        if isinstance(lhs, AnonymousConstraint):
-            if sign is not None or rhs is not None:
-                raise ValueError(
-                    "Passing arguments `sign` and `rhs` together with a constraint"
-                    " is ambiguous."
-                )
-            labels = lhs.labels  # returns an empty data array of correct shape
-            sign = lhs.sign
-            rhs = lhs.rhs
-            lhs = lhs.lhs
-        else:
-            if sign is None or rhs is None:
-                raise ValueError(
-                    "Argument `sign` and `rhs` must not be None if first argument "
-                    " is an expression."
-                )
+        if isinstance(lhs, Constraint):
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = lhs.data
+
         if isinstance(lhs, (list, tuple)):
-            lhs = self.linexpr(*lhs)
-        elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
-            lhs = lhs.to_linexpr()
-        assert isinstance(lhs, LinearExpression)
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = self.linexpr(*lhs).data
+            data = data.assign(sign=sign, rhs=rhs)
 
-        if isinstance(rhs, (Variable, LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
+        if isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = lhs.to_linexpr().data
+            data = data.assign(sign=sign, rhs=rhs)
 
-        lhs = lhs.sanitize()
-        sign = maybe_replace_signs(DataArray(sign))
-        rhs = DataArray(rhs)
-
-        if labels is None:
-            labels = (lhs.vars.chunk() + rhs).sum("_term")
+        if data is None:
+            raise ValueError(
+                f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
+            )
 
         if mask is not None:
-            mask = DataArray(mask).astype(bool)
-            mask, _ = xr.align(mask, labels, join="right")
+            mask = as_dataarray(mask).astype(bool)
+            # TODO: simplify
             assert set(mask.dims).issubset(
-                labels.dims
+                data.dims
             ), "Dimensions of mask not a subset of resulting labels dimensions."
+            data = data.assign(mask=mask)
 
-        # It is important to end up with monotonically increasing labels in the
-        # model's constraints container as we use it for indirect indexing.
-        labels_reindexed = labels.reindex_like(self.constraints.labels, fill_value=-1)
-        if not labels.equals(labels_reindexed):
-            warnings.warn(
-                f"Reindexing constraint `{name}` to match existing coordinates.",
-                UserWarning,
-            )
-            labels = labels_reindexed
-            lhs = lhs.reindex_like(labels)
-            rhs = rhs.reindex_like(labels)
-            if mask is None:
-                mask = labels != -1
-            else:
-                mask = mask.reindex_like(labels_reindexed, fill_value=False)
+        labels = DataArray(-1, coords=data.indexes)
 
         self.check_force_dim_names(labels)
 
         start = self._cCounter
-        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        end = start + labels.size
+        labels.data = np.arange(start, end).reshape(labels.shape)
         self._cCounter += labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            labels = labels.where(data.mask, -1)
 
-        lhs = lhs.data.rename({"_term": f"{name}_term"})
+        data = data.assign(labels=labels).assign_attrs(
+            label_range=(start, end), name=name
+        )
 
         if self.chunk:
-            lhs = lhs.chunk(self.chunk)
-            sign = sign.chunk(self.chunk)
-            rhs = rhs.chunk(self.chunk)
-            labels = labels.chunk(self.chunk)
+            data = data.chunk(self.chunk)
 
-        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
-
-        return self.constraints[name]
+        constraint = Constraint(data, name=name, model=self)
+        self.constraints.add(constraint)
+        return constraint
 
     def add_objective(self, expr, overwrite=False):
         """

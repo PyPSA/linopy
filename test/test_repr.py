@@ -23,13 +23,13 @@ c_mask[:, 5:] = True
 c = m.add_variables(lower, upper, name="c", mask=c_mask)
 d = m.add_variables(0, 10, coords=[types], name="d")
 
-# add variable with indexes to reindex
-with pytest.warns(UserWarning):
-    e = m.add_variables(0, upper[5:], name="e")
+# new behavior in v0.2, variable with dimension name and other
+# coordinates are added without a warning
+e = m.add_variables(0, upper[5:], name="e")
 
-    f_mask = np.full_like(upper[:5], True, dtype=bool)
-    f_mask[:3] = False
-    f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
+f_mask = np.full_like(upper[:5], True, dtype=bool)
+f_mask[:3] = False
+f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
 
 # create linear expression for each variable
@@ -57,7 +57,6 @@ cc_ = lc >= 0
 cd_ = ld >= 0
 cav_ = lav >= 0
 
-
 # add constraint for each variable
 cu = m.add_constraints(cu_, name="cu")
 cv = m.add_constraints(cv_, name="cv")
@@ -69,7 +68,7 @@ cb = m.add_constraints(cb_, name="cb")
 cc = m.add_constraints(cc_, name="cc")
 cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
-cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.data, False))
+cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.labels, False))
 
 
 def test_variable_repr():
