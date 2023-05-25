@@ -785,18 +785,18 @@ class Variables:
         """
         r = "linopy.model.Variables"
         line = "-" * len(r)
-        r += f"\n{line}\n\n"
+        r += f"\n{line}\n"
 
-        labelprint = self.labels.__repr__()
-        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
-        r += re.search(coordspattern, labelprint).group()
-        r += "Variables:\n"
-        for name in self.labels:
-            r += f"  *  {name} ({', '.join(self.labels[name].coords)})\n"
+        for name, ds in self.items():
+            coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
+            r += f" * {name}{coords}\n"
         return r
 
     def __iter__(self):
-        return self.labels.__iter__()
+        return self.variables.__iter__()
+
+    def items(self):
+        return self.variables.items()
 
     def _ipython_key_completions_(self):
         """

@@ -287,14 +287,12 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        var_string = self.variables.labels.__repr__().split("\n", 1)[1]
-        var_string = var_string.replace("Data variables:\n", "Data:\n")
-        con_string = self.constraints.labels.__repr__().split("\n", 1)[1]
-        con_string = con_string.replace("Data variables:\n", "Data:\n")
+        var_string = self.variables.__repr__().split("\n", 2)[2]
+        con_string = self.constraints.__repr__().split("\n", 2)[2]
         return (
             f"Linopy model\n============\n\n"
-            f"Variables:\n----------\n{var_string}\n\n"
-            f"Constraints:\n------------\n{con_string}\n\n"
+            f"Variables:\n----------\n{var_string}\n"
+            f"Constraints:\n------------\n{con_string}\n"
             f"Status:\n-------\n{self.status}"
         )
 

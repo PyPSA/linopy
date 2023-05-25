@@ -26,6 +26,7 @@ from linopy import constraints, variables
 from linopy.common import (
     as_dataarray,
     forward_as_properties,
+    generate_indices_for_printout,
     head_tail_range,
     print_coord,
     print_single_expression,
@@ -107,7 +108,7 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes"])
+@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -203,54 +204,48 @@ class LinearExpression:
 
     def __repr__(self):
         """
-        Get the string representation of the expression.
+        Print the expression arrays.
         """
-        nexprs = self.size // self.nterm
+        max_lines = options["display_max_rows"]
+        dims = list(self.dims)
+        dim_sizes = list(self.sizes.values())[:-1]
+        size = np.product(dim_sizes)  # that the number of theoretical printouts
+        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        lines = []
 
-        # don't loop over all values if not necessary
-        if self.size == self.nterm:
-            expr_string = print_single_expression(
-                self.coeffs.values, self.vars.values, self.model
-            )
-            return f"LinearExpression:\n-----------------\n{expr_string}"
+        header_string = "LinearExpression"
 
-        # create header string
-        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
-        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
-        header = f"LinearExpression {shape_string}:\n{'-' * (18 + len(shape_string))}"
+        if size > 1:
+            for indices in generate_indices_for_printout(dim_sizes, max_lines):
+                if indices is None:
+                    lines.append("\t\t...")
+                else:
+                    coord_values = ", ".join(
+                        str(self.data[dims[i]].values[ind])
+                        for i, ind in enumerate(indices)
+                    )
+                    if self.mask is None or self.mask.values[indices]:
+                        expr = print_single_expression(
+                            self.coeffs.values[indices],
+                            self.vars.values[indices],
+                            self.model,
+                        )
+                        line = f"[{coord_values}]: {expr}"
+                    else:
+                        line = f"[{coord_values}]: None"
+                    lines.append(line)
 
-        # create data string, print only a few values
-        max_print = options["display_max_rows"]
-        split_at = max_print // 2
-        to_print = head_tail_range(nexprs, max_print)
-        truncate = nexprs > max_print
-        coords = self.unravel_coords(to_print)
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
+            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+        elif size == 1:
+            expr = print_single_expression(self.coeffs, self.vars, self.model)
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n{expr}")
+        else:
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
 
-        if not self.size:
-            return f"{header}\nNone"
-
-        # loop over all values to print
-        coord_strings = []
-        expr_strings = []
-        trunc_strings = []
-        for i, coord in enumerate(coords):
-            coord_string = print_coord(coord) + ":"
-            expr_string = print_single_expression(
-                self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
-            )
-            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
-
-            coord_strings.append(coord_string)
-            expr_strings.append(expr_string)
-            trunc_strings.append(trunc_string)
-
-        coord_width = max(len(c) for c in coord_strings)
-
-        data_string = ""
-        for c, e, t in zip(coord_strings, expr_strings, trunc_strings):
-            data_string += f"\n{c:<{coord_width}} {e}{t}"
-
-        return f"{header}{data_string}"
+        return "\n".join(lines)
 
     def __add__(self, other):
         """
@@ -387,6 +382,11 @@ class LinearExpression:
     @coeffs.setter
     def coeffs(self, value):
         self.data["coeffs"] = value
+
+    # create a dummy for a mask, which can be implemented later
+    @property
+    def mask(self):
+        return None
 
     @classmethod
     def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:

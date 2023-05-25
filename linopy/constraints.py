@@ -67,10 +67,12 @@ def _con_unwrap(con):
         "attrs",
         "coords",
         "indexes",
+        "dims",
+        "sizes",
     ],
     labels=["values"],
     lhs=["nterm"],
-    rhs=["ndim", "shape", "size", "values", "dims", "sizes"],
+    rhs=["ndim", "shape", "size"],
 )
 class Constraint:
     """
@@ -162,13 +164,14 @@ class Constraint:
         """
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
-        dim_sizes = list(self.sizes.values())
+        dim_sizes = list(self.sizes.values())[:-1]
+        size = np.product(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
 
-        if dims:
+        if size > 1:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
@@ -195,13 +198,13 @@ class Constraint:
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
-        else:
-            expr = print_single_expression(
-                self.coeffs.item(), self.vars.item(), self.model
-            )
+        elif size == 1:
+            expr = print_single_expression(self.coeffs, self.vars, self.model)
             lines.append(
                 f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
+        else:
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
 
         return "\n".join(lines)
 
@@ -448,14 +451,11 @@ class Constraints:
         """
         r = "linopy.model.Constraints"
         line = "-" * len(r)
-        r += f"\n{line}\n\n"
+        r += f"\n{line}\n"
 
-        labelprint = self.labels.__repr__()
-        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
-        r += re.search(coordspattern, labelprint).group()
-        r += "Constraints:\n"
         for name, ds in self.items():
-            r += f"  *  {name} ({', '.join(ds.coords)})\n"
+            coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
+            r += f" * {name}{coords}\n"
         return r
 
     def __getitem__(
