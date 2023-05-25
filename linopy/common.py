@@ -91,6 +91,27 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
+def align_lines_by_delimiter(lines, delimiter):
+    # Determine the maximum position of the delimiter
+    if isinstance(delimiter, str):
+        delimiter = [delimiter]
+    try:
+        max_pos = max(line.index(d) for line in lines for d in delimiter if d in line)
+    except ValueError:
+        return lines
+
+    # Create the formatted lines
+    formatted_lines = []
+    for line in lines:
+        formatted_line = line
+        for d in delimiter:
+            if d in line:
+                parts = line.split(d)
+                formatted_line = f"{parts[0]:<{max_pos}}{d} {parts[1].strip()}"
+        formatted_lines.append(formatted_line)
+    return formatted_lines
+
+
 def dictsel(d, keys):
     "Reduce dictionary to keys that appear in selection."
     return {key: d[key] for key in keys}

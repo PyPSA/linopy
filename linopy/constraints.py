@@ -7,6 +7,7 @@ This module contains implementations for the Constraint{s} class.
 
 import functools
 import re
+import warnings
 from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, Dict, Sequence, Union
@@ -23,6 +24,7 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     _merge_inplace,
+    align_lines_by_delimiter,
     dictsel,
     forward_as_properties,
     generate_indices_for_printout,
@@ -35,7 +37,7 @@ from linopy.common import (
     replace_by_map,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, SIGNS_pretty
 
 
 def conwrap(method, *default_args, **new_default_kwargs):
@@ -164,7 +166,7 @@ class Constraint:
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
-        header_string = f"{self.type} `{self.name}`:" if self.name else f"{self.type}"
+        header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
 
         if dims:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
@@ -181,12 +183,13 @@ class Constraint:
                             self.vars.values[indices],
                             self.model,
                         )
-                        sign = self.sign.values[indices]
+                        sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
                         line = f"[{coord_values}]: {expr} {sign} {rhs}"
                     else:
                         line = f"[{coord_values}]: None"
                     lines.append(line)
+            lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
@@ -197,7 +200,7 @@ class Constraint:
                 self.coeffs.item(), self.vars.item(), self.model
             )
             lines.append(
-                f"{header_string}\n{'-'*len(header_string)}\n{expr} {self.sign.item()} {self.rhs.item()}"
+                f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
 
         return "\n".join(lines)
@@ -451,8 +454,8 @@ class Constraints:
         coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
         r += re.search(coordspattern, labelprint).group()
         r += "Constraints:\n"
-        for name in self.labels:
-            r += f"  *  {name} ({', '.join(self.labels[name].coords)})\n"
+        for name, ds in self.items():
+            r += f"  *  {name} ({', '.join(ds.coords)})\n"
         return r
 
     def __getitem__(
@@ -468,7 +471,8 @@ class Constraints:
     def __iter__(self):
         return self.constraints.__iter__()
 
-    _merge_inplace = _merge_inplace
+    def items(self):
+        return self.constraints.items()
 
     def _ipython_key_completions_(self):
         """
@@ -785,6 +789,25 @@ class Constraints:
         df = df.groupby(["rows", "cols"], as_index=False).sum()
 
         return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
+
+
+# define AnonymousConstraint for backwards compatibility
+class AnonymousConstraint(Constraint):
+    def __init__(self, lhs, sign, rhs):
+        """
+        Initialize a anonymous constraint.
+        """
+        # raise deprecation warning
+        warnings.warn(
+            "AnonymousConstraint is deprecated, use Constraint instead.",
+        )
+
+        if not isinstance(lhs, expressions.LinearExpression):
+            raise TypeError(
+                f"Assigned lhs must be a LinearExpression, got {type(lhs)})."
+            )
+        data = lhs.data.assign(sign=sign, rhs=rhs)
+        super().__init__(data, lhs.model)
 
 
 class AnonymousScalarConstraint:

@@ -21,6 +21,7 @@ from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
+    align_lines_by_delimiter,
     forward_as_properties,
     generate_indices_for_printout,
     has_optimized_model,
@@ -217,6 +218,7 @@ class Variable:
                     else:
                         line = f"[{coord_values}]: None"
                     lines.append(line)
+            # lines = align_lines_by_delimiter(lines, "∈")
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
