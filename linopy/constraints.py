@@ -18,7 +18,7 @@ import pandas as pd
 import xarray as xr
 from deprecation import deprecated
 from numpy import arange, array
-from scipy.sparse import coo_matrix
+from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 
 from linopy import expressions, variables
@@ -150,7 +150,7 @@ class Constraint:
     @property
     def name(self):
         """
-        Return the name of the variable.
+        Return the name of the constraint.
         """
         return self.attrs["name"]
 
@@ -225,7 +225,7 @@ class Constraint:
     @property
     def range(self):
         """
-        Return the range of the variable.
+        Return the range of the constraint.
         """
         return self.data.attrs["label_range"]
 
@@ -234,7 +234,7 @@ class Constraint:
         """
         Get the mask of the constraint.
 
-        The mask indicates on which coordinates the variable array is enabled
+        The mask indicates on which coordinates the constraint is enabled
         (True) and disabled (False).
 
         Returns
@@ -422,6 +422,56 @@ class Constraint:
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
         return cls(lhs, sign, rhs)
 
+    def to_dataframe(self):
+        """
+        Convert the constraint to a pandas DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked constraints with non-zero coefficients. It contains the
+        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        # Parameters
+        # ----------
+        # keys : list of str, optional
+        #     Specify which datafieds should be contained in the dataframe.
+        #     Note that all dataframes will be broadcasted to the array with the
+        #     biggest shape before added to the dataframe. That means if
+        #     `coeffs` and `vars` are included, the other fields will have repeated
+        #     values.
+        #     Default is None which leads to the full set of columns.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+        """
+        ds = self.data
+        # if keys is not None:
+        #     if isinstance(keys, str):
+        #         keys = [keys]
+        #     ds = ds[keys]
+        if not ds.sizes:
+            # fallback for weird error raised due to missing index
+            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
+        else:
+            df = ds.to_dataframe()
+        if "mask" in df:
+            mask = df.pop("mask")
+            df = df[mask]
+        df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
+        # Group repeated variables in the same constraint
+        agg = dict(coeffs="sum", rhs="first", sign="first")
+        df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
+        return df
+
+    @property
+    def flat(self):
+        """
+        Return the constraint as a flat pandas DataFrame.
+
+        This property is a shortcut for ``to_dataframe()``.
+        """
+        return self.to_dataframe()
+
     sel = conwrap(Dataset.sel)
 
     isel = conwrap(Dataset.isel)
@@ -456,6 +506,8 @@ class Constraints:
         for name, ds in self.items():
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
+        if not len(list(self)):
+            r += "<empty>"
         return r
 
     def __getitem__(
@@ -467,6 +519,12 @@ class Constraints:
         return self.__class__(
             {name: self.constraints[name] for name in names}, self.model
         )
+
+    def __getattr__(self, name: str) -> Constraint:
+        try:
+            return self.constraints[name]
+        except KeyError:
+            raise AttributeError(f"Constraint {name} not found.")
 
     def __iter__(self):
         return self.constraints.__iter__()
@@ -536,40 +594,33 @@ class Constraints:
         """
         Coefficient range of the constraint.
         """
-        return (
-            xr.concat(
-                [self.coeffs.min(), self.coeffs.max()],
-                dim=pd.Index(["min", "max"]),
-            )
-            .to_dataframe()
-            .T
-        )
+        d = {
+            k: [self[k].coeffs.min().item(), self[k].coeffs.max().item()] for k in self
+        }
+        return pd.DataFrame(d, index=["min", "max"]).T
 
     @property
     def ncons(self):
         """
-        Get the number all constraints which were at some point added to the
-        model.
+        Get the number all constraints effectively used by the model.
 
-        These also include constraints with missing labels.
+        These excludes constraints with missing labels.
         """
-        return self.ravel("labels", filter_missings=True).shape[0]
+        return len(self.flat.labels.unique())
 
     @property
     def inequalities(self):
         """
         Get the subset of constraints which are purely inequalities.
         """
-        return self[
-            [n for n, s in self.sign.items() if s in (LESS_EQUAL, GREATER_EQUAL)]
-        ]
+        return self[[n for n, s in self.items() if (s.sign != EQUAL).all()]]
 
     @property
     def equalities(self):
         """
         Get the subset of constraints which are purely equalities.
         """
-        return self[[n for n, s in self.sign.items() if s == EQUAL]]
+        return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
 
     def sanitize_zeros(self):
         """
@@ -588,7 +639,9 @@ class Constraints:
         for name in self:
             term_dim = name + "_term"
             contains_non_missing = (self[name].vars != -1).any(term_dim)
-            self[name].labels = self[name].labels.where(contains_non_missing, -1)
+            self[name].data["labels"] = self[name].labels.where(
+                contains_non_missing, -1
+            )
 
     def get_name_by_label(self, label):
         """
@@ -612,8 +665,8 @@ class Constraints:
         """
         if not isinstance(label, (float, int)) or label < 0:
             raise ValueError("Label must be a positive number.")
-        for name, labels in self.labels.items():
-            if label in labels:
+        for name, ds in self.items():
+            if label in ds.labels:
                 return name
         raise ValueError(f"No constraint found containing the label {label}.")
 
@@ -684,8 +737,9 @@ class Constraints:
 
         assert broadcast_like in ["labels", "vars"]
 
-        for name, values in getattr(self, broadcast_like).items():
-            broadcasted = ds[name].broadcast_like(values)
+        for name, ds in self.items():
+            values = ds.data[broadcast_like]
+            broadcasted = ds.data[key].broadcast_like(values)
             if values.chunks is not None:
                 broadcasted = broadcasted.chunk(values.chunks)
 
@@ -740,55 +794,44 @@ class Constraints:
         else:
             return res
 
-    def to_matrix(self, filter_missings=False):
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        Convert all constraint to a single pandas Dataframe.
+
+        The resulting dataframe is a long format with columns
+        `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        return pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+
+    @property
+    def flat(self):
+        """
+        Return the constraints as a flat pandas DataFrame.
+
+        This property is a shortcut for ``to_dataframe()``.
+        """
+        return self.to_dataframe()
+
+    def to_matrix(self, filter_missings=True):
         """
         Construct a constraint matrix in sparse format.
 
         Missing values, i.e. -1 in labels and vars, are ignored filtered
         out.
 
-        If filter_missings is set to True, the index of the rows and
-        columns
-        correspond to the constraint and variable labels stored in the
-        model.
-        If set to False, the rows correspond to the constraints given by
-        `m.constraints.ravel('labels', filter_missings=True)` and
-        columns to
-        `m.variables.ravel('labels', filter_missings=True)` where `m` is
-        the
-        underlying model. The matrix has then a shape of (`m.ncons`,
-        `m.nvars`).
+        # TODO: rename "filter_missings" to "labels_as_coordinates"
         """
-        self.sanitize_missings()
-
-        keys = ["coeffs", "labels", "vars"]
-        data, rows, cols = [
-            self.ravel(k, broadcast_like="vars", filter_missings=True) for k in keys
-        ]
+        df = self.to_dataframe()
         shape = (self.model._cCounter, self.model._xCounter)
-
+        matrix = csc_matrix((df.coeffs, (df.labels, df.vars)), shape=shape)
         if filter_missings:
-            # We have to map the variables to the filtered layout
-            clabels = self.ravel("labels", filter_missings=True)
-            ncons = clabels.shape[0]
-            cmap = np.empty(self.model._cCounter)
-            cmap[clabels] = arange(clabels.shape[0])
-            rows = cmap[rows]
-
-            variables = self.model.variables
-            vlabels = variables.ravel("labels", filter_missings=True)
-            nvars = vlabels.shape[0]
-            vmap = np.empty(self.model._xCounter)
-            vmap[vlabels] = arange(nvars)
-            cols = vmap[cols]
-
-            shape = (ncons, nvars)  # same as model.nvars/ncons but already there
-
-        # Group repeated variables in the same constraint
-        df = pd.DataFrame({"data": data, "rows": rows, "cols": cols})
-        df = df.groupby(["rows", "cols"], as_index=False).sum()
-
-        return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
+            vlabels = self.model.variables.flat.labels
+            matrix = matrix[df.labels.unique()][:, vlabels]
+        return matrix
 
 
 # define AnonymousConstraint for backwards compatibility

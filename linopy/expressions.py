@@ -856,6 +856,44 @@ class LinearExpression:
     def __iter__(self):
         return self.data.__iter__()
 
+    def to_dataframe(self):
+        """
+        Convert the expression to a pandas DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        expressions with non-zero coefficients. It contains the
+        columns `coeffs` and `vars`.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+        """
+        # if exclude_lhs:
+        #     ds = self.data.drop_vars(['coeffs', 'vars'])
+        # else:
+        ds = self.data
+        if not ds.sizes:
+            # fallback for weird error raised due to missing index
+            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
+        else:
+            df = ds.to_dataframe()
+        if "mask" in df:
+            mask = df.pop("mask")
+            df = df[mask]
+        df = df[(df.vars != -1) & (df.coeffs != 0)]
+        # Group repeated variables in the same constraint
+        df = df.groupby("vars", as_index=False).sum()
+        return df
+
+    @property
+    def flat(self):
+        """
+        Return the expression as a flat pandas DataFrame.
+
+        This property is a shortcut for ``to_dataframe()``.
+        """
+        return self.to_dataframe()
+
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)
 

@@ -11,61 +11,55 @@ import pandas as pd
 import xarray as xr
 
 
-def get_lower_bounds(m, filter_missings=True):
+def get_lower_bounds(m):
     """
     Get vector of all lower variable bounds.
 
     Parameters
     ----------
     m : linopy.Model
-    filter_missings : bool, optional
-        Whether to filter out missing variables. The default is True.
 
     Returns
     -------
     lb
         One-dimensional numpy array containing all lower bounds.
     """
-    return m.variables.ravel("lower", filter_missings=filter_missings)
+    return m.variables.flat.lower
 
 
-def get_upper_bounds(m, filter_missings=True):
+def get_upper_bounds(m):
     """
     Get vector of all upper variable bounds.
 
     Parameters
     ----------
     m : linopy.Model
-    filter_missings : bool, optional
-        Whether to filter out missing variables. The default is True.
 
     Returns
     -------
     ub
         One-dimensional numpy array containing all upper bounds.
     """
-    return m.variables.ravel("upper", filter_missings=filter_missings)
+    return m.variables.flat.upper
 
 
-def get_variable_labels(m, filter_missings=True):
+def get_variable_labels(m):
     """
     Get vector of all variable labels.
 
     Parameters
     ----------
     m : linopy.Model
-    filter_missings : bool, optional
-        Whether to filter out missing variables. The default is True.
 
     Returns
     -------
     labels
         One-dimensional numpy array containing all variable labels.
     """
-    return m.variables.ravel("labels", filter_missings=filter_missings)
+    return m.variables.flat.labels
 
 
-def get_variable_types(m, filter_missings=True):
+def get_variable_types(m):
     """
     Get vector of all variable types.
 
@@ -84,20 +78,20 @@ def get_variable_types(m, filter_missings=True):
     labels
         One-dimensional numpy array containing all variable types.
     """
-    specs = {}
+    specs = []
     for name in m.variables:
         if name in m.binaries:
-            specs[name] = "B"
+            val = "B"
         elif name in m.integers:
-            specs[name] = "I"
+            val = "I"
         else:
-            specs[name] = "C"
+            val = "C"
+        specs.append(pd.Series(val, index=m.variables[name].flat.index))
 
-    specs = xr.Dataset({k: xr.DataArray(v) for k, v in specs.items()})
-    return m.variables.ravel(specs, filter_missings=True)
+    return pd.concat(specs, ignore_index=True)
 
 
-def get_objective_coefficients(m, filter_missings=True):
+def get_objective_coefficients(m):
     """
     Get variable objective coefficients.
 
@@ -119,10 +113,10 @@ def get_objective_coefficients(m, filter_missings=True):
         vars, coeffs = ds.index.values, ds.values
     c = np.zeros(m._xCounter)
     c[vars] = coeffs
-    return c[get_variable_labels(m, filter_missings)]
+    return c[get_variable_labels(m)]
 
 
-def get_constraint_matrix(m, filter_missings=True):
+def get_constraint_matrix(m):
     """
     Get the constraint matrix of a linopy model.
 
@@ -137,7 +131,7 @@ def get_constraint_matrix(m, filter_missings=True):
     A
         Sparse constraint matrix.
     """
-    return m.constraints.to_matrix(filter_missings=filter_missings)
+    return m.constraints.to_matrix()
 
 
 def get_sense(m, filter_missings=True):
@@ -155,12 +149,10 @@ def get_sense(m, filter_missings=True):
     sense
         One-dimensional numpy array containing senses of all constraints.
     """
-    return m.constraints.ravel("sign", filter_missings=filter_missings).astype(
-        np.dtype("<U1")
-    )
+    return m.constraints.flat.sign.astype(np.dtype("<U1"))
 
 
-def get_rhs(m, filter_missings=True):
+def get_rhs(m):
     """
     Get the constraint right hand sides of a linopy model.
 
@@ -175,10 +167,10 @@ def get_rhs(m, filter_missings=True):
     sense
         One-dimensional numpy array containing rhs of all constraints.
     """
-    return m.constraints.ravel("rhs", filter_missings=filter_missings)
+    return m.constraints.flat.rhs
 
 
-def get_constraint_labels(m, filter_missings=True):
+def get_constraint_labels(m):
     """
     Get the constraint labels of a linopy model.
 
@@ -194,7 +186,7 @@ def get_constraint_labels(m, filter_missings=True):
         One-dimensional numpy array containing labels of all constraints.
     """
     m.constraints.sanitize_missings()
-    return m.constraints.ravel("labels", filter_missings=filter_missings)
+    return m.constraints.flat.labels
 
 
 class MatrixAccessor:
@@ -208,44 +200,66 @@ class MatrixAccessor:
     @property
     def vlabels(self):
         "Vector of labels of all non-missing variables."
-        return get_variable_labels(self._parent)
+        m = self._parent
+        return m.variabels.flat.labels.values
 
     @property
     def vtypes(self):
         "Vector of types of all non-missing variables."
-        return get_variable_types(self._parent)
+        m = self._parent
+        specs = []
+        for name in m.variables:
+            if name in m.binaries:
+                val = "B"
+            elif name in m.integers:
+                val = "I"
+            else:
+                val = "C"
+            specs.append(pd.Series(val, index=m.variables[name].flat.index))
+
+        return pd.concat(specs, ignore_index=True)
 
     @property
     def lb(self):
         "Vector of lower bounds of all non-missing variables."
-        return get_lower_bounds(self._parent)
+        m = self._parent
+        return m.variabels.flat.lower.values
 
     @property
     def ub(self):
         "Vector of upper bounds of all non-missing variables."
-        return get_upper_bounds(self._parent)
+        m = self._parent
+        return m.variabels.flat.upper.values
 
     @property
     def clabels(self):
         "Vector of labels of all non-missing constraints."
-        return get_constraint_labels(self._parent)
+        m = self._parent
+        return m.constraints.flat.labels.values
 
     @property
     def A(self):
         "Constraint matrix of all non-missing constraints and variables."
-        return get_constraint_matrix(self._parent)
+        m = self._parent
+        return m.constraints.to_matrix()
 
     @property
     def sense(self):
         "Vector of senses of all non-missing constraints."
-        return get_sense(self._parent)
+        m = self._parent
+        return m.constraints.flat.sign.values
 
     @property
     def b(self):
         "Vector of right-hand-sides of all non-missing constraints."
-        return get_rhs(self._parent)
+        m = self._parent
+        return m.constraints.flat.rhs.values
 
     @property
     def c(self):
         "Vector of objective coefficients of all non-missing variables."
-        return get_objective_coefficients(self._parent)
+        m = self._parent
+        ds = m.objective.flat
+        res = np.zeros(m.xCounter)
+        res[ds.vars] = ds.coeffs
+        return res[self.vlabels]

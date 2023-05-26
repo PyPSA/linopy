@@ -58,6 +58,7 @@ class Model:
         # hidden attributes
         "_status",
         "_termination_condition",
+        # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
         "_varnameCounter",
@@ -424,8 +425,11 @@ class Model:
         if binary and integer:
             raise ValueError("Variable cannot be both binary and integer.")
 
-        if binary and ((lower != -inf) or (upper != inf)):
-            raise ValueError("Binary variables cannot have lower or upper bounds.")
+        if binary:
+            if (lower != -inf) or (upper != inf):
+                raise ValueError("Binary variables cannot have lower or upper bounds.")
+            else:
+                lower, upper = 0, 1
 
         data = Dataset({"lower": as_dataarray(lower), "upper": as_dataarray(upper)})
 
@@ -631,12 +635,13 @@ class Model:
         -------
         None.
         """
-        labels = self.variables.labels[name]
+        labels = self.variables[name].labels
         self.variables.remove(name)
 
-        remove_b = self.constraints.vars.isin(labels).any()
-        names = [name for name, remove in remove_b.items() if remove.item()]
-        self.constraints.remove(names)
+        for k in self.constraints:
+            vars = self.constraints[k].data["vars"]
+            vars = vars.where(~vars.isin(labels), -1)
+            self.constraints[k].data["vars"] = vars
 
         self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
 

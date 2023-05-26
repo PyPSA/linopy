@@ -566,6 +566,37 @@ class Variable:
             raise AttributeError("Underlying model not optimized.")
         return self.model.solution[self.name]
 
+    def to_dataframe(self):
+        """
+        Convert the variable to a pandas DataFrame.
+
+        The resulting DataFrame represents a long table format of the variable
+        with columns `labels`, `lower`, `upper` which are not masked.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+        """
+        ds = self.data
+        if not ds.sizes:
+            # fallback for weird error raised due to missing index
+            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
+        else:
+            df = ds.to_dataframe()
+        if "mask" in df:
+            mask = df.pop("mask")
+            df = df[mask]
+        return df[df.labels != -1]
+
+    @property
+    def flat(self):
+        """
+        Return the variable as a flat pandas DataFrame.
+
+        This property is a shortcut for ``to_dataframe()``.
+        """
+        return self.to_dataframe()
+
     def sum(self, dims=None):
         """
         Sum the variables over all or a subset of dimensions.
@@ -790,6 +821,8 @@ class Variables:
         for name, ds in self.items():
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
+        if not len(list(self)):
+            r += "<empty>"
         return r
 
     def __iter__(self):
@@ -810,7 +843,7 @@ class Variables:
 
     def add(self, variable):
         """
-        Add a variable to the variables constrainer.
+        Add a variable to the variables container.
         """
         self.variables[variable.name] = variable
 
@@ -844,12 +877,11 @@ class Variables:
     @property
     def nvars(self):
         """
-        Get the number all variables which were at some point added to the
-        model.
+        Get the number all variables effectively used by the model.
 
-        These also include variables with missing labels.
+        These excludes variables with missing labels.
         """
-        return self.ravel("labels", filter_missings=True).shape[0]
+        return len(self.flat.labels.unique())
 
     @property
     def _binary_variables(self):
@@ -1017,6 +1049,28 @@ class Variables:
             return dask.compute(res)[0]
         else:
             return res
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        Convert all variables to a single pandas Dataframe.
+
+        The resulting dataframe is a long format of the variables
+        with columns `labels`, `lower`, 'upper` and `mask`.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        return pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+
+    @property
+    def flat(self):
+        """
+        Return the variables as a flat pandas DataFrame.
+
+        This property is a shortcut for ``to_dataframe()``.
+        """
+        return self.to_dataframe()
 
     def get_blocks(self, blocks: DataArray):
         """
