@@ -884,37 +884,32 @@ class Variables:
         return len(self.flat.labels.unique())
 
     @property
-    def _binary_variables(self):
-        return [v for v in self if self[v].attrs["binary"]]
-
-    @property
-    def _non_binary_variables(self):
-        return [v for v in self if not self[v].attrs["binary"]]
-
-    @property
     def binaries(self):
         """
         Get all binary variables.
         """
-        return self[self._binary_variables]
-
-    @property
-    def non_binaries(self):
-        """
-        Get all non-binary variables.
-        """
-        return self[self._non_binary_variables]
-
-    @property
-    def _integer_variables(self):
-        return [v for v in self if self[v].attrs["integer"]]
+        keys = [v for v in self if self[v].attrs["binary"]]
+        return self[keys]
 
     @property
     def integers(self):
         """
         Get all integers variables.
         """
-        return self[self._integer_variables]
+        keys = [v for v in self if self[v].attrs["integer"]]
+        return self[keys]
+
+    @property
+    def continuous(self):
+        """
+        Get all continuous variables.
+        """
+        keys = [
+            v
+            for v in self
+            if not self[v].attrs["integer"] and not self[v].attrs["binary"]
+        ]
+        return self[keys]
 
     def get_name_by_label(self, label):
         """
@@ -1061,7 +1056,11 @@ class Variables:
         -------
         pd.DataFrame
         """
-        return pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        df = pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        unique_labels = df.labels.unique()
+        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        df["key"] = df.labels.map(map_labels)
+        return df
 
     @property
     def flat(self):

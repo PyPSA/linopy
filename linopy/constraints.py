@@ -805,7 +805,11 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        return pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        df = pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        unique_labels = df.labels.unique()
+        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        df["key"] = df.labels.map(map_labels)
+        return df
 
     @property
     def flat(self):
@@ -823,15 +827,18 @@ class Constraints:
         Missing values, i.e. -1 in labels and vars, are ignored filtered
         out.
 
-        # TODO: rename "filter_missings" to "labels_as_coordinates"
+        # TODO: rename "filter_missings" to "~labels_as_coordinates"
         """
-        df = self.to_dataframe()
-        shape = (self.model._cCounter, self.model._xCounter)
-        matrix = csc_matrix((df.coeffs, (df.labels, df.vars)), shape=shape)
+        cons = self.to_dataframe()
+
         if filter_missings:
-            vlabels = self.model.variables.flat.labels
-            matrix = matrix[df.labels.unique()][:, vlabels]
-        return matrix
+            vars = self.model.variables.flat
+            shape = (cons.key.max() + 1, vars.key.max() + 1)
+            cons["vars"] = cons.vars.map(vars.set_index("labels").key)
+            return csc_matrix((cons.coeffs, (cons.key, cons.vars)), shape=shape)
+        else:
+            shape = (self.model._cCounter, self.model._xCounter)
+            return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
 
 
 # define AnonymousConstraint for backwards compatibility

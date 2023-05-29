@@ -25,6 +25,8 @@ ufunc_kwargs = dict(vectorize=True)
 concat_dim = "_concat_dim"
 concat_kwargs = dict(dim=concat_dim, coords="minimal")
 
+TQDM_COLOR = "#80bfff"
+
 
 # IO functions
 def int_to_str(arr):
@@ -56,7 +58,7 @@ def fill_by(target_shape, where, fill, other=""):
     return res
 
 
-def objective_to_file(m, f, log=False):
+def objective_to_file(m, f, log=False, batch_size=10000):
     """
     Write out the objective of a model to a lp file.
     """
@@ -64,131 +66,187 @@ def objective_to_file(m, f, log=False):
         logger.info("Writing objective.")
 
     f.write("min\n\nobj:\n\n")
-    coeffs = m.objective.coeffs.values
-    vars = m.objective.vars.values
-    nnz = vars != -1
-    coeffs, vars = coeffs[nnz], vars[nnz]
+    df = m.objective.flat
 
-    if np.isnan(coeffs).any():
+    if np.isnan(df.coeffs).any():
         raise ValueError(
             "Objective coefficients are missing (nan) where variables are not (-1)."
         )
 
-    objective = float_to_str(coeffs) + " x" + int_to_str(vars)
-    f.write("\n".join(objective))
-    del objective
+    coeffs = df.coeffs.values
+    vars = df.vars.values
+
+    batch = []  # to store batch of lines
+    for idx in range(len(df)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+
+        batch.append(f"{coeff:+.12g} x{var}\n")
+
+        if len(batch) >= batch_size:
+            f.writelines(batch)  # write out a batch
+            batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def constraints_to_file(m, f, log=False):
-    """
-    Write out the constraints of a model to a lp file.
-    """
+def constraints_to_file(m, f, log=False, batch_size=50000):
     f.write("\n\ns.t.\n\n")
-    m.constraints.sanitize_missings()
-    kwargs = dict(broadcast_like="vars", filter_missings=True)
-    vars = m.constraints.iter_ravel("vars", **kwargs)
-    coeffs = m.constraints.iter_ravel("coeffs", **kwargs)
-    labels = m.constraints.iter_ravel("labels", **kwargs)
-
-    labels_ = m.constraints.iter_ravel("labels", filter_missings=True)
-    sign_ = m.constraints.iter_ravel("sign", filter_missings=True)
-    rhs_ = m.constraints.iter_ravel("rhs", filter_missings=True)
-
-    iterate = zip(labels, vars, coeffs, labels_, sign_, rhs_)
+    names = m.constraints
     if log:
-        iterate = tqdm(iterate, "Writing constraints.", len(m.constraints.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing constraints.",
+            colour=TQDM_COLOR,
+        )
 
-    for l, v, c, l_, s_, r_ in iterate:
-        if not c.size:
-            continue
-        # Group repeated variables in the same constraint
-        df = pd.DataFrame({"coeffs": c, "labels": l, "vars": v})
-        df = df.groupby(["labels", "vars"], as_index=False).sum()
-        c, l, v = df.coeffs.values, df.labels.values, df.vars.values
+    batch = []
+    for name in names:
+        df = m.constraints[name].flat
 
-        diff_con = l[:-1] != l[1:]
-        new_con_b = concatenate([asarray([True]), diff_con])
-        end_of_con_b = concatenate([diff_con, asarray([True])])
+        labels = df.labels.values
+        vars = df.vars.values
+        coeffs = df.coeffs.values
+        rhs = df.rhs.values
+        sign = df.sign.values
 
-        l = fill_by(v.shape, new_con_b, "\nc" + int_to_str(l_) + ":\n")
-        s = fill_by(v.shape, end_of_con_b, "\n" + s_.astype(object) + "\n")
-        r = fill_by(v.shape, end_of_con_b, float_to_str(r_, ensure_sign=False))
-        constraints = l + float_to_str(c) + " x" + int_to_str(v) + s + r
+        len_df = len(df)  # compute length once
 
-        f.write("\n".join(constraints))
-        f.write("\n")
-        del l, s, r, constraints
+        # write out the start to enable a fast loop afterwards
+        idx = 0
+        label = labels[idx]
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
+        prev_label = label
+        prev_sign = sign[idx]
+        prev_rhs = rhs[idx]
+
+        for idx in range(1, len_df):
+            label = labels[idx]
+            coeff = coeffs[idx]
+            var = vars[idx]
+
+            if label != prev_label:
+                batch.append(
+                    f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
+                )
+                prev_sign = sign[idx]
+                prev_rhs = rhs[idx]
+            else:
+                batch.append(f"{coeff:+.12g} x{var}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)
+                batch = []  # reset batch
+
+            prev_label = label
+
+        batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def bounds_to_file(m, f, log=False):
+def bounds_to_file(m, f, log=False, batch_size=10000):
     """
     Write out variables of a model to a lp file.
     """
+    names = m.variables.continuous
+    if not len(list(names)):
+        return
+
     f.write("\n\nbounds\n\n")
-    lower = m.non_binaries.iter_ravel("lower", filter_missings=True)
-    upper = m.non_binaries.iter_ravel("upper", filter_missings=True)
-    labels = m.non_binaries.iter_ravel("labels", filter_missings=True)
-
-    iterate = zip(lower, labels, upper)
     if log:
-        iterate = tqdm(iterate, "Writing variables.", len(m.non_binaries.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing continuous variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for lo, l, up in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = float_to_str(lo) + " <= x" + int_to_str(l) + " <= " + float_to_str(up)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        labels = df.labels.values
+        lowers = df.lower.values
+        uppers = df.upper.values
+
+        for idx in range(len(df)):
+            label = labels[idx]
+            lower = lowers[idx]
+            upper = uppers[idx]
+            batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def binaries_to_file(m, f, log=False):
+def binaries_to_file(m, f, log=False, batch_size=1000):
     """
     Write out binaries of a model to a lp file.
     """
-    f.write("\n\nbinary\n\n")
-    labels = m.binaries.iter_ravel("labels", filter_missings=True)
-
-    if len(m.variables._binary_variables) == 0:
+    names = m.variables.binaries
+    if not len(list(names)):
         return
 
-    iterate = labels
+    f.write("\n\nbinary\n\n")
     if log:
-        iterate = tqdm(iterate, "Writing binaries.", len(m.binaries.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for l in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = "x" + int_to_str(l)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        for label in df.labels.values:
+            batch.append(f"x{label}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def integers_to_file(m, f, log=False):
+def integers_to_file(m, f, log=False, batch_size=1000):
     """
     Write out integers of a model to a lp file.
     """
-    f.write("\n\ngeneral\n\n")
-    labels = m.integers.iter_ravel("labels", filter_missings=True)
-
-    if len(m.variables._integer_variables) == 0:
+    names = m.variables.integers
+    if not len(list(names)):
         return
 
-    iterate = labels
+    f.write("\n\integer\n\n")
     if log:
-        iterate = tqdm(iterate, "Writing integer variables.", len(m.integers.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing integer variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for l in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = "x" + int_to_str(l)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        for label in df.labels.values:
+            batch.append(f"x{label}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
 def to_file(m, fn):
@@ -196,21 +254,22 @@ def to_file(m, fn):
     Write out a model to a lp or mps file.
     """
     fn = Path(m.get_problem_file(fn))
+    batch_size = 5000
 
     if fn.exists():
         fn.unlink()
 
     if fn.suffix == ".lp":
-        log = m._xCounter > 10000
+        log = m._xCounter > 10_000
 
         with open(fn, mode="w") as f:
             start = time.time()
 
-            objective_to_file(m, f, log)
-            constraints_to_file(m, f, log)
-            bounds_to_file(m, f, log)
-            binaries_to_file(m, f, log)
-            integers_to_file(m, f, log)
+            objective_to_file(m, f, log=log)
+            constraints_to_file(m, f, log=log, batch_size=batch_size)
+            bounds_to_file(m, f, log=log, batch_size=batch_size)
+            binaries_to_file(m, f, log=log, batch_size=batch_size)
+            integers_to_file(m, f, log=log, batch_size=batch_size)
             f.write("end\n")
 
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")

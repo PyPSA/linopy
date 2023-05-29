@@ -201,7 +201,7 @@ class MatrixAccessor:
     def vlabels(self):
         "Vector of labels of all non-missing variables."
         m = self._parent
-        return m.variabels.flat.labels.values
+        return m.variables.flat.labels.values
 
     @property
     def vtypes(self):
@@ -223,13 +223,13 @@ class MatrixAccessor:
     def lb(self):
         "Vector of lower bounds of all non-missing variables."
         m = self._parent
-        return m.variabels.flat.lower.values
+        return m.variables.flat.lower.values
 
     @property
     def ub(self):
         "Vector of upper bounds of all non-missing variables."
         m = self._parent
-        return m.variabels.flat.upper.values
+        return m.variables.flat.upper.values
 
     @property
     def clabels(self):
@@ -260,6 +260,6 @@ class MatrixAccessor:
         "Vector of objective coefficients of all non-missing variables."
         m = self._parent
         ds = m.objective.flat
-        res = np.zeros(m.xCounter)
+        res = np.zeros(m._xCounter)
         res[ds.vars] = ds.coeffs
         return res[self.vlabels]

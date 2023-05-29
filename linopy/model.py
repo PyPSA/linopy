@@ -431,7 +431,9 @@ class Model:
             else:
                 lower, upper = 0, 1
 
-        data = Dataset({"lower": as_dataarray(lower), "upper": as_dataarray(upper)})
+        data = Dataset(
+            {"lower": as_dataarray(lower, coords), "upper": as_dataarray(upper, coords)}
+        )
 
         if mask is not None:
             data = data.assign(mask=as_dataarray(mask).astype(bool))
@@ -523,33 +525,29 @@ class Model:
         if rhs is not None:
             rhs = as_dataarray(rhs)
 
-        data = None
-
-        if callable(lhs):
+        if isinstance(lhs, LinearExpression):
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = lhs.data.assign(sign=sign, rhs=rhs)
+        elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
             assert_sign_rhs_are_None(lhs, sign, rhs)
             data = Constraint.from_rule(self, rule, coords).data
-
-        if isinstance(lhs, AnonymousScalarConstraint):
+        elif isinstance(lhs, AnonymousScalarConstraint):
             assert_sign_rhs_are_None(lhs, sign, rhs)
             data = lhs.to_constraint().data
-
-        if isinstance(lhs, Constraint):
+        elif isinstance(lhs, Constraint):
             assert_sign_rhs_are_None(lhs, sign, rhs)
             data = lhs.data
-
-        if isinstance(lhs, (list, tuple)):
+        elif isinstance(lhs, (list, tuple)):
             assert_sign_rhs_not_None(lhs, sign, rhs)
             data = self.linexpr(*lhs).data
             data = data.assign(sign=sign, rhs=rhs)
-
-        if isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
+        elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
             assert_sign_rhs_not_None(lhs, sign, rhs)
             data = lhs.to_linexpr().data
             data = data.assign(sign=sign, rhs=rhs)
-
-        if data is None:
+        else:
             raise ValueError(
                 f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
             )

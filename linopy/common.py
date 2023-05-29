@@ -41,12 +41,12 @@ def _merge_inplace(self, attr, da, name, **kwargs):
     setattr(self, attr, ds)
 
 
-def as_dataarray(arr):
+def as_dataarray(arr, coords=None):
     """
     Convert an object to a DataArray if it is not already a DataArray.
     """
     if not isinstance(arr, DataArray):
-        return DataArray(arr)
+        return DataArray(arr, coords=coords)
     return arr
 
 
