@@ -28,26 +28,6 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-# IO functions
-def int_to_str(arr):
-    """
-    Convert numpy array to str typed array.
-    """
-    convert = np.frompyfunc(lambda i: "%i" % i, 1, 1)
-    return convert(arr)
-
-
-def float_to_str(arr, ensure_sign=True):
-    """
-    Convert numpy array to str typed array.
-    """
-    if ensure_sign:
-        convert = np.frompyfunc(lambda f: "%+.12g" % f, 1, 1)
-    else:
-        convert = np.frompyfunc(lambda f: "%.12g" % f, 1, 1)
-    return convert(arr)
-
-
 def fill_by(target_shape, where, fill, other=""):
     """
     Create array of `target_shape` with values from `fill` where `where` is
@@ -153,7 +133,7 @@ def bounds_to_file(m, f, log=False, batch_size=10000):
     """
     Write out variables of a model to a lp file.
     """
-    names = m.variables.continuous
+    names = list(m.variables.continuous) + list(m.variables.integers)
     if not len(list(names)):
         return
 
@@ -226,7 +206,7 @@ def integers_to_file(m, f, log=False, batch_size=1000):
     if not len(list(names)):
         return
 
-    f.write("\n\integer\n\n")
+    f.write("\n\ninteger\n\n")
     if log:
         names = tqdm(
             list(names),
@@ -354,12 +334,12 @@ def to_highspy(m):
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if len(m.binaries) + len(m.integers):
         vtypes = M.vtypes
         labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
         n = len(labels)
         h.changeColsIntegrality(n, labels, ones_like(labels))
-        if len(m.binaries.labels):
+        if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
             h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
@@ -512,25 +492,26 @@ def to_netcdf(m, *args, **kwargs):
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
     """
-    from linopy.expressions import LinearExpression
 
-    def get_and_rename(m, attr, prefix=""):
-        ds = getattr(m, attr)
-        if isinstance(ds, LinearExpression):
-            ds = ds.data
-        return ds.rename({v: prefix + attr + "-" + v for v in ds})
+    def with_prefix(ds, prefix):
+        ds = ds.rename({d: f"{prefix}-{d}" for d in [*ds.dims, *ds]})
+        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+        return ds
 
     vars = [
-        get_and_rename(m.variables, attr, "variables_")
-        for attr in m.variables.dataset_attrs
+        with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
     cons = [
-        get_and_rename(m.constraints, attr, "constraints_")
-        for attr in m.constraints.dataset_attrs
+        with_prefix(con.data, f"constraints-{name}")
+        for name, con in m.constraints.items()
     ]
-    others = [get_and_rename(m, d) for d in m.dataset_attrs + ["objective"]]
+    obj = [with_prefix(m.objective.data, "objective")]
+    params = [with_prefix(m.parameters, "params")]
+
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + others).assign_attrs(non_bool_dict(scalars))
+    ds = xr.merge(vars + cons + obj + params)
+    ds = ds.assign_attrs(scalars)
+    ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
         ds[k].attrs = non_bool_dict(ds[k].attrs)
@@ -553,28 +534,44 @@ def read_netcdf(path, **kwargs):
     -------
     m : linopy.Model
     """
-    from linopy.model import Constraints, LinearExpression, Model, Variables
+    from linopy.model import (
+        Constraint,
+        Constraints,
+        LinearExpression,
+        Model,
+        Variable,
+        Variables,
+    )
 
     m = Model()
-    all_ds = xr.load_dataset(path, **kwargs)
+    ds = xr.load_dataset(path, **kwargs)
 
-    def get_and_rename(ds, attr, prefix=""):
-        keys = [k for k in ds if k.startswith(prefix + attr + "-")]
-        return ds[keys].rename({k: k[len(prefix + attr) + 1 :] for k in keys})
+    def get_prefix(ds, prefix):
+        ds = ds[[k for k in ds if k.startswith(prefix)]]
+        ds = ds.rename({d: d.split(prefix + "-", 1)[1] for d in [*ds.dims, *ds]})
+        ds.attrs = {
+            k.split(prefix + "-", 1)[1]: v
+            for k, v in ds.attrs.items()
+            if k.startswith(prefix + "-")
+        }
+        return ds
 
-    attrs = Variables.dataset_attrs
-    kwargs = {attr: get_and_rename(all_ds, attr, "variables_") for attr in attrs}
-    m._variables = Variables(**kwargs, model=m)
+    vars = get_prefix(ds, "variables")
+    var_names = list(set([k.split("-", 1)[0] for k in vars]))
+    variables = {k: Variable(get_prefix(vars, k), m, k) for k in var_names}
+    m._variables = Variables(variables, m)
 
-    attrs = Constraints.dataset_attrs
-    kwargs = {attr: get_and_rename(all_ds, attr, "constraints_") for attr in attrs}
-    m._constraints = Constraints(**kwargs, model=m)
+    cons = get_prefix(ds, "constraints")
+    con_names = list(set([k.split("-", 1)[0] for k in cons]))
+    constraints = {k: Constraint(get_prefix(cons, k), m, k) for k in con_names}
+    m._constraints = Constraints(constraints, m)
 
-    for attr in m.dataset_attrs:
-        setattr(m, attr, get_and_rename(all_ds, attr))
-    m._objective = LinearExpression(get_and_rename(all_ds, "objective"), m)
+    objective = get_prefix(ds, "objective")
+    m._objective = LinearExpression(objective, m)
+
+    m._parameters = get_prefix(ds, "parameter")
 
     for k in m.scalar_attrs:
-        setattr(m, k, all_ds.attrs.pop(k))
+        setattr(m, k, ds.attrs.get(k))
 
     return m

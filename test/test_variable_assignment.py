@@ -114,13 +114,13 @@ def test_variable_assignment_different_coords():
 
     lower = pd.DataFrame(np.zeros((20, 10)))
     upper = pd.Series(np.ones((20)))
-    with pytest.warns(UserWarning):
-        m.add_variables(lower, upper, name="y")
+    m.add_variables(lower, upper, name="y")
 
-    assert m.variables.labels.y.shape == (10, 10)
-    # x should now be aligned to new coords and contain 100 nans
-    assert m.variables.labels.x.shape == (10, 10)
-    assert (m.variables.labels.x != -1).sum() == 100
+    with pytest.warns(UserWarning):
+        assert m.variables.labels.y.shape == (20, 10)
+        # x should now be aligned to new coords and contain 100 nans
+        assert m.variables.labels.x.shape == (20, 10)
+        assert (m.variables.labels.x != -1).sum() == 100
 
 
 def test_variable_assignment_non_broadcastable():

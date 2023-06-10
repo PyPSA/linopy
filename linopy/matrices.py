@@ -6,9 +6,17 @@ Created on Mon Oct 10 13:33:55 2022.
 @author: fabian
 """
 
+from functools import cached_property
+
 import numpy as np
 import pandas as pd
-import xarray as xr
+
+
+def create_vector(indices, values, fill_value=np.nan):
+    """Create a vector of a size equal to the maximum index plus one."""
+    vector = np.full(max(indices) + 1, fill_value)
+    vector[indices] = values
+    return vector
 
 
 def get_lower_bounds(m):
@@ -149,7 +157,7 @@ def get_sense(m, filter_missings=True):
     sense
         One-dimensional numpy array containing senses of all constraints.
     """
-    return m.constraints.flat.sign.astype(np.dtype("<U1"))
+    return m.constraints.flat.drop_duplicates("key").sign.astype(np.dtype("<U1"))
 
 
 def get_rhs(m):
@@ -164,10 +172,10 @@ def get_rhs(m):
 
     Returns
     -------
-    sense
+    rhs
         One-dimensional numpy array containing rhs of all constraints.
     """
-    return m.constraints.flat.rhs
+    return m.constraints.flat.drop_duplicates("key").rhs
 
 
 def get_constraint_labels(m):
@@ -186,7 +194,7 @@ def get_constraint_labels(m):
         One-dimensional numpy array containing labels of all constraints.
     """
     m.constraints.sanitize_missings()
-    return m.constraints.flat.labels
+    return m.constraints.flat.drop_duplicates("key").labels
 
 
 class MatrixAccessor:
@@ -197,16 +205,27 @@ class MatrixAccessor:
     def __init__(self, model):
         self._parent = model
 
+    @cached_property
+    def flat_vars(self):
+        m = self._parent
+        return m.variables.flat
+
+    @cached_property
+    def flat_cons(self):
+        m = self._parent
+        return m.constraints.flat
+
     @property
     def vlabels(self):
         "Vector of labels of all non-missing variables."
-        m = self._parent
-        return m.variables.flat.labels.values
+        df = self.flat_vars
+        return create_vector(df.key, df.labels, -1)
 
     @property
     def vtypes(self):
         "Vector of types of all non-missing variables."
         m = self._parent
+        df = self.flat_vars
         specs = []
         for name in m.variables:
             if name in m.binaries:
@@ -215,51 +234,54 @@ class MatrixAccessor:
                 val = "I"
             else:
                 val = "C"
-            specs.append(pd.Series(val, index=m.variables[name].flat.index))
+            specs.append(pd.Series(val, index=m.variables[name].flat.labels))
 
-        return pd.concat(specs, ignore_index=True)
+        ds = pd.concat(specs)
+        ds = df.set_index("key").labels.map(ds)
+        return create_vector(ds.index, ds.values, "")
 
     @property
     def lb(self):
         "Vector of lower bounds of all non-missing variables."
-        m = self._parent
-        return m.variables.flat.lower.values
+        df = self.flat_vars
+        return create_vector(df.key, df.lower)
 
     @property
     def ub(self):
         "Vector of upper bounds of all non-missing variables."
-        m = self._parent
-        return m.variables.flat.upper.values
+        df = self.flat_vars
+        return create_vector(df.key, df.upper)
 
     @property
     def clabels(self):
         "Vector of labels of all non-missing constraints."
-        m = self._parent
-        return m.constraints.flat.labels.values
+        df = self.flat_cons
+        return create_vector(df.key, df.labels, -1)
 
     @property
     def A(self):
         "Constraint matrix of all non-missing constraints and variables."
         m = self._parent
-        return m.constraints.to_matrix()
+        return m.constraints.to_matrix(filter_missings=False)[self.clabels][
+            :, self.vlabels
+        ]
 
     @property
     def sense(self):
         "Vector of senses of all non-missing constraints."
-        m = self._parent
-        return m.constraints.flat.sign.values
+        df = self.flat_cons
+        return create_vector(df.key, df.sign.astype(np.dtype("<U1")), "")
 
     @property
     def b(self):
         "Vector of right-hand-sides of all non-missing constraints."
-        m = self._parent
-        return m.constraints.flat.rhs.values
+        df = self.flat_cons
+        return create_vector(df.key, df.rhs)
 
     @property
     def c(self):
         "Vector of objective coefficients of all non-missing variables."
         m = self._parent
         ds = m.objective.flat
-        res = np.zeros(m._xCounter)
-        res[ds.vars] = ds.coeffs
-        return res[self.vlabels]
+        vars = ds.vars.map(self.flat_vars.set_index("labels").key)
+        return create_vector(vars, ds.coeffs, 0)

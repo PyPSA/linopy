@@ -7,10 +7,13 @@ This module contains commonly used functions.
 """
 
 from functools import partialmethod, update_wrapper, wraps
+from typing import Union
+from warnings import warn
 
 import numpy as np
 from numpy import arange, hstack
-from xarray import DataArray, apply_ufunc, merge
+from xarray import DataArray, Dataset, align, apply_ufunc, merge
+from xarray.core import indexing, utils
 
 from linopy.config import options
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
@@ -48,6 +51,19 @@ def as_dataarray(arr, coords=None):
     if not isinstance(arr, DataArray):
         return DataArray(arr, coords=coords)
     return arr
+
+
+def save_join(*dataarrays):
+    """
+    Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
+    """
+    try:
+        labels = align(*dataarrays, join="exact")
+    except ValueError:
+        warn("Coordinates across variables not equal. Perform outer join.", UserWarning)
+        labels = align(*dataarrays, join="outer")
+        labels = [ds.fillna(-1).astype(int) for ds in labels]
+    return Dataset({ds.name: ds for ds in labels})
 
 
 def _remap(array, mapping):
@@ -134,15 +150,24 @@ def print_coord(coord):
         return ""
 
 
-def print_single_variable(variable, name, coord, lower, upper):
-    if name in variable.model.variables._integer_variables:
-        bounds = "Z ⋂ " + f"[{lower},...,{upper}]"
-    elif name in variable.model.variables._binary_variables:
-        bounds = "{0, 1}"
-    else:
-        bounds = f"[{lower}, {upper}]"
+def print_single_variable(model, label):
+    if label == -1:
+        return "None"
 
-    return f"{name}{print_coord(coord)}", f"∈ {bounds}"
+    variables = model.variables
+    name, coord = variables.get_label_position(label)
+
+    lower = variables[name].lower.sel(coord).item()
+    upper = variables[name].upper.sel(coord).item()
+
+    if variables[name].attrs["binary"]:
+        bounds = " ∈ {0, 1}"
+    elif variables[name].attrs["integer"]:
+        bounds = f" ∈ Z ⋂ [{lower},...,{upper}]"
+    else:
+        bounds = f" ∈ [{lower}, {upper}]"
+
+    return f"{name}{print_coord(coord)}{bounds}"
 
 
 def print_single_expression(c, v, model):
@@ -231,3 +256,17 @@ def forward_as_properties(**routes):
         return cls
 
     return deco
+
+
+class LocIndexer:
+    __slots__ = ("object",)
+
+    def __init__(self, obj: Union["Variable", "LinearExpression", "Constraint"]):
+        self.object = obj
+
+    def __getitem__(self, key) -> Dataset:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.object.ndim)
+            key = dict(zip(self.object.dims, labels))
+        return self.object.sel(key)

@@ -39,19 +39,18 @@ def test_variables_assignment_with_merge():
     m.add_variables(upper)
 
     upper = pd.Series(np.ones((12)))
-    with pytest.warns(UserWarning):
-        m.add_variables(upper)
+    m.add_variables(upper)
 
-    assert m.variables.labels.var0[-1].item() != -1
+    with pytest.warns(UserWarning):
+        assert m.variables.labels.var0[-1].item() == -1
 
 
 def test_variables_assignment_with_reindex(m):
     shuffled_coords = [pd.Index([2, 1, 3, 4, 6, 5, 7, 9, 8, 0], name="first")]
+    m.add_variables(coords=shuffled_coords, name="a")
+
     with pytest.warns(UserWarning):
-        a = m.add_variables(coords=shuffled_coords, name="a")
-    assert a.indexes["first"].equals(m["x"].indexes["first"])
-    # check if labels are monotonically increasing
-    assert np.all(np.diff(np.ravel(a.labels)) > 0)
+        m.variables.labels
 
 
 def test_scalar_variables_name_counter():

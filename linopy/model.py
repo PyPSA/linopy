@@ -19,7 +19,13 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
+from linopy.common import (
+    as_dataarray,
+    best_int,
+    maybe_replace_signs,
+    replace_by_map,
+    save_join,
+)
 from linopy.constants import ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import LinearExpression, ScalarLinearExpression
@@ -102,8 +108,6 @@ class Model:
         self._objective = LinearExpression(None, self)
         self._parameters = Dataset()
 
-        self._solution = Dataset()
-        self._dual = Dataset()
         self._objective_value = nan
 
         self._status = "initialized"
@@ -164,22 +168,14 @@ class Model:
         """
         Solution calculated by the optimization.
         """
-        return self._solution
-
-    @solution.setter
-    def solution(self, value):
-        self._solution = Dataset(value)
+        return self.variables.solution
 
     @property
     def dual(self):
         """
         Dual values calculated by the optimization.
         """
-        return self._dual
-
-    @dual.setter
-    def dual(self, value):
-        self._dual = Dataset(value)
+        return self.constraints.dual
 
     @property
     def status(self):
@@ -270,7 +266,7 @@ class Model:
 
     @property
     def dataset_attrs(self):
-        return ["parameters", "solution", "dual"]
+        return ["parameters"]
 
     @property
     def scalar_attrs(self):
@@ -436,7 +432,7 @@ class Model:
         )
 
         if mask is not None:
-            data = data.assign(mask=as_dataarray(mask).astype(bool))
+            mask = as_dataarray(mask).astype(bool)
 
         labels = DataArray(-2, coords=data.coords)
 
@@ -448,7 +444,7 @@ class Model:
         self._xCounter += labels.size
 
         if mask is not None:
-            labels = labels.where(data.mask, -1)
+            labels = labels.where(mask, -1)
 
         data = data.assign(labels=labels).assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -541,12 +537,10 @@ class Model:
             data = lhs.data
         elif isinstance(lhs, (list, tuple)):
             assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = self.linexpr(*lhs).data
-            data = data.assign(sign=sign, rhs=rhs)
+            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
             assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.to_linexpr().data
-            data = data.assign(sign=sign, rhs=rhs)
+            data = lhs.to_linexpr().to_constraint(sign, rhs).data
         else:
             raise ValueError(
                 f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
@@ -558,7 +552,6 @@ class Model:
             assert set(mask.dims).issubset(
                 data.dims
             ), "Dimensions of mask not a subset of resulting labels dimensions."
-            data = data.assign(mask=mask)
 
         labels = DataArray(-1, coords=data.indexes)
 
@@ -570,7 +563,7 @@ class Model:
         self._cCounter += labels.size
 
         if mask is not None:
-            labels = labels.where(data.mask, -1)
+            labels = labels.where(mask, -1)
 
         data = data.assign(labels=labels).assign_attrs(
             label_range=(start, end), name=name
@@ -973,16 +966,18 @@ class Model:
             self.objective_value = solved.objective_value
             self.status = solved.status
             self.termination_condition = solved.termination_condition
-            self.solution = solved.solution
-            self.dual = solved.dual
+            for k, v in self.variables.items():
+                v.solution = solved.variables[k].solution
+            for k, c in self.constraints.items():
+                if "dual" in solved.constraints[k]:
+                    c.dual = solved.constraints[k].dual
             return self.status, self.termination_condition
 
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
-        self.solution = xr.Dataset()
-        self.dual = xr.Dataset()
+        self.reset_solution()
 
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
@@ -1032,22 +1027,22 @@ class Model:
         sol = result.solution.primal.copy()
         sol.loc[-1] = nan
 
-        for name, labels in self.variables.labels.items():
-            idx = np.ravel(labels)
-            vals = sol[idx].values.reshape(labels.shape)
-            self.solution[name] = xr.DataArray(vals, labels.coords)
+        for name, var in self.variables.items():
+            idx = np.ravel(var.labels)
+            vals = sol[idx].values.reshape(var.labels.shape)
+            var.solution = xr.DataArray(vals, var.coords)
 
         if not result.solution.dual.empty:
             dual = result.solution.dual.copy()
             dual.loc[-1] = nan
 
-            for name, labels in self.constraints.labels.items():
-                idx = np.ravel(labels)
+            for name, con in self.constraints.items():
+                idx = np.ravel(con.labels)
                 try:
-                    vals = dual[idx].values.reshape(labels.shape)
+                    vals = dual[idx].values.reshape(con.labels.shape)
                 except KeyError:
-                    vals = dual.reindex(idx).values.reshape(labels.shape)
-                self.dual[name] = xr.DataArray(vals, labels.coords)
+                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                con.dual = xr.DataArray(vals, con.labels.coords)
 
         return result.status.status.value, result.status.termination_condition.value
 
@@ -1083,6 +1078,13 @@ class Model:
             [k for (k, v) in (subset == -1).all().items() if v.item()]
         )
         return subset
+
+    def reset_solution(self):
+        """
+        Reset the solution and dual values if available of the model.
+        """
+        self.variables.reset_solution()
+        self.constraints.reset_dual()
 
     to_netcdf = to_netcdf
 

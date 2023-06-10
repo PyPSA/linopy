@@ -6,10 +6,11 @@ This module contains variable related definitions of the package.
 """
 
 import functools
-import re
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Sequence, Union
+from warnings import warn
 
 import dask
 import numpy as np
@@ -17,18 +18,21 @@ import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, align, broadcast, zeros_like
-from xarray.core import indexing, utils
 
 import linopy.expressions as expressions
 from linopy.common import (
-    align_lines_by_delimiter,
+    LocIndexer,
     forward_as_properties,
     generate_indices_for_printout,
     has_optimized_model,
     is_constant,
     print_coord,
+    print_single_variable,
+    save_join,
 )
 from linopy.config import options
+
+logger = logging.getLogger(__name__)
 
 
 def varwrap(method, *default_args, **new_default_kwargs):
@@ -118,7 +122,7 @@ class Variable:
     __slots__ = ("_data", "_model")
     __array_ufunc__ = None
 
-    _fill_value = -1
+    _fill_value = {"labels": -1, "lower": np.nan, "upper": np.nan}
 
     def __init__(self, data: Dataset, model: Any, name: str):
         """
@@ -171,7 +175,7 @@ class Variable:
 
     @property
     def loc(self):
-        return _LocIndexer(self)
+        return LocIndexer(self)
 
     def to_pandas(self):
         return self.labels.to_pandas()
@@ -191,32 +195,23 @@ class Variable:
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
         dim_sizes = list(self.data.sizes.values())
-        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        masked_entries = (~self.mask).sum().values
         lines = []
-
-        def domain(self, lower, upper):
-            if self.attrs["binary"]:
-                return "∈ {0, 1}"
-            elif self.attrs["integer"]:
-                return f"∈ Z ⋂ [{lower},...,{upper}]"
-            else:
-                return f"∈ [{lower}, {upper}]"
 
         if dims:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord_values = ", ".join(
-                        str(self.data[dims[i]].values[ind])
-                        for i, ind in enumerate(indices)
+                    coord = [
+                        self.data[dims[i]].values[ind] for i, ind in enumerate(indices)
+                    ]
+                    label = self.labels.values[indices]
+                    line = (
+                        print_coord(coord)
+                        + ": "
+                        + print_single_variable(self.model, label)
                     )
-                    if self.mask is None or self.mask.values[indices]:
-                        lower = self.lower.values[indices]
-                        upper = self.upper.values[indices]
-                        line = f"[{coord_values}]: {self.name}[{coord_values}] {domain(self, lower, upper)}"
-                    else:
-                        line = f"[{coord_values}]: None"
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
 
@@ -228,7 +223,7 @@ class Variable:
             )
         else:
             lines.append(
-                f"Variable\n{'-'*8}\n{self.name} {domain(self, self.lower.item(), self.upper.item())}"
+                f"Variable\n{'-'*8}\n{print_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -326,6 +321,9 @@ class Variable:
         raise NotImplementedError(
             "Inequalities only ever defined for >= rather than >."
         )
+
+    def __contains__(self, value):
+        return self.data.__contains__(value)
 
     def groupby(
         self,
@@ -503,7 +501,7 @@ class Variable:
         -------
         xr.DataArray
         """
-        return self.data.get("mask")
+        return (self.labels != self.fill_value["labels"]).astype(bool)
 
     @property
     def upper(self):
@@ -555,6 +553,25 @@ class Variable:
 
     @property
     @has_optimized_model
+    def solution(self):
+        """
+        Get the optimal values of the variable.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        return self.data["solution"]
+
+    @solution.setter
+    def solution(self, value):
+        """
+        Set the optimal values of the variable.
+        """
+        value = DataArray(value).broadcast_like(self.labels)
+        self.data["solution"] = value
+
+    @property
+    @has_optimized_model
     def sol(self):
         """
         Get the optimal values of the variable.
@@ -562,9 +579,11 @@ class Variable:
         The function raises an error in case no model is set as a
         reference or the model is not optimized.
         """
-        if self.model.status != "ok":
-            raise AttributeError("Underlying model not optimized.")
-        return self.model.solution[self.name]
+        warn(
+            "`Variable.sol` is deprecated. Use `Variable.solution` instead.",
+            DeprecationWarning,
+        )
+        return self.solution
 
     def to_dataframe(self):
         """
@@ -583,10 +602,15 @@ class Variable:
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
             df = ds.to_dataframe()
-        if "mask" in df:
-            mask = df.pop("mask")
-            df = df[mask]
-        return df[df.labels != -1]
+        df = df[df.labels != -1]
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Variable `{self.name}` contains nan's in field(s) {fields}"
+            )
+        return df
 
     @property
     def flat(self):
@@ -660,10 +684,12 @@ class Variable:
         linopy.Variable
         """
         if isinstance(other, Variable):
-            other = other.labels
+            other = other.data
         elif isinstance(other, ScalarVariable):
-            other = other.label
-        return self.__class__(self.labels.where(cond, other, **kwargs), self.model)
+            other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
+        return self.__class__(
+            self.data.where(cond, other, **kwargs), self.model, self.name
+        )
 
     def ffill(self, dim, limit=None):
         """
@@ -683,13 +709,13 @@ class Variable:
         -------
         linopy.Variable
         """
-        labels = (
-            self.labels.where(self.labels != -1)
+        data = (
+            self.data.where(self.labels != -1)
             .ffill(dim, limit=limit)
-            .fillna(-1)
-            .astype(int)
+            .fillna(self.fill_value)
         )
-        return self.__class__(labels, self.model)
+        data = data.assign(labels=data.labels.astype(int))
+        return self.__class__(data, self.model, self.name)
 
     def bfill(self, dim, limit=None):
         """
@@ -709,13 +735,13 @@ class Variable:
         -------
         linopy.Variable
         """
-        labels = (
-            self.labels.where(self.labels != -1)
+        data = (
+            self.data.where(self.labels != -1)
             .bfill(dim, limit=limit)
-            .fillna(-1)
-            .astype(int)
+            .fillna(self.fill_value)
         )
-        return self.__class__(labels, self.model)
+        data = data.assign(labels=data.labels.astype(int))
+        return self.__class__(data, self.model, self.name)
 
     def sanitize(self):
         """
@@ -726,7 +752,8 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            return self.__class__(self.labels.fillna(-1).astype(int), self.model)
+            data = self.data.assign(labels=self.labels.fillna(-1).astype(int))
+            return self.__class__(data, self.model, self.name)
         return self
 
     def equals(self, other):
@@ -741,7 +768,7 @@ class Variable:
 
     compute = varwrap(Dataset.compute)
 
-    drop = varwrap(Dataset.drop)
+    # drop = varwrap(Dataset.drop)
 
     drop_sel = varwrap(Dataset.drop_sel)
 
@@ -753,25 +780,11 @@ class Variable:
 
     isel = varwrap(Dataset.isel)
 
-    shift = varwrap(Dataset.shift, fill_value=-1)
+    shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
     rename = varwrap(Dataset.rename)
 
     roll = varwrap(Dataset.roll)
-
-
-class _LocIndexer:
-    __slots__ = ("variable",)
-
-    def __init__(self, variable: Variable):
-        self.variable = variable
-
-    def __getitem__(self, key) -> Dataset:
-        if not utils.is_dict_like(key):
-            # expand the indexer so we can handle Ellipsis
-            labels = indexing.expanded_indexer(key, self.variable.ndim)
-            key = dict(zip(self.variable.dims, labels))
-        return self.variable.sel(key)
 
 
 @dataclass(repr=False)
@@ -825,6 +838,9 @@ class Variables:
             r += "<empty>"
         return r
 
+    def __len__(self):
+        return self.variables.__len__()
+
     def __iter__(self):
         return self.variables.__iter__()
 
@@ -858,21 +874,21 @@ class Variables:
         """
         Get the labels of all variables.
         """
-        return Dataset({name: var.labels for name, var in self.variables.items()})
+        return save_join(*[v.labels.rename(k) for k, v in self.items()])
 
     @property
     def lower(self):
         """
         Get the lower bounds of all variables.
         """
-        return Dataset({name: var.lower for name, var in self.variables.items()})
+        return save_join(*[v.lower.rename(k) for k, v in self.items()])
 
     @property
     def upper(self):
         """
         Get the upper bounds of all variables.
         """
-        return Dataset({name: var.upper for name, var in self.variables.items()})
+        return save_join(*[v.upper.rename(k) for k, v in self.items()])
 
     @property
     def nvars(self):
@@ -911,6 +927,13 @@ class Variables:
         ]
         return self[keys]
 
+    @property
+    def solution(self):
+        """
+        Get the solution of variables.
+        """
+        return save_join(*[v.solution.rename(k) for k, v in self.items()])
+
     def get_name_by_label(self, label):
         """
         Get the variable name of the variable containing the passed label.
@@ -931,7 +954,7 @@ class Variables:
         name : str
             Name of the containing variable.
         """
-        if not isinstance(label, (float, int)) or label < 0:
+        if not isinstance(label, (float, int, np.integer)) or label < 0:
             raise ValueError("Label must be a positive number.")
         for name, labels in self.labels.items():
             if label in labels:
@@ -955,8 +978,9 @@ class Variables:
             return_list = False
 
         for value in values:
-            for name, labels in self.labels.items():
-                start, stop = self.get_label_range(name)
+            for name, var in self.items():
+                labels = var.labels
+                start, stop = var.range
 
                 if value >= start and value < stop:
                     index = np.unravel_index(value - start, labels.shape)
@@ -972,6 +996,7 @@ class Variables:
 
         return coords if return_list else coords[0]
 
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, filter_missings=False):
         """
         Create an generator which iterates over all arrays in `key` and
@@ -1015,6 +1040,7 @@ class Variables:
                 flat = broadcasted.data.ravel()
             yield flat
 
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def ravel(self, key, filter_missings=False, compute=True):
         """
         Ravel and concate all arrays in `key` while aligning to
@@ -1071,6 +1097,14 @@ class Variables:
         """
         return self.to_dataframe()
 
+    def reset_solution(self):
+        """
+        Reset the stored solution of variables.
+        """
+        for k, v in self.items():
+            if "solution" in v:
+                v._data = v.data.drop_vars("solution")
+
     def get_blocks(self, blocks: DataArray):
         """
         Get a dataset of same shape as variables.labels indicating the blocks.
@@ -1124,6 +1158,22 @@ class ScalarVariable:
         Get the label of the variable.
         """
         return self._label
+
+    @property
+    def lower(self):
+        """
+        Get the lower bound of the variable.
+        """
+        name, position = self.model.variables.get_label_position(self.label)
+        return self.model.variables[name].lower.sel(position).item()
+
+    @property
+    def upper(self):
+        """
+        Get the upper bound of the variable.
+        """
+        name, position = self.model.variables.get_label_position(self.label)
+        return self.model.variables[name].upper.sel(position).item()
 
     @property
     def model(self):

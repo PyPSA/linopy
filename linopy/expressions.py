@@ -22,8 +22,9 @@ from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 
-from linopy import constraints, variables
+from linopy import constraints, expressions, variables
 from linopy.common import (
+    LocIndexer,
     as_dataarray,
     forward_as_properties,
     generate_indices_for_printout,
@@ -185,7 +186,8 @@ class LinearExpression:
             data["vars"] = data.vars.fillna(-1).astype(int)
 
         (data,) = xr.broadcast(data)
-        data = data.transpose(..., term_dim)
+        # transpose with new Dataset to really ensure correct order
+        data = Dataset(data.transpose(..., term_dim))
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -317,16 +319,13 @@ class LinearExpression:
         return self.__div__(other)
 
     def __le__(self, rhs):
-        data = self.data.assign(sign=LESS_EQUAL, rhs=rhs)
-        return constraints.Constraint(data, model=self.model)
+        return self.to_constraint(LESS_EQUAL, rhs)
 
     def __ge__(self, rhs):
-        data = self.data.assign(sign=GREATER_EQUAL, rhs=rhs)
-        return constraints.Constraint(data, model=self.model)
+        return self.to_constraint(GREATER_EQUAL, rhs)
 
     def __eq__(self, rhs):
-        data = self.data.assign(sign=EQUAL, rhs=rhs)
-        return constraints.Constraint(data, model=self.model)
+        return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other):
         raise NotImplementedError(
@@ -344,6 +343,24 @@ class LinearExpression:
         Convert the expression to a xarray.Dataset.
         """
         return self.data
+
+    def to_constraint(self, sign, rhs):
+        if isinstance(
+            rhs,
+            (
+                variables.Variable,
+                variables.ScalarVariable,
+                expressions.LinearExpression,
+            ),
+        ):
+            raise TypeError(f"Expected numeric type for rhs, got {type(rhs)}")
+        # TODO: check that sign is valid
+        data = self.data.assign(sign=sign, rhs=rhs)
+        return constraints.Constraint(data, model=self.model)
+
+    @property
+    def loc(self):
+        return LocIndexer(self)
 
     @classmethod
     @property
@@ -504,7 +521,7 @@ class LinearExpression:
                     if dim not in c.coords:
                         c = c.assign_coords(**{dim: pd.RangeIndex(c.shape[i])})
 
-            ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
+            ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term", -1)
             expr = cls(ds, model)
             exprs.append(expr)
 
@@ -883,6 +900,14 @@ class LinearExpression:
         df = df[(df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         df = df.groupby("vars", as_index=False).sum()
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Expression `{self.name}` contains nan's in field(s) {fields}"
+            )
+
         return df
 
     @property

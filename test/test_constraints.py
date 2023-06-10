@@ -96,14 +96,10 @@ def test_constraint_assignment_with_reindex():
 
     m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
-    shuffled_coords = pd.Index([2, 1, 3, 4, 6, 5, 7, 9, 8, 0], name="first")
-    con = m.variables["x"].loc[shuffled_coords] <= 10
-    with pytest.warns(UserWarning):
-        con_shuffled = m.add_constraints(con, name="con_shuffled")
+    shuffled_coords = [2, 1, 3, 4, 6, 5, 7, 9, 8, 0]
 
-    assert con_shuffled.indexes["dim_0"].equals(m.constraints["con0"].indexes["dim_0"])
-    # check if labels are monotonically increasing
-    assert np.all(np.diff(np.ravel(con_shuffled.labels)) > 0)
+    con = x.loc[shuffled_coords] + y >= 10
+    assert (con.coords["dim_0"].values == shuffled_coords).all()
 
 
 def test_wrong_constraint_assignment_repeated():

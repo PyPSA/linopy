@@ -23,6 +23,7 @@ from xarray import DataArray, Dataset
 
 from linopy import expressions, variables
 from linopy.common import (
+    LocIndexer,
     _merge_inplace,
     align_lines_by_delimiter,
     dictsel,
@@ -35,6 +36,7 @@ from linopy.common import (
     print_coord,
     print_single_expression,
     replace_by_map,
+    save_join,
 )
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, SIGNS_pretty
@@ -46,7 +48,7 @@ def conwrap(method, *default_args, **new_default_kwargs):
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return con.__class__(
-            method(con.labels, *default_args, *args, **kwargs), con.model, con.name
+            method(con.data, *default_args, *args, **kwargs), con.model, con.name
         )
 
     _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
@@ -58,7 +60,7 @@ def conwrap(method, *default_args, **new_default_kwargs):
 
 def _con_unwrap(con):
     if isinstance(con, Constraint):
-        return con.labels
+        return con.data
     return con
 
 
@@ -103,12 +105,6 @@ class Constraint:
         if not isinstance(data, Dataset):
             raise ValueError(f"data must be a Dataset, got {type(data)}")
 
-        # check whether constraint is already assigned
-        if "labels" not in data:
-            self._assigned = False
-        else:
-            self._assigned = True
-
         if not isinstance(model, Model):
             raise ValueError(f"model must be a Model, got {type(model)}")
 
@@ -119,8 +115,8 @@ class Constraint:
 
         data = data.assign_attrs(name=name)
 
-        # TODO: check whether broadcasting should be done here
-        data = data.rename({"_term": f"{name}_term"})
+        if "_term" in data.dims:
+            data = data.rename({"_term": f"{name}_term"})
         (data,) = xr.broadcast(data, exclude=[f"{name}_term"])
 
         self._data = data
@@ -156,7 +152,7 @@ class Constraint:
 
     @property
     def is_assigned(self):
-        return self._assigned
+        return "labels" in self.data
 
     def __repr__(self):
         """
@@ -208,6 +204,9 @@ class Constraint:
 
         return "\n".join(lines)
 
+    def __contains__(self, value):
+        return self.data.__contains__(value)
+
     @deprecated(details="Use the `labels` property instead of `to_array`")
     def to_array(self):
         """
@@ -257,6 +256,7 @@ class Constraint:
     def coeffs(self, value):
         term_dim = self.name + "_term"
         value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
+        self._data = self.data.assign(coeffs=value)
         self.data["coeffs"] = value
 
     @property
@@ -296,9 +296,12 @@ class Constraint:
         if not isinstance(value, expressions.LinearExpression):
             raise TypeError("Assigned lhs must be a LinearExpression.")
 
-        value = value.rename(_term=self.name + "_term")
-        self.coeffs = value.coeffs
-        self.vars = value.vars
+        # TODO: check if the expression coords is compatible with the constraint
+        self._data = (
+            self.data.drop_vars(["coeffs", "vars"])
+            .assign(coeffs=value.coeffs, vars=value.vars)
+            .rename(_term=self.name + "_term")
+        )
 
     @property
     def sign(self):
@@ -343,11 +346,19 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference or the model status is not okay.
         """
-        if not list(self.model.dual):
+        if not "dual" in self.data:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
-        return self.model.dual[self.name]
+        return self.data["dual"]
+
+    @dual.setter
+    def dual(self, value):
+        """
+        Get the dual values of the constraint.
+        """
+        value = DataArray(value).broadcast_like(self.labels)
+        self.data["dual"] = value
 
     @property
     def shape(self):
@@ -386,7 +397,7 @@ class Constraint:
 
         Examples
         --------
-        >>> from linopy import Model, LinearExpression
+        >>> from linopy import Model, LinearExpression, Constraint
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> x = m.add_variables(0, 100, coords)
@@ -420,7 +431,8 @@ class Constraint:
         )
         sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
-        return cls(lhs, sign, rhs)
+        data = lhs.data.assign(sign=sign, rhs=rhs)
+        return cls(data, model=model)
 
     def to_dataframe(self):
         """
@@ -429,16 +441,6 @@ class Constraint:
         The resulting DataFrame represents a long table format of the all
         non-masked constraints with non-zero coefficients. It contains the
         columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
-
-        # Parameters
-        # ----------
-        # keys : list of str, optional
-        #     Specify which datafieds should be contained in the dataframe.
-        #     Note that all dataframes will be broadcasted to the array with the
-        #     biggest shape before added to the dataframe. That means if
-        #     `coeffs` and `vars` are included, the other fields will have repeated
-        #     values.
-        #     Default is None which leads to the full set of columns.
 
         Returns
         -------
@@ -454,13 +456,17 @@ class Constraint:
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
             df = ds.to_dataframe()
-        if "mask" in df:
-            mask = df.pop("mask")
-            df = df[mask]
         df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Constraint `{self.name}` contains nan's in field(s) {fields}"
+            )
         return df
 
     @property
@@ -526,6 +532,9 @@ class Constraints:
         except KeyError:
             raise AttributeError(f"Constraint {name} not found.")
 
+    def __len__(self):
+        return self.constraints.__len__()
+
     def __iter__(self):
         return self.constraints.__iter__()
 
@@ -555,39 +564,50 @@ class Constraints:
         self.constraints.pop(name)
 
     @property
+    def loc(self):
+        return LocIndexer(self)
+
+    @property
     def labels(self):
         """
         Get the labels of all constraints.
         """
-        return Dataset({name: con.labels for name, con in self.items()})
+        return save_join(*[v.labels.rename(k) for k, v in self.items()])
 
     @property
     def coeffs(self):
         """
         Get the coefficients of all constraints.
         """
-        return Dataset({name: con.coeffs for name, con in self.items()})
+        return save_join(*[v.coeffs.rename(k) for k, v in self.items()])
 
     @property
     def vars(self):
         """
         Get the variables of all constraints.
         """
-        return Dataset({name: con.vars for name, con in self.items()})
+        return save_join(*[v.vars.rename(k) for k, v in self.items()])
 
     @property
     def sign(self):
         """
         Get the signs of all constraints.
         """
-        return Dataset({name: con.sign for name, con in self.items()})
+        return save_join(*[v.sign.rename(k) for k, v in self.items()])
 
     @property
     def rhs(self):
         """
         Get the right-hand-side constants of all constraints.
         """
-        return Dataset({name: con.rhs for name, con in self.items()})
+        return save_join(*[v.rhs.rename(k) for k, v in self.items()])
+
+    @property
+    def dual(self):
+        """
+        Get the dual values of all constraints.
+        """
+        return save_join(*[v.dual.rename(k) for k, v in self.items()])
 
     @property
     def coefficientrange(self):
@@ -704,6 +724,7 @@ class Constraints:
         self.var_blocks = var_blocks
         return self.blocks
 
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
         """
         Create an generator which iterates over all arrays in `key` and
@@ -763,6 +784,7 @@ class Constraints:
                 flat = broadcasted.data.ravel()
             yield flat
 
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
         """
         Ravel and concate all arrays in `key` while aligning to
@@ -840,6 +862,14 @@ class Constraints:
             shape = (self.model._cCounter, self.model._xCounter)
             return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
 
+    def reset_dual(self):
+        """
+        Reset the stored solution of variables.
+        """
+        for k, c in self.items():
+            if "dual" in c:
+                c._data = c.data.drop_vars("dual")
+
 
 # define AnonymousConstraint for backwards compatibility
 class AnonymousConstraint(Constraint):
@@ -914,7 +944,7 @@ class AnonymousScalarConstraint:
 
     def to_constraint(self):
         data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
-        return Constraint(data=data)
+        return Constraint(data=data, model=self.lhs.model)
 
     @deprecated(details="Use to_constraint instead.")
     def to_anonymous_constraint(self):
