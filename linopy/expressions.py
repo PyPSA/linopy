@@ -337,13 +337,6 @@ class LinearExpression:
             "Inequalities only ever defined for >= rather than >."
         )
 
-    @deprecated(details="Use the `data` property instead of `to_dataset`")
-    def to_dataset(self):
-        """
-        Convert the expression to a xarray.Dataset.
-        """
-        return self.data
-
     def to_constraint(self, sign, rhs):
         if isinstance(
             rhs,
@@ -696,35 +689,6 @@ class LinearExpression:
         )
         return LinearExpressionGroupby(groups, model=self.model)
 
-    @deprecated("0.1.0", "0.1.2", details="Use groupby (followed by sum) instead.")
-    def groupby_sum(self, group):
-        """
-        Sum expression over groups.
-
-        The function works in the same manner as the xarray.Dataset.groupby
-        function, but automatically sums over all terms.
-
-        Parameters
-        ----------
-        group : DataArray or IndexVariable
-            Array whose unique values should be used to group the expressions.
-
-        Returns
-        -------
-        Grouped linear expression.
-        """
-        if isinstance(group, pd.Series):
-            logger.info("Converting group pandas.Series to xarray.DataArray")
-            group = group.to_xarray()
-        groups = xr.Dataset.groupby(self.data, group)
-
-        def func(ds):
-            ds = self._sum(ds, groups._group_dim)
-            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
-            return ds
-
-        return self.__class__(groups.map(func), self.model)  # .reset_index('_term')
-
     def rolling(
         self,
         dim: "Mapping[Any, int]" = None,
@@ -761,38 +725,6 @@ class LinearExpression:
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
         return LinearExpressionRolling(rolling, model=self.model)
-
-    @deprecated("0.1.0", "0.1.2", details="Use rolling (followed by sum) instead.")
-    def rolling_sum(self, **kwargs):
-        """
-        Rolling sum of the linear expression.
-
-        Parameters
-        ----------
-        **kwargs :
-            Keyword arguments passed to ``xarray.Dataset.rolling``.
-
-        Returns
-        -------
-        linopy.LinearExpression
-        """
-        coeffs = xr.DataArray.rolling(self.coeffs, **kwargs).construct(
-            "_rolling_term", keep_attrs=True
-        )
-
-        vars = xr.DataArray.rolling(self.vars, **kwargs).construct(
-            "_rolling_term",
-            fill_value=self._fill_value["vars"],
-            keep_attrs=True,
-        )
-
-        ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
-        ds = (
-            ds.rename(_term="_stacked_term")
-            .stack(_term=["_stacked_term", "_rolling_term"])
-            .reset_index("_term", drop=True)
-        )
-        return self.__class__(ds, self.model).assign_attrs(self.attrs)
 
     @property
     def nterm(self):

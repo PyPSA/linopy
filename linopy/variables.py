@@ -366,24 +366,6 @@ class Variable:
             group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
         )
 
-    def groupby_sum(self, group):
-        """
-        Sum variable over groups.
-
-        The function works in the same manner as the xarray.Dataset.groupby
-        function, but automatically sums over all terms.
-
-        Parameters
-        ----------
-        group : DataArray or IndexVariable
-            Array whose unique values should be used to group the expressions.
-
-        Returns
-        -------
-        Grouped linear expression.
-        """
-        return self.to_linexpr().groupby_sum(group)
-
     def rolling(
         self,
         dim: "Mapping[Any, int]" = None,
@@ -418,21 +400,6 @@ class Variable:
         return self.to_linexpr().rolling(
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
-
-    def rolling_sum(self, **kwargs):
-        """
-        Rolling sum of variable.
-
-        Parameters
-        ----------
-        **kwargs :
-            Keyword arguments passed to xarray.DataArray.rolling.
-
-        Returns
-        -------
-        Rolling sum of variable.
-        """
-        return self.to_linexpr().rolling_sum(**kwargs)
 
     @property
     def name(self):

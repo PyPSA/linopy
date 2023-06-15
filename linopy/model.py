@@ -807,22 +807,6 @@ class Model:
         else:
             raise TypeError(f"Not supported type {args}.")
 
-    def vareval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "vareval was removed in version `v0.1.0`. Please use m.add_variables() instead."
-        )
-
-    def lineval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "lineval was removed in version `v0.1.0`. Please use arithmetic expressions instead."
-        )
-
-    def coneval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "coneval was removed in version `v0.1.0`. Please use arithmetic "
-            "expressions and m.add_constraints() instead."
-        )
-
     @property
     def coefficientrange(self):
         """

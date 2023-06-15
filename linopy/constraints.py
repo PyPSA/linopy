@@ -207,13 +207,6 @@ class Constraint:
     def __contains__(self, value):
         return self.data.__contains__(value)
 
-    @deprecated(details="Use the `labels` property instead of `to_array`")
-    def to_array(self):
-        """
-        Convert the variable array to a xarray.DataArray.
-        """
-        return self.labels
-
     @property
     def type(self):
         """
