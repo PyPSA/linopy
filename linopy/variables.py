@@ -591,7 +591,8 @@ class Variable:
         )
         return self.solution
 
-    def to_dataframe(self):
+    @property
+    def flat(self):
         """
         Convert the variable to a pandas DataFrame.
 
@@ -617,15 +618,6 @@ class Variable:
                 f"Variable `{self.name}` contains nan's in field(s) {fields}"
             )
         return df
-
-    @property
-    def flat(self):
-        """
-        Return the variable as a flat pandas DataFrame.
-
-        This property is a shortcut for ``to_dataframe()``.
-        """
-        return self.to_dataframe()
 
     def sum(self, dims=None):
         """
@@ -717,6 +709,7 @@ class Variable:
         """
         data = (
             self.data.where(self.labels != -1)
+            # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
             .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
         )
@@ -743,8 +736,9 @@ class Variable:
         """
         data = (
             self.data.where(self.labels != -1)
-            # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
+            # .bfill(dim, limit=limit)
+            # breaks with Dataset.bfill, use map instead
+            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self.fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -807,7 +801,7 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    variables: Dict[str, Variable] = field(default_factory=dict)
+    data: Dict[str, Variable] = field(default_factory=dict)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "lower", "upper"]
@@ -817,17 +811,18 @@ class Variables:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
         if isinstance(names, str):
-            return self.variables[names]
+            return self.data[names]
 
-        return self.__class__(
-            {name: self.variables[name] for name in names}, self.model
-        )
+        return self.__class__({name: self.data[name] for name in names}, self.model)
 
-    def __getattr__(self, name: str) -> Variable:
-        try:
-            return self.variables[name]
-        except KeyError:
-            raise AttributeError(f"Variable {name} not found.")
+    def __getattr__(self, name: str):
+        # If name is an attribute of self (including methods and properties), return that
+        if name in self.data:
+            return self.data[name]
+        else:
+            raise AttributeError(
+                f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
+            )
 
     def __repr__(self):
         """
@@ -845,13 +840,13 @@ class Variables:
         return r
 
     def __len__(self):
-        return self.variables.__len__()
+        return self.data.__len__()
 
     def __iter__(self):
-        return self.variables.__iter__()
+        return self.data.__iter__()
 
     def items(self):
-        return self.variables.items()
+        return self.data.items()
 
     def _ipython_key_completions_(self):
         """
@@ -867,13 +862,13 @@ class Variables:
         """
         Add a variable to the variables container.
         """
-        self.variables[variable.name] = variable
+        self.data[variable.name] = variable
 
     def remove(self, name):
         """
         Remove variable `name` from the variables.
         """
-        self.variables.pop(name)
+        self.data.pop(name)
 
     @property
     def labels(self):
@@ -1077,7 +1072,8 @@ class Variables:
         else:
             return res
 
-    def to_dataframe(self) -> pd.DataFrame:
+    @property
+    def flat(self) -> pd.DataFrame:
         """
         Convert all variables to a single pandas Dataframe.
 
@@ -1088,20 +1084,11 @@ class Variables:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
         df["key"] = df.labels.map(map_labels)
         return df
-
-    @property
-    def flat(self):
-        """
-        Return the variables as a flat pandas DataFrame.
-
-        This property is a shortcut for ``to_dataframe()``.
-        """
-        return self.to_dataframe()
 
     def reset_solution(self):
         """

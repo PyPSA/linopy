@@ -163,9 +163,9 @@ def print_single_variable(model, label):
     if variables[name].attrs["binary"]:
         bounds = " ∈ {0, 1}"
     elif variables[name].attrs["integer"]:
-        bounds = f" ∈ Z ⋂ [{lower},...,{upper}]"
+        bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
     else:
-        bounds = f" ∈ [{lower}, {upper}]"
+        bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
 
     return f"{name}{print_coord(coord)}{bounds}"
 
@@ -184,10 +184,10 @@ def print_single_expression(c, v, model):
             coord_string = print_coord(coord)
             if i:
                 # split sign and coefficient
-                coeff_string = f"{float(coeff):+.4}"
+                coeff_string = f"{float(coeff):+.4g}"
                 res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
             else:
-                res.append(f"{float(coeff):.4} {name}{coord_string}")
+                res.append(f"{float(coeff):+.4g} {name}{coord_string}")
         return " ".join(res) if len(res) else "None"
 
     if isinstance(c, np.ndarray):

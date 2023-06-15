@@ -873,7 +873,8 @@ class LinearExpression:
     def __iter__(self):
         return self.data.__iter__()
 
-    def to_dataframe(self):
+    @property
+    def flat(self) -> pd.DataFrame:
         """
         Convert the expression to a pandas DataFrame.
 
@@ -909,15 +910,6 @@ class LinearExpression:
             )
 
         return df
-
-    @property
-    def flat(self):
-        """
-        Return the expression as a flat pandas DataFrame.
-
-        This property is a shortcut for ``to_dataframe()``.
-        """
-        return self.to_dataframe()
 
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)

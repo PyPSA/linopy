@@ -434,7 +434,8 @@ class Constraint:
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
 
-    def to_dataframe(self):
+    @property
+    def flat(self):
         """
         Convert the constraint to a pandas DataFrame.
 
@@ -469,15 +470,6 @@ class Constraint:
             )
         return df
 
-    @property
-    def flat(self):
-        """
-        Return the constraint as a flat pandas DataFrame.
-
-        This property is a shortcut for ``to_dataframe()``.
-        """
-        return self.to_dataframe()
-
     sel = conwrap(Dataset.sel)
 
     isel = conwrap(Dataset.isel)
@@ -489,7 +481,7 @@ class Constraints:
     A constraint container used for storing multiple constraint arrays.
     """
 
-    constraints: Dict[str, Constraint] = field(default_factory=dict)
+    data: Dict[str, Constraint] = field(default_factory=dict)
     model: Any = None  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
@@ -520,26 +512,27 @@ class Constraints:
         self, names: Union[str, Sequence[str]]
     ) -> Union[Constraint, "Constraints"]:
         if isinstance(names, str):
-            return self.constraints[names]
+            return self.data[names]
 
-        return self.__class__(
-            {name: self.constraints[name] for name in names}, self.model
-        )
+        return self.__class__({name: self.data[name] for name in names}, self.model)
 
-    def __getattr__(self, name: str) -> Constraint:
-        try:
-            return self.constraints[name]
-        except KeyError:
-            raise AttributeError(f"Constraint {name} not found.")
+    def __getattr__(self, name: str):
+        # If name is an attribute of self (including methods and properties), return that
+        if name in self.data:
+            return self.data[name]
+        else:
+            raise AttributeError(
+                f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
+            )
 
     def __len__(self):
-        return self.constraints.__len__()
+        return self.data.__len__()
 
     def __iter__(self):
-        return self.constraints.__iter__()
+        return self.data.__iter__()
 
     def items(self):
-        return self.constraints.items()
+        return self.data.items()
 
     def _ipython_key_completions_(self):
         """
@@ -555,13 +548,13 @@ class Constraints:
         """
         Add a constraint to the constraints constrainer.
         """
-        self.constraints[constraint.name] = constraint
+        self.data[constraint.name] = constraint
 
     def remove(self, name):
         """
         Remove constraint `name` from the constraints.
         """
-        self.constraints.pop(name)
+        self.data.pop(name)
 
     @property
     def loc(self):
@@ -819,7 +812,8 @@ class Constraints:
         else:
             return res
 
-    def to_dataframe(self) -> pd.DataFrame:
+    @property
+    def flat(self) -> pd.DataFrame:
         """
         Convert all constraint to a single pandas Dataframe.
 
@@ -830,20 +824,11 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].to_dataframe() for k in self], ignore_index=True)
+        df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
         df["key"] = df.labels.map(map_labels)
         return df
-
-    @property
-    def flat(self):
-        """
-        Return the constraints as a flat pandas DataFrame.
-
-        This property is a shortcut for ``to_dataframe()``.
-        """
-        return self.to_dataframe()
 
     def to_matrix(self, filter_missings=True):
         """
@@ -854,7 +839,7 @@ class Constraints:
 
         # TODO: rename "filter_missings" to "~labels_as_coordinates"
         """
-        cons = self.to_dataframe()
+        cons = self.flat
 
         if filter_missings:
             vars = self.model.variables.flat
