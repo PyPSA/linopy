@@ -92,6 +92,8 @@ def constraints_to_file(m, f, log=False, batch_size=50000):
         sign = df.sign.values
 
         len_df = len(df)  # compute length once
+        if not len_df:
+            continue
 
         # write out the start to enable a fast loop afterwards
         idx = 0

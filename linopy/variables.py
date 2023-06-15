@@ -150,6 +150,12 @@ class Variable:
 
         data = data.assign_attrs(name=name)
         (data,) = broadcast(data)
+        for attr in (
+            "lower",
+            "upper",
+        ):  # convert to float, important for  operations like "shift"
+            if not issubdtype(data[attr].dtype, floating):
+                data[attr] = data[attr].astype(float)
 
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
@@ -711,8 +717,8 @@ class Variable:
         """
         data = (
             self.data.where(self.labels != -1)
-            .ffill(dim, limit=limit)
-            .fillna(self.fill_value)
+            # breaks with Dataset.ffill, use map instead
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -737,8 +743,8 @@ class Variable:
         """
         data = (
             self.data.where(self.labels != -1)
-            .bfill(dim, limit=limit)
-            .fillna(self.fill_value)
+            # breaks with Dataset.ffill, use map instead
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)

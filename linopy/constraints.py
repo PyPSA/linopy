@@ -607,7 +607,10 @@ class Constraints:
         """
         Get the dual values of all constraints.
         """
-        return save_join(*[v.dual.rename(k) for k, v in self.items()])
+        try:
+            return save_join(*[v.dual.rename(k) for k, v in self.items()])
+        except AttributeError:
+            return Dataset()
 
     @property
     def coefficientrange(self):
