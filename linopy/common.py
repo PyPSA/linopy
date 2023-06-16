@@ -261,7 +261,7 @@ def forward_as_properties(**routes):
 class LocIndexer:
     __slots__ = ("object",)
 
-    def __init__(self, obj: Union["Variable", "LinearExpression", "Constraint"]):
+    def __init__(self, obj):
         self.object = obj
 
     def __getitem__(self, key) -> Dataset:
