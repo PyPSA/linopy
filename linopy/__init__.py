@@ -12,6 +12,7 @@ import linopy.monkey_patch_xarray
 from linopy import model, remote
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.constraints import Constraint
 from linopy.expressions import merge
 from linopy.io import read_netcdf
 from linopy.model import LinearExpression, Model, Variable, available_solvers

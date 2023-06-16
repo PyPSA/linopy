@@ -7,10 +7,13 @@ This module contains commonly used functions.
 """
 
 from functools import partialmethod, update_wrapper, wraps
+from typing import Union
+from warnings import warn
 
 import numpy as np
 from numpy import arange, hstack
-from xarray import DataArray, apply_ufunc, merge
+from xarray import DataArray, Dataset, align, apply_ufunc, merge
+from xarray.core import indexing, utils
 
 from linopy.config import options
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
@@ -30,24 +33,26 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def _merge_inplace(self, attr, da, name, **kwargs):
-    """
-    Assign a new dataarray to the dataset `attr` by merging.
-
-    This takes care of all coordinate alignments, instead of a direct
-    assignment like self.variables[name] = var
-    """
-    ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
-    setattr(self, attr, ds)
-
-
-def as_dataarray(arr):
+def as_dataarray(arr, coords=None):
     """
     Convert an object to a DataArray if it is not already a DataArray.
     """
     if not isinstance(arr, DataArray):
-        return DataArray(arr)
+        return DataArray(arr, coords=coords)
     return arr
+
+
+def save_join(*dataarrays):
+    """
+    Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
+    """
+    try:
+        labels = align(*dataarrays, join="exact")
+    except ValueError:
+        warn("Coordinates across variables not equal. Perform outer join.", UserWarning)
+        labels = align(*dataarrays, join="outer")
+        labels = [ds.fillna(-1).astype(int) for ds in labels]
+    return Dataset({ds.name: ds for ds in labels})
 
 
 def _remap(array, mapping):
@@ -76,17 +81,40 @@ def best_int(max_value):
             return t
 
 
-def dictsel(d, keys):
-    "Reduce dictionary to keys that appear in selection."
-    return {k: v for k, v in d.items() if k in keys}
-
-
-def head_tail_range(stop, max_number_of_values=14):
-    split_at = max_number_of_values // 2
-    if stop > max_number_of_values:
-        return hstack([arange(split_at), arange(stop - split_at, stop)])
+def generate_indices_for_printout(dim_sizes, max_lines):
+    total_lines = int(np.prod(dim_sizes))
+    lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
+    if lines_to_skip > 0:
+        half_lines = max_lines // 2
+        for i in range(half_lines):
+            yield np.unravel_index(i, dim_sizes)
+        yield None
+        for i in range(total_lines - half_lines, total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
     else:
-        return arange(stop)
+        for i in range(total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
+
+
+def align_lines_by_delimiter(lines, delimiter):
+    # Determine the maximum position of the delimiter
+    if isinstance(delimiter, str):
+        delimiter = [delimiter]
+    try:
+        max_pos = max(line.index(d) for line in lines for d in delimiter if d in line)
+    except ValueError:
+        return lines
+
+    # Create the formatted lines
+    formatted_lines = []
+    for line in lines:
+        formatted_line = line
+        for d in delimiter:
+            if d in line:
+                parts = line.split(d)
+                formatted_line = f"{parts[0]:<{max_pos}}{d} {parts[1].strip()}"
+        formatted_lines.append(formatted_line)
+    return formatted_lines
 
 
 def print_coord(coord):
@@ -98,21 +126,32 @@ def print_coord(coord):
         return ""
 
 
-def print_single_variable(variable, name, coord, lower, upper):
-    if name in variable.model.variables._integer_variables:
-        bounds = "Z ⋂ " + f"[{lower},...,{upper}]"
-    elif name in variable.model.variables._binary_variables:
-        bounds = "{0, 1}"
-    else:
-        bounds = f"[{lower}, {upper}]"
+def print_single_variable(model, label):
+    if label == -1:
+        return "None"
 
-    return f"{name}{print_coord(coord)}", f"∈ {bounds}"
+    variables = model.variables
+    name, coord = variables.get_label_position(label)
+
+    lower = variables[name].lower.sel(coord).item()
+    upper = variables[name].upper.sel(coord).item()
+
+    if variables[name].attrs["binary"]:
+        bounds = " ∈ {0, 1}"
+    elif variables[name].attrs["integer"]:
+        bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
+    else:
+        bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
+
+    return f"{name}{print_coord(coord)}{bounds}"
 
 
 def print_single_expression(c, v, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
+
+    c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
     def print_line(expr):
@@ -121,10 +160,10 @@ def print_single_expression(c, v, model):
             coord_string = print_coord(coord)
             if i:
                 # split sign and coefficient
-                coeff_string = f"{float(coeff):+.4}"
+                coeff_string = f"{float(coeff):+.4g}"
                 res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
             else:
-                res.append(f"{float(coeff):.4} {name}{coord_string}")
+                res.append(f"{float(coeff):+.4g} {name}{coord_string}")
         return " ".join(res) if len(res) else "None"
 
     if isinstance(c, np.ndarray):
@@ -193,3 +232,17 @@ def forward_as_properties(**routes):
         return cls
 
     return deco
+
+
+class LocIndexer:
+    __slots__ = ("object",)
+
+    def __init__(self, obj):
+        self.object = obj
+
+    def __getitem__(self, key) -> Dataset:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.object.ndim)
+            key = dict(zip(self.object.dims, labels))
+        return self.object.sel(key)

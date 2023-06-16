@@ -25,38 +25,10 @@ ufunc_kwargs = dict(vectorize=True)
 concat_dim = "_concat_dim"
 concat_kwargs = dict(dim=concat_dim, coords="minimal")
 
-
-# IO functions
-def int_to_str(arr):
-    """
-    Convert numpy array to str typed array.
-    """
-    convert = np.frompyfunc(lambda i: "%i" % i, 1, 1)
-    return convert(arr)
+TQDM_COLOR = "#80bfff"
 
 
-def float_to_str(arr, ensure_sign=True):
-    """
-    Convert numpy array to str typed array.
-    """
-    if ensure_sign:
-        convert = np.frompyfunc(lambda f: "%+.12g" % f, 1, 1)
-    else:
-        convert = np.frompyfunc(lambda f: "%.12g" % f, 1, 1)
-    return convert(arr)
-
-
-def fill_by(target_shape, where, fill, other=""):
-    """
-    Create array of `target_shape` with values from `fill` where `where` is
-    True.
-    """
-    res = np.full(target_shape, other).astype(object)
-    res[where] = fill
-    return res
-
-
-def objective_to_file(m, f, log=False):
+def objective_to_file(m, f, log=False, batch_size=10000):
     """
     Write out the objective of a model to a lp file.
     """
@@ -64,131 +36,189 @@ def objective_to_file(m, f, log=False):
         logger.info("Writing objective.")
 
     f.write("min\n\nobj:\n\n")
-    coeffs = m.objective.coeffs.values
-    vars = m.objective.vars.values
-    nnz = vars != -1
-    coeffs, vars = coeffs[nnz], vars[nnz]
+    df = m.objective.flat
 
-    if np.isnan(coeffs).any():
+    if np.isnan(df.coeffs).any():
         raise ValueError(
             "Objective coefficients are missing (nan) where variables are not (-1)."
         )
 
-    objective = float_to_str(coeffs) + " x" + int_to_str(vars)
-    f.write("\n".join(objective))
-    del objective
+    coeffs = df.coeffs.values
+    vars = df.vars.values
+
+    batch = []  # to store batch of lines
+    for idx in range(len(df)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+
+        batch.append(f"{coeff:+.12g} x{var}\n")
+
+        if len(batch) >= batch_size:
+            f.writelines(batch)  # write out a batch
+            batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def constraints_to_file(m, f, log=False):
-    """
-    Write out the constraints of a model to a lp file.
-    """
+def constraints_to_file(m, f, log=False, batch_size=50000):
     f.write("\n\ns.t.\n\n")
-    m.constraints.sanitize_missings()
-    kwargs = dict(broadcast_like="vars", filter_missings=True)
-    vars = m.constraints.iter_ravel("vars", **kwargs)
-    coeffs = m.constraints.iter_ravel("coeffs", **kwargs)
-    labels = m.constraints.iter_ravel("labels", **kwargs)
-
-    labels_ = m.constraints.iter_ravel("labels", filter_missings=True)
-    sign_ = m.constraints.iter_ravel("sign", filter_missings=True)
-    rhs_ = m.constraints.iter_ravel("rhs", filter_missings=True)
-
-    iterate = zip(labels, vars, coeffs, labels_, sign_, rhs_)
+    names = m.constraints
     if log:
-        iterate = tqdm(iterate, "Writing constraints.", len(m.constraints.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing constraints.",
+            colour=TQDM_COLOR,
+        )
 
-    for l, v, c, l_, s_, r_ in iterate:
-        if not c.size:
+    batch = []
+    for name in names:
+        df = m.constraints[name].flat
+
+        labels = df.labels.values
+        vars = df.vars.values
+        coeffs = df.coeffs.values
+        rhs = df.rhs.values
+        sign = df.sign.values
+
+        len_df = len(df)  # compute length once
+        if not len_df:
             continue
-        # Group repeated variables in the same constraint
-        df = pd.DataFrame({"coeffs": c, "labels": l, "vars": v})
-        df = df.groupby(["labels", "vars"], as_index=False).sum()
-        c, l, v = df.coeffs.values, df.labels.values, df.vars.values
 
-        diff_con = l[:-1] != l[1:]
-        new_con_b = concatenate([asarray([True]), diff_con])
-        end_of_con_b = concatenate([diff_con, asarray([True])])
+        # write out the start to enable a fast loop afterwards
+        idx = 0
+        label = labels[idx]
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
+        prev_label = label
+        prev_sign = sign[idx]
+        prev_rhs = rhs[idx]
 
-        l = fill_by(v.shape, new_con_b, "\nc" + int_to_str(l_) + ":\n")
-        s = fill_by(v.shape, end_of_con_b, "\n" + s_.astype(object) + "\n")
-        r = fill_by(v.shape, end_of_con_b, float_to_str(r_, ensure_sign=False))
-        constraints = l + float_to_str(c) + " x" + int_to_str(v) + s + r
+        for idx in range(1, len_df):
+            label = labels[idx]
+            coeff = coeffs[idx]
+            var = vars[idx]
 
-        f.write("\n".join(constraints))
-        f.write("\n")
-        del l, s, r, constraints
+            if label != prev_label:
+                batch.append(
+                    f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
+                )
+                prev_sign = sign[idx]
+                prev_rhs = rhs[idx]
+            else:
+                batch.append(f"{coeff:+.12g} x{var}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)
+                batch = []  # reset batch
+
+            prev_label = label
+
+        batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def bounds_to_file(m, f, log=False):
+def bounds_to_file(m, f, log=False, batch_size=10000):
     """
     Write out variables of a model to a lp file.
     """
+    names = list(m.variables.continuous) + list(m.variables.integers)
+    if not len(list(names)):
+        return
+
     f.write("\n\nbounds\n\n")
-    lower = m.non_binaries.iter_ravel("lower", filter_missings=True)
-    upper = m.non_binaries.iter_ravel("upper", filter_missings=True)
-    labels = m.non_binaries.iter_ravel("labels", filter_missings=True)
-
-    iterate = zip(lower, labels, upper)
     if log:
-        iterate = tqdm(iterate, "Writing variables.", len(m.non_binaries.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing continuous variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for lo, l, up in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = float_to_str(lo) + " <= x" + int_to_str(l) + " <= " + float_to_str(up)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        labels = df.labels.values
+        lowers = df.lower.values
+        uppers = df.upper.values
+
+        for idx in range(len(df)):
+            label = labels[idx]
+            lower = lowers[idx]
+            upper = uppers[idx]
+            batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def binaries_to_file(m, f, log=False):
+def binaries_to_file(m, f, log=False, batch_size=1000):
     """
     Write out binaries of a model to a lp file.
     """
-    f.write("\n\nbinary\n\n")
-    labels = m.binaries.iter_ravel("labels", filter_missings=True)
-
-    if len(m.variables._binary_variables) == 0:
+    names = m.variables.binaries
+    if not len(list(names)):
         return
 
-    iterate = labels
+    f.write("\n\nbinary\n\n")
     if log:
-        iterate = tqdm(iterate, "Writing binaries.", len(m.binaries.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for l in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = "x" + int_to_str(l)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        for label in df.labels.values:
+            batch.append(f"x{label}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
-def integers_to_file(m, f, log=False):
+def integers_to_file(m, f, log=False, batch_size=1000):
     """
     Write out integers of a model to a lp file.
     """
-    f.write("\n\ngeneral\n\n")
-    labels = m.integers.iter_ravel("labels", filter_missings=True)
-
-    if len(m.variables._integer_variables) == 0:
+    names = m.variables.integers
+    if not len(list(names)):
         return
 
-    iterate = labels
+    f.write("\n\ninteger\n\n")
     if log:
-        iterate = tqdm(iterate, "Writing integer variables.", len(m.integers.labels))
+        names = tqdm(
+            list(names),
+            desc="Writing integer variables.",
+            colour=TQDM_COLOR,
+        )
 
-    for l in iterate:
-        if not l.size:
-            continue
+    batch = []  # to store batch of lines
+    for name in names:
+        df = m.variables[name].flat
 
-        bounds = "x" + int_to_str(l)
-        f.write("\n".join(bounds))
-        f.write("\n")
-        del bounds
+        for label in df.labels.values:
+            batch.append(f"x{label}\n")
+
+            if len(batch) >= batch_size:
+                f.writelines(batch)  # write out a batch
+                batch = []  # reset batch
+
+    if batch:  # write the remaining lines
+        f.writelines(batch)
 
 
 def to_file(m, fn):
@@ -196,21 +226,22 @@ def to_file(m, fn):
     Write out a model to a lp or mps file.
     """
     fn = Path(m.get_problem_file(fn))
+    batch_size = 5000
 
     if fn.exists():
         fn.unlink()
 
     if fn.suffix == ".lp":
-        log = m._xCounter > 10000
+        log = m._xCounter > 10_000
 
         with open(fn, mode="w") as f:
             start = time.time()
 
-            objective_to_file(m, f, log)
-            constraints_to_file(m, f, log)
-            bounds_to_file(m, f, log)
-            binaries_to_file(m, f, log)
-            integers_to_file(m, f, log)
+            objective_to_file(m, f, log=log)
+            constraints_to_file(m, f, log=log, batch_size=batch_size)
+            bounds_to_file(m, f, log=log, batch_size=batch_size)
+            binaries_to_file(m, f, log=log, batch_size=batch_size)
+            integers_to_file(m, f, log=log, batch_size=batch_size)
             f.write("end\n")
 
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -295,12 +326,12 @@ def to_highspy(m):
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if len(m.binaries) + len(m.integers):
         vtypes = M.vtypes
         labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
         n = len(labels)
         h.changeColsIntegrality(n, labels, ones_like(labels))
-        if len(m.binaries.labels):
+        if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
             h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
@@ -453,25 +484,26 @@ def to_netcdf(m, *args, **kwargs):
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
     """
-    from linopy.expressions import LinearExpression
 
-    def get_and_rename(m, attr, prefix=""):
-        ds = getattr(m, attr)
-        if isinstance(ds, LinearExpression):
-            ds = ds.data
-        return ds.rename({v: prefix + attr + "-" + v for v in ds})
+    def with_prefix(ds, prefix):
+        ds = ds.rename({d: f"{prefix}-{d}" for d in [*ds.dims, *ds]})
+        ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+        return ds
 
     vars = [
-        get_and_rename(m.variables, attr, "variables_")
-        for attr in m.variables.dataset_attrs
+        with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
     cons = [
-        get_and_rename(m.constraints, attr, "constraints_")
-        for attr in m.constraints.dataset_attrs
+        with_prefix(con.data, f"constraints-{name}")
+        for name, con in m.constraints.items()
     ]
-    others = [get_and_rename(m, d) for d in m.dataset_attrs + ["objective"]]
+    obj = [with_prefix(m.objective.data, "objective")]
+    params = [with_prefix(m.parameters, "params")]
+
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + others).assign_attrs(non_bool_dict(scalars))
+    ds = xr.merge(vars + cons + obj + params)
+    ds = ds.assign_attrs(scalars)
+    ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
         ds[k].attrs = non_bool_dict(ds[k].attrs)
@@ -494,28 +526,44 @@ def read_netcdf(path, **kwargs):
     -------
     m : linopy.Model
     """
-    from linopy.model import Constraints, LinearExpression, Model, Variables
+    from linopy.model import (
+        Constraint,
+        Constraints,
+        LinearExpression,
+        Model,
+        Variable,
+        Variables,
+    )
 
     m = Model()
-    all_ds = xr.load_dataset(path, **kwargs)
+    ds = xr.load_dataset(path, **kwargs)
 
-    def get_and_rename(ds, attr, prefix=""):
-        keys = [k for k in ds if k.startswith(prefix + attr + "-")]
-        return ds[keys].rename({k: k[len(prefix + attr) + 1 :] for k in keys})
+    def get_prefix(ds, prefix):
+        ds = ds[[k for k in ds if k.startswith(prefix)]]
+        ds = ds.rename({d: d.split(prefix + "-", 1)[1] for d in [*ds.dims, *ds]})
+        ds.attrs = {
+            k.split(prefix + "-", 1)[1]: v
+            for k, v in ds.attrs.items()
+            if k.startswith(prefix + "-")
+        }
+        return ds
 
-    attrs = Variables.dataset_attrs
-    kwargs = {attr: get_and_rename(all_ds, attr, "variables_") for attr in attrs}
-    m._variables = Variables(**kwargs, model=m)
+    vars = get_prefix(ds, "variables")
+    var_names = list(set([k.split("-", 1)[0] for k in vars]))
+    variables = {k: Variable(get_prefix(vars, k), m, k) for k in var_names}
+    m._variables = Variables(variables, m)
 
-    attrs = Constraints.dataset_attrs
-    kwargs = {attr: get_and_rename(all_ds, attr, "constraints_") for attr in attrs}
-    m._constraints = Constraints(**kwargs, model=m)
+    cons = get_prefix(ds, "constraints")
+    con_names = list(set([k.split("-", 1)[0] for k in cons]))
+    constraints = {k: Constraint(get_prefix(cons, k), m, k) for k in con_names}
+    m._constraints = Constraints(constraints, m)
 
-    for attr in m.dataset_attrs:
-        setattr(m, attr, get_and_rename(all_ds, attr))
-    m._objective = LinearExpression(get_and_rename(all_ds, "objective"), m)
+    objective = get_prefix(ds, "objective")
+    m._objective = LinearExpression(objective, m)
+
+    m._parameters = get_prefix(ds, "parameter")
 
     for k in m.scalar_attrs:
-        setattr(m, k, all_ds.attrs.pop(k))
+        setattr(m, k, ds.attrs.get(k))
 
     return m

@@ -22,12 +22,12 @@ from numpy import array, nan
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 
-from linopy import constraints, variables
+from linopy import constraints, expressions, variables
 from linopy.common import (
+    LocIndexer,
     as_dataarray,
     forward_as_properties,
-    head_tail_range,
-    print_coord,
+    generate_indices_for_printout,
     print_single_expression,
 )
 from linopy.config import options
@@ -107,7 +107,7 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes"])
+@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -184,7 +184,8 @@ class LinearExpression:
             data["vars"] = data.vars.fillna(-1).astype(int)
 
         (data,) = xr.broadcast(data)
-        data = data.transpose(..., term_dim)
+        # transpose with new Dataset to really ensure correct order
+        data = Dataset(data.transpose(..., term_dim))
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -203,54 +204,48 @@ class LinearExpression:
 
     def __repr__(self):
         """
-        Get the string representation of the expression.
+        Print the expression arrays.
         """
-        nexprs = self.size // self.nterm
+        max_lines = options["display_max_rows"]
+        dims = list(self.dims)
+        dim_sizes = list(self.sizes.values())[:-1]
+        size = np.product(dim_sizes)  # that the number of theoretical printouts
+        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        lines = []
 
-        # don't loop over all values if not necessary
-        if self.size == self.nterm:
-            expr_string = print_single_expression(
-                self.coeffs.values, self.vars.values, self.model
-            )
-            return f"LinearExpression:\n-----------------\n{expr_string}"
+        header_string = "LinearExpression"
 
-        # create header string
-        nonterm_dims = [(k, v) for k, v in self.dims.items() if not k.startswith("_")]
-        shape_string = "(" + ", ".join([f"{k}: {v}" for k, v in nonterm_dims]) + ")"
-        header = f"LinearExpression {shape_string}:\n{'-' * (18 + len(shape_string))}"
+        if size > 1:
+            for indices in generate_indices_for_printout(dim_sizes, max_lines):
+                if indices is None:
+                    lines.append("\t\t...")
+                else:
+                    coord_values = ", ".join(
+                        str(self.data[dims[i]].values[ind])
+                        for i, ind in enumerate(indices)
+                    )
+                    if self.mask is None or self.mask.values[indices]:
+                        expr = print_single_expression(
+                            self.coeffs.values[indices],
+                            self.vars.values[indices],
+                            self.model,
+                        )
+                        line = f"[{coord_values}]: {expr}"
+                    else:
+                        line = f"[{coord_values}]: None"
+                    lines.append(line)
 
-        # create data string, print only a few values
-        max_print = options["display_max_rows"]
-        split_at = max_print // 2
-        to_print = head_tail_range(nexprs, max_print)
-        truncate = nexprs > max_print
-        coords = self.unravel_coords(to_print)
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
+            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+        elif size == 1:
+            expr = print_single_expression(self.coeffs, self.vars, self.model)
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n{expr}")
+        else:
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
 
-        if not self.size:
-            return f"{header}\nNone"
-
-        # loop over all values to print
-        coord_strings = []
-        expr_strings = []
-        trunc_strings = []
-        for i, coord in enumerate(coords):
-            coord_string = print_coord(coord) + ":"
-            expr_string = print_single_expression(
-                self.coeffs.loc[coord].values, self.vars.loc[coord].values, self.model
-            )
-            trunc_string = "\n\t\t..." if i == split_at - 1 and truncate else ""
-
-            coord_strings.append(coord_string)
-            expr_strings.append(expr_string)
-            trunc_strings.append(trunc_string)
-
-        coord_width = max(len(c) for c in coord_strings)
-
-        data_string = ""
-        for c, e, t in zip(coord_strings, expr_strings, trunc_strings):
-            data_string += f"\n{c:<{coord_width}} {e}{t}"
-
-        return f"{header}{data_string}"
+        return "\n".join(lines)
 
     def __add__(self, other):
         """
@@ -322,13 +317,13 @@ class LinearExpression:
         return self.__div__(other)
 
     def __le__(self, rhs):
-        return constraints.AnonymousConstraint(self, LESS_EQUAL, rhs)
+        return self.to_constraint(LESS_EQUAL, rhs)
 
     def __ge__(self, rhs):
-        return constraints.AnonymousConstraint(self, GREATER_EQUAL, rhs)
+        return self.to_constraint(GREATER_EQUAL, rhs)
 
     def __eq__(self, rhs):
-        return constraints.AnonymousConstraint(self, EQUAL, rhs)
+        return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other):
         raise NotImplementedError(
@@ -340,12 +335,23 @@ class LinearExpression:
             "Inequalities only ever defined for >= rather than >."
         )
 
-    @deprecated(details="Use the `data` property instead of `to_dataset`")
-    def to_dataset(self):
-        """
-        Convert the expression to a xarray.Dataset.
-        """
-        return self.data
+    def to_constraint(self, sign, rhs):
+        if isinstance(
+            rhs,
+            (
+                variables.Variable,
+                variables.ScalarVariable,
+                expressions.LinearExpression,
+            ),
+        ):
+            raise TypeError(f"Expected numeric type for rhs, got {type(rhs)}")
+        # TODO: check that sign is valid
+        data = self.data.assign(sign=sign, rhs=rhs)
+        return constraints.Constraint(data, model=self.model)
+
+    @property
+    def loc(self):
+        return LocIndexer(self)
 
     @classmethod
     @property
@@ -384,6 +390,11 @@ class LinearExpression:
     @coeffs.setter
     def coeffs(self, value):
         self.data["coeffs"] = value
+
+    # create a dummy for a mask, which can be implemented later
+    @property
+    def mask(self):
+        return None
 
     @classmethod
     def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:
@@ -501,7 +512,7 @@ class LinearExpression:
                     if dim not in c.coords:
                         c = c.assign_coords(**{dim: pd.RangeIndex(c.shape[i])})
 
-            ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term")
+            ds = Dataset({"coeffs": c, "vars": v}).expand_dims("_term", -1)
             expr = cls(ds, model)
             exprs.append(expr)
 
@@ -676,35 +687,6 @@ class LinearExpression:
         )
         return LinearExpressionGroupby(groups, model=self.model)
 
-    @deprecated("0.1.0", "0.1.2", details="Use groupby (followed by sum) instead.")
-    def groupby_sum(self, group):
-        """
-        Sum expression over groups.
-
-        The function works in the same manner as the xarray.Dataset.groupby
-        function, but automatically sums over all terms.
-
-        Parameters
-        ----------
-        group : DataArray or IndexVariable
-            Array whose unique values should be used to group the expressions.
-
-        Returns
-        -------
-        Grouped linear expression.
-        """
-        if isinstance(group, pd.Series):
-            logger.info("Converting group pandas.Series to xarray.DataArray")
-            group = group.to_xarray()
-        groups = xr.Dataset.groupby(self.data, group)
-
-        def func(ds):
-            ds = self._sum(ds, groups._group_dim)
-            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
-            return ds
-
-        return self.__class__(groups.map(func), self.model)  # .reset_index('_term')
-
     def rolling(
         self,
         dim: "Mapping[Any, int]" = None,
@@ -741,38 +723,6 @@ class LinearExpression:
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
         return LinearExpressionRolling(rolling, model=self.model)
-
-    @deprecated("0.1.0", "0.1.2", details="Use rolling (followed by sum) instead.")
-    def rolling_sum(self, **kwargs):
-        """
-        Rolling sum of the linear expression.
-
-        Parameters
-        ----------
-        **kwargs :
-            Keyword arguments passed to ``xarray.Dataset.rolling``.
-
-        Returns
-        -------
-        linopy.LinearExpression
-        """
-        coeffs = xr.DataArray.rolling(self.coeffs, **kwargs).construct(
-            "_rolling_term", keep_attrs=True
-        )
-
-        vars = xr.DataArray.rolling(self.vars, **kwargs).construct(
-            "_rolling_term",
-            fill_value=self._fill_value["vars"],
-            keep_attrs=True,
-        )
-
-        ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
-        ds = (
-            ds.rename(_term="_stacked_term")
-            .stack(_term=["_stacked_term", "_rolling_term"])
-            .reset_index("_term", drop=True)
-        )
-        return self.__class__(ds, self.model).assign_attrs(self.attrs)
 
     @property
     def nterm(self):
@@ -852,6 +802,44 @@ class LinearExpression:
 
     def __iter__(self):
         return self.data.__iter__()
+
+    @property
+    def flat(self) -> pd.DataFrame:
+        """
+        Convert the expression to a pandas DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        expressions with non-zero coefficients. It contains the
+        columns `coeffs` and `vars`.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+        """
+        # if exclude_lhs:
+        #     ds = self.data.drop_vars(['coeffs', 'vars'])
+        # else:
+        ds = self.data
+        if not ds.sizes:
+            # fallback for weird error raised due to missing index
+            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
+        else:
+            df = ds.to_dataframe()
+        if "mask" in df:
+            mask = df.pop("mask")
+            df = df[mask]
+        df = df[(df.vars != -1) & (df.coeffs != 0)]
+        # Group repeated variables in the same constraint
+        df = df.groupby("vars", as_index=False).sum()
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Expression `{self.name}` contains nan's in field(s) {fields}"
+            )
+
+        return df
 
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)
