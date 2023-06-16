@@ -453,6 +453,7 @@ class Constraint:
         df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")
+        agg.update({k: "first" for k in df.columns if k not in agg})
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
 
         any_nan = df.isna().any()
@@ -679,7 +680,7 @@ class Constraints:
                 return name
         raise ValueError(f"No constraint found containing the label {label}.")
 
-    def get_blocks(self, block_map):
+    def set_blocks(self, block_map):
         """
         Get a dataset of same shape as constraints.labels with block values.
 
@@ -693,10 +694,11 @@ class Constraints:
             * N+1 otherwise
         """
         N = block_map.max()
-        var_blocks = replace_by_map(self.vars, block_map)
-        res = xr.full_like(self.labels, N + 1, dtype=block_map.dtype)
 
-        for name, entries in var_blocks.items():
+        for name, constraint in self.items():
+            res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
+            entries = replace_by_map(constraint.vars, block_map)
+
             term_dim = f"{name}_term"
 
             not_zero = entries != 0
@@ -704,14 +706,11 @@ class Constraints:
             for n in range(N + 1):
                 not_n = entries != n
                 mask = not_n & not_zero & not_missing
-                res[name] = res[name].where(mask.any(term_dim), n)
+                res = res.where(mask.any(term_dim), n)
 
-            res[name] = res[name].where(not_missing.any(term_dim), -1)
-            res[name] = res[name].where(not_zero.any(term_dim), 0)
-
-        self.blocks = res
-        self.var_blocks = var_blocks
-        return self.blocks
+            res = res.where(not_missing.any(term_dim), -1)
+            res = res.where(not_zero.any(term_dim), 0)
+            constraint.data["blocks"] = res
 
     @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
@@ -738,18 +737,12 @@ class Constraints:
         ------
         flat : np.array/dask.array
         """
-        if isinstance(key, str):
-            ds = getattr(self, key)
-        elif isinstance(key, xr.Dataset):
-            ds = key
-        else:
-            raise TypeError("Argument `key` must be of type string or xarray.Dataset")
-
         assert broadcast_like in ["labels", "vars"]
 
-        for name, ds in self.items():
-            values = ds.data[broadcast_like]
-            broadcasted = ds.data[key].broadcast_like(values)
+        for name, constraint in self.items():
+            values = constraint.data[broadcast_like]
+            ds = constraint.data[key]
+            broadcasted = ds.broadcast_like(values)
             if values.chunks is not None:
                 broadcasted = broadcasted.chunk(values.chunks)
 
@@ -757,7 +750,7 @@ class Constraints:
                 flat = np.ravel(broadcasted)
                 mask = np.ravel(values) != -1
                 if broadcast_like != "labels":
-                    labels = np.ravel(self.labels[name].broadcast_like(values))
+                    labels = np.ravel(constraint.labels.broadcast_like(values))
                     mask &= labels != -1
                 flat = flat[mask]
                 if pd.isna(flat).any():

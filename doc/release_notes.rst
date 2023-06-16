@@ -24,6 +24,7 @@ Upcoming Release
 * The deprecated attribute `values` of the classes `Variable`, `LinearExpression` and `Constraint` was removed in favor of the `data` attribute.
 * The deprecated `to_array` method of the classes `Variable` and `Constraint` was removed in favor of the `data` attribute.
 * The deprecated `to_dataset` of the `LinearExpression` class was removed in favor of the `data` attribute.
+* The function `get_lower_bound`, `get_upper_bound`, `get_variable_labels`, `get_variable_types`, `get_objective_coefficient`, `get_constraint_labels`, `get_constraint_sense`, `get_constraint_rhs`, `get_constraint_matrix` were removed in favor of the `matrices` accessor, i.e. `ub`, `lb`, `vlabels`, etc.
 
 **Internal Changes**
 * The internal data fields in `Variable` and `Constraint` are now always broadcasted to have aligned indexes. This allows for a more consistent handling of the objects.

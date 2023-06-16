@@ -985,15 +985,11 @@ class Variables:
         ------
         flat : np.array/dask.array
         """
-        if isinstance(key, str):
-            ds = getattr(self, key)
-        elif isinstance(key, Dataset):
-            ds = key
-        else:
-            raise TypeError("Argument `key` must be of type string or xarray.Dataset")
 
-        for name, labels in self.labels.items():
-            broadcasted = ds[name].broadcast_like(labels)
+        for name, variable in self.items():
+            labels = variable.labels
+            ds = variable.data[key]
+            broadcasted = ds.broadcast_like(labels)
             if labels.chunks is not None:
                 broadcasted = broadcasted.chunk(labels.chunks)
 
@@ -1065,28 +1061,24 @@ class Variables:
             if "solution" in v:
                 v._data = v.data.drop_vars("solution")
 
-    def get_blocks(self, blocks: DataArray):
+    def set_blocks(self, blocks: DataArray):
         """
         Get a dataset of same shape as variables.labels indicating the blocks.
         """
         dim = blocks.dims[0]
         assert dim in self.labels.dims, "Block dimension not in variables."
 
-        block_map = zeros_like(self.labels, dtype=blocks.dtype)
-        for name, variable in self.labels.items():
+        for name, variable in self.items():
             if dim in variable.dims:
-                block_map[name] = blocks.broadcast_like(variable)
-        return block_map.where(self.labels != -1, -1)
+                variable.data["blocks"] = blocks.broadcast_like(variable.labels)
 
-    def blocks_to_blockmap(self, block_map, dtype=np.int8):
+    def get_blockmap(self, dtype=np.int8):
         """
         Get a one-dimensional array mapping the variables to blocks.
         """
-        # non-assigned variables are assumed to be masked, insert -1
+        df = self.flat
         res = np.full(self.model._xCounter + 1, -1, dtype=dtype)
-        for name, labels in self.labels.items():
-            res[np.ravel(labels)] = np.ravel(block_map[name])
-        res[-1] = -1
+        res[df.labels] = df.blocks
         return res
 
 

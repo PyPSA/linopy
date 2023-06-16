@@ -28,16 +28,6 @@ concat_kwargs = dict(dim=concat_dim, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def fill_by(target_shape, where, fill, other=""):
-    """
-    Create array of `target_shape` with values from `fill` where `where` is
-    True.
-    """
-    res = np.full(target_shape, other).astype(object)
-    res[where] = fill
-    return res
-
-
 def objective_to_file(m, f, log=False, batch_size=10000):
     """
     Write out the objective of a model to a lp file.

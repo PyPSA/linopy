@@ -716,10 +716,9 @@ class Model:
         assert self.blocks is not None, "Blocks are not defined."
 
         dtype = self.blocks.dtype
-        self.variables.blocks = self.variables.get_blocks(self.blocks)
-        block_map = self.variables.blocks_to_blockmap(self.variables.blocks, dtype)
-
-        self.constraints.blocks = self.constraints.get_blocks(block_map)
+        self.variables.set_blocks(self.blocks)
+        block_map = self.variables.get_blockmap(dtype)
+        self.constraints.set_blocks(block_map)
 
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)

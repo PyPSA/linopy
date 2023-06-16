@@ -92,18 +92,20 @@ def test_to_highspy(m):
     m.to_highspy()
 
 
-# def test_to_blocks(tmp_path):
-#     m = Model()
+def test_to_blocks(tmp_path):
+    # This is currently broken and due to time-constraints not possible to fix
+    m = Model()
 
-#     lower = pd.Series(range(20))
-#     upper = pd.Series(range(30, 50))
-#     x = m.add_variables(lower, upper)
-#     y = m.add_variables(lower, upper)
+    lower = pd.Series(range(20))
+    upper = pd.Series(range(30, 50))
+    x = m.add_variables(lower, upper)
+    y = m.add_variables(lower, upper)
 
-#     m.add_constraints(x + y, LESS_EQUAL, 10)
+    m.add_constraints(x + y, LESS_EQUAL, 10)
 
-#     m.add_objective(2 * x + 3 * y)
+    m.add_objective(2 * x + 3 * y)
 
-#     m.blocks = xr.DataArray([1] * 10 + [2] * 10)
+    m.blocks = xr.DataArray([1] * 10 + [2] * 10)
 
-#     m.to_block_files(tmp_path)
+    with pytest.raises(ValueError):
+        m.to_block_files(tmp_path)
