@@ -28,8 +28,6 @@ from linopy.common import (
     as_dataarray,
     forward_as_properties,
     generate_indices_for_printout,
-    head_tail_range,
-    print_coord,
     print_single_expression,
 )
 from linopy.config import options

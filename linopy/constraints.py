@@ -24,13 +24,10 @@ from xarray import DataArray, Dataset
 from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
-    _merge_inplace,
     align_lines_by_delimiter,
-    dictsel,
     forward_as_properties,
     generate_indices_for_printout,
     has_optimized_model,
-    head_tail_range,
     is_constant,
     maybe_replace_signs,
     print_coord,
@@ -172,10 +169,9 @@ class Constraint:
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord_values = ", ".join(
-                        str(self.data[dims[i]].values[ind])
-                        for i, ind in enumerate(indices)
-                    )
+                    coord = [
+                        self.data[dims[i]].values[ind] for i, ind in enumerate(indices)
+                    ]
                     if self.mask is None or self.mask.values[indices]:
                         expr = print_single_expression(
                             self.coeffs.values[indices],
@@ -184,9 +180,9 @@ class Constraint:
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = f"[{coord_values}]: {expr} {sign} {rhs}"
+                        line = f"{print_coord(coord)}: {expr} {sign} {rhs}"
                     else:
-                        line = f"[{coord_values}]: None"
+                        line = f"{print_coord(coord)}: None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 

@@ -33,17 +33,6 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def _merge_inplace(self, attr, da, name, **kwargs):
-    """
-    Assign a new dataarray to the dataset `attr` by merging.
-
-    This takes care of all coordinate alignments, instead of a direct
-    assignment like self.variables[name] = var
-    """
-    ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
-    setattr(self, attr, ds)
-
-
 def as_dataarray(arr, coords=None):
     """
     Convert an object to a DataArray if it is not already a DataArray.
@@ -126,19 +115,6 @@ def align_lines_by_delimiter(lines, delimiter):
                 formatted_line = f"{parts[0]:<{max_pos}}{d} {parts[1].strip()}"
         formatted_lines.append(formatted_line)
     return formatted_lines
-
-
-def dictsel(d, keys):
-    "Reduce dictionary to keys that appear in selection."
-    return {key: d[key] for key in keys}
-
-
-def head_tail_range(stop, max_number_of_values=14):
-    split_at = max_number_of_values // 2
-    if stop > max_number_of_values:
-        return hstack([arange(split_at), arange(stop - split_at, stop)])
-    else:
-        return arange(stop)
 
 
 def print_coord(coord):

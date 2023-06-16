@@ -668,13 +668,6 @@ class Model:
         return self.variables.integers
 
     @property
-    def non_binaries(self):
-        """
-        Get all non-binary variables.
-        """
-        return self.variables.non_binaries
-
-    @property
     def nvars(self):
         """
         Get the total number of variables.
