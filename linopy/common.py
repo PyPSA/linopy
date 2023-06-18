@@ -33,12 +33,12 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def as_dataarray(arr, coords=None):
+def as_dataarray(arr, coords=None, **kwargs):
     """
     Convert an object to a DataArray if it is not already a DataArray.
     """
     if not isinstance(arr, DataArray):
-        return DataArray(arr, coords=coords)
+        return DataArray(arr, coords=coords, **kwargs)
     return arr
 
 
@@ -53,6 +53,29 @@ def save_join(*dataarrays):
         labels = align(*dataarrays, join="outer")
         labels = [ds.fillna(-1).astype(int) for ds in labels]
     return Dataset({ds.name: ds for ds in labels})
+
+
+def fill_missing_coords(ds):
+    """
+    Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
+
+    This function fills in the integer coordinates for all dimensions of a
+    Dataset or DataArray that have no coordinates assigned yet.
+
+    Parameters
+    ----------
+    ds : xarray.DataArray or xarray.Dataset
+    """
+    ds = ds.copy()
+    if not isinstance(ds, (Dataset, DataArray)):
+        raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
+
+    # Fill in missing integer coordinates
+    for dim in ds.dims:
+        if dim not in ds.coords:
+            ds.coords[dim] = arange(ds.sizes[dim])
+
+    return ds
 
 
 def _remap(array, mapping):

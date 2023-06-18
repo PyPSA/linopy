@@ -9,7 +9,7 @@ Upcoming Release
 * The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
 * The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
 * It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
-
+* Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
 
 **Deprecations**
 * The class `AnonymousConstraint` is now deprecated in the favor of `Constraint`. The latter can now be assigned to a model or not.

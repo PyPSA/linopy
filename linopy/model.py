@@ -22,6 +22,7 @@ from linopy import solvers
 from linopy.common import (
     as_dataarray,
     best_int,
+    fill_missing_coords,
     maybe_replace_signs,
     replace_by_map,
     save_join,
@@ -428,14 +429,18 @@ class Model:
                 lower, upper = 0, 1
 
         data = Dataset(
-            {"lower": as_dataarray(lower, coords), "upper": as_dataarray(upper, coords)}
+            {
+                "lower": as_dataarray(lower, coords, **kwargs),
+                "upper": as_dataarray(upper, coords, **kwargs),
+            }
         )
 
         if mask is not None:
-            mask = as_dataarray(mask).astype(bool)
+            mask = as_dataarray(mask, **kwargs).astype(bool)
+
+        data = fill_missing_coords(data)
 
         labels = DataArray(-2, coords=data.coords)
-
         self.check_force_dim_names(labels)
 
         start = self._xCounter
@@ -554,7 +559,6 @@ class Model:
             ), "Dimensions of mask not a subset of resulting labels dimensions."
 
         labels = DataArray(-1, coords=data.indexes)
-
         self.check_force_dim_names(labels)
 
         start = self._cCounter
