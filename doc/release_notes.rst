@@ -6,9 +6,12 @@ Upcoming Release
 
 
 **New Features**
+* `LinearExpression`'s now support constant values. This allows defining linear expressions with numeric constant values, like `x + 5`.
+* When defining constraints, it is not needed to separate variables from constants anymore. Thus, expressions  like `x <= y` or `5 * x + 10 >= y` are supported.
 * The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
 * The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
 * It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
+* Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
 
 
 **Deprecations**

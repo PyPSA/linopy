@@ -428,11 +428,14 @@ class Model:
                 lower, upper = 0, 1
 
         data = Dataset(
-            {"lower": as_dataarray(lower, coords), "upper": as_dataarray(upper, coords)}
+            {
+                "lower": as_dataarray(lower, coords, **kwargs),
+                "upper": as_dataarray(upper, coords, **kwargs),
+            }
         )
 
         if mask is not None:
-            mask = as_dataarray(mask).astype(bool)
+            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
         labels = DataArray(-2, coords=data.coords)
 

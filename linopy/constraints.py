@@ -148,6 +148,10 @@ class Constraint:
         return self.attrs["name"]
 
     @property
+    def coord_dims(self):
+        return {k: self.data.dims[k] for k in self.dims if not k.endswith("_term")}
+
+    @property
     def is_assigned(self):
         return "labels" in self.data
 
@@ -176,6 +180,7 @@ class Constraint:
                         expr = print_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
+                            0,
                             self.model,
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
@@ -191,7 +196,7 @@ class Constraint:
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(self.coeffs, self.vars, self.model)
+            expr = print_single_expression(self.coeffs, self.vars, 0, self.model)
             lines.append(
                 f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
@@ -216,6 +221,13 @@ class Constraint:
         Return the range of the constraint.
         """
         return self.data.attrs["label_range"]
+
+    @property
+    def term_dim(self):
+        """
+        Return the term dimension of the constraint.
+        """
+        return self.name + "_term"
 
     @property
     def mask(self):
@@ -243,8 +255,7 @@ class Constraint:
 
     @coeffs.setter
     def coeffs(self, value):
-        term_dim = self.name + "_term"
-        value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
+        value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
         self._data = self.data.assign(coeffs=value)
         self.data["coeffs"] = value
 
@@ -260,12 +271,11 @@ class Constraint:
 
     @vars.setter
     def vars(self, value):
-        term_dim = self.name + "_term"
         if isinstance(value, variables.Variable):
             value = value.labels
         if not isinstance(value, DataArray):
             raise TypeError("Expected value to be of type DataArray or Variable")
-        value = value.broadcast_like(self.coeffs, exclude=[term_dim])
+        value = value.broadcast_like(self.coeffs, exclude=[self.term_dim])
         self.data["vars"] = value
 
     @property
@@ -276,19 +286,17 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        term_dim = self.name + "_term"
-        data = self.data[["coeffs", "vars"]].rename({term_dim: "_term"})
+        data = self.data[["coeffs", "vars"]].rename({self.term_dim: "_term"})
         return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
     def lhs(self, value):
-        if not isinstance(value, expressions.LinearExpression):
-            raise TypeError("Assigned lhs must be a LinearExpression.")
-
-        # TODO: check if the expression coords is compatible with the constraint
+        value = expressions.as_expression(
+            value, self.model, coords=self.coords, dims=self.coord_dims
+        )
         self._data = (
             self.data.drop_vars(["coeffs", "vars"])
-            .assign(coeffs=value.coeffs, vars=value.vars)
+            .assign(coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const)
             .rename(_term=self.name + "_term")
         )
 
@@ -319,12 +327,12 @@ class Constraint:
         return self.data.rhs
 
     @rhs.setter
-    @is_constant
     def rhs(self, value):
-        if isinstance(value, (variables.Variable, expressions.LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(value)}).")
-        value = DataArray(value).broadcast_like(self.rhs)
-        self.data["rhs"] = value
+        value = expressions.as_expression(
+            value, self.model, coords=self.coords, dims=self.coord_dims
+        )
+        self.lhs = self.lhs - value.reset_const()
+        self.data["rhs"] = value.const
 
     @property
     @has_optimized_model
@@ -643,8 +651,7 @@ class Constraints:
         missing.
         """
         for name in self:
-            term_dim = name + "_term"
-            contains_non_missing = (self[name].vars != -1).any(term_dim)
+            contains_non_missing = (self[name].vars != -1).any(self[name].term_dim)
             self[name].data["labels"] = self[name].labels.where(
                 contains_non_missing, -1
             )
@@ -695,17 +702,15 @@ class Constraints:
             res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
             entries = replace_by_map(constraint.vars, block_map)
 
-            term_dim = f"{name}_term"
-
             not_zero = entries != 0
             not_missing = entries != -1
             for n in range(N + 1):
                 not_n = entries != n
                 mask = not_n & not_zero & not_missing
-                res = res.where(mask.any(term_dim), n)
+                res = res.where(mask.any(constraint.term_dim), n)
 
-            res = res.where(not_missing.any(term_dim), -1)
-            res = res.where(not_zero.any(term_dim), 0)
+            res = res.where(not_missing.any(constraint.term_dim), -1)
+            res = res.where(not_zero.any(constraint.term_dim), 0)
             constraint.data["blocks"] = res
 
     @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
@@ -818,9 +823,8 @@ class Constraints:
 
         Missing values, i.e. -1 in labels and vars, are ignored filtered
         out.
-
-        # TODO: rename "filter_missings" to "~labels_as_coordinates"
         """
+        # TODO: rename "filter_missings" to "~labels_as_coordinates"
         cons = self.flat
 
         if filter_missings:
@@ -887,7 +891,7 @@ class AnonymousScalarConstraint:
         Get the representation of the AnonymousScalarConstraint.
         """
         expr_string = print_single_expression(
-            self.lhs.coeffs, self.lhs.vars, self.lhs.model
+            self.lhs.coeffs, self.lhs.vars, 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
 

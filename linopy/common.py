@@ -7,10 +7,11 @@ This module contains commonly used functions.
 """
 
 from functools import partialmethod, update_wrapper, wraps
-from typing import Union
+from typing import Any, Dict, List, Optional, Union
 from warnings import warn
 
 import numpy as np
+import pandas as pd
 from numpy import arange, hstack
 from xarray import DataArray, Dataset, align, apply_ufunc, merge
 from xarray.core import indexing, utils
@@ -33,12 +34,49 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def as_dataarray(arr, coords=None):
-    """
-    Convert an object to a DataArray if it is not already a DataArray.
-    """
-    if not isinstance(arr, DataArray):
-        return DataArray(arr, coords=coords)
+def as_dataarray(
+    arr,
+    coords: Optional[Union[dict, list]] = None,
+    dims: Optional[list] = None,
+    **kwargs,
+) -> DataArray:
+    if isinstance(arr, (pd.Series, pd.DataFrame)):
+        if dims is not None:
+            dims = [axis.name or list(dims)[i] for i, axis in enumerate(arr.axes)]
+        if coords is not None and not isinstance(coords, list):
+            coords = {dim: coords[dim] for dim in dims}
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
+
+    elif isinstance(arr, np.ndarray):
+        dims = list(dims)[: arr.ndim] if dims else []
+
+        if isinstance(coords, list):
+            coords = {dim: coord for dim, coord in zip(dims, coords)}
+
+        if len(dims) < arr.ndim:
+            dims = list(dims) + [f"dim_{i}" for i in range(len(dims), arr.ndim)]
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
+
+    elif isinstance(arr, (np.number, int, float, str, bool, list)):
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
+
+    elif not isinstance(arr, DataArray):
+        supported_types = [
+            np.number,
+            str,
+            bool,
+            list,
+            pd.Series,
+            pd.DataFrame,
+            np.ndarray,
+            DataArray,
+        ]
+        supported_types_str = ", ".join([t.__name__ for t in supported_types])
+        raise TypeError(
+            f"Unsupported type of arr: {type(arr)}. Supported types are: {supported_types_str}"
+        )
+
+    arr = fill_missing_coords(arr)
     return arr
 
 
@@ -53,6 +91,29 @@ def save_join(*dataarrays):
         labels = align(*dataarrays, join="outer")
         labels = [ds.fillna(-1).astype(int) for ds in labels]
     return Dataset({ds.name: ds for ds in labels})
+
+
+def fill_missing_coords(ds):
+    """
+    Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
+
+    This function fills in the integer coordinates for all dimensions of a
+    Dataset or DataArray that have no coordinates assigned yet.
+
+    Parameters
+    ----------
+    ds : xarray.DataArray or xarray.Dataset
+    """
+    ds = ds.copy()
+    if not isinstance(ds, (Dataset, DataArray)):
+        raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
+
+    # Fill in missing integer coordinates
+    for dim in ds.dims:
+        if dim not in ds.coords and not dim.endswith("_term"):
+            ds.coords[dim] = arange(ds.sizes[dim])
+
+    return ds
 
 
 def _remap(array, mapping):
@@ -146,7 +207,7 @@ def print_single_variable(model, label):
     return f"{name}{print_coord(coord)}{bounds}"
 
 
-def print_single_expression(c, v, model):
+def print_single_expression(c, v, const, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
@@ -154,16 +215,23 @@ def print_single_expression(c, v, model):
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
-    def print_line(expr):
+    def print_line(expr, const):
         res = []
         for i, (coeff, (name, coord)) in enumerate(expr):
             coord_string = print_coord(coord)
             if i:
+                coeff_string = f"{coeff:+.4g}"
                 # split sign and coefficient
-                coeff_string = f"{float(coeff):+.4g}"
                 res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
             else:
-                res.append(f"{float(coeff):+.4g} {name}{coord_string}")
+                coeff_string = f"{coeff:+.4g} " if coeff != 1 else ""
+                res.append(f"{coeff_string}{name}{coord_string}")
+        if const != 0:
+            const_string = f"{const:+.4g}"
+            if len(res):
+                res.append(f"{const_string[0]} {const_string[1:]}")
+            else:
+                res.append(const_string)
         return " ".join(res) if len(res) else "None"
 
     if isinstance(c, np.ndarray):
@@ -174,17 +242,17 @@ def print_single_expression(c, v, model):
     if len(c) > max_terms:
         truncate = max_terms // 2
         expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
-        res = print_line(expr)
+        res = print_line(expr, const)
         res += " ... "
         expr = list(
             zip(c[-truncate:], model.variables.get_label_position(v[-truncate:]))
         )
-        residual = print_line(expr)
+        residual = print_line(expr, const)
         if residual != " None":
             res += residual
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
-    return print_line(expr)
+    return print_line(expr, const)
 
 
 def has_optimized_model(func):
@@ -206,10 +274,16 @@ def has_optimized_model(func):
 def is_constant(func):
     from linopy import expressions, variables
 
-    #
     @wraps(func)
     def wrapper(self, arg):
-        if isinstance(arg, (variables.Variable, expressions.LinearExpression)):
+        if isinstance(
+            arg,
+            (
+                variables.Variable,
+                variables.ScalarVariable,
+                expressions.LinearExpression,
+            ),
+        ):
             raise TypeError(f"Assigned rhs must be a constant, got {type()}).")
         return func(self, arg)
 
@@ -232,6 +306,26 @@ def forward_as_properties(**routes):
         return cls
 
     return deco
+
+
+def check_common_keys_values(list_of_dicts: List[Dict[str, Any]]) -> bool:
+    """
+    Check if all common keys among a list of dictionaries have the same value.
+
+    Parameters
+    ----------
+    list_of_dicts : list of dict
+        A list of dictionaries.
+
+    Returns
+    -------
+    bool
+        True if all common keys have the same value across all dictionaries, False otherwise.
+    """
+    common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
+    return all(
+        len(set(d[k] for d in list_of_dicts if k in d)) == 1 for k in common_keys
+    )
 
 
 class LocIndexer:
