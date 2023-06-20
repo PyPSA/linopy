@@ -114,16 +114,48 @@ def test_anonymous_constraint_from_variable_eq(x):
     assert (con.rhs == 10).all()
 
 
-def test_anonymous_constraint_from_linear_expression_fail(x, y):
+def test_anonymous_constraint_with_variable_on_rhs(x, y):
     expr = 10 * x + y
-    with pytest.raises(TypeError):
-        expr == x
+    con = expr == x
+    assert isinstance(con.lhs, LinearExpression)
+    assert (con.sign == EQUAL).all()
+    assert (con.rhs == 0).all()
 
 
-def test_anonymous_scalar_constraint_from_linear_expression_fail(x, y):
+def test_anonymous_constraint_with_constant_on_lhs(x, y):
+    expr = 10 * x + y + 10
+    con = expr == 0
+    assert isinstance(con.lhs, LinearExpression)
+    assert (con.lhs.const == 0).all()
+    assert (con.sign == EQUAL).all()
+    assert (con.rhs == -10).all()
+
+
+def test_anonymous_constraint_with_constant_on_rhs(x, y):
+    expr = 10 * x + y
+    con = expr == 10
+    assert isinstance(con.lhs, LinearExpression)
+    assert (con.sign == EQUAL).all()
+    assert (con.rhs == 10).all()
+
+
+def test_anonymous_constraint_with_expression_on_both_sides(x, y):
+    expr = 10 * x + y + 10
+    con = expr == expr
+    assert isinstance(con.lhs, LinearExpression)
+    assert con.lhs.nterm == 4  # are stacked on top of each other
+    assert (con.coeffs.sum(con.term_dim) == 0).all()
+    assert (con.sign == EQUAL).all()
+    assert (con.rhs == 0).all()
+
+
+def test_anonymous_scalar_constraint_with_scalar_variable_on_rhs(x, y):
     expr = 10 * x[0] + y[1]
     with pytest.raises(TypeError):
-        expr == x[0]
+        con = expr == x[0]
+        # assert isinstance(con.lhs, LinearExpression)
+        # assert (con.sign == EQUAL).all()
+        # assert (con.rhs == 0).all()
 
 
 def test_anonymous_constraint_sel(x, y):
@@ -203,10 +235,15 @@ def test_constraint_lhs_setter(c, x, y):
     assert c.coeffs.notnull().all().item()
 
 
-def test_constraint_lhs_setter_invalid(c):
-    # Test that assigning lhs with other type that LinearExpression raises TypeError
-    with pytest.raises(TypeError):
-        c.lhs = x
+def test_constraint_lhs_setter_with_variable(c, x):
+    c.lhs = x
+    assert c.lhs.nterm == 1
+
+
+def test_constraint_lhs_setter_with_constant(c):
+    c.lhs = 10
+    assert (c.rhs == -10).all()
+    assert c.lhs.nterm == 0
 
 
 def test_constraint_sign_setter(c):
@@ -230,13 +267,25 @@ def test_constraint_rhs_setter(c):
     assert (c.rhs == 2).all()
 
 
-def test_constraint_rhs_setter_invalid(c, x):
-    # Test that assigning a variable or linear expression to the rhs property raises a TypeError
-    with pytest.raises(TypeError):
-        c.rhs = x
+def test_constraint_rhs_setter_with_variable(c, x):
+    c.rhs = x
+    assert (c.rhs == 0).all()
+    assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
+    assert c.lhs.nterm == 2
 
-    with pytest.raises(TypeError):
-        c.rhs = x + y
+
+def test_constraint_rhs_setter_with_expression(c, x, y):
+    c.rhs = x + y
+    assert (c.rhs == 0).all()
+    assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
+    assert c.lhs.nterm == 3
+
+
+def test_constraint_rhs_setter_with_expression_and_constant(c, x):
+    c.rhs = x + 1
+    assert (c.rhs == 1).all()
+    assert (c.coeffs.sum(c.term_dim) == 0).all()
+    assert c.lhs.nterm == 2
 
 
 def test_constraint_labels_setter_invalid(c):

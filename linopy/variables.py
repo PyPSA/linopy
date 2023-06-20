@@ -22,6 +22,8 @@ from xarray import DataArray, Dataset, align, broadcast, zeros_like
 import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
+    as_dataarray,
+    fill_missing_coords,
     forward_as_properties,
     generate_indices_for_printout,
     has_optimized_model,
@@ -186,13 +188,30 @@ class Variable:
     def to_pandas(self):
         return self.labels.to_pandas()
 
-    def to_linexpr(self, coefficient=1):
+    def to_linexpr(
+        self,
+        coefficient: Union[
+            np.number, pd.Series, pd.DataFrame, np.ndarray, DataArray
+        ] = 1,
+    ) -> "expressions.LinearExpression":
         """
         Create a linear expression from the variables.
+
+        Parameters
+        ----------
+        coefficient : array-like, optional
+                Coefficient for the linear expression. This can be a numeric value, numpy array,
+                pandas series/dataframe or a DataArray. Default is 1.
+        Returns
+        -------
+        linopy.LinearExpression
+            Linear expression with the variables and coefficients.
         """
-        if isinstance(coefficient, (expressions.LinearExpression, Variable)):
-            raise TypeError(f"unsupported type of coefficient: {type(coefficient)}")
-        return expressions.LinearExpression.from_tuples((coefficient, self))
+        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
+            "_term", -1
+        )
+        return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self):
         """
@@ -280,14 +299,7 @@ class Variable:
         """
         Add variables to linear expressions or other variables.
         """
-        if isinstance(other, Variable):
-            return expressions.LinearExpression.from_tuples((1, self), (1, other))
-        elif isinstance(other, expressions.LinearExpression):
-            return self.to_linexpr() + other
-        else:
-            raise TypeError(
-                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
-            )
+        return self.to_linexpr() + other
 
     def __radd__(self, other):
         # This is needed for using python's sum function
@@ -300,14 +312,7 @@ class Variable:
         """
         Subtract linear expressions or other variables from the variables.
         """
-        if isinstance(other, Variable):
-            return expressions.LinearExpression.from_tuples((1, self), (-1, other))
-        elif isinstance(other, expressions.LinearExpression):
-            return self.to_linexpr() - other
-        else:
-            raise TypeError(
-                "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
-            )
+        return self.to_linexpr() - other
 
     def __le__(self, other):
         return self.to_linexpr().__le__(other)

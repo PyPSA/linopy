@@ -43,6 +43,7 @@ lb = 1 * b
 lc = 1 * c
 ld = 1 * d
 lav = 1 * a + 1 * v
+luc = 1 * v + 10
 
 
 # create anonymous constraint for linear expression
@@ -56,6 +57,7 @@ cb_ = lb >= 0
 cc_ = lc >= 0
 cd_ = ld >= 0
 cav_ = lav >= 0
+cuc_ = luc >= 0
 
 # add constraint for each variable
 cu = m.add_constraints(cu_, name="cu")
@@ -68,6 +70,7 @@ cb = m.add_constraints(cb_, name="cb")
 cc = m.add_constraints(cc_, name="cc")
 cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
+cuc = m.add_constraints(cuc_, name="cuc")
 cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.labels, False))
 
 
@@ -89,7 +92,7 @@ def test_single_variable_repr():
 
 
 def test_linear_expression_repr():
-    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav]:
+    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc]:
         repr(expr)
 
 
@@ -110,7 +113,7 @@ def test_single_linear_repr():
 
 
 def test_anonymous_constraint_repr():
-    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_]:
+    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_]:
         repr(con)
 
 
@@ -126,7 +129,7 @@ def test_single_constraint_repr():
 
 
 def test_constraint_repr():
-    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cu_masked]:
+    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked]:
         repr(con)
 
 
