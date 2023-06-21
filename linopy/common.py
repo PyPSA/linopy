@@ -6,6 +6,7 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
+import hashlib
 from functools import partialmethod, update_wrapper, wraps
 from typing import Any, Dict, List, Optional, Union
 from warnings import warn
@@ -140,6 +141,19 @@ def best_int(max_value):
     for t in (np.int8, np.int16, np.int32, np.int64):
         if max_value <= np.iinfo(t).max:
             return t
+
+
+def get_index_map(*arrays):
+    """
+    Given arrays of hashable objects, create a map from unique combinations to unique integers.
+    """
+    # Create unique combinations
+    unique_combinations = set(zip(*arrays))
+
+    # Create a map from combinations to integers
+    index_map = {combination: i for i, combination in enumerate(unique_combinations)}
+
+    return index_map
 
 
 def generate_indices_for_printout(dim_sizes, max_lines):

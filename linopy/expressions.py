@@ -8,7 +8,7 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import Any, Mapping, Union
 
@@ -30,6 +30,7 @@ from linopy.common import (
     fill_missing_coords,
     forward_as_properties,
     generate_indices_for_printout,
+    get_index_map,
     print_single_expression,
 )
 from linopy.config import options
@@ -69,23 +70,124 @@ class LinearExpressionGroupby:
     GroupBy object specialized to grouping LinearExpression objects.
     """
 
-    groupby: xr.core.groupby.DatasetGroupBy
+    data: xr.Dataset
+    group: xr.DataArray
     model: Any
+    kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def groupby(self):
+        """
+        Groups the data using the specified group and kwargs.
+
+        Returns
+        -------
+        xarray.core.groupby.DataArrayGroupBy
+            The groupby object.
+        """
+        return self.data.groupby(group=self.group, **self.kwargs)
 
     def map(self, func, shortcut=False, args=(), **kwargs):
+        """
+        Apply a specified function to the groupby object.
+
+        Parameters
+        ----------
+        func : callable
+            The function to apply.
+        shortcut : bool, optional
+            Whether to use shortcut or not.
+        args : tuple, optional
+            The arguments to pass to the function.
+        **kwargs
+            Arbitrary keyword arguments.
+
+        Returns
+        -------
+        LinearExpression
+            The result of applying the function to the groupby object.
+        """
+
         return LinearExpression(
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
 
-    def sum(self, **kwargs):
-        def func(ds):
-            ds = LinearExpression._sum(ds, self.groupby._group_dim)
-            ds = ds.assign_coords(_term=np.arange(len(ds._term)))
-            return ds
+    def sum(self, use_fallback=False, **kwargs):
+        """
+        Sum the groupby object.
 
-        return self.map(func, **kwargs)
+        There are two options to perform the summation over groups.
+        The first and faster option uses an internal reindexing mechanism, which
+        however ignores keyword arguments. This will be used when passing a
+        pandas object or a DataArray as group, and setting `use_fallack`
+        to False (default).
+        The second uses a mapping of xarray groups which performs slower but
+        also takes into account the keyword arguments.
+
+        Parameters
+        ----------
+        use_fallback : bool
+            Whether to use the fallback implementation, which is a sort of default
+            xarray implementation. If set to False, the operation will be much
+            faster but keyword arguments are ignored. Defaults to False.
+        **kwargs
+            Arbitrary keyword arguments.
+
+        Returns
+        -------
+        LinearExpression
+            The sum of the groupby object.
+        """
+        non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
+        if isinstance(self.group, non_fallback_types) and not use_fallback:
+            group = self.group
+            group_name = getattr(group, "name", "group") or "group"
+
+            if isinstance(group, DataArray):
+                group = group.to_pandas()
+
+            int_map = None
+            if isinstance(group, pd.DataFrame):
+                int_map = get_index_map(*group.values.T)
+                orig_group = group
+                group = group.apply(tuple, axis=1).map(int_map)
+
+            group_dim = group.index.name
+            arrays = [group, group.groupby(group).cumcount()]
+            idx = pd.MultiIndex.from_arrays(arrays, names=[group_name, "_grouped_term"])
+            ds = self.data.assign_coords({group_dim: idx})
+            ds = ds.unstack(group_dim, fill_value=LinearExpression.fill_value)
+            ds = LinearExpression._sum(ds, dims="_grouped_term")
+
+            if int_map is not None:
+                index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
+                index.names = orig_group.columns
+                index.name = group_name
+                ds = xr.Dataset(ds.assign_coords({group_name: index}))
+
+            return LinearExpression(ds, self.model)
+
+        else:
+
+            def func(ds):
+                ds = LinearExpression._sum(ds, self.groupby._group_dim)
+                ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+                return ds
+
+            return self.map(func, **kwargs)
 
     def roll(self, **kwargs):
+        """
+        Roll the groupby object.
+
+        **kwargs
+            Arbitrary keyword arguments.
+
+        Returns
+        -------
+        LinearExpression
+            The result of rolling over the groups.
+        """
         return self.map(Dataset.roll, **kwargs)
 
 
@@ -179,6 +281,8 @@ class LinearExpression:
 
         if np.issubdtype(data.vars, np.floating):
             data["vars"] = data.vars.fillna(-1).astype(int)
+        if not np.issubdtype(data.coeffs, np.floating):
+            data["coeffs"] = data.coeffs.astype(float)
 
         data = fill_missing_coords(data)
 
@@ -187,11 +291,11 @@ class LinearExpression:
             raise ValueError("data must contain one dimension ending with '_term'")
         term_dim = term_dims[0]
 
-        if "const" in data:
-            data[["coeffs", "vars"]] = xr.broadcast(data[["coeffs", "vars"]])[0]
-        else:
+        if "const" not in data:
             data = data.assign(const=0)
+
         data = xr.broadcast(data, exclude=["_term"])[0]
+        data[["coeffs", "vars"]] = xr.broadcast(data[["coeffs", "vars"]])[0]
 
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., term_dim))
@@ -665,10 +769,7 @@ class LinearExpression:
         return self - self.shift({dim: n})
 
     def groupby(
-        self,
-        group,
-        squeeze: "bool" = True,
-        restore_coord_dims: "bool" = None,
+        self, group, squeeze: "bool" = True, restore_coord_dims: "bool" = None, **kwargs
     ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
@@ -696,10 +797,8 @@ class LinearExpression:
             the correct return type.
         """
         ds = self.data
-        groups = ds.groupby(
-            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
-        )
-        return LinearExpressionGroupby(groups, model=self.model)
+        kwargs = dict(squeeze=squeeze, restore_coord_dims=restore_coord_dims, **kwargs)
+        return LinearExpressionGroupby(ds, group, model=self.model, kwargs=kwargs)
 
     def rolling(
         self,
