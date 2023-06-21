@@ -69,16 +69,16 @@ Note that these do have to be installed by the user separately.
 License
 =======
 
-Copyright 2021 Fabian Hofmann
+Copyright 2021-2023 Fabian Hofmann
 
-This package is published under license GNU Public License GPLv3
+This package is published under MIT license.
 
 .. |PyPI| image:: https://img.shields.io/pypi/v/linopy
    :target: https://pypi.org/project/linopy/
 .. |CI| image:: https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg
    :target: https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml
-.. |License: GPL v3| image:: https://img.shields.io/badge/License-GPLv3-blue.svg
-   :target: https://www.gnu.org/licenses/gpl-3.0
+.. |License| image:: https://img.shields.io/pypi/l/linopy.svg
+   :target: https://mit-license.org/
 
 
 .. toctree::

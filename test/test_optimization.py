@@ -215,7 +215,7 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     x = model["x"]
-    assert_equal(x.sol, model.solution["x"])
+    assert_equal(x.solution, model.solution["x"])
     c = model.constraints["con1"]
     assert_equal(c.dual, model.dual["con1"])
 
@@ -337,9 +337,12 @@ def test_milp_model(milp_model, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_milp_model_r(milp_model_r, solver, io_api):
-    status, condition = milp_model_r.solve(solver, io_api=io_api)
-    assert condition == "optimal"
-    assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
+    # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
+    # skip it
+    if io_api != "mps":
+        status, condition = milp_model_r.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
 @pytest.mark.parametrize("solver,io_api", params)

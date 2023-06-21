@@ -62,4 +62,4 @@ def test_matrices_duplicated_variables():
 
     A = m.matrices.A.todense()
     assert A[0, 0] == 2
-    assert np.isin(np.unique(A), [0, 2]).all()
+    assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()

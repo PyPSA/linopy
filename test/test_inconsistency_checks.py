@@ -22,6 +22,7 @@ def test_nan_in_variable_lower():
     m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
 
     m.add_objective(2 * y + x)
+
     with pytest.raises(ValueError):
         m.solve()
 

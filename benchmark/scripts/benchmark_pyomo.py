@@ -71,7 +71,6 @@ def knapsack_model(n, solver):
 
     opt = SolverFactory(solver)
     opt.solve(m)
-    print(m.obj())
     return m.obj()
 
 

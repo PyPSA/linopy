@@ -19,13 +19,15 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import best_int, maybe_replace_signs, replace_by_map
-from linopy.constants import ModelStatus, TerminationCondition
-from linopy.constraints import (
-    AnonymousConstraint,
-    AnonymousScalarConstraint,
-    Constraints,
+from linopy.common import (
+    as_dataarray,
+    best_int,
+    maybe_replace_signs,
+    replace_by_map,
+    save_join,
 )
+from linopy.constants import ModelStatus, TerminationCondition
+from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
@@ -62,6 +64,7 @@ class Model:
         # hidden attributes
         "_status",
         "_termination_condition",
+        # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
         "_varnameCounter",
@@ -105,8 +108,6 @@ class Model:
         self._objective = LinearExpression(None, self)
         self._parameters = Dataset()
 
-        self._solution = Dataset()
-        self._dual = Dataset()
         self._objective_value = nan
 
         self._status = "initialized"
@@ -167,22 +168,14 @@ class Model:
         """
         Solution calculated by the optimization.
         """
-        return self._solution
-
-    @solution.setter
-    def solution(self, value):
-        self._solution = Dataset(value)
+        return self.variables.solution
 
     @property
     def dual(self):
         """
         Dual values calculated by the optimization.
         """
-        return self._dual
-
-    @dual.setter
-    def dual(self, value):
-        self._dual = Dataset(value)
+        return self.constraints.dual
 
     @property
     def status(self):
@@ -273,7 +266,7 @@ class Model:
 
     @property
     def dataset_attrs(self):
-        return ["parameters", "solution", "dual"]
+        return ["parameters"]
 
     @property
     def scalar_attrs(self):
@@ -291,14 +284,12 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        var_string = self.variables.labels.__repr__().split("\n", 1)[1]
-        var_string = var_string.replace("Data variables:\n", "Data:\n")
-        con_string = self.constraints.labels.__repr__().split("\n", 1)[1]
-        con_string = con_string.replace("Data variables:\n", "Data:\n")
+        var_string = self.variables.__repr__().split("\n", 2)[2]
+        con_string = self.constraints.__repr__().split("\n", 2)[2]
         return (
             f"Linopy model\n============\n\n"
-            f"Variables:\n----------\n{var_string}\n\n"
-            f"Constraints:\n------------\n{con_string}\n\n"
+            f"Variables:\n----------\n{var_string}\n"
+            f"Constraints:\n------------\n{con_string}\n"
             f"Status:\n-------\n{self.status}"
         )
 
@@ -430,58 +421,23 @@ class Model:
         if binary and integer:
             raise ValueError("Variable cannot be both binary and integer.")
 
-        if not binary:
-            lower = DataArray(lower, coords=coords, **kwargs)
-            upper = DataArray(upper, coords=coords, **kwargs)
-            if coords is None:
-                # only a lazy calculation for extracting coords, shape and size
-                broadcasted = lower.chunk() + upper.chunk()
-                coords = broadcasted.coords
-                if not coords and broadcasted.size > 1:
-                    raise ValueError(
-                        "Both `lower` and `upper` have missing coordinates"
-                        " while the broadcasted array is of size > 1."
-                    )
-        else:
-            # check if lower and upper and non-defaults
+        if binary:
             if (lower != -inf) or (upper != inf):
-                raise ValueError(
-                    "Argument lower and upper not valid for binary variables."
-                )
-            # for general compatibility when ravelling all values set non-nan
-            lower = DataArray(-inf, coords=coords, **kwargs)
-            upper = DataArray(inf, coords=coords, **kwargs)
+                raise ValueError("Binary variables cannot have lower or upper bounds.")
+            else:
+                lower, upper = 0, 1
 
-        labels = DataArray(-2, coords=coords).assign_attrs(
-            binary=binary, integer=integer
+        data = Dataset(
+            {
+                "lower": as_dataarray(lower, coords, **kwargs),
+                "upper": as_dataarray(upper, coords, **kwargs),
+            }
         )
 
-        # ensure order of dims is the same
-        lower = lower.transpose(*[d for d in labels.dims if d in lower.dims])
-        upper = upper.transpose(*[d for d in labels.dims if d in upper.dims])
-
         if mask is not None:
-            mask = DataArray(mask).astype(bool)
-            mask, _ = xr.align(mask, labels, join="right")
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
+            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
-        # It is important to end up with monotonically increasing labels in the
-        # model's variables container as we use it for indirect indexing.
-        labels_reindexed = labels.reindex_like(self.variables.labels, fill_value=-1)
-        if not labels.equals(labels_reindexed):
-            warnings.warn(
-                f"Reindexing variable {name} to match existing coordinates.",
-                UserWarning,
-            )
-            labels = labels_reindexed
-            lower = lower.reindex_like(labels)
-            upper = upper.reindex_like(labels)
-            if mask is None:
-                mask = labels != -1
-            else:
-                mask = mask.reindex_like(labels_reindexed, fill_value=False)
+        labels = DataArray(-2, coords=data.coords)
 
         self.check_force_dim_names(labels)
 
@@ -493,13 +449,16 @@ class Model:
         if mask is not None:
             labels = labels.where(mask, -1)
 
-        if self.chunk:
-            labels = labels.chunk(self.chunk)
-            lower = lower.chunk(self.chunk)
-            upper = upper.chunk(self.chunk)
+        data = data.assign(labels=labels).assign_attrs(
+            label_range=(start, end), name=name, binary=binary, integer=integer
+        )
 
-        self.variables.add(name, labels, lower, upper, start=start, end=end)
-        return self.variables[name]
+        if self.chunk:
+            data = data.chunk(self.chunk)
+
+        variable = Variable(data, name=name, model=self)
+        self.variables.add(variable)
+        return variable
 
     def add_constraints(
         self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None
@@ -515,7 +474,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.AnonymousConstraint/callable
+        lhs : linopy.LinearExpression/linopy.Constraint/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -544,79 +503,81 @@ class Model:
         labels : linopy.model.Constraint
             Array containing the labels of the added constraints.
         """
-        labels = None
 
-        if name is None:
-            name = "con" + str(self._connameCounter)
-            self._connameCounter += 1
+        def assert_sign_rhs_are_None(lhs, sign, rhs):
+            if sign is not None or rhs is not None:
+                msg = f"Passing arguments `sign` and `rhs` together with a {type(lhs)} is ambiguous."
+                raise ValueError(msg)
+
+        def assert_sign_rhs_not_None(lhs, sign, rhs):
+            if sign is None or rhs is None:
+                msg = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
+                raise ValueError(msg)
 
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
+        elif name is None:
+            name = "con" + str(self._connameCounter)
+            self._connameCounter += 1
+        if sign is not None:
+            sign = maybe_replace_signs(as_dataarray(sign))
+        if rhs is not None:
+            rhs = as_dataarray(rhs)
 
-        if callable(lhs):
+        if isinstance(lhs, LinearExpression):
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = lhs.data.assign(sign=sign, rhs=rhs)
+        elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
-            lhs = AnonymousConstraint.from_rule(self, rule, coords)
-
-        if isinstance(lhs, AnonymousScalarConstraint):
-            lhs = lhs.to_anonymous_constraint()
-
-        if isinstance(lhs, AnonymousConstraint):
-            if sign is not None or rhs is not None:
-                raise ValueError(
-                    "Passing arguments `sign` and `rhs` together with a constraint"
-                    " is ambiguous."
-                )
-            labels = lhs.labels  # returns an empty data array of correct shape
-            sign = lhs.sign
-            rhs = lhs.rhs
-            lhs = lhs.lhs
-        else:
-            if sign is None or rhs is None:
-                raise ValueError(
-                    "Argument `sign` and `rhs` must not be None if first argument "
-                    " is an expression."
-                )
-        if isinstance(lhs, (list, tuple)):
-            lhs = self.linexpr(*lhs)
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = Constraint.from_rule(self, rule, coords).data
+        elif isinstance(lhs, AnonymousScalarConstraint):
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = lhs.to_constraint().data
+        elif isinstance(lhs, Constraint):
+            assert_sign_rhs_are_None(lhs, sign, rhs)
+            data = lhs.data
+        elif isinstance(lhs, (list, tuple)):
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
-            lhs = lhs.to_linexpr()
-        assert isinstance(lhs, LinearExpression)
+            assert_sign_rhs_not_None(lhs, sign, rhs)
+            data = lhs.to_linexpr().to_constraint(sign, rhs).data
+        else:
+            raise ValueError(
+                f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
+            )
 
-        if isinstance(rhs, (Variable, LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
+        if mask is not None:
+            mask = as_dataarray(mask).astype(bool)
+            # TODO: simplify
+            assert set(mask.dims).issubset(
+                data.dims
+            ), "Dimensions of mask not a subset of resulting labels dimensions."
 
-        lhs = lhs.sanitize()
-        sign = maybe_replace_signs(DataArray(sign))
-        rhs = DataArray(rhs)
-
-        if labels is None:
-            labels = (lhs.vars.chunk() + rhs).sum("_term")
+        labels = DataArray(-1, coords=data.indexes)
 
         self.check_force_dim_names(labels)
 
         start = self._cCounter
-        labels.data = np.arange(start, start + labels.size).reshape(labels.shape)
+        end = start + labels.size
+        labels.data = np.arange(start, end).reshape(labels.shape)
         self._cCounter += labels.size
 
         if mask is not None:
-            mask = DataArray(mask)
-            assert set(mask.dims).issubset(
-                labels.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
             labels = labels.where(mask, -1)
 
-        lhs = lhs.data.rename({"_term": f"{name}_term"})
+        data = data.assign(labels=labels).assign_attrs(
+            label_range=(start, end), name=name
+        )
 
         if self.chunk:
-            lhs = lhs.chunk(self.chunk)
-            sign = sign.chunk(self.chunk)
-            rhs = rhs.chunk(self.chunk)
-            labels = labels.chunk(self.chunk)
+            data = data.chunk(self.chunk)
 
-        self.constraints.add(name, labels, lhs.coeffs, lhs.vars, sign, rhs)
-
-        return self.constraints[name]
+        constraint = Constraint(data, name=name, model=self)
+        self.constraints.add(constraint)
+        return constraint
 
     def add_objective(self, expr, overwrite=False):
         """
@@ -668,12 +629,13 @@ class Model:
         -------
         None.
         """
-        labels = self.variables.labels[name]
+        labels = self.variables[name].labels
         self.variables.remove(name)
 
-        remove_b = self.constraints.vars.isin(labels).any()
-        names = [name for name, remove in remove_b.items() if remove.item()]
-        self.constraints.remove(names)
+        for k in self.constraints:
+            vars = self.constraints[k].data["vars"]
+            vars = vars.where(~vars.isin(labels), -1)
+            self.constraints[k].data["vars"] = vars
 
         self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
 
@@ -707,13 +669,6 @@ class Model:
         Get all integer variables.
         """
         return self.variables.integers
-
-    @property
-    def non_binaries(self):
-        """
-        Get all non-binary variables.
-        """
-        return self.variables.non_binaries
 
     @property
     def nvars(self):
@@ -757,10 +712,9 @@ class Model:
         assert self.blocks is not None, "Blocks are not defined."
 
         dtype = self.blocks.dtype
-        self.variables.blocks = self.variables.get_blocks(self.blocks)
-        block_map = self.variables.blocks_to_blockmap(self.variables.blocks, dtype)
-
-        self.constraints.blocks = self.constraints.get_blocks(block_map)
+        self.variables.set_blocks(self.blocks)
+        block_map = self.variables.get_blockmap(dtype)
+        self.constraints.set_blocks(block_map)
 
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
@@ -847,22 +801,6 @@ class Model:
             return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
         else:
             raise TypeError(f"Not supported type {args}.")
-
-    def vareval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "vareval was removed in version `v0.1.0`. Please use m.add_variables() instead."
-        )
-
-    def lineval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "lineval was removed in version `v0.1.0`. Please use arithmetic expressions instead."
-        )
-
-    def coneval(self, expr: str, eval_kw=None, **kwargs):
-        raise NotImplementedError(
-            "coneval was removed in version `v0.1.0`. Please use arithmetic "
-            "expressions and m.add_constraints() instead."
-        )
 
     @property
     def coefficientrange(self):
@@ -1007,16 +945,18 @@ class Model:
             self.objective_value = solved.objective_value
             self.status = solved.status
             self.termination_condition = solved.termination_condition
-            self.solution = solved.solution
-            self.dual = solved.dual
+            for k, v in self.variables.items():
+                v.solution = solved.variables[k].solution
+            for k, c in self.constraints.items():
+                if "dual" in solved.constraints[k]:
+                    c.dual = solved.constraints[k].dual
             return self.status, self.termination_condition
 
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
-        self.solution = xr.Dataset()
-        self.dual = xr.Dataset()
+        self.reset_solution()
 
         if log_fn is not None:
             logger.info(f"Solver logs written to `{log_fn}`.")
@@ -1066,22 +1006,22 @@ class Model:
         sol = result.solution.primal.copy()
         sol.loc[-1] = nan
 
-        for name, labels in self.variables.labels.items():
-            idx = np.ravel(labels)
-            vals = sol[idx].values.reshape(labels.shape)
-            self.solution[name] = xr.DataArray(vals, labels.coords)
+        for name, var in self.variables.items():
+            idx = np.ravel(var.labels)
+            vals = sol[idx].values.reshape(var.labels.shape)
+            var.solution = xr.DataArray(vals, var.coords)
 
         if not result.solution.dual.empty:
             dual = result.solution.dual.copy()
             dual.loc[-1] = nan
 
-            for name, labels in self.constraints.labels.items():
-                idx = np.ravel(labels)
+            for name, con in self.constraints.items():
+                idx = np.ravel(con.labels)
                 try:
-                    vals = dual[idx].values.reshape(labels.shape)
+                    vals = dual[idx].values.reshape(con.labels.shape)
                 except KeyError:
-                    vals = dual.reindex(idx).values.reshape(labels.shape)
-                self.dual[name] = xr.DataArray(vals, labels.coords)
+                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                con.dual = xr.DataArray(vals, con.labels.coords)
 
         return result.status.status.value, result.status.termination_condition.value
 
@@ -1117,6 +1057,13 @@ class Model:
             [k for (k, v) in (subset == -1).all().items() if v.item()]
         )
         return subset
+
+    def reset_solution(self):
+        """
+        Reset the solution and dual values if available of the model.
+        """
+        self.variables.reset_solution()
+        self.constraints.reset_dual()
 
     to_netcdf = to_netcdf
 

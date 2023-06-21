@@ -6,11 +6,16 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
+import hashlib
 from functools import partialmethod, update_wrapper, wraps
+from typing import Any, Dict, List, Optional, Union
+from warnings import warn
 
 import numpy as np
+import pandas as pd
 from numpy import arange, hstack
-from xarray import DataArray, apply_ufunc, merge
+from xarray import DataArray, Dataset, align, apply_ufunc, merge
+from xarray.core import indexing, utils
 
 from linopy.config import options
 from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
@@ -30,24 +35,86 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def _merge_inplace(self, attr, da, name, **kwargs):
-    """
-    Assign a new dataarray to the dataset `attr` by merging.
+def as_dataarray(
+    arr,
+    coords: Optional[Union[dict, list]] = None,
+    dims: Optional[list] = None,
+    **kwargs,
+) -> DataArray:
+    if isinstance(arr, (pd.Series, pd.DataFrame)):
+        if dims is not None:
+            dims = [axis.name or list(dims)[i] for i, axis in enumerate(arr.axes)]
+        if coords is not None and not isinstance(coords, list):
+            coords = {dim: coords[dim] for dim in dims}
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
-    This takes care of all coordinate alignments, instead of a direct
-    assignment like self.variables[name] = var
-    """
-    ds = merge([getattr(self, attr), da.rename(name)], **kwargs)
-    setattr(self, attr, ds)
+    elif isinstance(arr, np.ndarray):
+        dims = list(dims)[: arr.ndim] if dims else []
 
+        if isinstance(coords, list):
+            coords = {dim: coord for dim, coord in zip(dims, coords)}
 
-def as_dataarray(arr):
-    """
-    Convert an object to a DataArray if it is not already a DataArray.
-    """
-    if not isinstance(arr, DataArray):
-        return DataArray(arr)
+        if len(dims) < arr.ndim:
+            dims = list(dims) + [f"dim_{i}" for i in range(len(dims), arr.ndim)]
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
+
+    elif isinstance(arr, (np.number, int, float, str, bool, list)):
+        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
+
+    elif not isinstance(arr, DataArray):
+        supported_types = [
+            np.number,
+            str,
+            bool,
+            list,
+            pd.Series,
+            pd.DataFrame,
+            np.ndarray,
+            DataArray,
+        ]
+        supported_types_str = ", ".join([t.__name__ for t in supported_types])
+        raise TypeError(
+            f"Unsupported type of arr: {type(arr)}. Supported types are: {supported_types_str}"
+        )
+
+    arr = fill_missing_coords(arr)
     return arr
+
+
+def save_join(*dataarrays):
+    """
+    Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
+    """
+    try:
+        labels = align(*dataarrays, join="exact")
+    except ValueError:
+        warn("Coordinates across variables not equal. Perform outer join.", UserWarning)
+        labels = align(*dataarrays, join="outer")
+        labels = [ds.fillna(-1).astype(int) for ds in labels]
+    return Dataset({ds.name: ds for ds in labels})
+
+
+def fill_missing_coords(ds):
+    """
+    Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
+
+    This function fills in the integer coordinates for all dimensions of a
+    Dataset or DataArray that have no coordinates assigned yet.
+
+    Parameters
+    ----------
+    ds : xarray.DataArray or xarray.Dataset
+    """
+    ds = ds.copy()
+    if not isinstance(ds, (Dataset, DataArray)):
+        raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
+
+    # Fill in missing integer coordinates
+    for dim in ds.dims:
+        if dim not in ds.coords and not dim.endswith("_term"):
+            ds.coords[dim] = arange(ds.sizes[dim])
+
+    return ds
 
 
 def _remap(array, mapping):
@@ -76,17 +143,53 @@ def best_int(max_value):
             return t
 
 
-def dictsel(d, keys):
-    "Reduce dictionary to keys that appear in selection."
-    return {k: v for k, v in d.items() if k in keys}
+def get_index_map(*arrays):
+    """
+    Given arrays of hashable objects, create a map from unique combinations to unique integers.
+    """
+    # Create unique combinations
+    unique_combinations = set(zip(*arrays))
+
+    # Create a map from combinations to integers
+    index_map = {combination: i for i, combination in enumerate(unique_combinations)}
+
+    return index_map
 
 
-def head_tail_range(stop, max_number_of_values=14):
-    split_at = max_number_of_values // 2
-    if stop > max_number_of_values:
-        return hstack([arange(split_at), arange(stop - split_at, stop)])
+def generate_indices_for_printout(dim_sizes, max_lines):
+    total_lines = int(np.prod(dim_sizes))
+    lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
+    if lines_to_skip > 0:
+        half_lines = max_lines // 2
+        for i in range(half_lines):
+            yield np.unravel_index(i, dim_sizes)
+        yield None
+        for i in range(total_lines - half_lines, total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
     else:
-        return arange(stop)
+        for i in range(total_lines):
+            yield tuple(np.unravel_index(i, dim_sizes))
+
+
+def align_lines_by_delimiter(lines, delimiter):
+    # Determine the maximum position of the delimiter
+    if isinstance(delimiter, str):
+        delimiter = [delimiter]
+    try:
+        max_pos = max(line.index(d) for line in lines for d in delimiter if d in line)
+    except ValueError:
+        return lines
+
+    # Create the formatted lines
+    formatted_lines = []
+    for line in lines:
+        formatted_line = line
+        for d in delimiter:
+            if d in line:
+                parts = line.split(d)
+                formatted_line = f"{parts[0]:<{max_pos}}{d} {parts[1].strip()}"
+        formatted_lines.append(formatted_line)
+    return formatted_lines
 
 
 def print_coord(coord):
@@ -98,33 +201,51 @@ def print_coord(coord):
         return ""
 
 
-def print_single_variable(variable, name, coord, lower, upper):
-    if name in variable.model.variables._integer_variables:
-        bounds = "Z ⋂ " + f"[{lower},...,{upper}]"
-    elif name in variable.model.variables._binary_variables:
-        bounds = "{0, 1}"
+def print_single_variable(model, label):
+    if label == -1:
+        return "None"
+
+    variables = model.variables
+    name, coord = variables.get_label_position(label)
+
+    lower = variables[name].lower.sel(coord).item()
+    upper = variables[name].upper.sel(coord).item()
+
+    if variables[name].attrs["binary"]:
+        bounds = " ∈ {0, 1}"
+    elif variables[name].attrs["integer"]:
+        bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
     else:
-        bounds = f"[{lower}, {upper}]"
+        bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
 
-    return f"{name}{print_coord(coord)}", f"∈ {bounds}"
+    return f"{name}{print_coord(coord)}{bounds}"
 
 
-def print_single_expression(c, v, model):
+def print_single_expression(c, v, const, model):
     """
     Print a single linear expression based on the coefficients and variables.
     """
 
+    c, v = np.atleast_1d(c), np.atleast_1d(v)
+
     # catch case that to many terms would be printed
-    def print_line(expr):
+    def print_line(expr, const):
         res = []
         for i, (coeff, (name, coord)) in enumerate(expr):
             coord_string = print_coord(coord)
             if i:
+                coeff_string = f"{coeff:+.4g}"
                 # split sign and coefficient
-                coeff_string = f"{float(coeff):+.4}"
                 res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
             else:
-                res.append(f"{float(coeff):.4} {name}{coord_string}")
+                coeff_string = f"{coeff:+.4g} " if coeff != 1 else ""
+                res.append(f"{coeff_string}{name}{coord_string}")
+        if const != 0:
+            const_string = f"{const:+.4g}"
+            if len(res):
+                res.append(f"{const_string[0]} {const_string[1:]}")
+            else:
+                res.append(const_string)
         return " ".join(res) if len(res) else "None"
 
     if isinstance(c, np.ndarray):
@@ -135,17 +256,17 @@ def print_single_expression(c, v, model):
     if len(c) > max_terms:
         truncate = max_terms // 2
         expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
-        res = print_line(expr)
+        res = print_line(expr, const)
         res += " ... "
         expr = list(
             zip(c[-truncate:], model.variables.get_label_position(v[-truncate:]))
         )
-        residual = print_line(expr)
+        residual = print_line(expr, const)
         if residual != " None":
             res += residual
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
-    return print_line(expr)
+    return print_line(expr, const)
 
 
 def has_optimized_model(func):
@@ -167,10 +288,16 @@ def has_optimized_model(func):
 def is_constant(func):
     from linopy import expressions, variables
 
-    #
     @wraps(func)
     def wrapper(self, arg):
-        if isinstance(arg, (variables.Variable, expressions.LinearExpression)):
+        if isinstance(
+            arg,
+            (
+                variables.Variable,
+                variables.ScalarVariable,
+                expressions.LinearExpression,
+            ),
+        ):
             raise TypeError(f"Assigned rhs must be a constant, got {type()}).")
         return func(self, arg)
 
@@ -193,3 +320,37 @@ def forward_as_properties(**routes):
         return cls
 
     return deco
+
+
+def check_common_keys_values(list_of_dicts: List[Dict[str, Any]]) -> bool:
+    """
+    Check if all common keys among a list of dictionaries have the same value.
+
+    Parameters
+    ----------
+    list_of_dicts : list of dict
+        A list of dictionaries.
+
+    Returns
+    -------
+    bool
+        True if all common keys have the same value across all dictionaries, False otherwise.
+    """
+    common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
+    return all(
+        len(set(d[k] for d in list_of_dicts if k in d)) == 1 for k in common_keys
+    )
+
+
+class LocIndexer:
+    __slots__ = ("object",)
+
+    def __init__(self, obj):
+        self.object = obj
+
+    def __getitem__(self, key) -> Dataset:
+        if not utils.is_dict_like(key):
+            # expand the indexer so we can handle Ellipsis
+            labels = indexing.expanded_indexer(key, self.object.ndim)
+            key = dict(zip(self.object.dims, labels))
+        return self.object.sel(key)

@@ -36,7 +36,7 @@ def test_model_solver_dir():
 def test_model_variable_getitem():
     m = Model()
     x = m.add_variables(name="x")
-    assert m["x"].values == x.values
+    assert m["x"].labels == x.labels
 
 
 def test_coefficient_range():
@@ -90,11 +90,12 @@ def test_remove_variable():
     obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
 
-    m.remove_variables("x")
-    for attr in m.constraints.dataset_attrs:
-        assert "x" not in getattr(m.constraints, attr)
+    assert "x" in m.variables
 
-    assert "con0" not in m.constraints.labels
+    m.remove_variables("x")
+    assert "x" not in m.variables
+
+    assert not m.constraints.con0.vars.isin(x.labels).any()
 
     assert not m.objective.vars.isin(x.labels).any()
 
@@ -106,16 +107,3 @@ def test_remove_constraint():
     m.add_constraints(x, EQUAL, 0, name="x")
     m.remove_constraints("x")
     assert not len(m.constraints.labels)
-
-
-def test_removed_eval_funcs():
-    m = Model()
-
-    with pytest.raises(NotImplementedError):
-        m.vareval("")
-
-    with pytest.raises(NotImplementedError):
-        m.lineval("")
-
-    with pytest.raises(NotImplementedError):
-        m.coneval("")

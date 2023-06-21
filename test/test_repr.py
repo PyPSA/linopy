@@ -23,13 +23,13 @@ c_mask[:, 5:] = True
 c = m.add_variables(lower, upper, name="c", mask=c_mask)
 d = m.add_variables(0, 10, coords=[types], name="d")
 
-# add variable with indexes to reindex
-with pytest.warns(UserWarning):
-    e = m.add_variables(0, upper[5:], name="e")
+# new behavior in v0.2, variable with dimension name and other
+# coordinates are added without a warning
+e = m.add_variables(0, upper[5:], name="e")
 
-    f_mask = np.full_like(upper[:5], True, dtype=bool)
-    f_mask[:3] = False
-    f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
+f_mask = np.full_like(upper[:5], True, dtype=bool)
+f_mask[:3] = False
+f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
 
 # create linear expression for each variable
@@ -43,6 +43,7 @@ lb = 1 * b
 lc = 1 * c
 ld = 1 * d
 lav = 1 * a + 1 * v
+luc = 1 * v + 10
 
 
 # create anonymous constraint for linear expression
@@ -56,7 +57,7 @@ cb_ = lb >= 0
 cc_ = lc >= 0
 cd_ = ld >= 0
 cav_ = lav >= 0
-
+cuc_ = luc >= 0
 
 # add constraint for each variable
 cu = m.add_constraints(cu_, name="cu")
@@ -69,7 +70,8 @@ cb = m.add_constraints(cb_, name="cb")
 cc = m.add_constraints(cc_, name="cc")
 cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
-cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.data, False))
+cuc = m.add_constraints(cuc_, name="cuc")
+cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.labels, False))
 
 
 def test_variable_repr():
@@ -90,7 +92,7 @@ def test_single_variable_repr():
 
 
 def test_linear_expression_repr():
-    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav]:
+    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc]:
         repr(expr)
 
 
@@ -111,7 +113,7 @@ def test_single_linear_repr():
 
 
 def test_anonymous_constraint_repr():
-    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_]:
+    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_]:
         repr(con)
 
 
@@ -127,8 +129,14 @@ def test_single_constraint_repr():
 
 
 def test_constraint_repr():
-    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cu_masked]:
+    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked]:
         repr(con)
+
+
+def test_empty_repr():
+    repr(u.loc[[]])
+    repr(lu.sel(dim_0=[]))
+    repr(lu.sel(dim_0=[]) >= 0)
 
 
 def test_print_options():

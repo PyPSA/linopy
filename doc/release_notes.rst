@@ -1,8 +1,60 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+
+**New Features**
+* `LinearExpression`'s now support constant values. This allows defining linear expressions with numeric constant values, like `x + 5`.
+* When defining constraints, it is not needed to separate variables from constants anymore. Thus, expressions  like `x <= y` or `5 * x + 10 >= y` are supported.
+* The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
+* The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
+* It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
+* Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
+* The `groupby` function now supports passing `pandas.Dataframe`s as groupby keys. These allows to group by multiple variables at once.
+* The performance of the `groupby` function was strongly increased. In large operations a speedup of 10x was observed.
+
+**Deprecations**
+* The class `AnonymousConstraint` is now deprecated in the favor of `Constraint`. The latter can now be assigned to a model or not.
+* The `ravel` and `iter_ravel` method of the `Variables` and `Constraints` class is now deprecated in favor of the `flat` method.
+
+
+**Breaking Changes**
+* The `data` attribute of Variables and Constraints now returns a `xarray.Dataset` object instead of a `xarray.DataArray` object with the labels only.
+* The deprecated `groupby_sum` function was removed in favor of the `groupby` method.
+* The deprecated `rolling_sum` function was removed in favor of the `rolling` method.
+* The deprecated `eval` module was removed in favor of the arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
+* The deprecated attribute `values` of the classes `Variable`, `LinearExpression` and `Constraint` was removed in favor of the `data` attribute.
+* The deprecated `to_array` method of the classes `Variable` and `Constraint` was removed in favor of the `data` attribute.
+* The deprecated `to_dataset` of the `LinearExpression` class was removed in favor of the `data` attribute.
+* The function `get_lower_bound`, `get_upper_bound`, `get_variable_labels`, `get_variable_types`, `get_objective_coefficient`, `get_constraint_labels`, `get_constraint_sense`, `get_constraint_rhs`, `get_constraint_matrix` were removed in favor of the `matrices` accessor, i.e. `ub`, `lb`, `vlabels`, etc.
+* The `LinearExpressionGroupby` class now takes a different set of arguments when initializing. These are `data: xr.Dataset`, `group: xr.DataArray`, `model: Any`, `kwargs: Mapping[str, Any]`.
+* When grouping with a `xr.DataArray` / `pd.Series` / `pd.DataFrame` and summing afterwards, the keyword arguments like `squeeze`, `restore_coords` are ignored.
+
+
+**Internal Changes**
+* The internal data fields in `Variable` and `Constraint` are now always broadcasted to have aligned indexes. This allows for a more consistent handling of the objects.
+* The inner structure of the `Variable`, `Variables`, `Constraint` and `Constraints` class has changed to a more stable design. All information of the `Variable` and the `Constraint` class is now stored in the `data` field. The `data` field is a `xarray.Dataset` object. The `Variables` and `Constraints` class "simple" containers for the `Variable` and `Constraint` objects, stored in dictionary under the `data` field. This design allows for a more flexible handling of individual variables and constraints.
+
+**Other**
+* License changed to MIT license.
+
+
+
+Version 0.1.5
+-------------
+
+
+* Add `sel` functions to `Constraint` and `AnonymousConstraint` to allow for selection and inspection of constraints by coordinate.
+* The printout of `Variables` and `Constraints` was refactored to a more concise layout.
+* The solving termination condition "other" is now tagged as solving status "warning".
+
+Version 0.1.4
+-------------
+
+* Fix representation of empty variables and linear expressions.
+* The benchmark reported in [here](https://github.com/PyPSA/linopy/tree/master/benchmark) was updated to the latest version of linopy and adjusted to be fully reproducible.
 
 
 Version 0.1.3
