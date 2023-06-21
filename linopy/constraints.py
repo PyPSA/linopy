@@ -56,9 +56,7 @@ def conwrap(method, *default_args, **new_default_kwargs):
 
 
 def _con_unwrap(con):
-    if isinstance(con, Constraint):
-        return con.data
-    return con
+    return con.data if isinstance(con, Constraint) else con
 
 
 @forward_as_properties(
@@ -343,7 +341,7 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference or the model status is not okay.
         """
-        if not "dual" in self.data:
+        if "dual" not in self.data:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
@@ -413,7 +411,7 @@ class Constraint:
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, AnonymousScalarConstraint) and not output is None:
+        if not isinstance(output, AnonymousScalarConstraint) and output is not None:
             msg = f"`rule` has to return AnonymousScalarConstraint not {type(output)}."
             raise TypeError(msg)
 
@@ -457,7 +455,7 @@ class Constraint:
         df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")
-        agg.update({k: "first" for k in df.columns if k not in agg})
+        agg |= {k: "first" for k in df.columns if k not in agg}
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
 
         any_nan = df.isna().any()
@@ -794,10 +792,7 @@ class Constraints:
         """
         res = list(self.iter_ravel(key, broadcast_like, filter_missings))
         res = np.concatenate(res)
-        if compute:
-            return dask.compute(res)[0]
-        else:
-            return res
+        return dask.compute(res)[0] if compute else res
 
     @property
     def flat(self) -> pd.DataFrame:

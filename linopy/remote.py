@@ -6,6 +6,7 @@ Created on Sun Feb 13 21:34:55 2022.
 @author: fabian
 """
 
+
 import logging
 import tempfile
 from dataclasses import dataclass
@@ -17,8 +18,6 @@ try:
     import paramiko
 except ImportError:
     paramiko_present = False
-    pass
-
 logger = logging.getLogger(__name__)
 
 command = """
@@ -155,7 +154,7 @@ class RemoteHandler:
         logger.info(f"Saving python script at {self.python_file} on remote")
         script_kwargs = dict(
             model_unsolved_file=self.model_unsolved_file,
-            solve_kwargs="**" + str(solve_kwargs),
+            solve_kwargs=f"**{solve_kwargs}",
             model_solved_file=self.model_solved_file,
         )
         with self.sftp_client.open(self.python_file, "w") as fn:
@@ -177,7 +176,7 @@ class RemoteHandler:
         cmd = cmd.strip("\n")
         self.stdin.write(cmd + "\n")
         finish = "End of stdout. Exit Status"
-        echo_cmd = "echo {} $?".format(finish)
+        echo_cmd = f"echo {finish} $?"
         self.stdin.write(echo_cmd + "\n")
         self.stdin.flush()
 
@@ -188,10 +187,10 @@ class RemoteHandler:
             if line.endswith(cmd):
                 # up to now everything was login and stdin
                 print_stdout = True
-            elif str(line).startswith(finish):
-                exit_status = int(str(line).rsplit(maxsplit=1)[1])
+            elif line.startswith(finish):
+                exit_status = int(line.rsplit(maxsplit=1)[1])
                 break
-            elif not finish in line and print_stdout:
+            elif finish not in line and print_stdout:
                 print(line)
 
         if exit_status:
@@ -223,7 +222,7 @@ class RemoteHandler:
         self.write_python_file_on_remote(**kwargs)
         self.write_model_on_remote(model)
 
-        command = self.python_executable + " " + self.python_file
+        command = f"{self.python_executable} {self.python_file}"
 
         logger.info("Solving model on remote.")
         self.execute(command)

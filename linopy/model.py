@@ -412,7 +412,7 @@ class Model:
         [9]: x[9] ∈ [0, inf]
         """
         if name is None:
-            name = "var" + str(self._varnameCounter)
+            name = f"var{self._varnameCounter}"
             self._varnameCounter += 1
 
         if name in self.variables:
@@ -517,7 +517,7 @@ class Model:
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
         elif name is None:
-            name = "con" + str(self._connameCounter)
+            name = f"con{self._connameCounter}"
             self._connameCounter += 1
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
@@ -793,14 +793,12 @@ class Model:
             )
             rule, coords = args
             return LinearExpression.from_rule(self, rule, coords)
-        if isinstance(args, tuple):
-            tuples = [
-                (c, self.variables[v]) if isinstance(v, str) else (c, v)
-                for (c, v) in args
-            ]
-            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
-        else:
+        if not isinstance(args, tuple):
             raise TypeError(f"Not supported type {args}.")
+        tuples = [
+            (c, self.variables[v]) if isinstance(v, str) else (c, v) for (c, v) in args
+        ]
+        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
     @property
     def coefficientrange(self):
@@ -823,40 +821,36 @@ class Model:
         """
         Get a fresh created solution file if solution file is None.
         """
-        if solution_fn is None:
-            kwargs = dict(
-                prefix="linopy-solve-",
-                suffix=".sol",
-                mode="w",
-                dir=self.solver_dir,
-                delete=False,
-            )
-            with NamedTemporaryFile(**kwargs) as f:
-                return f.name
-        else:
+        if solution_fn is not None:
             return solution_fn
+
+        kwargs = dict(
+            prefix="linopy-solve-",
+            suffix=".sol",
+            mode="w",
+            dir=self.solver_dir,
+            delete=False,
+        )
+        with NamedTemporaryFile(**kwargs) as f:
+            return f.name
 
     def get_problem_file(self, problem_fn=None, io_api=None):
         """
         Get a fresh created problem file if problem file is None.
         """
-        if problem_fn is None:
-            if io_api == "mps":
-                suffix = ".mps"
-            else:
-                suffix = ".lp"
-
-            kwargs = dict(
-                prefix="linopy-problem-",
-                suffix=suffix,
-                mode="w",
-                dir=self.solver_dir,
-                delete=False,
-            )
-            with NamedTemporaryFile(**kwargs) as f:
-                return f.name
-        else:
+        if problem_fn is not None:
             return problem_fn
+
+        suffix = ".mps" if io_api == "mps" else ".lp"
+        kwargs = dict(
+            prefix="linopy-problem-",
+            suffix=suffix,
+            mode="w",
+            dir=self.solver_dir,
+            delete=False,
+        )
+        with NamedTemporaryFile(**kwargs) as f:
+            return f.name
 
     def solve(
         self,
@@ -988,9 +982,8 @@ class Model:
             )
         finally:
             for fn in (problem_fn, solution_fn):
-                if fn is not None:
-                    if os.path.exists(fn) and not keep_files:
-                        os.remove(fn)
+                if fn is not None and (os.path.exists(fn) and not keep_files):
+                    os.remove(fn)
 
         result.info()
 

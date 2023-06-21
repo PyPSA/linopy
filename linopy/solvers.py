@@ -3,6 +3,7 @@
 """
 Linopy module for solving lp files with different solvers.
 """
+
 import io
 import logging
 import os
@@ -22,11 +23,7 @@ from linopy.constants import (
 
 available_solvers = []
 
-if os.name == "nt":
-    which = "where"
-else:
-    which = "which"
-
+which = "where" if os.name == "nt" else "which"
 if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 

@@ -226,13 +226,13 @@ def to_file(m, fn):
     Write out a model to a lp or mps file.
     """
     fn = Path(m.get_problem_file(fn))
-    batch_size = 5000
-
     if fn.exists():
         fn.unlink()
 
     if fn.suffix == ".lp":
         log = m._xCounter > 10_000
+
+        batch_size = 5000
 
         with open(fn, mode="w") as f:
             start = time.time()
@@ -247,16 +247,15 @@ def to_file(m, fn):
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
     elif fn.suffix == ".mps":
-        if "highs" in solvers.available_solvers:
-            # Use very fast highspy implementation
-            # Might be replaced by custom writer, however needs C bindings for performance
-            h = m.to_highspy()
-            h.writeModel(str(fn))
-        else:
+        if "highs" not in solvers.available_solvers:
             raise RuntimeError(
                 "Package highspy not installed. This is required to exporting to MPS file."
             )
 
+        # Use very fast highspy implementation
+        # Might be replaced by custom writer, however needs C bindings for performance
+        h = m.to_highspy()
+        h.writeModel(str(fn))
     else:
         raise ValueError(
             f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
@@ -425,9 +424,7 @@ def to_block_files(m, fn):
         PIPS requires this information to set the shape of sub-matrices.
         """
         assert key in keys
-        if key == "coeffs":
-            return np.where(mask, arr, 0)
-        return arr
+        return np.where(mask, arr, 0) if key == "coeffs" else arr
 
     for key, suffix in zip(keys, ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True)
@@ -468,7 +465,7 @@ def non_bool_dict(d):
     """
     Convert bool to int for netCDF4 storing.
     """
-    return {k: v if not isinstance(v, bool) else int(v) for k, v in d.items()}
+    return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
 def to_netcdf(m, *args, **kwargs):
@@ -549,12 +546,12 @@ def read_netcdf(path, **kwargs):
         return ds
 
     vars = get_prefix(ds, "variables")
-    var_names = list(set([k.split("-", 1)[0] for k in vars]))
+    var_names = list({k.split("-", 1)[0] for k in vars})
     variables = {k: Variable(get_prefix(vars, k), m, k) for k in var_names}
     m._variables = Variables(variables, m)
 
     cons = get_prefix(ds, "constraints")
-    con_names = list(set([k.split("-", 1)[0] for k in cons]))
+    con_names = list({k.split("-", 1)[0] for k in cons})
     constraints = {k: Constraint(get_prefix(cons, k), m, k) for k in con_names}
     m._constraints = Constraints(constraints, m)
 
