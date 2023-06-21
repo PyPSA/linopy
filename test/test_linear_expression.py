@@ -170,7 +170,7 @@ def test_linear_expression_with_subtraction(m, x, y):
     assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
 
-def test_linear_expression_with_constant(m, x):
+def test_linear_expression_with_constant(m, x, y):
     expr = x + 1
     assert isinstance(expr, LinearExpression)
     assert (expr.const == 1).all()
@@ -179,10 +179,6 @@ def test_linear_expression_with_constant(m, x):
     assert isinstance(expr, LinearExpression)
     assert (expr.const == -10).all()
     assert expr.nterm == 2
-
-
-def test_linear_expression_with_constant():
-    data = xr.DataArray([1, 2, 3])
 
 
 def test_linear_expression_multi_indexed(u):
@@ -252,7 +248,7 @@ def test_linear_expression_addition(x, y, z):
     assert isinstance(x + expr, LinearExpression)
 
 
-def test_linear_expression_addition(x, y, z):
+def test_linear_expression_addition_with_constant(x, y, z):
     expr = 10 * x + y + 10
     assert (expr.const == 10).all()
 
@@ -416,51 +412,86 @@ def test_linear_expression_diff(v):
     assert diff.nterm == 2
 
 
-def test_linear_expression_groupby(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby(v, use_fallback):
     expr = 1 * v
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.nterm == 10
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_name(v, use_fallback):
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords, name="my_group")
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "my_group" in grouped.dims
+    assert (grouped.data.my_group == [1, 2]).all()
+    assert grouped.nterm == 10
+
+
+def test_linear_expression_groupby_with_series(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
     grouped = expr.groupby(groups).sum()
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
+    assert grouped.nterm == 10
 
 
-def test_linear_expression_groupby_with_const(v):
+def test_linear_expression_groupby_with_dataframe(v):
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(xr.DataArray(groups)).sum()
+    index = pd.MultiIndex.from_frame(groups)
+    assert "group" in grouped.dims
+    assert set(grouped.data.group.values) == set(index.values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_const(v, use_fallback):
     expr = 1 * v + 15
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = expr.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
+    assert grouped.nterm == 10
     assert (grouped.const == 150).all()
 
 
-def test_linear_expression_groupby_asymmetric(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_asymmetric(v, use_fallback):
     expr = 1 * v
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = expr.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     assert "group" in grouped.dims
     # first group must be full with vars
     assert (grouped.data.sel(group=1) > 0).all()
     # the last 4 entries of the second group must be empty, i.e. -1
     assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
     assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
-    assert grouped.data._term.size == 12
+    assert grouped.nterm == 12
 
 
-def test_linear_expression_groupby_asymmetric_with_const(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_asymmetric_with_const(v, use_fallback):
     expr = 1 * v + 15
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = expr.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     assert "group" in grouped.dims
     # first group must be full with vars
     assert (grouped.data.sel(group=1) > 0).all()
     # the last 4 entries of the second group must be empty, i.e. -1
     assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
     assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
-    assert grouped.data._term.size == 12
+    assert grouped.nterm == 12
     assert list(grouped.const) == [180, 120]
 
 
@@ -486,7 +517,7 @@ def test_linear_expression_groupby_from_variable(v):
     grouped = v.groupby(groups).sum()
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
+    assert grouped.nterm == 10
 
 
 def test_linear_expression_rolling(v):
