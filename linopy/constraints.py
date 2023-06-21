@@ -162,7 +162,7 @@ class Constraint:
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
         dim_sizes = list(self.sizes.values())[:-1]
-        size = np.product(dim_sizes)  # that the number of theoretical printouts
+        size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
