@@ -52,7 +52,7 @@ def as_dataarray(
         dims = list(dims)[: arr.ndim] if dims else []
 
         if isinstance(coords, list):
-            coords = {dim: coord for dim, coord in zip(dims, coords)}
+            coords = dict(zip(dims, coords))
 
         if len(dims) < arr.ndim:
             dims = list(dims) + [f"dim_{i}" for i in range(len(dims), arr.ndim)]
@@ -150,10 +150,7 @@ def get_index_map(*arrays):
     # Create unique combinations
     unique_combinations = set(zip(*arrays))
 
-    # Create a map from combinations to integers
-    index_map = {combination: i for i, combination in enumerate(unique_combinations)}
-
-    return index_map
+    return {combination: i for i, combination in enumerate(unique_combinations)}
 
 
 def generate_indices_for_printout(dim_sizes, max_lines):
@@ -195,10 +192,7 @@ def align_lines_by_delimiter(lines, delimiter):
 def print_coord(coord):
     if isinstance(coord, dict):
         coord = coord.values()
-    if len(coord):
-        return "[" + ", ".join([str(c) for c in coord]) + "]"
-    else:
-        return ""
+    return "[" + ", ".join([str(c) for c in coord]) + "]" if len(coord) else ""
 
 
 def print_single_variable(model, label):
@@ -337,9 +331,7 @@ def check_common_keys_values(list_of_dicts: List[Dict[str, Any]]) -> bool:
         True if all common keys have the same value across all dictionaries, False otherwise.
     """
     common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
-    return all(
-        len(set(d[k] for d in list_of_dicts if k in d)) == 1 for k in common_keys
-    )
+    return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
 class LocIndexer:

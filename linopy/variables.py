@@ -54,9 +54,7 @@ def varwrap(method, *default_args, **new_default_kwargs):
 
 
 def _var_unwrap(var):
-    if isinstance(var, Variable):
-        return var.data
-    return var
+    return var.data if isinstance(var, Variable) else var
 
 
 @forward_as_properties(
@@ -166,7 +164,7 @@ class Variable:
         self._model = model
 
     def __getitem__(self, keys) -> "ScalarVariable":
-        keys = (keys,) if not isinstance(keys, tuple) else keys
+        keys = keys if isinstance(keys, tuple) else (keys,)
         assert all(map(pd.api.types.is_scalar, keys)), (
             "The get function of Variable is different as of xarray.DataArray. "
             "Set single values for each dimension in order to obtain a "
@@ -303,10 +301,7 @@ class Variable:
 
     def __radd__(self, other):
         # This is needed for using python's sum function
-        if other == 0:
-            return self
-        else:
-            return NotImplemented
+        return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         """
@@ -461,11 +456,11 @@ class Variable:
 
     @classmethod
     @property
-    def fill_value(self):
+    def fill_value(cls):
         """
         Return the fill value of the variable.
         """
-        return self._fill_value
+        return cls._fill_value
 
     @property
     def mask(self):
@@ -1035,10 +1030,7 @@ class Variables:
             One dimensional data with all values in `key`.
         """
         res = np.concatenate(list(self.iter_ravel(key, filter_missings)))
-        if compute:
-            return dask.compute(res)[0]
-        else:
-            return res
+        return dask.compute(res)[0] if compute else res
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1155,10 +1147,7 @@ class ScalarVariable:
 
     def __radd__(self, other):
         # This is needed for using python's sum function
-        if other == 0:
-            return self
-        else:
-            return NotImplemented
+        return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other

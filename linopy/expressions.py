@@ -365,10 +365,7 @@ class LinearExpression:
 
     def __radd__(self, other):
         # This is needed for using python's sum function
-        if other == 0:
-            return self
-        else:
-            return NotImplemented
+        return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         """
@@ -607,10 +604,7 @@ class LinearExpression:
 
             exprs.append(expr)
 
-        if len(exprs) > 1:
-            return merge(exprs, cls=cls)
-        else:
-            return exprs[0]
+        return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 
     @classmethod
     def from_rule(cls, model, rule, coords):
@@ -674,7 +668,8 @@ class LinearExpression:
         exprs = [rule(model, *coord) or placeholder for coord in combinations]
         return cls._from_scalarexpression_list(exprs, coords, model)
 
-    def _from_scalarexpression_list(exprs, coords: DataArrayCoordinates, model):
+    @classmethod
+    def _from_scalarexpression_list(cls, exprs, coords: DataArrayCoordinates, model):
         """
         Create a LinearExpression from a list of lists with different lengths.
         """
@@ -691,7 +686,7 @@ class LinearExpression:
         vars = DataArray(vars, coords, dims=("_term", *coords))
         ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
 
-        return LinearExpression(ds, model)
+        return cls(ds, model)
 
     def to_constraint(self, sign, rhs):
         """
@@ -1025,8 +1020,8 @@ def as_expression(obj, model=None, **kwargs):
     else:
         try:
             obj = as_dataarray(obj, **kwargs)
-        except ValueError:
-            raise ValueError("Cannot convert to LinearExpression")
+        except ValueError as e:
+            raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)
 
 
@@ -1067,9 +1062,8 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
         override = False
 
     data = [e.data if isinstance(e, cls) else e for e in exprs]
-    if cls == LinearExpression:
-        if len(set(ds.dims["_term"] for ds in data)) > 1:
-            data = [ds.assign_coords(_term=arange(ds.dims["_term"])) for ds in data]
+    if cls == LinearExpression and len({ds.dims["_term"] for ds in data}) > 1:
+        data = [ds.assign_coords(_term=arange(ds.dims["_term"])) for ds in data]
 
     if not kwargs:
         kwargs = {
@@ -1078,7 +1072,7 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
             "compat": "override",
         }
         if override:
-            kwargs.update({"join": "override"})
+            kwargs["join"] = "override"
 
     if dim == "_term":
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
