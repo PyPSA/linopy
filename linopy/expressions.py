@@ -19,6 +19,7 @@ import xarray.core.groupby
 import xarray.core.rolling
 from deprecation import deprecated
 from numpy import arange, array, nan
+from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 
@@ -34,7 +35,16 @@ from linopy.common import (
     print_single_expression,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.constants import (
+    EQUAL,
+    FACTOR_DIM,
+    GREATER_EQUAL,
+    GROUPED_TERM_DIM,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    STACKED_TERM_DIM,
+    TERM_DIM,
+)
 
 
 def exprwrap(method, *default_args, **new_default_kwargs):
@@ -154,10 +164,12 @@ class LinearExpressionGroupby:
 
             group_dim = group.index.name
             arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(arrays, names=[group_name, "_grouped_term"])
+            idx = pd.MultiIndex.from_arrays(
+                arrays, names=[group_name, GROUPED_TERM_DIM]
+            )
             ds = self.data.assign_coords({group_dim: idx})
             ds = ds.unstack(group_dim, fill_value=LinearExpression.fill_value)
-            ds = LinearExpression._sum(ds, dims="_grouped_term")
+            ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
 
             if int_map is not None:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
@@ -171,7 +183,7 @@ class LinearExpressionGroupby:
 
             def func(ds):
                 ds = LinearExpression._sum(ds, self.groupby._group_dim)
-                ds = ds.assign_coords(_term=np.arange(len(ds._term)))
+                ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
                 return ds
 
             return self.map(func, **kwargs)
@@ -205,9 +217,8 @@ class LinearExpressionRolling:
         data = self.rolling.construct("_rolling_term", keep_attrs=True)
         ds = (
             data[["coeffs", "vars"]]
-            .rename(_term="_stacked_term")
-            .stack(_term=["_stacked_term", "_rolling_term"])
-            .reset_index("_term", drop=True)
+            .rename({TERM_DIM: STACKED_TERM_DIM})
+            .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
         )
         ds["const"] = data.const.sum("_rolling_term")
         return LinearExpression(ds, self.model)
@@ -262,12 +273,12 @@ class LinearExpression:
         from linopy.model import Model
 
         if data is None:
-            da = xr.DataArray([], dims=["_term"])
+            da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0})
         elif isinstance(data, DataArray):
             # assume only constant are passed
             const = fill_missing_coords(data)
-            da = xr.DataArray([], dims=["_term"])
+            da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
             raise ValueError(
@@ -286,19 +297,19 @@ class LinearExpression:
 
         data = fill_missing_coords(data)
 
-        term_dims = [d for d in data.dims if d.endswith("_term")]
-        if not term_dims:
+        if TERM_DIM not in data.dims:
             raise ValueError("data must contain one dimension ending with '_term'")
-        term_dim = term_dims[0]
 
         if "const" not in data:
             data = data.assign(const=0)
 
-        data = xr.broadcast(data, exclude=["_term"])[0]
-        data[["coeffs", "vars"]] = xr.broadcast(data[["coeffs", "vars"]])[0]
+        data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
+        data[["coeffs", "vars"]] = xr.broadcast(
+            data[["coeffs", "vars"]], exclude=[FACTOR_DIM]
+        )[0]
 
         # transpose with new Dataset to really ensure correct order
-        data = Dataset(data.transpose(..., term_dim))
+        data = Dataset(data.transpose(..., TERM_DIM))
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -311,13 +322,13 @@ class LinearExpression:
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.dims)
-        dim_sizes = list(self.sizes.values())[:-1]
+        dims = list(self.coord_dims)
+        dim_sizes = list(self.coord_dims.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
-        header_string = "LinearExpression"
+        header_string = self.type
 
         if size > 1:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
@@ -361,7 +372,7 @@ class LinearExpression:
         other = as_expression(
             other, model=self.model, coords=self.coords, dims=self.coord_dims
         )
-        return merge(self, other)
+        return merge(self, other, cls=self.__class__)
 
     def __radd__(self, other):
         # This is needed for using python's sum function
@@ -374,7 +385,7 @@ class LinearExpression:
         other = as_expression(
             other, model=self.model, coords=self.coords, dims=self.coord_dims
         )
-        return merge(self, -other)
+        return merge(self, -other, cls=self.__class__)
 
     def __neg__(self):
         """
@@ -386,19 +397,27 @@ class LinearExpression:
         """
         Multiply the expr by a factor.
         """
-        if isinstance(
-            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
-        ):
+        if isinstance(other, QuadraticExpression):
             raise TypeError(
                 "unsupported operand type(s) for *: "
                 f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
+                "Higher order non-linear expressions are not yet supported."
             )
-        coeffs = self.coeffs * as_dataarray(
-            other, coords=self.coords, dims=self.coord_dims
-        )
-        assert set(coeffs.shape) == set(self.coeffs.shape)
-        return self.assign(coeffs=coeffs)
+        elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
+            other = other.to_linexpr()
+
+        if isinstance(other, LinearExpression):
+            if other.nterm > 1:
+                raise TypeError("Multiplication of multiple terms is not supported.")
+            ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
+            ds = ds.assign(const=other.const)
+            return merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+        else:
+            coeffs = self.coeffs * as_dataarray(
+                other, coords=self.coords, dims=self.coord_dims
+            )
+            assert set(coeffs.shape) == set(self.coeffs.shape)
+            return self.assign(coeffs=coeffs)
 
     def __rmul__(self, other):
         """
@@ -449,6 +468,10 @@ class LinearExpression:
         return cls._fill_value
 
     @property
+    def type(self):
+        return "LinearExpression"
+
+    @property
     def data(self):
         return self._data
 
@@ -468,7 +491,7 @@ class LinearExpression:
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if not k.endswith("_term")}
+        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
 
     @property
     def vars(self):
@@ -504,18 +527,17 @@ class LinearExpression:
         data = _expr_unwrap(expr)
 
         if dims is None:
-            vars = DataArray(data.vars.data.ravel(), dims="_term")
-            coeffs = DataArray(data.coeffs.data.ravel(), dims="_term")
+            vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
+            coeffs = DataArray(data.coeffs.data.ravel(), dims=TERM_DIM)
             const = data.const.sum()
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
         else:
-            dims = [d for d in np.atleast_1d(dims) if d != "_term"]
+            dims = [d for d in np.atleast_1d(dims) if d != TERM_DIM]
             ds = (
                 data[["coeffs", "vars"]]
                 .reset_index(dims, drop=True)
-                .rename(_term="_stacked_term")
-                .stack(_term=["_stacked_term"] + dims)
-                .reset_index("_term", drop=True)
+                .rename({TERM_DIM: STACKED_TERM_DIM})
+                .stack({TERM_DIM: [STACKED_TERM_DIM] + dims}, create_index=False)
             )
             ds["const"] = data.const.sum(dims)
 
@@ -682,11 +704,19 @@ class LinearExpression:
         coeffs = coeffs.reshape((nterm, *shape))
         vars = vars.reshape((nterm, *shape))
 
-        coeffs = DataArray(coeffs, coords, dims=("_term", *coords))
-        vars = DataArray(vars, coords, dims=("_term", *coords))
-        ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., "_term")
+        coeffs = DataArray(coeffs, coords, dims=(TERM_DIM, *coords))
+        vars = DataArray(vars, coords, dims=(TERM_DIM, *coords))
+        ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., TERM_DIM)
 
         return cls(ds, model)
+
+    def to_quadexpr(self):
+        """Convert LinearExpression to QuadraticExpression."""
+        vars = self.data.vars.expand_dims(FACTOR_DIM)
+        fill_value = self.fill_value["vars"]
+        vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)
+        data = self.data.assign(vars=vars)
+        return QuadraticExpression(data, self.model)
 
     def to_constraint(self, sign, rhs):
         """
@@ -866,7 +896,7 @@ class LinearExpression:
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
         """
-        data = self.data.transpose(..., "_term")
+        data = self.data.transpose(..., TERM_DIM)
 
         cdata = data.coeffs.data
         axis = cdata.ndim - 1
@@ -890,7 +920,7 @@ class LinearExpression:
         cdata[tuple(mod_nnz)] = data.coeffs.data[nnz]
         data.coeffs.data = cdata
 
-        return self.__class__(data.sel(_term=slice(0, nterm)), self.model)
+        return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
 
     def sanitize(self):
         """
@@ -924,9 +954,6 @@ class LinearExpression:
         -------
         df : pandas.DataFrame
         """
-        # if exclude_lhs:
-        #     ds = self.data.drop_vars(['coeffs', 'vars'])
-        # else:
         ds = self.data
         if not ds.sizes:
             # fallback for weird error raised due to missing index
@@ -991,9 +1018,145 @@ class LinearExpression:
     roll = exprwrap(Dataset.roll)
 
 
+@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
+class QuadraticExpression(LinearExpression):
+    """
+    A quadratic expression consisting of terms of coefficients and variables.
+
+    The QuadraticExpression class is a subclass of LinearExpression which allows to
+    apply most xarray functions on it.
+    """
+
+    __slots__ = ("_data", "_model")
+    __array_ufunc__ = None
+    __array_priority__ = 10000
+
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
+
+    def __init__(self, data, model):
+        super().__init__(data, model)
+
+        if FACTOR_DIM not in data.vars.dims:
+            raise ValueError(f"Data does not include dimension {FACTOR_DIM}")
+        elif data.sizes[FACTOR_DIM] != 2:
+            raise ValueError(f"Size of dimension {FACTOR_DIM} must be 2.")
+
+        # transpose data to have _term as last dimension and _factor as second last
+        data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
+        self._data = data
+
+    def __mul__(self, other):
+        """
+        Multiply the expr by a factor.
+        """
+        if isinstance(
+            other,
+            (
+                LinearExpression,
+                QuadraticExpression,
+                variables.Variable,
+                variables.ScalarVariable,
+            ),
+        ):
+            raise TypeError(
+                "unsupported operand type(s) for *: "
+                f"{type(self)} and {type(other)}. "
+                "Higher order non-linear expressions are not yet supported."
+            )
+        return super().__mul__(other)
+
+    @property
+    def type(self):
+        return "QuadraticExpression"
+
+    def __add__(self, other):
+        """
+        Add an expression to others.
+        """
+        other = as_expression(
+            other, model=self.model, coords=self.coords, dims=self.coord_dims
+        )
+        if isinstance(other, LinearExpression):
+            other = other.to_quadexpr()
+        return merge(self, other, cls=self.__class__)
+
+    def __sub__(self, other):
+        """
+        Subtract others from expression.
+        """
+        other = as_expression(
+            other, model=self.model, coords=self.coords, dims=self.coord_dims
+        )
+        if isinstance(other, LinearExpression):
+            other = other.to_quadexpr()
+        return merge(self, -other, cls=self.__class__)
+
+    @classmethod
+    def _sum(cls, expr: "QuadraticExpression", dims=None) -> Dataset:
+        data = _expr_unwrap(expr)
+        dims = dims or list(set(data.dims) - set(HELPER_DIMS))
+        return LinearExpression._sum(expr, dims)
+
+    def to_constraint(self, sign, rhs):
+        raise NotImplementedError(
+            "Quadratic expressions cannot be used in constraints."
+        )
+
+    @property
+    def flat(self):
+        """
+        Return a flattened expression.
+        """
+        vars = self.data.vars.assign_coords(
+            {FACTOR_DIM: ["vars1", "vars2"]}
+        ).to_dataset(FACTOR_DIM)
+        ds = self.data.drop_vars("vars").assign(vars)
+        if not ds.sizes:
+            # fallback for weird error raised due to missing index
+            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
+        else:
+            df = ds.to_dataframe()
+        if "mask" in df:
+            mask = df.pop("mask")
+            df = df[mask]
+        df = df[((df.vars1 != -1) | (df.vars2 != -1)) & (df.coeffs != 0)]
+        # Group repeated variables in the same constraint
+        df = df.groupby(["vars1", "vars2"], as_index=False).sum()
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Expression `{self.name}` contains nan's in field(s) {fields}"
+            )
+
+        return df
+
+    def to_matrix(self):
+        """
+        Return a sparse matrix representation of the expression only including
+        quadratic terms.
+        """
+        df = self.flat
+        # drop linear terms
+        df = df[(df.vars1 != -1) & (df.vars2 != -1)]
+
+        # symmetrize cross terms
+        cross_terms = df.vars1 != df.vars2
+        df.loc[cross_terms, "coeffs"] *= 0.5
+        df = pd.concat([df, df[cross_terms].assign(vars1=df.vars2, vars2=df.vars1)])
+
+        # assign matrix
+        data = df.coeffs
+        row = df.vars1
+        col = df.vars2
+        nvars = self.model.shape[1]
+        return csc_matrix((data, (row, col)), shape=(nvars, nvars))
+
+
 def as_expression(obj, model=None, **kwargs):
     """
-    Convert an object to a LinearExpression.
+    Convert an object to a LinearExpression or QuadraticExpression.
 
     Parameters
     ----------
@@ -1015,6 +1178,8 @@ def as_expression(obj, model=None, **kwargs):
     """
     if isinstance(obj, LinearExpression):
         return obj
+    elif isinstance(obj, QuadraticExpression):
+        return obj
     elif isinstance(obj, (variables.Variable, variables.ScalarVariable)):
         return obj.to_linexpr()
     else:
@@ -1025,13 +1190,13 @@ def as_expression(obj, model=None, **kwargs):
         return LinearExpression(obj, model)
 
 
-def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
+def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
     """
-    Merge multiple linear expression together.
+    Merge multiple expression together.
 
     This function is a bit faster than summing over multiple linear expressions.
     In case a list of LinearExpression with exactly the same shape is passed
-    and the dimension to concatenate on is "_term", the concatenation uses
+    and the dimension to concatenate on is TERM_DIM, the concatenation uses
     the coordinates of the first object as a basis which overrides the
     coordinates of the consecutive objects.
 
@@ -1053,17 +1218,23 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
     -------
     res : linopy.LinearExpression
     """
+    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
+
     exprs = exprs[0] if len(exprs) == 1 else list(exprs)  # allow passing a list
     model = exprs[0].model
 
-    if cls == LinearExpression and dim == "_term":
-        override = check_common_keys_values([e.coord_dims for e in exprs])
+    if cls in linopy_types and dim in HELPER_DIMS:
+        coord_dims = [
+            {k: v for k, v in e.dims.items() if k not in HELPER_DIMS} for e in exprs
+        ]
+        override = check_common_keys_values(coord_dims)
     else:
         override = False
 
-    data = [e.data if isinstance(e, cls) else e for e in exprs]
-    if cls == LinearExpression and len({ds.dims["_term"] for ds in data}) > 1:
-        data = [ds.assign_coords(_term=arange(ds.dims["_term"])) for ds in data]
+    data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
+    for d in set(HELPER_DIMS) & set(_ for ds in data for _ in ds.dims):
+        if len({ds.dims[d] for ds in data}) > 1:
+            data = [ds.assign_coords({d: arange(ds.dims[d])}) for ds in data]
 
     if not kwargs:
         kwargs = {
@@ -1074,15 +1245,21 @@ def merge(*exprs, dim="_term", cls=LinearExpression, **kwargs):
         if override:
             kwargs["join"] = "override"
 
-    if dim == "_term":
+    if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).sum("_term")
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).sum(TERM_DIM)
+        ds["const"] = const
+    elif dim == FACTOR_DIM:
+        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
+        ds["coeffs"] = coeffs
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
         ds["const"] = const
     else:
         ds = xr.concat(data, dim, **kwargs)
 
-    if "_term" in ds.coords:
-        ds = ds.reset_index("_term", drop=True)
+    for d in set(HELPER_DIMS) & set(ds.coords):
+        ds = ds.reset_index(d, drop=True)
 
     return cls(ds, model)
 
@@ -1219,7 +1396,7 @@ class ScalarLinearExpression:
         )
 
     def to_linexpr(self):
-        coeffs = xr.DataArray(list(self.coeffs), dims="_term")
-        vars = xr.DataArray(list(self.vars), dims="_term")
+        coeffs = xr.DataArray(list(self.coeffs), dims=TERM_DIM)
+        vars = xr.DataArray(list(self.vars), dims=TERM_DIM)
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
         return LinearExpression(ds, self.model)

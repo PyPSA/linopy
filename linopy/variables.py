@@ -33,6 +33,7 @@ from linopy.common import (
     save_join,
 )
 from linopy.config import options
+from linopy.constants import TERM_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +208,7 @@ class Variable:
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
-            "_term", -1
+            TERM_DIM, -1
         )
         return expressions.LinearExpression(ds, self.model)
 
@@ -261,13 +262,10 @@ class Variable:
         """
         Multiply variables with a coefficient.
         """
-        if isinstance(other, (expressions.LinearExpression, Variable)):
-            raise TypeError(
-                "unsupported operand type(s) for *: "
-                f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
-            )
-        return self.to_linexpr(other)
+        if isinstance(other, (expressions.LinearExpression, Variable, ScalarVariable)):
+            return self.to_linexpr() * other
+        else:
+            return self.to_linexpr(other)
 
     def __rmul__(self, other):
         """
@@ -803,7 +801,7 @@ class Variables:
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
         if not len(list(self)):
-            r += "<empty>"
+            r += "<empty>\n"
         return r
 
     def __len__(self):
@@ -939,13 +937,10 @@ class Variables:
         """
         Get tuple of name and coordinate for variable labels.
         """
-        coords = []
-        return_list = True
-        if not isinstance(values, Iterable):
-            values = [values]
-            return_list = False
 
-        for value in values:
+        def find_single(value):
+            if value == -1:
+                return None, None
             for name, var in self.items():
                 labels = var.labels
                 start, stop = var.range
@@ -960,9 +955,17 @@ class Variables:
                     }
 
                     # Add the name of the DataArray and the coordinates to the result list
-                    coords.append((name, coord))
+                    return name, coord
 
-        return coords if return_list else coords[0]
+        ndim = np.array(values).ndim
+        if ndim == 0:
+            return find_single(values)
+        elif ndim == 1:
+            return [find_single(v) for v in values]
+        elif ndim == 2:
+            return [[find_single(v) for v in _] for _ in values.T]
+        else:
+            raise ValueError("Array's with more than two dimensions is not supported")
 
     @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, filter_missings=False):

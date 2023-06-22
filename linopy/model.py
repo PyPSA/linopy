@@ -26,9 +26,13 @@ from linopy.common import (
     replace_by_map,
     save_join,
 )
-from linopy.constants import ModelStatus, TerminationCondition
+from linopy.constants import TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.expressions import (
+    LinearExpression,
+    QuadraticExpression,
+    ScalarLinearExpression,
+)
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
 from linopy.solvers import available_solvers
@@ -286,8 +290,10 @@ class Model:
         """
         var_string = self.variables.__repr__().split("\n", 2)[2]
         con_string = self.constraints.__repr__().split("\n", 2)[2]
+        model_string = f"Linopy {self.type} model"
+
         return (
-            f"Linopy model\n============\n\n"
+            f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Constraints:\n------------\n{con_string}\n"
             f"Status:\n-------\n{self.status}"
@@ -603,12 +609,17 @@ class Model:
 
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
-        assert isinstance(expr, LinearExpression)
+
+        if not isinstance(expr, (LinearExpression, QuadraticExpression)):
+            raise ValueError(
+                f"Invalid type of `expr` ({type(expr)})."
+                " Must be a LinearExpression or QuadraticExpression."
+            )
 
         if self.chunk is not None:
             expr = expr.chunk(self.chunk)
 
-        if expr.vars.ndim > 1:
+        if len(expr.coord_dims):
             expr = expr.sum()
         self._objective = expr
         return self._objective
@@ -637,7 +648,9 @@ class Model:
             vars = vars.where(~vars.isin(labels), -1)
             self.constraints[k].data["vars"] = vars
 
-        self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
+        self.objective = self.objective.sel(
+            {TERM_DIM: ~self.objective.vars.isin(labels)}
+        )
 
     def remove_constraints(self, name):
         """
@@ -671,9 +684,27 @@ class Model:
         return self.variables.integers
 
     @property
+    def type(self):
+        if (len(self.binaries) or len(self.integers)) and len(self.continuous):
+            variable_type = "MI"
+        elif len(self.binaries) or len(self.integers):
+            variable_type = "I"
+        else:
+            variable_type = ""
+
+        if isinstance(self.objective, QuadraticExpression):
+            objective_type = "Q"
+        else:
+            objective_type = "L"
+
+        return f"{variable_type}{objective_type}P"
+
+    @property
     def nvars(self):
         """
         Get the total number of variables.
+
+        This excludes all variables which are not active.
         """
         return self.variables.nvars
 
@@ -681,8 +712,19 @@ class Model:
     def ncons(self):
         """
         Get the total number of constraints.
+
+        This excludes all constraints which are not active.
         """
         return self.constraints.ncons
+
+    @property
+    def shape(self):
+        """
+        Get the shape of the non-filtered constraint matrix.
+
+        This includes all constraints and variables which are not active.
+        """
+        return (self._cCounter, self._xCounter)
 
     @property
     def blocks(self):

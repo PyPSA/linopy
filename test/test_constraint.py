@@ -372,7 +372,7 @@ def test_constraint_matrix_masked_variables():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_constraint_matrix_masked_constraints():
@@ -390,7 +390,7 @@ def test_constraint_matrix_masked_constraints():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_constraint_matrix_masked_constraints_and_variables():
@@ -408,7 +408,7 @@ def test_constraint_matrix_masked_constraints_and_variables():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_get_name_by_label():
