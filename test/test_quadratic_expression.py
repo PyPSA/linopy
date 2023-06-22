@@ -45,38 +45,56 @@ def test_quadratic_expression_from_linexpr_multiplication(x, y):
 
 
 def test_quadratic_expression_addition(x, y):
-    expr = x * y
-    q = expr + x + 5
-    assert isinstance(q, QuadraticExpression)
-    assert (q.const == 5).all()
+    expr = x * y + x + 5
+    assert isinstance(expr, QuadraticExpression)
+    assert (expr.const == 5).all()
+    assert expr.nterm == 2
+
+
+def test_quadratic_expression_raddition(x, y):
+    expr = x + x * y + 5
+    assert isinstance(expr, QuadraticExpression)
+    assert (expr.const == 5).all()
+    assert expr.nterm == 2
+
+
+def test_quadratic_expression_subtraction(x, y):
+    expr = x * y - x - 5
+    assert isinstance(expr, QuadraticExpression)
+    assert (expr.const == -5).all()
+    assert expr.nterm == 2
+
+
+def test_quadratic_expression_rsubtraction(x, y):
+    expr = x - x * y - 5
+    assert isinstance(expr, QuadraticExpression)
+    assert (expr.const == -5).all()
+    assert expr.nterm == 2
 
 
 def test_quadratic_expression_sum(x, y):
-    expr = x * y
-    q = expr + x + 5
+    expr = x * y + x + 5
 
-    summed_expr = q.sum(dims="dim_0")
+    summed_expr = expr.sum(dims="dim_0")
     assert isinstance(summed_expr, QuadraticExpression)
     assert not summed_expr.coord_dims
 
-    summed_expr_all = q.sum()
+    summed_expr_all = expr.sum()
     assert isinstance(summed_expr_all, QuadraticExpression)
     assert not summed_expr_all.coord_dims
 
 
 def test_quadratic_expression_flat(x, y):
-    expr = x * y
-    q = expr + x + 5
+    expr = x * y + x + 5
 
-    df = q.flat
+    df = expr.flat
     assert isinstance(df, pd.DataFrame)
 
 
 def test_quadratic_expression_to_matrix(model, x, y):
-    expr = x * y
-    q = expr + x + 5
+    expr = x * y + x + 5
 
-    Q = q.to_matrix()
+    Q = expr.to_matrix()
     assert isinstance(Q, csc_matrix)
     assert Q.shape == (model.nvars, model.nvars)
 
@@ -92,7 +110,7 @@ def test_matrices_matrix(model, x, y):
 
 def test_matrices_matrix_mixed_linear_and_quadratic(model, x, y):
     expr = x * y + x
-    model.objective = expr + x + 5
+    model.objective = expr + x
 
     Q = model.matrices.Q
     assert isinstance(Q, csc_matrix)
@@ -101,10 +119,3 @@ def test_matrices_matrix_mixed_linear_and_quadratic(model, x, y):
     c = model.matrices.c
     assert isinstance(c, np.ndarray)
     assert c.shape == (model.nvars,)
-
-
-# m = Model()
-# x = m.add_variables(lower=[0,0], name="x")
-# y = m.add_variables(upper=[10, 10], name="y")
-
-# m.objective = x * x

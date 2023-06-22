@@ -621,6 +621,10 @@ class Model:
 
         if len(expr.coord_dims):
             expr = expr.sum()
+
+        if expr.const != 0:
+            raise ValueError("Constant values in objective function not supported.")
+
         self._objective = expr
         return self._objective
 
@@ -684,6 +688,14 @@ class Model:
         return self.variables.integers
 
     @property
+    def is_linear(self):
+        return type(self.objective) is LinearExpression
+
+    @property
+    def is_quadratic(self):
+        return type(self.objective) is QuadraticExpression
+
+    @property
     def type(self):
         if (len(self.binaries) or len(self.integers)) and len(self.continuous):
             variable_type = "MI"
@@ -692,10 +704,7 @@ class Model:
         else:
             variable_type = ""
 
-        if isinstance(self.objective, QuadraticExpression):
-            objective_type = "Q"
-        else:
-            objective_type = "L"
+        objective_type = "Q" if self.is_quadratic else "L"
 
         return f"{variable_type}{objective_type}P"
 

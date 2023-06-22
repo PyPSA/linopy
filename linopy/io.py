@@ -13,19 +13,77 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
+from scipy.sparse import csc_matrix, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.constants import EQUAL, GREATER_EQUAL
+from linopy.constants import CONCAT_DIM, EQUAL, GREATER_EQUAL
 
 logger = logging.getLogger(__name__)
 
 
 ufunc_kwargs = dict(vectorize=True)
-concat_dim = "_concat_dim"
-concat_kwargs = dict(dim=concat_dim, coords="minimal")
+concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 
 TQDM_COLOR = "#80bfff"
+
+
+def handle_batch(batch, f, batch_size):
+    """
+    Write out a batch to a file and reset the batch.
+    """
+    if len(batch) >= batch_size:
+        f.writelines(batch)  # write out a batch
+        batch = []  # reset batch
+    return batch
+
+
+def objective_write_linear_terms(df, f, batch, batch_size):
+    """
+    Write the linear terms of the objective to a file.
+    """
+    coeffs = df.coeffs.values
+    vars = df.vars.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"{coeff:+.12g} x{var}\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
+
+
+def objective_write_cross_terms(quadratic, f, batch, batch_size):
+    """
+    Write the cross terms of the objective to a file.
+    """
+    is_cross = quadratic.vars1 != quadratic.vars2
+    cross = quadratic[is_cross]
+    coeffs = cross.coeffs.values
+    vars1 = cross.vars1.values
+    vars2 = cross.vars2.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var1 = vars1[idx]
+        var2 = vars2[idx]
+        batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
+
+
+def objective_write_quad_terms(quadratic, f, batch, batch_size):
+    """
+    Write the quadratic terms of the objective to a file.
+    """
+    is_cross = quadratic.vars1 != quadratic.vars2
+    quad = quadratic[~is_cross]
+    coeffs = quad.coeffs.values
+    vars = quad.vars1.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"{coeff:+.12g} x{var} ^ 2\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
 
 
 def objective_to_file(m, f, log=False, batch_size=10000):
@@ -39,29 +97,37 @@ def objective_to_file(m, f, log=False, batch_size=10000):
     df = m.objective.flat
 
     if np.isnan(df.coeffs).any():
-        raise ValueError(
+        logger.warning(
             "Objective coefficients are missing (nan) where variables are not (-1)."
         )
 
-    coeffs = df.coeffs.values
-    vars = df.vars.values
+    if m.is_linear:
+        batch = objective_write_linear_terms(df, f, [], batch_size)
 
-    batch = []  # to store batch of lines
-    for idx in range(len(df)):
-        coeff = coeffs[idx]
-        var = vars[idx]
+    elif m.is_quadratic:
+        is_linear = (df.vars1 == -1) | (df.vars2 == -1)
+        linear = df[is_linear]
+        linear = linear.assign(
+            vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
+        )
+        batch = objective_write_linear_terms(linear, f, [], batch_size)
 
-        batch.append(f"{coeff:+.12g} x{var}\n")
-
-        if len(batch) >= batch_size:
-            f.writelines(batch)  # write out a batch
-            batch = []  # reset batch
+        if not is_linear.all():
+            batch.append("+ [\n")
+            quadratic = df[~is_linear]
+            quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
+            batch = objective_write_cross_terms(quadratic, f, batch, batch_size)
+            batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
+            batch.append("] / 2\n")
 
     if batch:  # write the remaining lines
         f.writelines(batch)
 
 
 def constraints_to_file(m, f, log=False, batch_size=50000):
+    if not len(m.constraints):
+        return
+
     f.write("\n\ns.t.\n\n")
     names = m.constraints
     if log:
@@ -334,16 +400,33 @@ def to_highspy(m):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
             h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
+
+    # linear objective
     h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
-    A = M.A.tocsr()
-    num_cons = A.shape[0]
-    lower = np.where(M.sense != "<", M.b, -np.inf)
-    upper = np.where(M.sense != ">", M.b, np.inf)
-    h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
+    # linear constraints
+    A = M.A
+    if A is not None:
+        A = A.tocsr()
+        num_cons = A.shape[0]
+        lower = np.where(M.sense != "<", M.b, -np.inf)
+        upper = np.where(M.sense != ">", M.b, np.inf)
+        h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
     lp = h.getLp()
-    lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
     lp.col_names_ = "x" + M.vlabels.astype(str).astype(object)
+    if len(M.clabels):
+        lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
     h.passModel(lp)
+
+    # quadrative objective
+    Q = M.Q
+    if Q is not None:
+        Q = triu(Q)
+        Q = Q.tocsr()
+        num_vars = Q.shape[0]
+        h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
+
     return h
 
 

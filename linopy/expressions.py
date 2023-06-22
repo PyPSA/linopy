@@ -406,7 +406,7 @@ class LinearExpression:
         elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
             other = other.to_linexpr()
 
-        if isinstance(other, LinearExpression):
+        if type(other) is LinearExpression:
             if other.nterm > 1:
                 raise TypeError("Multiplication of multiple terms is not supported.")
             ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
@@ -1076,9 +1076,19 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(
             other, model=self.model, coords=self.coords, dims=self.coord_dims
         )
-        if isinstance(other, LinearExpression):
+        if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge(self, other, cls=self.__class__)
+
+    def __radd__(self, other):
+        """
+        Add others to expression.
+        """
+        if type(other) is LinearExpression:
+            other = other.to_quadexpr()
+            return other.__add__(self)
+        else:
+            NotImplemented
 
     def __sub__(self, other):
         """
@@ -1087,9 +1097,19 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(
             other, model=self.model, coords=self.coords, dims=self.coord_dims
         )
-        if isinstance(other, LinearExpression):
+        if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge(self, -other, cls=self.__class__)
+
+    def __rsub__(self, other):
+        """
+        Subtract expression from others.
+        """
+        if type(other) is LinearExpression:
+            other = other.to_quadexpr()
+            return other.__sub__(self)
+        else:
+            NotImplemented
 
     @classmethod
     def _sum(cls, expr: "QuadraticExpression", dims=None) -> Dataset:
@@ -1136,15 +1156,21 @@ class QuadraticExpression(LinearExpression):
         """
         Return a sparse matrix representation of the expression only including
         quadratic terms.
+
+        Note that the matrix is formulated following the convention of the
+        optimization problem, i.e. the quadratic term is 0.5 x^T Q x.
+        The matrix Q is therefore symmetric and the diagonal terms are doubled.
+
         """
         df = self.flat
         # drop linear terms
         df = df[(df.vars1 != -1) & (df.vars2 != -1)]
 
-        # symmetrize cross terms
+        # symmetrize cross terms and double diagonal terms
         cross_terms = df.vars1 != df.vars2
-        df.loc[cross_terms, "coeffs"] *= 0.5
-        df = pd.concat([df, df[cross_terms].assign(vars1=df.vars2, vars2=df.vars1)])
+        df.loc[~cross_terms, "coeffs"] *= 2
+        vals = dict(vars1=df.vars2[cross_terms], vars2=df.vars1[cross_terms])
+        df = pd.concat([df, df[cross_terms].assign(**vals)])
 
         # assign matrix
         data = df.coeffs

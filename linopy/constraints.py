@@ -809,7 +809,10 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].flat for k in self], ignore_index=True)
+        dfs = [self[k].flat for k in self]
+        if not len(dfs):
+            return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
+        df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
         df["key"] = df.labels.map(map_labels)
@@ -824,6 +827,9 @@ class Constraints:
         """
         # TODO: rename "filter_missings" to "~labels_as_coordinates"
         cons = self.flat
+
+        if not len(self):
+            return None
 
         if filter_missings:
             vars = self.model.variables.flat

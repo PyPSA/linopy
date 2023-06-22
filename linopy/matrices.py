@@ -82,15 +82,16 @@ class MatrixAccessor:
     def clabels(self):
         "Vector of labels of all non-missing constraints."
         df = self.flat_cons
+        if df.empty:
+            return []
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
     def A(self):
         "Constraint matrix of all non-missing constraints and variables."
         m = self._parent
-        return m.constraints.to_matrix(filter_missings=False)[self.clabels][
-            :, self.vlabels
-        ]
+        A = m.constraints.to_matrix(filter_missings=False)
+        return A[self.clabels][:, self.vlabels] if A is not None else None
 
     @property
     def sense(self):
@@ -121,7 +122,7 @@ class MatrixAccessor:
     def Q(self):
         "Matrix objective coefficients of quadratic terms of all non-missing variables."
         m = self._parent
-        if not isinstance(m.objective, expressions.QuadraticExpression):
+        if m.is_linear:
             return None
 
         return m.objective.to_matrix()[self.vlabels][:, self.vlabels]

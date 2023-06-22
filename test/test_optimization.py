@@ -153,6 +153,34 @@ def milp_model_r():
 
 
 @pytest.fixture
+def quadratic_model():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
+
+    m.add_objective(x * x)
+    return m
+
+
+@pytest.fixture
+def quadratic_model_cross_terms():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
+
+    m.add_objective(2 * x + y + x * y)
+    return m
+
+
+@pytest.fixture
 def modified_model():
     m = Model()
 
@@ -343,6 +371,24 @@ def test_milp_model_r(milp_model_r, solver, io_api):
         status, condition = milp_model_r.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model(quadratic_model, solver, io_api):
+    status, condition = quadratic_model.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (quadratic_model.solution.x == 0).all()
+    assert (quadratic_model.solution.y == 10).all()
+    assert quadratic_model.objective_value == 0
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
+    status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (quadratic_model_cross_terms.solution.x == 0).all()
+    assert (quadratic_model_cross_terms.solution.y == 10).all()
+    assert quadratic_model_cross_terms.objective_value == 0
 
 
 @pytest.mark.parametrize("solver,io_api", params)
