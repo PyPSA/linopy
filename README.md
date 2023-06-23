@@ -1,4 +1,4 @@
-# linopy: Linear optimization with N-D labeled variables
+# linopy: Linear optimization with N-dimensional labeled variables
 
 [![PyPI](https://img.shields.io/pypi/v/linopy)](https://pypi.org/project/linopy/) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml) [![License](https://img.shields.io/pypi/l/linopy.svg)](LICENSE.txt) [![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/) [![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
 
@@ -27,6 +27,13 @@ So far **linopy** is available on the PyPI repository
 ```bash
 pip install linopy
 ```
+
+or on conda-forge
+
+```bash
+conda install -c conda-forge linopy
+```
+
 
 ## Supported solvers
 
