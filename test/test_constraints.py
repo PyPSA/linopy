@@ -13,6 +13,7 @@ import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
+from linopy.testing import assert_conequal
 
 # Test model functions
 
@@ -25,7 +26,7 @@ def test_constraint_assignment():
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    con0 = m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
     for attr in m.constraints.dataset_attrs:
         assert "con0" in getattr(m.constraints, attr)
@@ -35,6 +36,8 @@ def test_constraint_assignment():
     assert m.constraints.coeffs.con0.dtype in (int, float)
     assert m.constraints.vars.con0.dtype in (int, float)
     assert m.constraints.rhs.con0.dtype in (int, float)
+
+    assert_conequal(m.constraints.con0, con0)
 
 
 def test_anonymous_constraint_assignment():

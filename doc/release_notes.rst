@@ -16,6 +16,7 @@ Upcoming Release
 * Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
 * The `groupby` function now supports passing `pandas.Dataframe`s as groupby keys. These allows to group by multiple variables at once.
 * The performance of the `groupby` function was strongly increased. In large operations a speedup of 10x was observed.
+* New test functions `assert_varequal`, `assert_conequal` were added to the `testing` module.
 
 
 **Deprecations**
