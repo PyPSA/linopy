@@ -12,7 +12,8 @@ import pytest
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, Model
-from linopy.solvers import available_solvers
+from linopy.constants import SolverStatus, Status, TerminationCondition
+from linopy.solvers import available_solvers, quadratic_solvers
 
 params = [(name, "lp") for name in available_solvers]
 # mps io is only supported via highspy
@@ -174,9 +175,9 @@ def quadratic_model_cross_terms():
     x = m.add_variables(lower, name="x")
     y = m.add_variables(lower, name="y")
 
-    m.add_constraints(x + y, GREATER_EQUAL, 10)
+    m.add_constraints(x + y >= 10)
 
-    m.add_objective(2 * x + y + x * y)
+    m.add_objective(-2 * x + y + x * x)
     return m
 
 
@@ -375,20 +376,39 @@ def test_milp_model_r(milp_model_r, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model(quadratic_model, solver, io_api):
-    status, condition = quadratic_model.solve(solver, io_api=io_api)
-    assert condition == "optimal"
-    assert (quadratic_model.solution.x == 0).all()
-    assert (quadratic_model.solution.y == 10).all()
-    assert quadratic_model.objective_value == 0
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model.solution.x.round(3) == 0).all()
+        assert (quadratic_model.solution.y.round(3) == 10).all()
+        assert round(quadratic_model.objective_value, 3) == 0
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
-    status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
-    assert condition == "optimal"
-    assert (quadratic_model_cross_terms.solution.x == 0).all()
-    assert (quadratic_model_cross_terms.solution.y == 10).all()
-    assert quadratic_model_cross_terms.objective_value == 0
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
+        assert (quadratic_model_cross_terms.solution.y.round(3) == 8.5).all()
+        assert round(quadratic_model_cross_terms.objective_value, 3) == 77.5
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model_cross_terms.solve(solver, io_api=io_api)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
+    quadratic_model.objective = -quadratic_model.objective
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

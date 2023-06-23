@@ -365,6 +365,11 @@ def test_linear_expression_multiplication_invalid(x, y, z):
         expr / x
 
 
+def test_linear_expression_loc(x, y):
+    expr = x + y
+    assert expr.loc[0].size < expr.loc[:5].size
+
+
 def test_linear_expression_where(v):
     expr = np.arange(20) * v
     expr = expr.where(expr.coeffs >= 10)

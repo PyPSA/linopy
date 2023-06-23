@@ -35,7 +35,7 @@ from linopy.expressions import (
 )
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
-from linopy.solvers import available_solvers
+from linopy.solvers import available_solvers, quadratic_solvers
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -1017,6 +1017,11 @@ class Model:
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
+
+        if self.is_quadratic and solver_name not in quadratic_solvers:
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic problems."
+            )
 
         try:
             func = getattr(solvers, f"run_{solver_name}")

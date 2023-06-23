@@ -78,7 +78,7 @@ def test_objective():
 
     # test objective with constant which is not supported
     with pytest.raises(ValueError):
-        m.add_objective = obj + 3
+        m.objective = m.objective + 3
 
 
 def test_remove_variable():

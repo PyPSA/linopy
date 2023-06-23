@@ -82,7 +82,7 @@ class SolverStatus(Enum):
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
-        return cls.unknown
+        return cls("unknown")
 
 
 class TerminationCondition(Enum):

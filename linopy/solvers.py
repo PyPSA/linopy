@@ -11,6 +11,7 @@ import re
 import subprocess as sub
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from linopy.constants import (
@@ -20,6 +21,8 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
 
 available_solvers = []
 
@@ -254,13 +257,17 @@ def run_glpk(
     else:
         p.wait()
 
+    if not os.path.exists(solution_fn):
+        status = Status(SolverStatus.warning, TerminationCondition.unknown)
+        return Result(status, Solution())
+
     f = open(solution_fn)
 
     def read_until_break(f):
-        linebreak = False
-        while not linebreak:
+        while True:
             line = f.readline()
-            linebreak = line == "\n"
+            if line == "\n" or line == "":
+                break
             yield line
 
     info = io.StringIO("".join(read_until_break(f))[:-2])

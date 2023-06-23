@@ -359,7 +359,10 @@ def to_gurobipy(m):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
-    model.setObjective(M.c @ x)
+    if m.is_quadratic:
+        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+    else:
+        model.setObjective(M.c @ x)
 
     names = "c" + M.clabels.astype(str).astype(object)
     c = model.addMConstr(M.A, x, M.sense, M.b)

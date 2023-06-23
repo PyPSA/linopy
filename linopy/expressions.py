@@ -224,7 +224,7 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
+@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"], const=["ndim"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -882,7 +882,6 @@ class LinearExpression:
         """
         Get the total size of the linear expression.
         """
-        assert self.vars.size == self.coeffs.size
         return self.vars.size
 
     def empty(self):

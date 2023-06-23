@@ -44,7 +44,7 @@ def test_quadratic_expression_from_linexpr_multiplication(x, y):
     assert expr.nterm == 2
 
 
-def test_quadratic_expression_addition(x, y):
+def test_quadratic_expression_addition(model, x, y):
     expr = x * y + x + 5
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == 5).all()
@@ -84,11 +84,20 @@ def test_quadratic_expression_sum(x, y):
     assert not summed_expr_all.coord_dims
 
 
+def test_quadratic_expression_loc(x):
+    expr = x * x
+    assert expr.loc[0].size < expr.loc[:5].size
+
+
 def test_quadratic_expression_flat(x, y):
     expr = x * y + x + 5
-
     df = expr.flat
     assert isinstance(df, pd.DataFrame)
+
+    expr = x * y + x * y
+    assert expr.nterm == 2
+    assert (expr.flat.coeffs == 2).all()
+    assert len(expr.flat) == 2
 
 
 def test_quadratic_expression_to_matrix(model, x, y):
