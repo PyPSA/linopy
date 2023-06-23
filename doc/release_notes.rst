@@ -10,6 +10,7 @@ Upcoming Release
 * Linopy now supports quadratic programming. Therefore a new class `QuadraticExpression` was created, which can be assigned to the objective function. The `QuadraticExpression` class supports the same arithmetic operations as the `LinearExpression` and can be created by multiplying two `Variable` or `LinearExpression` objects. Note for the latter, the number of stacked terms must be equal to one (`expr.nterm == 1`).
 * `LinearExpression`'s now support constant values. This allows defining linear expressions with numeric constant values, like `x + 5`.
 * When defining constraints, it is not needed to separate variables from constants anymore. Thus, expressions  like `x <= y` or `5 * x + 10 >= y` are supported.
+* The new default solver will now be the first element in `available_solvers`.
 * The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
 * The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
 * It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
