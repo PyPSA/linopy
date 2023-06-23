@@ -11,10 +11,14 @@ from functools import cached_property
 import numpy as np
 import pandas as pd
 
+from linopy import expressions
 
-def create_vector(indices, values, fill_value=np.nan):
+
+def create_vector(indices, values, fill_value=np.nan, shape=None):
     """Create a vector of a size equal to the maximum index plus one."""
-    vector = np.full(max(indices) + 1, fill_value)
+    if shape is None:
+        shape = max(indices) + 1
+    vector = np.full(shape, fill_value)
     vector[indices] = values
     return vector
 
@@ -60,7 +64,7 @@ class MatrixAccessor:
 
         ds = pd.concat(specs)
         ds = df.set_index("key").labels.map(ds)
-        return create_vector(ds.index, ds.values, "")
+        return create_vector(ds.index, ds.values, fill_value="")
 
     @property
     def lb(self):
@@ -78,21 +82,22 @@ class MatrixAccessor:
     def clabels(self):
         "Vector of labels of all non-missing constraints."
         df = self.flat_cons
-        return create_vector(df.key, df.labels, -1)
+        if df.empty:
+            return np.array([], dtype=int)
+        return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
     def A(self):
         "Constraint matrix of all non-missing constraints and variables."
         m = self._parent
-        return m.constraints.to_matrix(filter_missings=False)[self.clabels][
-            :, self.vlabels
-        ]
+        A = m.constraints.to_matrix(filter_missings=False)
+        return A[self.clabels][:, self.vlabels] if A is not None else None
 
     @property
     def sense(self):
         "Vector of senses of all non-missing constraints."
         df = self.flat_cons
-        return create_vector(df.key, df.sign.astype(np.dtype("<U1")), "")
+        return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
 
     @property
     def b(self):
@@ -105,5 +110,19 @@ class MatrixAccessor:
         "Vector of objective coefficients of all non-missing variables."
         m = self._parent
         ds = m.objective.flat
+        if isinstance(m.objective, expressions.QuadraticExpression):
+            ds = ds[(ds.vars1 == -1) | (ds.vars2 == -1)]
+            ds["vars"] = ds.vars1.where(ds.vars1 != -1, ds.vars2)
+
         vars = ds.vars.map(self.flat_vars.set_index("labels").key)
-        return create_vector(vars, ds.coeffs, 0)
+        shape = self.flat_vars.key.max() + 1
+        return create_vector(vars, ds.coeffs, fill_value=0, shape=shape)
+
+    @property
+    def Q(self):
+        "Matrix objective coefficients of quadratic terms of all non-missing variables."
+        m = self._parent
+        if m.is_linear:
+            return None
+
+        return m.objective.to_matrix()[self.vlabels][:, self.vlabels]

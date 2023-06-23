@@ -33,6 +33,13 @@ sign_replace_dict = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
+TERM_DIM = "_term"
+STACKED_TERM_DIM = "_stacked_term"
+GROUPED_TERM_DIM = "_grouped_term"
+FACTOR_DIM = "_factor"
+CONCAT_DIM = "_concat"
+HELPER_DIMS = [TERM_DIM, STACKED_TERM_DIM, GROUPED_TERM_DIM, FACTOR_DIM, CONCAT_DIM]
+
 
 class ModelStatus(Enum):
     """
@@ -75,7 +82,7 @@ class SolverStatus(Enum):
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
-        return cls.unknown
+        return cls("unknown")
 
 
 class TerminationCondition(Enum):

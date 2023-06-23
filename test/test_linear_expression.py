@@ -13,6 +13,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
+from linopy.constants import TERM_DIM
 from linopy.testing import assert_linequal
 
 
@@ -73,7 +74,7 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, m)
 
-    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name="_term")]
+    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
     coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
     vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
     data = xr.Dataset({"coeffs": coeffs, "vars": vars})
@@ -83,8 +84,8 @@ def test_linexpr_with_wrong_data(m):
 
 def test_linexpr_with_data_without_coords(m):
     lhs = 1 * m["x"]
-    vars = xr.DataArray(lhs.vars.values, dims=["dim_0", "_term"])
-    coeffs = xr.DataArray(lhs.coeffs.values, dims=["dim_0", "_term"])
+    vars = xr.DataArray(lhs.vars.values, dims=["dim_0", TERM_DIM])
+    coeffs = xr.DataArray(lhs.coeffs.values, dims=["dim_0", TERM_DIM])
     data = xr.Dataset({"vars": vars, "coeffs": coeffs})
     expr = LinearExpression(data, m)
     assert_linequal(expr, lhs)
@@ -102,7 +103,7 @@ def test_fill_value():
 def test_linexpr_with_scalars(m):
     expr = m.linexpr((10, "x"), (1, "y"))
     target = xr.DataArray(
-        [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", "_term"]
+        [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", TERM_DIM]
     )
     assert_equal(expr.coeffs, target)
 
@@ -188,16 +189,7 @@ def test_linear_expression_multi_indexed(u):
 
 def test_linear_expression_with_errors(m, x):
     with pytest.raises(TypeError):
-        x.to_linexpr(x)
-
-    with pytest.raises(TypeError):
-        x * x
-
-    with pytest.raises(TypeError):
         x / x
-
-    with pytest.raises(TypeError):
-        x * (1 * x)
 
     with pytest.raises(TypeError):
         x / (1 * x)
@@ -293,7 +285,7 @@ def test_linear_expression_sum(x, y, z, v):
     assert res.nterm == expr.size
     assert res.data.notnull().all().to_array().all()
 
-    assert_linequal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
     # test special case otherride coords
     expr = v.loc[:9] + v.loc[10:]
@@ -315,7 +307,7 @@ def test_linear_expression_sum_with_const(x, y, z, v):
     assert res.data.notnull().all().to_array().all()
     assert (res.const == 60).item()
 
-    assert_linequal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
     # test special case otherride coords
     expr = v.loc[:9] + v.loc[10:]
@@ -366,11 +358,16 @@ def test_linear_expression_multiplication_invalid(x, y, z):
 
     with pytest.raises(TypeError):
         expr = 10 * x + y + z
-        expr * x
+        expr * expr
 
     with pytest.raises(TypeError):
         expr = 10 * x + y + z
         expr / x
+
+
+def test_linear_expression_loc(x, y):
+    expr = x + y
+    assert expr.loc[0].size < expr.loc[:5].size
 
 
 def test_linear_expression_where(v):
@@ -592,9 +589,9 @@ def test_linear_expression_outer_sum(x, y):
 def test_rename(x, y, z):
     expr = 10 * x + y + z
     renamed = expr.rename({"dim_0": "dim_5"})
-    assert set(renamed.dims) == {"dim_1", "dim_5", "_term"}
+    assert set(renamed.dims) == {"dim_1", "dim_5", TERM_DIM}
     assert renamed.nterm == 3
 
     renamed = expr.rename({"dim_0": "dim_1", "dim_1": "dim_2"})
-    assert set(renamed.dims) == {"dim_1", "dim_2", "_term"}
+    assert set(renamed.dims) == {"dim_1", "dim_2", TERM_DIM}
     assert renamed.nterm == 3

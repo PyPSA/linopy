@@ -18,7 +18,7 @@ from xarray import DataArray, Dataset, align, apply_ufunc, merge
 from xarray.core import indexing, utils
 
 from linopy.config import options
-from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
+from linopy.constants import SIGNS, TERM_DIM, SIGNS_alternative, sign_replace_dict
 
 
 def maybe_replace_sign(sign):
@@ -111,7 +111,7 @@ def fill_missing_coords(ds):
 
     # Fill in missing integer coordinates
     for dim in ds.dims:
-        if dim not in ds.coords and not dim.endswith("_term"):
+        if dim not in ds.coords and dim != TERM_DIM:
             ds.coords[dim] = arange(ds.sizes[dim])
 
     return ds
@@ -225,15 +225,25 @@ def print_single_expression(c, v, const, model):
     # catch case that to many terms would be printed
     def print_line(expr, const):
         res = []
-        for i, (coeff, (name, coord)) in enumerate(expr):
-            coord_string = print_coord(coord)
+        for i, (coeff, var) in enumerate(expr):
+            coeff_string = f"{coeff:+.4g}"
             if i:
-                coeff_string = f"{coeff:+.4g}"
                 # split sign and coefficient
-                res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
+                coeff_string = f"{coeff_string[0]} {coeff_string[1:]}"
+
+            if isinstance(var, list):
+                var_string = ""
+                for name, coords in var:
+                    if name is not None:
+                        coord_string = print_coord(coords)
+                        var_string += f" {name}{coord_string}"
             else:
-                coeff_string = f"{coeff:+.4g} " if coeff != 1 else ""
-                res.append(f"{coeff_string}{name}{coord_string}")
+                name, coords = var
+                coord_string = print_coord(coords)
+                var_string = f" {name}{coord_string}"
+
+            res.append(f"{coeff_string}{var_string}")
+
         if const != 0:
             const_string = f"{const:+.4g}"
             if len(res):
@@ -242,14 +252,19 @@ def print_single_expression(c, v, const, model):
                 res.append(const_string)
         return " ".join(res) if len(res) else "None"
 
-    if isinstance(c, np.ndarray):
+    if v.ndim == 1:
         mask = v != -1
         c, v = c[mask], v[mask]
+    else:
+        mask = (v != -1).any(0)
+        c = c[mask]
+        v = v[:, mask]
 
     max_terms = options.get_value("display_max_terms")
     if len(c) > max_terms:
         truncate = max_terms // 2
-        expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
+        positions = model.variables.get_label_position(v[..., :truncate])
+        expr = list(zip(c[:truncate], positions))
         res = print_line(expr, const)
         res += " ... "
         expr = list(

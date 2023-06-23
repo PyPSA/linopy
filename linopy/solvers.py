@@ -11,6 +11,7 @@ import re
 import subprocess as sub
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from linopy.constants import (
@@ -21,15 +22,13 @@ from linopy.constants import (
     TerminationCondition,
 )
 
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+
 available_solvers = []
 
 which = "where" if os.name == "nt" else "which"
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("glpk")
 
-if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("cbc")
-
+# the first available solver will be the default solver
 try:
     import gurobipy
 
@@ -44,6 +43,12 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
+if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("glpk")
+
+
+if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("cbc")
 
 try:
     import cplex
@@ -254,13 +259,17 @@ def run_glpk(
     else:
         p.wait()
 
+    if not os.path.exists(solution_fn):
+        status = Status(SolverStatus.warning, TerminationCondition.unknown)
+        return Result(status, Solution())
+
     f = open(solution_fn)
 
     def read_until_break(f):
-        linebreak = False
-        while not linebreak:
+        while True:
             line = f.readline()
-            linebreak = line == "\n"
+            if line == "\n" or line == "":
+                break
             yield line
 
     info = io.StringIO("".join(read_until_break(f))[:-2])
@@ -445,16 +454,21 @@ def run_cplex(
 
     if warmstart_fn:
         m.start.read_basis(warmstart_fn)
-    m.solve()
+
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-    if log_fn is not None:
-        log_f.close()
+    try:
+        m.solve()
+    except cplex.exceptions.errors.CplexSolverError as e:
+        pass
 
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
+
+    if log_fn is not None:
+        log_f.close()
 
     def get_solver_solution() -> Solution:
         if basis_fn and is_lp:

@@ -36,7 +36,14 @@ from linopy.common import (
     save_join,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, SIGNS_pretty
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    SIGNS_pretty,
+)
 
 
 def conwrap(method, *default_args, **new_default_kwargs):
@@ -110,9 +117,7 @@ class Constraint:
 
         data = data.assign_attrs(name=name)
 
-        if "_term" in data.dims:
-            data = data.rename({"_term": f"{name}_term"})
-        (data,) = xr.broadcast(data, exclude=[f"{name}_term"])
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         self._data = data
         self._model = model
@@ -147,7 +152,7 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if not k.endswith("_term")}
+        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):
@@ -225,7 +230,7 @@ class Constraint:
         """
         Return the term dimension of the constraint.
         """
-        return self.name + "_term"
+        return TERM_DIM
 
     @property
     def mask(self):
@@ -284,7 +289,7 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        data = self.data[["coeffs", "vars"]].rename({self.term_dim: "_term"})
+        data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
         return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
@@ -292,10 +297,8 @@ class Constraint:
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
-        self._data = (
-            self.data.drop_vars(["coeffs", "vars"])
-            .assign(coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const)
-            .rename(_term=self.name + "_term")
+        self._data = self.data.drop_vars(["coeffs", "vars"]).assign(
+            coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const
         )
 
     @property
@@ -501,7 +504,7 @@ class Constraints:
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
         if not len(list(self)):
-            r += "<empty>"
+            r += "<empty>\n"
         return r
 
     def __getitem__(
@@ -806,7 +809,10 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].flat for k in self], ignore_index=True)
+        dfs = [self[k].flat for k in self]
+        if not len(dfs):
+            return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
+        df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
         df["key"] = df.labels.map(map_labels)
@@ -822,13 +828,16 @@ class Constraints:
         # TODO: rename "filter_missings" to "~labels_as_coordinates"
         cons = self.flat
 
+        if not len(self):
+            return None
+
         if filter_missings:
             vars = self.model.variables.flat
             shape = (cons.key.max() + 1, vars.key.max() + 1)
             cons["vars"] = cons.vars.map(vars.set_index("labels").key)
             return csc_matrix((cons.coeffs, (cons.key, cons.vars)), shape=shape)
         else:
-            shape = (self.model._cCounter, self.model._xCounter)
+            shape = self.model.shape
             return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
 
     def reset_dual(self):

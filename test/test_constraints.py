@@ -123,3 +123,23 @@ def test_masked_constraints():
     m.add_constraints(1 * x + 10 * y, EQUAL, 0, mask=mask)
     assert (m.constraints.labels.con0[0:5, :] != -1).all()
     assert (m.constraints.labels.con0[5:10, :] == -1).all()
+
+
+def test_constraints_flat():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+
+    assert isinstance(m.constraints.flat, pd.DataFrame)
+    assert m.constraints.flat.empty
+    assert m.constraints.to_matrix() is None
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_constraints(1 * x + 10 * y, LESS_EQUAL, 0)
+    m.add_constraints(1 * x + 10 * y, GREATER_EQUAL, 0)
+
+    assert isinstance(m.constraints.flat, pd.DataFrame)
+    assert not m.constraints.flat.empty

@@ -76,6 +76,10 @@ def test_objective():
     assert m.objectiverange.min() == 2
     assert m.objectiverange.max() == 2
 
+    # test objective with constant which is not supported
+    with pytest.raises(ValueError):
+        m.objective = m.objective + 3
+
 
 def test_remove_variable():
     m = Model()
