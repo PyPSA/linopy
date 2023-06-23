@@ -452,16 +452,21 @@ def run_cplex(
 
     if warmstart_fn:
         m.start.read_basis(warmstart_fn)
-    m.solve()
+
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-    if log_fn is not None:
-        log_f.close()
+    try:
+        m.solve()
+    except cplex.exceptions.errors.CplexSolverError as e:
+        pass
 
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
+
+    if log_fn is not None:
+        log_f.close()
 
     def get_solver_solution() -> Solution:
         if basis_fn and is_lp:
