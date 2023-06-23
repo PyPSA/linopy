@@ -175,9 +175,7 @@ def constraints_to_file(m, f, log=False, batch_size=50000):
             else:
                 batch.append(f"{coeff:+.12g} x{var}\n")
 
-            if len(batch) >= batch_size:
-                f.writelines(batch)
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
             prev_label = label
 
@@ -216,10 +214,7 @@ def bounds_to_file(m, f, log=False, batch_size=10000):
             lower = lowers[idx]
             upper = uppers[idx]
             batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -247,10 +242,7 @@ def binaries_to_file(m, f, log=False, batch_size=1000):
 
         for label in df.labels.values:
             batch.append(f"x{label}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -278,10 +270,7 @@ def integers_to_file(m, f, log=False, batch_size=1000):
 
         for label in df.labels.values:
             batch.append(f"x{label}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -364,9 +353,10 @@ def to_gurobipy(m):
     else:
         model.setObjective(M.c @ x)
 
-    names = "c" + M.clabels.astype(str).astype(object)
-    c = model.addMConstr(M.A, x, M.sense, M.b)
-    c.setAttr("ConstrName", list(names))
+    if len(m.constraints):
+        names = "c" + M.clabels.astype(str).astype(object)
+        c = model.addMConstr(M.A, x, M.sense, M.b)
+        c.setAttr("ConstrName", list(names))
 
     model.update()
     return model

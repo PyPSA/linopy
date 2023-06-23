@@ -44,6 +44,14 @@ def test_quadratic_expression_from_linexpr_multiplication(x, y):
     assert expr.nterm == 2
 
 
+def test_quadratic_expression_wrong_assignment(x, y):
+    with pytest.raises(ValueError):
+        QuadraticExpression((x + y).data, x.model)
+
+    with pytest.raises(ValueError):
+        QuadraticExpression((x + y).data.expand_dims(FACTOR_DIM), x.model)
+
+
 def test_quadratic_expression_addition(model, x, y):
     expr = x * y + x + 5
     assert isinstance(expr, QuadraticExpression)
@@ -56,6 +64,9 @@ def test_quadratic_expression_raddition(x, y):
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == 5).all()
     assert expr.nterm == 2
+
+    with pytest.raises(TypeError):
+        5 + x * y + x
 
 
 def test_quadratic_expression_subtraction(x, y):
@@ -82,6 +93,11 @@ def test_quadratic_expression_sum(x, y):
     summed_expr_all = expr.sum()
     assert isinstance(summed_expr_all, QuadraticExpression)
     assert not summed_expr_all.coord_dims
+
+
+def test_quadratic_expression_wrong_multiplication(x, y):
+    with pytest.raises(TypeError):
+        x * x * y
 
 
 def test_quadratic_expression_loc(x):
@@ -128,3 +144,8 @@ def test_matrices_matrix_mixed_linear_and_quadratic(model, x, y):
     c = model.matrices.c
     assert isinstance(c, np.ndarray)
     assert c.shape == (model.nvars,)
+
+
+def test_quadratic_to_constraint(x, y):
+    with pytest.raises(NotImplementedError):
+        x * y <= 10

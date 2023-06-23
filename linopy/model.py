@@ -674,6 +674,13 @@ class Model:
         self.constraints.remove(name)
 
     @property
+    def continuous(self):
+        """
+        Get all continuous variables.
+        """
+        return self.variables.continuous
+
+    @property
     def binaries(self):
         """
         Get all binary variables.
@@ -905,7 +912,7 @@ class Model:
 
     def solve(
         self,
-        solver_name="gurobi",
+        solver_name=None,
         io_api=None,
         problem_fn=None,
         solution_fn=None,
@@ -927,7 +934,7 @@ class Model:
         ----------
         solver_name : str, optional
             Name of the solver to use, this must be in `linopy.available_solvers`.
-            The default is 'gurobi'.
+            Default to the first entry in `linopy.available_solvers`.
         io_api : str, optional
             Api to use for communicating with the solver, must be one of
             {'lp', 'mps', 'direct'}. If set to 'lp'/'mps' the problem is written to an
@@ -997,6 +1004,12 @@ class Model:
                     c.dual = solved.constraints[k].dual
             return self.status, self.termination_condition
 
+        if len(available_solvers) == 0:
+            raise RuntimeError("No solver installed.")
+
+        if solver_name is None:
+            solver_name = available_solvers[0]
+
         logger.info(f" Solve linear problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
@@ -1057,7 +1070,10 @@ class Model:
 
         for name, var in self.variables.items():
             idx = np.ravel(var.labels)
-            vals = sol[idx].values.reshape(var.labels.shape)
+            try:
+                vals = sol[idx].values.reshape(var.labels.shape)
+            except KeyError:
+                vals = sol.reindex(idx).values.reshape(var.labels.shape)
             var.solution = xr.DataArray(vals, var.coords)
 
         if not result.solution.dual.empty:
@@ -1085,6 +1101,9 @@ class Model:
         labels : xr.DataArray
             Labels of the infeasible constraints. Labels with value -1 are not in the set.
         """
+        if "gurobi" not in available_solvers:
+            raise ImportError("Gurobi is required for this method.")
+
         import gurobipy
 
         solver_model = getattr(self, "solver_model")

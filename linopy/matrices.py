@@ -83,7 +83,7 @@ class MatrixAccessor:
         "Vector of labels of all non-missing constraints."
         df = self.flat_cons
         if df.empty:
-            return []
+            return np.array([], dtype=int)
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property

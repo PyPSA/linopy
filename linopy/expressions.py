@@ -1086,8 +1086,10 @@ class QuadraticExpression(LinearExpression):
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
             return other.__add__(self)
+        elif other == 0:
+            return self
         else:
-            NotImplemented
+            return NotImplemented
 
     def __sub__(self, other):
         """
@@ -1202,8 +1204,6 @@ def as_expression(obj, model=None, **kwargs):
         If object cannot be converted to LinearExpression.
     """
     if isinstance(obj, LinearExpression):
-        return obj
-    elif isinstance(obj, QuadraticExpression):
         return obj
     elif isinstance(obj, (variables.Variable, variables.ScalarVariable)):
         return obj.to_linexpr()

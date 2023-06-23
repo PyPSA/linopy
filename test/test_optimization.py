@@ -232,6 +232,32 @@ def masked_constraint_model():
     return m
 
 
+def test_model_types(
+    model,
+    model_with_duplicated_variables,
+    milp_binary_model,
+    milp_binary_model_r,
+    milp_model,
+    milp_model_r,
+    quadratic_model,
+    quadratic_model_cross_terms,
+    modified_model,
+    masked_variable_model,
+    masked_constraint_model,
+):
+    assert model.type == "LP"
+    assert model_with_duplicated_variables.type == "LP"
+    assert milp_binary_model.type == "MILP"
+    assert milp_binary_model_r.type == "MILP"
+    assert milp_model.type == "MILP"
+    assert milp_model_r.type == "MILP"
+    assert quadratic_model.type == "QP"
+    assert quadratic_model_cross_terms.type == "QP"
+    assert modified_model.type == "MILP"
+    assert masked_variable_model.type == "LP"
+    assert masked_constraint_model.type == "LP"
+
+
 @pytest.mark.parametrize("solver,io_api", params)
 def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
@@ -325,7 +351,7 @@ def test_infeasible_model(model, solver, io_api):
     if solver == "gurobi":
         model.compute_set_of_infeasible_constraints()
     else:
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((NotImplementedError, ImportError)):
             model.compute_set_of_infeasible_constraints()
 
 
@@ -398,6 +424,19 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
     else:
         with pytest.raises(ValueError):
             quadratic_model_cross_terms.solve(solver, io_api=io_api)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
+    quadratic_model.constraints.remove("con0")
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model.solution.x.round(3) == 0).all()
+        assert round(quadratic_model.objective_value, 3) == 0
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

@@ -299,6 +299,10 @@ def test_constraint_sel(c):
     assert isinstance(c.isel(first=[1, 2]), linopy.constraints.Constraint)
 
 
+def test_constraint_flat(c):
+    assert isinstance(c.flat, pd.DataFrame)
+
+
 def test_constraint_assignment_with_anonymous_constraints(m, x, y):
     m.add_constraints(x + y == 0, name="c2")
     assert m.constraints["c2"].vars.notnull().all()

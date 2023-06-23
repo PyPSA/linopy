@@ -27,12 +27,8 @@ quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
 available_solvers = []
 
 which = "where" if os.name == "nt" else "which"
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("glpk")
 
-if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("cbc")
-
+# the first available solver will be the default solver
 try:
     import gurobipy
 
@@ -47,6 +43,12 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
+if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("glpk")
+
+
+if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("cbc")
 
 try:
     import cplex
