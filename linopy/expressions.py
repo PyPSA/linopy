@@ -713,7 +713,7 @@ class LinearExpression:
     def to_quadexpr(self):
         """Convert LinearExpression to QuadraticExpression."""
         vars = self.data.vars.expand_dims(FACTOR_DIM)
-        fill_value = self.fill_value["vars"]
+        fill_value = self._fill_value["vars"]
         vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)
         data = self.data.assign(vars=vars)
         return QuadraticExpression(data, self.model)

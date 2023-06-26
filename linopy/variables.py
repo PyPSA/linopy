@@ -472,7 +472,7 @@ class Variable:
         -------
         xr.DataArray
         """
-        return (self.labels != self.fill_value["labels"]).astype(bool)
+        return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def upper(self):
@@ -676,7 +676,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -703,7 +703,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self.fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
