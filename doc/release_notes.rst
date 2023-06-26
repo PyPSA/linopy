@@ -5,6 +5,7 @@ Upcoming Release
 ----------------
 
 * Backwards compatibility for python 3.8.
+* `Variable`, `LinearExpression` and `Constraint` now have a print function to easily print the objects with larger layouts, i.e. showing more terms and lines.
 
 
 Version 0.2.0

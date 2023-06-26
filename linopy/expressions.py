@@ -365,6 +365,23 @@ class LinearExpression:
 
         return "\n".join(lines)
 
+    def print(self, display_max_rows=20, display_max_terms=20):
+        """
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(
+                display_max_rows=display_max_rows, display_max_terms=display_max_terms
+            )
+            print(self)
+
     def __add__(self, other):
         """
         Add an expression to others.
@@ -1245,6 +1262,16 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
     """
     linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
 
+    if (
+        cls is QuadraticExpression
+        and dim == TERM_DIM
+        and any(type(e) is LinearExpression for e in exprs)
+    ):
+        raise ValueError(
+            "Cannot merge linear and quadratic expressions along term dimension."
+            "Convert to QuadraticExpression first."
+        )
+
     exprs = exprs[0] if len(exprs) == 1 else list(exprs)  # allow passing a list
     model = exprs[0].model
 
@@ -1257,9 +1284,7 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
         override = False
 
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
-    for d in set(HELPER_DIMS) & set(_ for ds in data for _ in ds.dims):
-        if len({ds.dims[d] for ds in data}) > 1:
-            data = [ds.assign_coords({d: arange(ds.dims[d])}) for ds in data]
+    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
     if not kwargs:
         kwargs = {

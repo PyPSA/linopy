@@ -252,6 +252,21 @@ class Variable:
 
         return "\n".join(lines)
 
+    def print(self, display_max_rows=20):
+        """
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(display_max_rows=display_max_rows)
+            print(self)
+
     def __neg__(self):
         """
         Calculate the negative of the variables (converts coefficients only).

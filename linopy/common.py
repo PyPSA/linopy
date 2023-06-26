@@ -18,7 +18,13 @@ from xarray import DataArray, Dataset, align, apply_ufunc, merge
 from xarray.core import indexing, utils
 
 from linopy.config import options
-from linopy.constants import SIGNS, TERM_DIM, SIGNS_alternative, sign_replace_dict
+from linopy.constants import (
+    HELPER_DIMS,
+    SIGNS,
+    TERM_DIM,
+    SIGNS_alternative,
+    sign_replace_dict,
+)
 
 
 def maybe_replace_sign(sign):
@@ -94,7 +100,7 @@ def save_join(*dataarrays):
     return Dataset({ds.name: ds for ds in labels})
 
 
-def fill_missing_coords(ds):
+def fill_missing_coords(ds, fill_helper_dims=False):
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -104,14 +110,19 @@ def fill_missing_coords(ds):
     Parameters
     ----------
     ds : xarray.DataArray or xarray.Dataset
+    fill_helper_dims : bool, optional
+        Whether to fill in integer coordinates for helper dimensions, by default False.
+
     """
     ds = ds.copy()
     if not isinstance(ds, (Dataset, DataArray)):
         raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
 
+    skip_dims = [] if fill_helper_dims else HELPER_DIMS
+
     # Fill in missing integer coordinates
     for dim in ds.dims:
-        if dim not in ds.coords and dim != TERM_DIM:
+        if dim not in ds.coords and dim not in skip_dims:
             ds.coords[dim] = arange(ds.sizes[dim])
 
     return ds
