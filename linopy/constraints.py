@@ -458,7 +458,7 @@ class Constraint:
         df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")
-        agg |= {k: "first" for k in df.columns if k not in agg}
+        agg.update({k: "first" for k in df.columns if k not in agg})
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
 
         any_nan = df.isna().any()
