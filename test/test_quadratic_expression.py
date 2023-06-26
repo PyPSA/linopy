@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 from scipy.sparse import csc_matrix
 
-from linopy import Model
-from linopy.constants import FACTOR_DIM
+from linopy import Model, merge
+from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import QuadraticExpression
 
 
@@ -98,6 +98,25 @@ def test_quadratic_expression_sum(x, y):
 def test_quadratic_expression_wrong_multiplication(x, y):
     with pytest.raises(TypeError):
         x * x * y
+
+
+def test_merge_linear_expression_and_quadratic_expression(x, y):
+    linexpr = 10 * x + y + 5
+    quadexpr = x * y
+
+    with pytest.raises(ValueError):
+        expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
+
+    linexpr = linexpr.to_quadexpr()
+    expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
+    assert isinstance(expr, QuadraticExpression)
+    assert expr.nterm == 3
+    assert expr.const.sum() == 10
+    assert FACTOR_DIM not in expr.coeffs.dims
+    assert FACTOR_DIM not in expr.const.dims
+
+    first_term = expr.data.isel({TERM_DIM: 0})
+    assert (first_term.vars.isel({FACTOR_DIM: 1}) == -1).all()
 
 
 def test_quadratic_expression_loc(x):

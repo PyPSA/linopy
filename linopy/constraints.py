@@ -208,6 +208,23 @@ class Constraint:
 
         return "\n".join(lines)
 
+    def print(self, display_max_rows=20, display_max_terms=20):
+        """
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(
+                display_max_rows=display_max_rows, display_max_terms=display_max_terms
+            )
+            print(self)
+
     def __contains__(self, value):
         return self.data.__contains__(value)
 

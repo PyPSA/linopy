@@ -148,3 +148,5 @@ def test_print_options():
             opts.set_value(display_max_rows=20)
             longer_repr = repr(o)
         assert len(default_repr) < len(longer_repr)
+
+        longer_repr = o.print(display_max_rows=20)
