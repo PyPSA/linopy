@@ -97,7 +97,7 @@ def test_repr(m):
 
 
 def test_fill_value():
-    isinstance(LinearExpression.fill_value, dict)
+    isinstance(LinearExpression._fill_value, dict)
 
 
 def test_linexpr_with_scalars(m):
