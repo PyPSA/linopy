@@ -4,6 +4,12 @@ Release Notes
 Upcoming Release
 ----------------
 
+* Backwards compatibility for python 3.8.
+
+
+Version 0.2.0
+-------------
+
 
 **New Features**
 

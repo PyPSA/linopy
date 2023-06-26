@@ -168,7 +168,7 @@ class LinearExpressionGroupby:
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
             ds = self.data.assign_coords({group_dim: idx})
-            ds = ds.unstack(group_dim, fill_value=LinearExpression.fill_value)
+            ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
 
             if int_map is not None:
@@ -713,7 +713,7 @@ class LinearExpression:
     def to_quadexpr(self):
         """Convert LinearExpression to QuadraticExpression."""
         vars = self.data.vars.expand_dims(FACTOR_DIM)
-        fill_value = self.fill_value["vars"]
+        fill_value = self._fill_value["vars"]
         vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)
         data = self.data.assign(vars=vars)
         return QuadraticExpression(data, self.model)

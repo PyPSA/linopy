@@ -146,7 +146,7 @@ def test_variable_sum(x):
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.labels[9] == x.fill_value["labels"]
+    assert x.labels[9] == x._fill_value["labels"]
 
     x = x.where([True] * 4 + [False] * 6, x[0])
     assert isinstance(x, linopy.variables.Variable)
