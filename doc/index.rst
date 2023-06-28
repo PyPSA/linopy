@@ -83,6 +83,7 @@ This package is published under MIT license.
    creating-constraints
    manipulating-models
    testing-framework
+   infeasible-model
    solve-on-remote
    migrating-from-pyomo
 

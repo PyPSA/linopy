@@ -349,10 +349,14 @@ def test_infeasible_model(model, solver, io_api):
     assert "infeasible" in condition
 
     if solver == "gurobi":
-        model.compute_set_of_infeasible_constraints()
+        # ignore deprecated warning
+        with pytest.warns(DeprecationWarning):
+            model.compute_set_of_infeasible_constraints()
+        model.compute_infeasibilities()
+        model.print_infeasibilities()
     else:
         with pytest.raises((NotImplementedError, ImportError)):
-            model.compute_set_of_infeasible_constraints()
+            model.compute_infeasibilities()
 
 
 @pytest.mark.parametrize(

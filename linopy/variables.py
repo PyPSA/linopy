@@ -26,6 +26,7 @@ from linopy.common import (
     fill_missing_coords,
     forward_as_properties,
     generate_indices_for_printout,
+    get_label_position,
     has_optimized_model,
     is_constant,
     print_coord,
@@ -952,35 +953,19 @@ class Variables:
         """
         Get tuple of name and coordinate for variable labels.
         """
+        return get_label_position(self, values)
 
-        def find_single(value):
-            if value == -1:
-                return None, None
-            for name, var in self.items():
-                labels = var.labels
-                start, stop = var.range
+    def print_labels(self, values):
+        """
+        Print a selection of labels of the variables.
 
-                if value >= start and value < stop:
-                    index = np.unravel_index(value - start, labels.shape)
-
-                    # Extract the coordinates from the indices
-                    coord = {
-                        dim: labels.indexes[dim][i]
-                        for dim, i in zip(labels.dims, index)
-                    }
-
-                    # Add the name of the DataArray and the coordinates to the result list
-                    return name, coord
-
-        ndim = np.array(values).ndim
-        if ndim == 0:
-            return find_single(values)
-        elif ndim == 1:
-            return [find_single(v) for v in values]
-        elif ndim == 2:
-            return [[find_single(v) for v in _] for _ in values.T]
-        else:
-            raise ValueError("Array's with more than two dimensions is not supported")
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        """
+        res = [print_single_variable(self.model, v) for v in values]
+        print("\n".join(res))
 
     @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, filter_missings=False):

@@ -23,6 +23,7 @@ from linopy.constants import (
     SIGNS,
     TERM_DIM,
     SIGNS_alternative,
+    SIGNS_pretty,
     sign_replace_dict,
 )
 
@@ -203,6 +204,40 @@ def align_lines_by_delimiter(lines, delimiter):
     return formatted_lines
 
 
+def get_label_position(obj, values):
+    """
+    Get tuple of name and coordinate for variable labels.
+    """
+
+    def find_single(value):
+        if value == -1:
+            return None, None
+        for name, val in obj.items():
+            labels = val.labels
+            start, stop = val.range
+
+            if value >= start and value < stop:
+                index = np.unravel_index(value - start, labels.shape)
+
+                # Extract the coordinates from the indices
+                coord = {
+                    dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
+                }
+
+                # Add the name of the DataArray and the coordinates to the result list
+                return name, coord
+
+    ndim = np.array(values).ndim
+    if ndim == 0:
+        return find_single(values)
+    elif ndim == 1:
+        return [find_single(v) for v in values]
+    elif ndim == 2:
+        return [[find_single(v) for v in _] for _ in values.T]
+    else:
+        raise ValueError("Array's with more than two dimensions is not supported")
+
+
 def print_coord(coord):
     if isinstance(coord, dict):
         coord = coord.values()
@@ -290,6 +325,21 @@ def print_single_expression(c, v, const, model):
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
     return print_line(expr, const)
+
+
+def print_single_constraint(model, label):
+    constraints = model.constraints
+    name, coord = constraints.get_label_position(label)
+
+    coeffs = model.constraints[name].coeffs.sel(coord).values
+    vars = model.constraints[name].vars.sel(coord).values
+    sign = model.constraints[name].sign.sel(coord).item()
+    rhs = model.constraints[name].rhs.sel(coord).item()
+
+    expr = print_single_expression(coeffs, vars, 0, model)
+    sign = SIGNS_pretty[sign]
+
+    return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
 def has_optimized_model(func):

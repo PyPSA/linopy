@@ -15,6 +15,7 @@ from tempfile import NamedTemporaryFile, gettempdir
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecation import deprecated
 from numpy import inf, nan
 from xarray import DataArray, Dataset
 
@@ -1090,16 +1091,17 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_set_of_infeasible_constraints(self):
+    def compute_infeasibilities(self):
         """
         Compute a set of infeasible constraints.
 
-        This method requires gurobipy to be running.
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
 
         Returns
         -------
-        labels : xr.DataArray
-            Labels of the infeasible constraints. Labels with value -1 are not in the set.
+        labels : list
+            Labels of the infeasible constraints.
         """
         if "gurobi" not in available_solvers:
             raise ImportError("Gurobi is required for this method.")
@@ -1119,6 +1121,34 @@ class Model:
             line = line.decode()
             if line.startswith(" c"):
                 labels.append(int(line.split(":")[0][2:]))
+        return labels
+
+    def print_infeasibilities(self, display_max_terms=None):
+        """
+        Print a list of infeasible constraints.
+
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
+        """
+        labels = self.compute_infeasibilities()
+        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+
+    @deprecated(
+        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+    )
+    def compute_set_of_infeasible_constraints(self):
+        """
+        Compute a set of infeasible constraints.
+
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
+
+        Returns
+        -------
+        labels : xr.DataArray
+            Labels of the infeasible constraints. Labels with value -1 are not in the set.
+        """
+        labels = self.compute_infeasibilities()
         cons = self.constraints.labels.isin(np.array(labels))
         subset = self.constraints.labels.where(cons, -1)
         subset = subset.drop_vars(
