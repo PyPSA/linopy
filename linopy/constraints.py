@@ -27,10 +27,12 @@ from linopy.common import (
     align_lines_by_delimiter,
     forward_as_properties,
     generate_indices_for_printout,
+    get_label_position,
     has_optimized_model,
     is_constant,
     maybe_replace_signs,
     print_coord,
+    print_single_constraint,
     print_single_expression,
     replace_by_map,
     save_join,
@@ -700,6 +702,30 @@ class Constraints:
             if label in ds.labels:
                 return name
         raise ValueError(f"No constraint found containing the label {label}.")
+
+    def get_label_position(self, values):
+        """
+        Get tuple of name and coordinate for constraint labels.
+        """
+        return get_label_position(self, values)
+
+    def print_labels(self, values, display_max_terms=None):
+        """
+        Print a selection of labels of the constraints.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [
+                print_single_constraint(self.model, v, include_position=True)
+                for v in values
+            ]
+        print("\n".join(res))
 
     def set_blocks(self, block_map):
         """

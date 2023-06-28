@@ -15,6 +15,7 @@ from tempfile import NamedTemporaryFile, gettempdir
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecation import deprecated
 from numpy import inf, nan
 from xarray import DataArray, Dataset
 
@@ -1090,7 +1091,7 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_set_of_infeasible_constraints(self):
+    def compute_infeasible_constraints(self):
         """
         Compute a set of infeasible constraints.
 
@@ -1119,6 +1120,30 @@ class Model:
             line = line.decode()
             if line.startswith(" c"):
                 labels.append(int(line.split(":")[0][2:]))
+        return labels
+
+    def print_infeasible_constraints(self, display_max_terms=None):
+        """
+        Print a list of infeasible constraints.
+        """
+        labels = self.compute_infeasible_constraints()
+        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+
+    @deprecated(
+        details="Use `compute_infeasible_constraints`/`print_infeasible_constraints` instead."
+    )
+    def compute_set_of_infeasible_constraints(self):
+        """
+        Compute a set of infeasible constraints.
+
+        This method requires gurobipy to be running.
+
+        Returns
+        -------
+        labels : xr.DataArray
+            Labels of the infeasible constraints. Labels with value -1 are not in the set.
+        """
+        labels = self.compute_infeasible_constraints()
         cons = self.constraints.labels.isin(np.array(labels))
         subset = self.constraints.labels.where(cons, -1)
         subset = subset.drop_vars(

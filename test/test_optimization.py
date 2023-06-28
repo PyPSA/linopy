@@ -350,6 +350,8 @@ def test_infeasible_model(model, solver, io_api):
 
     if solver == "gurobi":
         model.compute_set_of_infeasible_constraints()
+        model.compute_infeasible_constraints()
+        model.print_infeasible_constraints()
     else:
         with pytest.raises((NotImplementedError, ImportError)):
             model.compute_set_of_infeasible_constraints()
