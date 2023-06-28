@@ -21,15 +21,6 @@ Creating a model
     model.Model.linexpr
     model.Model.remove_constraints
 
-Creating a model with ``eval`` strings (experimental)
-=====================================================
-
-.. autosummary::
-    :toctree: generated/
-
-    model.Model.vareval
-    model.Model.lineval
-    model.Model.coneval
 
 Classes under the hook
 ======================
@@ -62,12 +53,11 @@ Variables
     variables.Variables
     variables.Variables.add
     variables.Variables.remove
-    variables.Variables.binaries
-    variables.Variables.non_binaries
+    variables.Variables.continuous
     variables.Variables.integers
-    variables.Variables.iter_ravel
-    variables.Variables.ravel
-    variables.Variables.get_blocks
+    variables.Variables.binaries
+    variables.Variables.integers
+    variables.Variables.flat
 
 
 LinearExpressions
@@ -78,7 +68,9 @@ LinearExpressions
 
     expressions.LinearExpression
     expressions.LinearExpression.sum
-    expressions.LinearExpression.groupby_sum
+    expressions.LinearExpression.where
+    expressions.LinearExpression.groupby
+    expressions.LinearExpression.rolling
     expressions.LinearExpression.from_tuples
     expressions.merge
     expressions.ScalarLinearExpression
@@ -92,23 +84,12 @@ Constraint
     :toctree: generated/
 
     constraints.Constraint
-    constraints.Constraint.to_array
     constraints.Constraint.coeffs
     constraints.Constraint.vars
     constraints.Constraint.lhs
     constraints.Constraint.sign
     constraints.Constraint.rhs
-
-
-AnonymousConstraint
--------------------
-
-``AnonynousConstraint`` contains all information about lower bounds, upper bounds, sign and right-hand-side of a constraint that is not yet added to a ``Model`` instance.
-
-.. autosummary::
-    :toctree: generated/
-
-    constraints.AnonymousConstraint
+    constraints.Constraint.flat
 
 
 Constraints
@@ -124,9 +105,7 @@ Constraints
     constraints.Constraints.inequalities
     constraints.Constraints.equalities
     constraints.Constraints.sanitize_missings
-    constraints.Constraints.get_blocks
-    constraints.Constraints.iter_ravel
-    constraints.Constraints.ravel
+    constraints.Constraints.flat
     constraints.Constraints.to_matrix
 
 

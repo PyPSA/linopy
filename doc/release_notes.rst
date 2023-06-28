@@ -26,7 +26,7 @@ Version 0.2.0
 * The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
 * It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
 * Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
-* The `groupby` function now supports passing `pandas.Dataframe`s as groupby keys. These allows to group by multiple variables at once.
+* The `groupby` function now supports passing a `pandas.Dataframe` as `groupby` keys. These allows to group by multiple variables at once.
 * The performance of the `groupby` function was strongly increased. In large operations a speedup of 10x was observed.
 * New test functions `assert_varequal`, `assert_conequal` were added to the `testing` module.
 
@@ -123,7 +123,7 @@ This is the first major-minor release of linopy!  With this release, the package
 Version 0.0.15
 --------------
 
-* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
+* Using the python `sum()` function over a `ScalarVariable` or a `ScalarLinearExpression` is now supported.
 * Returning None type in `from_rule` assignment is now supported.
 * Python 3.11 is now supported
 * Xarray versions higher and lower `v2022.06.` are now supported.

@@ -92,31 +92,29 @@ nbsphinx_prolog = """
 
 """
 
-nbsphinx_allow_errors = True
+nbsphinx_allow_errors = False
 
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "sphinx_rtd_theme"
+html_theme = "sphinx_book_theme"
+
+html_title = "Linopy: Optimization with n-dimensional labeled variables"
+
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
 html_theme_options = {
-    "display_version": True,
-    "sticky_navigation": True,
-    # 'style_nav_header_background': '#009682',
+    "repository_url": "https://github.com/pypsa/linopy",
+    "use_repository_button": True,
 }
 
 
 # These folders are copied to the documentation's HTML output
 html_static_path = ["_static"]
 html_logo = "logo.png"
-html_theme_options = {
-    "logo_only": True,
-    "display_version": False,
-}
 
 
 # These paths are either relative to html_static_path

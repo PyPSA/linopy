@@ -8,17 +8,17 @@
 linopy: Linear optimization with N-D labeled variables
 ======================================================
 
-|PyPI| |CI| |License: GPL v3|
+|PyPI| |CI| |License|
 
-**linopy** is an open-source python package that facilitates **linear or
-mixed-integer optimisation** with **real world data**. It builds a
+
+Welcome to Linopy! This Python library is designed to make linear programming easy, flexible, and performant. Whether you're dealing with Linear, Integer, Mixed-Integer, or Quadratic Programming, Linopy provides a user-friendly interface to define variables, apply arithmetic operations, modify variables and constraints, and much more.
+**linopy** builds a
 bridge between data analysis packages like
 `xarray <https://github.com/pydata/xarray>`__ &
-`pandas <https://pandas.pydata.org/>`__ and linear problem solvers like
+`pandas <https://pandas.pydata.org/>`__ and problem solvers like
 `cbc <https://projects.coin-or.org/Cbc>`__,
-`gurobi <https://www.gurobi.com/>`__ (see the full list below). The
-project aims to make linear programming in python easy, highly-flexible
-and performant.
+`gurobi <https://www.gurobi.com/>`__ (see the full list below).
+
 
 Main features
 -------------
@@ -43,28 +43,9 @@ flexible data-handling features:
 -  Choose from **different commercial and non-commercial solvers**
 -  Fast **import and export** a linear model using xarray’s netcdf IO
 
-Installation
-------------
 
-So far **linopy** is available on the PyPI repository
+**linopy** supports the following solvers `Cbc <https://projects.coin-or.org/Cbc>`__, `GLPK <https://www.gnu.org/software/glpk/>`__, `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__, `Gurobi <https://www.gurobi.com/>`__,  `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__, `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__.
 
-.. code:: bash
-
-   pip install linopy
-
-Supported solvers
------------------
-
-**linopy** supports the following solvers
-
--  `Cbc <https://projects.coin-or.org/Cbc>`__
--  `GLPK <https://www.gnu.org/software/glpk/>`__
--  `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
--  `Gurobi <https://www.gurobi.com/>`__
--  `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
--  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
-
-Note that these do have to be installed by the user separately.
 
 License
 =======
@@ -84,10 +65,11 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Getting started
+   :caption: Getting Started
 
+   prerequisites
    create-a-model
-   solvers
+   create-a-model-with-coordinates
 
 .. toctree::
    :hidden:
@@ -95,9 +77,11 @@ This package is published under MIT license.
    :caption: User Guide
 
    creating-variables
+   creating-expressions
    creating-constraints
    manipulating-models
    solve-on-remote
+   migrating-from-pyomo
 
 
 .. toctree::

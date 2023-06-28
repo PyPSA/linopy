@@ -43,6 +43,7 @@ setup(
             "numpydoc",
             "sphinx",
             "sphinx_rtd_theme",
+            "sphinx_book_theme",
             "nbsphinx",
             "nbsphinx-link",
             "gurobipy",
