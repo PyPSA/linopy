@@ -153,5 +153,6 @@ def test_print_options():
 
 
 def test_print_labels():
-    m.constraints.print_labels([1, 2, 3])
     m.variables.print_labels([1, 2, 3])
+    m.constraints.print_labels([1, 2, 3])
+    m.constraints.print_labels([1, 2, 3], display_max_terms=10)

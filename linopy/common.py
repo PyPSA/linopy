@@ -328,9 +328,6 @@ def print_single_expression(c, v, const, model):
 
 
 def print_single_constraint(model, label):
-    if label == -1:
-        return "None"
-
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
