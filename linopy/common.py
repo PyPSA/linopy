@@ -55,13 +55,16 @@ def as_dataarray(
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif isinstance(arr, np.ndarray):
-        dims = list(dims)[: arr.ndim] if dims else []
+        ndim = max(arr.ndim, 0 if coords is None else len(coords))
 
-        if isinstance(coords, list):
+        if dims is not None and len(dims):
+            # ensure dims is defined for ndim
+            dims = list(dims)[:ndim] if dims else []
+            dims = dims + [f"dim_{i}" for i in range(len(dims), ndim)]
+
+        if isinstance(coords, list) and dims is not None and len(dims):
             coords = dict(zip(dims, coords))
 
-        if len(dims) < arr.ndim:
-            dims = list(dims) + [f"dim_{i}" for i in range(len(dims), arr.ndim)]
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif isinstance(arr, (np.number, int, float, str, bool, list)):
