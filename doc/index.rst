@@ -11,13 +11,9 @@ linopy: Linear optimization with N-D labeled variables
 |PyPI| |CI| |License|
 
 
-Welcome to Linopy! This Python library is designed to make linear programming easy, flexible, and performant. Whether you're dealing with Linear, Integer, Mixed-Integer, or Quadratic Programming, Linopy provides a user-friendly interface to define variables, apply arithmetic operations, modify variables and constraints, and much more.
-**linopy** builds a
-bridge between data analysis packages like
+Welcome to Linopy! This Python library is designed to make linear programming easy, flexible, and performant. Whether you're dealing with Linear, Integer, Mixed-Integer, or Quadratic Programming, Linopy is as a user-friendly interface to define variables and constraints. It serves as a bridge, connecting data analysis packages such like
 `xarray <https://github.com/pydata/xarray>`__ &
-`pandas <https://pandas.pydata.org/>`__ and problem solvers like
-`cbc <https://projects.coin-or.org/Cbc>`__,
-`gurobi <https://www.gurobi.com/>`__ (see the full list below).
+`pandas <https://pandas.pydata.org/>`__ with problem solvers.
 
 
 Main features
@@ -42,9 +38,14 @@ flexible data-handling features:
    `dask <https://dask.org/>`__
 -  Choose from **different commercial and non-commercial solvers**
 -  Fast **import and export** a linear model using xarray’s netcdf IO
+-  Support of various solvers
+   - `Cbc <https://projects.coin-or.org/Cbc>`__
+   - `GLPK <https://www.gnu.org/software/glpk/>`__
+   - `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
+   - `Gurobi <https://www.gurobi.com/>`__
+   - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
+   - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
 
-
-**linopy** supports the following solvers `Cbc <https://projects.coin-or.org/Cbc>`__, `GLPK <https://www.gnu.org/software/glpk/>`__, `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__, `Gurobi <https://www.gurobi.com/>`__,  `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__, `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__.
 
 
 License
@@ -76,10 +77,12 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: User Guide
 
+   user-guide
    creating-variables
    creating-expressions
    creating-constraints
    manipulating-models
+   testing-framework
    solve-on-remote
    migrating-from-pyomo
 

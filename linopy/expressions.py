@@ -150,43 +150,44 @@ class LinearExpressionGroupby:
         """
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group = self.group
-            group_name = getattr(group, "name", "group") or "group"
+            try:
+                group = self.group
+                group_name = getattr(group, "name", "group") or "group"
 
-            if isinstance(group, DataArray):
-                group = group.to_pandas()
+                if isinstance(group, DataArray):
+                    group = group.to_pandas()
 
-            int_map = None
-            if isinstance(group, pd.DataFrame):
-                int_map = get_index_map(*group.values.T)
-                orig_group = group
-                group = group.apply(tuple, axis=1).map(int_map)
+                int_map = None
+                if isinstance(group, pd.DataFrame):
+                    int_map = get_index_map(*group.values.T)
+                    orig_group = group
+                    group = group.apply(tuple, axis=1).map(int_map)
 
-            group_dim = group.index.name
-            arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(
-                arrays, names=[group_name, GROUPED_TERM_DIM]
-            )
-            ds = self.data.assign_coords({group_dim: idx})
-            ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
-            ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
+                group_dim = group.index.name
+                arrays = [group, group.groupby(group).cumcount()]
+                idx = pd.MultiIndex.from_arrays(
+                    arrays, names=[group_name, GROUPED_TERM_DIM]
+                )
+                ds = self.data.assign_coords({group_dim: idx})
+                ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
+                ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
 
-            if int_map is not None:
-                index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
-                index.names = orig_group.columns
-                index.name = group_name
-                ds = xr.Dataset(ds.assign_coords({group_name: index}))
+                if int_map is not None:
+                    index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
+                    index.names = orig_group.columns
+                    index.name = group_name
+                    ds = xr.Dataset(ds.assign_coords({group_name: index}))
 
-            return LinearExpression(ds, self.model)
+                return LinearExpression(ds, self.model)
+            except Exception as e:
+                pass
 
-        else:
+        def func(ds):
+            ds = LinearExpression._sum(ds, self.groupby._group_dim)
+            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+            return ds
 
-            def func(ds):
-                ds = LinearExpression._sum(ds, self.groupby._group_dim)
-                ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
-                return ds
-
-            return self.map(func, **kwargs)
+        return self.map(func, **kwargs)
 
     def roll(self, **kwargs):
         """
