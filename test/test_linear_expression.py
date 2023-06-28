@@ -438,6 +438,14 @@ def test_linear_expression_groupby_with_series(v):
     assert grouped.nterm == 10
 
 
+def test_linear_expression_groupby_with_series_false(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
+    groups.name = "dim_2"
+    with pytest.raises(ValueError):
+        grouped = expr.groupby(groups).sum()
+
+
 def test_linear_expression_groupby_with_dataframe(v):
     expr = 1 * v
     groups = pd.DataFrame(

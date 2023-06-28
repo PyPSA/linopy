@@ -8,6 +8,7 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
+import warnings
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import Any, Mapping, Union
@@ -150,37 +151,37 @@ class LinearExpressionGroupby:
         """
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(self.group, non_fallback_types) and not use_fallback:
-            try:
-                group = self.group
-                group_name = getattr(group, "name", "group") or "group"
+            group = self.group
+            group_name = getattr(group, "name", "group") or "group"
 
-                if isinstance(group, DataArray):
-                    group = group.to_pandas()
+            if isinstance(group, DataArray):
+                group = group.to_pandas()
 
-                int_map = None
-                if isinstance(group, pd.DataFrame):
-                    int_map = get_index_map(*group.values.T)
-                    orig_group = group
-                    group = group.apply(tuple, axis=1).map(int_map)
+            int_map = None
+            if isinstance(group, pd.DataFrame):
+                int_map = get_index_map(*group.values.T)
+                orig_group = group
+                group = group.apply(tuple, axis=1).map(int_map)
 
-                group_dim = group.index.name
-                arrays = [group, group.groupby(group).cumcount()]
-                idx = pd.MultiIndex.from_arrays(
-                    arrays, names=[group_name, GROUPED_TERM_DIM]
-                )
-                ds = self.data.assign_coords({group_dim: idx})
-                ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
-                ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
+            group_dim = group.index.name
+            if group_name == group_dim:
+                raise ValueError("Group name cannot be the same as group dimension")
 
-                if int_map is not None:
-                    index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
-                    index.names = orig_group.columns
-                    index.name = group_name
-                    ds = xr.Dataset(ds.assign_coords({group_name: index}))
+            arrays = [group, group.groupby(group).cumcount()]
+            idx = pd.MultiIndex.from_arrays(
+                arrays, names=[group_name, GROUPED_TERM_DIM]
+            )
+            ds = self.data.assign_coords({group_dim: idx})
+            ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
+            ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
 
-                return LinearExpression(ds, self.model)
-            except Exception as e:
-                pass
+            if int_map is not None:
+                index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
+                index.names = orig_group.columns
+                index.name = group_name
+                ds = xr.Dataset(ds.assign_coords({group_name: index}))
+
+            return LinearExpression(ds, self.model)
 
         def func(ds):
             ds = LinearExpression._sum(ds, self.groupby._group_dim)
