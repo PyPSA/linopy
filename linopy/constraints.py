@@ -721,10 +721,7 @@ class Constraints:
         with options as opts:
             if display_max_terms is not None:
                 opts.set_value(display_max_terms=display_max_terms)
-            res = [
-                print_single_constraint(self.model, v, include_position=True)
-                for v in values
-            ]
+            res = [print_single_constraint(self.model, v) for v in values]
         print("\n".join(res))
 
     def set_blocks(self, block_map):

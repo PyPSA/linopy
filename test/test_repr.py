@@ -150,3 +150,8 @@ def test_print_options():
         assert len(default_repr) < len(longer_repr)
 
         longer_repr = o.print(display_max_rows=20)
+
+
+def test_print_labels():
+    m.constraints.print_labels([1, 2, 3])
+    m.variables.print_labels([1, 2, 3])

@@ -327,7 +327,7 @@ def print_single_expression(c, v, const, model):
     return print_line(expr, const)
 
 
-def print_single_constraint(model, label, include_position=False):
+def print_single_constraint(model, label):
     if label == -1:
         return "None"
 
@@ -342,10 +342,7 @@ def print_single_constraint(model, label, include_position=False):
     expr = print_single_expression(coeffs, vars, 0, model)
     sign = SIGNS_pretty[sign]
 
-    if include_position:
-        return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
-    else:
-        return f"{expr} {sign} {rhs:.12g}"
+    return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
 def has_optimized_model(func):
