@@ -6,7 +6,7 @@ In order to compare the syntax between different API's, let's initialize the fol
 
 .. math::
 
-    & \min \;\; \sum_{i,j} 2 x_{i,j} \; y_{i,j} \\
+    & \min \;\; \sum_{i,j} 2 x_{i,j} + \; y_{i,j} \\
     s.t. & \\
     & x_{i,j} - y_{i,j} \; \ge \; i \qquad \forall \; i,j \in \{1,...,N\} \\
     & x_{i,j} + y_{i,j} \; \ge \; 0 \qquad \forall \; i,j \in \{1,...,N\}
