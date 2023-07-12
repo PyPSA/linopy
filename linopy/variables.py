@@ -17,7 +17,8 @@ import numpy as np
 import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, broadcast, zeros_like
+from xarray import DataArray, Dataset, align, broadcast, zeros_like 
+from xarray.core.types import Dims
 
 import linopy.expressions as expressions
 from linopy.common import (
@@ -413,6 +414,46 @@ class Variable:
         """
         return self.to_linexpr().rolling(
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+
+    def cumsum(
+        self,
+        dim: Dims = None,
+        *,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
+        **kwargs: Any,
+    ) -> "expressions.LinearExpression":
+        """
+        Cumulated sum along a given axis.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.cumsum`
+
+        Parameters
+        ----------
+        dim : str, Iterable of Hashable, "..." or None, default: None
+            Name of dimension[s] along which to apply ``cumsum``. For e.g. ``dim="x"``
+            or ``dim=["x", "y"]``. If "..." or None, will reduce over all dimensions.
+        skipna : bool or None, optional
+            If True, skip missing values (as marked by NaN). By default, only
+            skips missing values for float dtypes; other dtypes either do not
+            have a sentinel missing value (int) or ``skipna=True`` has not been
+            implemented (object, datetime64 or timedelta64).
+        keep_attrs : bool or None, optional
+            If True, ``attrs`` will be copied from the original
+            object to the new one.  If False, the new object will be
+            returned without attributes.
+        **kwargs : Any
+            Additional keyword arguments passed on to the appropriate array
+            function for calculating ``cumsum`` on this object's data.
+            These could include dask-specific kwargs like ``split_every``.
+
+        Returns
+        -------
+        linopy.expression.LinearExpression
+        """
+        return self.to_linexpr().cumsum(
+            dim=dim, skipna=skipna, keep_attrs=keep_attrs, **kwargs
         )
 
     @property
