@@ -11,7 +11,7 @@ import logging
 import warnings
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import Any, Mapping, Union
+from typing import Any, Mapping, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -591,8 +591,8 @@ class LinearExpression:
         self,
         dim: Dims = None,
         *,
-        skipna: bool | None = None,
-        keep_attrs: bool | None = None,
+        skipna: Optional[bool] = None,
+        keep_attrs: Optional[bool] = None,
         **kwargs: Any,
     ) -> "LinearExpression":
         """
