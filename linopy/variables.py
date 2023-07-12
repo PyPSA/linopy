@@ -9,7 +9,7 @@ import functools
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Sequence, Union
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 from warnings import warn
 
 import dask
@@ -420,8 +420,8 @@ class Variable:
         self,
         dim: Dims = None,
         *,
-        skipna: bool | None = None,
-        keep_attrs: bool | None = None,
+        skipna: Optional[bool] = None,
+        keep_attrs: Optional[bool] = None,
         **kwargs: Any,
     ) -> "expressions.LinearExpression":
         """
