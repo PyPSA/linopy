@@ -23,6 +23,7 @@ from numpy import arange, array, nan
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
+from xarray.core.types import Dims
 
 from linopy import constraints, expressions, variables
 from linopy.common import (
@@ -585,6 +586,58 @@ class LinearExpression:
             res = res.densify_terms()
 
         return res
+
+    
+    def cumsum(
+        self,
+        dim: Dims = None,
+        *,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
+        **kwargs: Any,
+    ) -> "LinearExpression":
+        """
+        Cumulated sum along a given axis.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.cumsum`
+
+        Parameters
+        ----------
+        dim : str, Iterable of Hashable, "..." or None, default: None
+            Name of dimension[s] along which to apply ``cumsum``. For e.g. ``dim="x"``
+            or ``dim=["x", "y"]``. If "..." or None, will reduce over all dimensions.
+        skipna : bool or None, optional
+            If True, skip missing values (as marked by NaN). By default, only
+            skips missing values for float dtypes; other dtypes either do not
+            have a sentinel missing value (int) or ``skipna=True`` has not been
+            implemented (object, datetime64 or timedelta64).
+        keep_attrs : bool or None, optional
+            If True, ``attrs`` will be copied from the original
+            object to the new one.  If False, the new object will be
+            returned without attributes.
+        **kwargs : Any
+            Additional keyword arguments passed on to the appropriate array
+            function for calculating ``cumsum`` on this object's data.
+            These could include dask-specific kwargs like ``split_every``.
+
+        Returns
+        -------
+        linopy.expression.LinearExpression
+        """
+        # Along every dimensions, we want to perform cumsum along, get the size of the
+        # dimension to pass that to self.rolling.
+        if not dim:
+            # If user did not specify a dimension to sum over, use all relevant
+            # dimensions
+            dim = [d for d in self.data.dims.keys() if d != "_term"]
+        if isinstance(dim, str):
+            # Make sure, single mentioned dimensions is handled correctly.
+            dim = [dim]
+        dim_dict = {
+            dim_name: self.data.dims[dim_name]
+            for dim_name in dim
+        }
+        return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     @classmethod
     def from_tuples(cls, *tuples, model=None, chunk=None):
