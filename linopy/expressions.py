@@ -587,7 +587,6 @@ class LinearExpression:
 
         return res
 
-    
     def cumsum(
         self,
         dim: Dims = None,
@@ -633,10 +632,7 @@ class LinearExpression:
         if isinstance(dim, str):
             # Make sure, single mentioned dimensions is handled correctly.
             dim = [dim]
-        dim_dict = {
-            dim_name: self.data.dims[dim_name]
-            for dim_name in dim
-        }
+        dim_dict = {dim_name: self.data.dims[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     @classmethod

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, broadcast, zeros_like 
+from xarray import DataArray, Dataset, align, broadcast, zeros_like
 from xarray.core.types import Dims
 
 import linopy.expressions as expressions
