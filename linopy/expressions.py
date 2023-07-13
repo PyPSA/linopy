@@ -628,7 +628,7 @@ class LinearExpression:
         if not dim:
             # If user did not specify a dimension to sum over, use all relevant
             # dimensions
-            dim = [d for d in self.data.dims.keys() if d != "_term"]
+            dim = self.coord_dims
         if isinstance(dim, str):
             # Make sure, single mentioned dimensions is handled correctly.
             dim = [dim]
