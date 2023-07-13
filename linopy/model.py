@@ -1011,7 +1011,7 @@ class Model:
         if solver_name is None:
             solver_name = available_solvers[0]
 
-        logger.info(f" Solve linear problem using {solver_name.title()} solver")
+        logger.info(f" Solve problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
