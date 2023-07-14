@@ -614,7 +614,7 @@ def test_cumsum(m, multiple):
     assert_linequal(cumsum.loc[0], multiple * (var.loc[0] + var.loc[1]))
 
     # Test cumsum on sum of variables
-    var = m.variables["x"] + var = m.variables["y"]
+    var = m.variables["x"] + m.variables["y"]
     cumsum = (multiple * var).cumsum()
     assert_linequal(cumsum.loc[0], multiple * var.loc[0])
     assert_linequal(cumsum.loc[0], multiple * (var.loc[0] + var.loc[1]))
