@@ -618,4 +618,3 @@ def test_cumsum(m, multiple):
     cumsum = (multiple * var).cumsum()
     assert_linequal(cumsum.loc[0], multiple * var.loc[0])
     assert_linequal(cumsum.loc[0], multiple * (var.loc[0] + var.loc[1]))
-
