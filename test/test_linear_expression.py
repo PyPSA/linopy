@@ -603,3 +603,16 @@ def test_rename(x, y, z):
     renamed = expr.rename({"dim_0": "dim_1", "dim_1": "dim_2"})
     assert set(renamed.dims) == {"dim_1", "dim_2", TERM_DIM}
     assert renamed.nterm == 3
+
+
+@pytest.mark.parametrize("multiple", [1.0, 0.5, 2.0, 0.0])
+def test_cumsum(m, multiple):
+    # Test cumsum on variable x
+    var = m.variables["x"]
+    cumsum = (multiple * var).cumsum()
+    cumsum.nterm == 2
+
+    # Test cumsum on sum of variables
+    var = m.variables["x"] + m.variables["y"]
+    cumsum = (multiple * var).cumsum()
+    cumsum.nterm == 2
