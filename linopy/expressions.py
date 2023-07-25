@@ -433,11 +433,11 @@ class LinearExpression:
             ds = ds.assign(const=other.const)
             return merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
         else:
-            coeffs = self.coeffs * as_dataarray(
-                other, coords=self.coords, dims=self.coord_dims
-            )
+            multiplyer = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            coeffs = self.coeffs * multiplyer
             assert set(coeffs.shape) == set(self.coeffs.shape)
-            return self.assign(coeffs=coeffs)
+            const = self.const * multiplyer
+            return self.assign(coeffs=coeffs, const=const)
 
     def __rmul__(self, other):
         """

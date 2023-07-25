@@ -182,6 +182,13 @@ def test_linear_expression_with_constant(m, x, y):
     assert expr.nterm == 2
 
 
+def test_linear_expression_with_constant_multiplication(m, x, y):
+    expr = x + 1
+    expr = expr * 10
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
 def test_linear_expression_multi_indexed(u):
     expr = 3 * u + 1 * u
     assert isinstance(expr, LinearExpression)
@@ -436,6 +443,14 @@ def test_linear_expression_groupby_with_series(v):
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.nterm == 10
+
+
+def test_linear_expression_groupby_with_series_false(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
+    groups.name = "dim_2"
+    with pytest.raises(ValueError):
+        grouped = expr.groupby(groups).sum()
 
 
 def test_linear_expression_groupby_with_series_false(v):
