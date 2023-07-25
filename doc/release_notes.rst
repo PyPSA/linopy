@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* When multiplying a `LinearExpression` with a constant value, the constant in the `LinearExpression` was not updated. This is fixed now.
 
 Version 0.2.1
 -------------
