@@ -182,6 +182,13 @@ def test_linear_expression_with_constant(m, x, y):
     assert expr.nterm == 2
 
 
+def test_linear_expression_with_constant_multiplication(m, x, y):
+    expr = x + 1
+    expr = expr * 10
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
 def test_linear_expression_multi_indexed(u):
     expr = 3 * u + 1 * u
     assert isinstance(expr, LinearExpression)
