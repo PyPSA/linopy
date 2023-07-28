@@ -50,12 +50,10 @@ Note that these do have to be installed by the user separately.
 
 ## Citing Linopy
 
-If you use Linopy in your research, please cite it as follows:
+If you use Linopy in your research, please cite the following paper:
 
-```
-Hofmann, F., (2023). Linopy: Linear optimization with n-dimensional labeled variables.
-Journal of Open Source Software, 8(84), 4823, https://doi.org/10.21105/joss.04823
-```
+- Hofmann, F., (2023). Linopy: Linear optimization with n-dimensional labeled variables.
+Journal of Open Source Software, 8(84), 4823, [https://doi.org/10.21105/joss.04823](https://doi.org/10.21105/joss.04823)
 
 A BibTeX entry for LaTeX users is
 
