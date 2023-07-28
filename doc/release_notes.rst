@@ -1,10 +1,20 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+
+Version 0.2.1
+-------------
+
+**Bugfixes**
 
 * When multiplying a `LinearExpression` with a constant value, the constant in the `LinearExpression` was not updated. This is fixed now.
+
+**New Features**
+
+* The `Variable` and the `LinearExpression` have a new method `cumsum`, which allows to compute the cumulative sum.
 
 Version 0.2.1
 -------------
