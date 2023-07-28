@@ -48,7 +48,7 @@ conda install -c conda-forge linopy
 
 Note that these do have to be installed by the user separately.
 
-# Citing Linopy
+## Citing Linopy
 
 If you use Linopy in your research, please cite it as follows:
 
@@ -74,7 +74,7 @@ A BibTeX entry for LaTeX users is
 ```
 
 
-# License
+## License
 
 Copyright 2021 Fabian Hofmann
 
