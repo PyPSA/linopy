@@ -15,6 +15,7 @@ from tempfile import NamedTemporaryFile, gettempdir
 import numpy as np
 import pandas as pd
 import xarray as xr
+from deprecation import deprecated
 from numpy import inf, nan
 from xarray import DataArray, Dataset
 
@@ -26,12 +27,16 @@ from linopy.common import (
     replace_by_map,
     save_join,
 )
-from linopy.constants import ModelStatus, TerminationCondition
+from linopy.constants import TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.expressions import (
+    LinearExpression,
+    QuadraticExpression,
+    ScalarLinearExpression,
+)
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
-from linopy.solvers import available_solvers
+from linopy.solvers import available_solvers, quadratic_solvers
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -286,8 +291,10 @@ class Model:
         """
         var_string = self.variables.__repr__().split("\n", 2)[2]
         con_string = self.constraints.__repr__().split("\n", 2)[2]
+        model_string = f"Linopy {self.type} model"
+
         return (
-            f"Linopy model\n============\n\n"
+            f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Constraints:\n------------\n{con_string}\n"
             f"Status:\n-------\n{self.status}"
@@ -412,7 +419,7 @@ class Model:
         [9]: x[9] ∈ [0, inf]
         """
         if name is None:
-            name = "var" + str(self._varnameCounter)
+            name = f"var{self._varnameCounter}"
             self._varnameCounter += 1
 
         if name in self.variables:
@@ -517,7 +524,7 @@ class Model:
         if name in self.constraints:
             raise ValueError(f"Constraint '{name}' already assigned to model")
         elif name is None:
-            name = "con" + str(self._connameCounter)
+            name = f"con{self._connameCounter}"
             self._connameCounter += 1
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
@@ -603,13 +610,22 @@ class Model:
 
         if isinstance(expr, (list, tuple)):
             expr = self.linexpr(*expr)
-        assert isinstance(expr, LinearExpression)
+
+        if not isinstance(expr, (LinearExpression, QuadraticExpression)):
+            raise ValueError(
+                f"Invalid type of `expr` ({type(expr)})."
+                " Must be a LinearExpression or QuadraticExpression."
+            )
 
         if self.chunk is not None:
             expr = expr.chunk(self.chunk)
 
-        if expr.vars.ndim > 1:
+        if len(expr.coord_dims):
             expr = expr.sum()
+
+        if expr.const != 0:
+            raise ValueError("Constant values in objective function not supported.")
+
         self._objective = expr
         return self._objective
 
@@ -637,7 +653,9 @@ class Model:
             vars = vars.where(~vars.isin(labels), -1)
             self.constraints[k].data["vars"] = vars
 
-        self.objective = self.objective.sel(_term=~self.objective.vars.isin(labels))
+        self.objective = self.objective.sel(
+            {TERM_DIM: ~self.objective.vars.isin(labels)}
+        )
 
     def remove_constraints(self, name):
         """
@@ -657,6 +675,13 @@ class Model:
         self.constraints.remove(name)
 
     @property
+    def continuous(self):
+        """
+        Get all continuous variables.
+        """
+        return self.variables.continuous
+
+    @property
     def binaries(self):
         """
         Get all binary variables.
@@ -671,9 +696,32 @@ class Model:
         return self.variables.integers
 
     @property
+    def is_linear(self):
+        return type(self.objective) is LinearExpression
+
+    @property
+    def is_quadratic(self):
+        return type(self.objective) is QuadraticExpression
+
+    @property
+    def type(self):
+        if (len(self.binaries) or len(self.integers)) and len(self.continuous):
+            variable_type = "MI"
+        elif len(self.binaries) or len(self.integers):
+            variable_type = "I"
+        else:
+            variable_type = ""
+
+        objective_type = "Q" if self.is_quadratic else "L"
+
+        return f"{variable_type}{objective_type}P"
+
+    @property
     def nvars(self):
         """
         Get the total number of variables.
+
+        This excludes all variables which are not active.
         """
         return self.variables.nvars
 
@@ -681,8 +729,19 @@ class Model:
     def ncons(self):
         """
         Get the total number of constraints.
+
+        This excludes all constraints which are not active.
         """
         return self.constraints.ncons
+
+    @property
+    def shape(self):
+        """
+        Get the shape of the non-filtered constraint matrix.
+
+        This includes all constraints and variables which are not active.
+        """
+        return (self._cCounter, self._xCounter)
 
     @property
     def blocks(self):
@@ -793,14 +852,12 @@ class Model:
             )
             rule, coords = args
             return LinearExpression.from_rule(self, rule, coords)
-        if isinstance(args, tuple):
-            tuples = [
-                (c, self.variables[v]) if isinstance(v, str) else (c, v)
-                for (c, v) in args
-            ]
-            return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
-        else:
+        if not isinstance(args, tuple):
             raise TypeError(f"Not supported type {args}.")
+        tuples = [
+            (c, self.variables[v]) if isinstance(v, str) else (c, v) for (c, v) in args
+        ]
+        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
     @property
     def coefficientrange(self):
@@ -823,44 +880,40 @@ class Model:
         """
         Get a fresh created solution file if solution file is None.
         """
-        if solution_fn is None:
-            kwargs = dict(
-                prefix="linopy-solve-",
-                suffix=".sol",
-                mode="w",
-                dir=self.solver_dir,
-                delete=False,
-            )
-            with NamedTemporaryFile(**kwargs) as f:
-                return f.name
-        else:
+        if solution_fn is not None:
             return solution_fn
+
+        kwargs = dict(
+            prefix="linopy-solve-",
+            suffix=".sol",
+            mode="w",
+            dir=self.solver_dir,
+            delete=False,
+        )
+        with NamedTemporaryFile(**kwargs) as f:
+            return f.name
 
     def get_problem_file(self, problem_fn=None, io_api=None):
         """
         Get a fresh created problem file if problem file is None.
         """
-        if problem_fn is None:
-            if io_api == "mps":
-                suffix = ".mps"
-            else:
-                suffix = ".lp"
-
-            kwargs = dict(
-                prefix="linopy-problem-",
-                suffix=suffix,
-                mode="w",
-                dir=self.solver_dir,
-                delete=False,
-            )
-            with NamedTemporaryFile(**kwargs) as f:
-                return f.name
-        else:
+        if problem_fn is not None:
             return problem_fn
+
+        suffix = ".mps" if io_api == "mps" else ".lp"
+        kwargs = dict(
+            prefix="linopy-problem-",
+            suffix=suffix,
+            mode="w",
+            dir=self.solver_dir,
+            delete=False,
+        )
+        with NamedTemporaryFile(**kwargs) as f:
+            return f.name
 
     def solve(
         self,
-        solver_name="highs",
+        solver_name=None,
         io_api=None,
         problem_fn=None,
         solution_fn=None,
@@ -882,7 +935,7 @@ class Model:
         ----------
         solver_name : str, optional
             Name of the solver to use, this must be in `linopy.available_solvers`.
-            The default is 'gurobi'.
+            Default to the first entry in `linopy.available_solvers`.
         io_api : str, optional
             Api to use for communicating with the solver, must be one of
             {'lp', 'mps', 'direct'}. If set to 'lp'/'mps' the problem is written to an
@@ -952,7 +1005,13 @@ class Model:
                     c.dual = solved.constraints[k].dual
             return self.status, self.termination_condition
 
-        logger.info(f" Solve linear problem using {solver_name.title()} solver")
+        if len(available_solvers) == 0:
+            raise RuntimeError("No solver installed.")
+
+        if solver_name is None:
+            solver_name = available_solvers[0]
+
+        logger.info(f" Solve problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
@@ -973,6 +1032,11 @@ class Model:
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
 
+        if self.is_quadratic and solver_name not in quadratic_solvers:
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic problems."
+            )
+
         try:
             func = getattr(solvers, f"run_{solver_name}")
             result = func(
@@ -988,9 +1052,8 @@ class Model:
             )
         finally:
             for fn in (problem_fn, solution_fn):
-                if fn is not None:
-                    if os.path.exists(fn) and not keep_files:
-                        os.remove(fn)
+                if fn is not None and (os.path.exists(fn) and not keep_files):
+                    os.remove(fn)
 
         result.info()
 
@@ -1008,7 +1071,10 @@ class Model:
 
         for name, var in self.variables.items():
             idx = np.ravel(var.labels)
-            vals = sol[idx].values.reshape(var.labels.shape)
+            try:
+                vals = sol[idx].values.reshape(var.labels.shape)
+            except KeyError:
+                vals = sol.reindex(idx).values.reshape(var.labels.shape)
             var.solution = xr.DataArray(vals, var.coords)
 
         if not result.solution.dual.empty:
@@ -1025,17 +1091,21 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_set_of_infeasible_constraints(self):
+    def compute_infeasibilities(self):
         """
         Compute a set of infeasible constraints.
 
-        This method requires gurobipy to be running.
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
 
         Returns
         -------
-        labels : xr.DataArray
-            Labels of the infeasible constraints. Labels with value -1 are not in the set.
+        labels : list
+            Labels of the infeasible constraints.
         """
+        if "gurobi" not in available_solvers:
+            raise ImportError("Gurobi is required for this method.")
+
         import gurobipy
 
         solver_model = getattr(self, "solver_model")
@@ -1051,6 +1121,34 @@ class Model:
             line = line.decode()
             if line.startswith(" c"):
                 labels.append(int(line.split(":")[0][2:]))
+        return labels
+
+    def print_infeasibilities(self, display_max_terms=None):
+        """
+        Print a list of infeasible constraints.
+
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
+        """
+        labels = self.compute_infeasibilities()
+        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+
+    @deprecated(
+        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+    )
+    def compute_set_of_infeasible_constraints(self):
+        """
+        Compute a set of infeasible constraints.
+
+        This function requires that the model was solved with `gurobi` and the
+        termination condition was infeasible.
+
+        Returns
+        -------
+        labels : xr.DataArray
+            Labels of the infeasible constraints. Labels with value -1 are not in the set.
+        """
+        labels = self.compute_infeasibilities()
         cons = self.constraints.labels.isin(np.array(labels))
         subset = self.constraints.labels.where(cons, -1)
         subset = subset.drop_vars(

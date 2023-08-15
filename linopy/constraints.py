@@ -27,16 +27,25 @@ from linopy.common import (
     align_lines_by_delimiter,
     forward_as_properties,
     generate_indices_for_printout,
+    get_label_position,
     has_optimized_model,
     is_constant,
     maybe_replace_signs,
     print_coord,
+    print_single_constraint,
     print_single_expression,
     replace_by_map,
     save_join,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, SIGNS_pretty
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    SIGNS_pretty,
+)
 
 
 def conwrap(method, *default_args, **new_default_kwargs):
@@ -56,9 +65,7 @@ def conwrap(method, *default_args, **new_default_kwargs):
 
 
 def _con_unwrap(con):
-    if isinstance(con, Constraint):
-        return con.data
-    return con
+    return con.data if isinstance(con, Constraint) else con
 
 
 @forward_as_properties(
@@ -112,9 +119,7 @@ class Constraint:
 
         data = data.assign_attrs(name=name)
 
-        if "_term" in data.dims:
-            data = data.rename({"_term": f"{name}_term"})
-        (data,) = xr.broadcast(data, exclude=[f"{name}_term"])
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         self._data = data
         self._model = model
@@ -149,7 +154,7 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if not k.endswith("_term")}
+        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):
@@ -162,7 +167,7 @@ class Constraint:
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
         dim_sizes = list(self.sizes.values())[:-1]
-        size = np.product(dim_sizes)  # that the number of theoretical printouts
+        size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
@@ -205,6 +210,23 @@ class Constraint:
 
         return "\n".join(lines)
 
+    def print(self, display_max_rows=20, display_max_terms=20):
+        """
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(
+                display_max_rows=display_max_rows, display_max_terms=display_max_terms
+            )
+            print(self)
+
     def __contains__(self, value):
         return self.data.__contains__(value)
 
@@ -227,7 +249,7 @@ class Constraint:
         """
         Return the term dimension of the constraint.
         """
-        return self.name + "_term"
+        return TERM_DIM
 
     @property
     def mask(self):
@@ -286,7 +308,7 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        data = self.data[["coeffs", "vars"]].rename({self.term_dim: "_term"})
+        data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
         return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
@@ -294,10 +316,8 @@ class Constraint:
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
-        self._data = (
-            self.data.drop_vars(["coeffs", "vars"])
-            .assign(coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const)
-            .rename(_term=self.name + "_term")
+        self._data = self.data.drop_vars(["coeffs", "vars"]).assign(
+            coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const
         )
 
     @property
@@ -343,7 +363,7 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference or the model status is not okay.
         """
-        if not "dual" in self.data:
+        if "dual" not in self.data:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
@@ -413,7 +433,7 @@ class Constraint:
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, AnonymousScalarConstraint) and not output is None:
+        if not isinstance(output, AnonymousScalarConstraint) and output is not None:
             msg = f"`rule` has to return AnonymousScalarConstraint not {type(output)}."
             raise TypeError(msg)
 
@@ -503,7 +523,7 @@ class Constraints:
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
         if not len(list(self)):
-            r += "<empty>"
+            r += "<empty>\n"
         return r
 
     def __getitem__(
@@ -683,6 +703,27 @@ class Constraints:
                 return name
         raise ValueError(f"No constraint found containing the label {label}.")
 
+    def get_label_position(self, values):
+        """
+        Get tuple of name and coordinate for constraint labels.
+        """
+        return get_label_position(self, values)
+
+    def print_labels(self, values, display_max_terms=None):
+        """
+        Print a selection of labels of the constraints.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [print_single_constraint(self.model, v) for v in values]
+        print("\n".join(res))
+
     def set_blocks(self, block_map):
         """
         Get a dataset of same shape as constraints.labels with block values.
@@ -794,10 +835,7 @@ class Constraints:
         """
         res = list(self.iter_ravel(key, broadcast_like, filter_missings))
         res = np.concatenate(res)
-        if compute:
-            return dask.compute(res)[0]
-        else:
-            return res
+        return dask.compute(res)[0] if compute else res
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -811,7 +849,10 @@ class Constraints:
         -------
         pd.DataFrame
         """
-        df = pd.concat([self[k].flat for k in self], ignore_index=True)
+        dfs = [self[k].flat for k in self]
+        if not len(dfs):
+            return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
+        df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
         df["key"] = df.labels.map(map_labels)
@@ -827,13 +868,16 @@ class Constraints:
         # TODO: rename "filter_missings" to "~labels_as_coordinates"
         cons = self.flat
 
+        if not len(self):
+            return None
+
         if filter_missings:
             vars = self.model.variables.flat
             shape = (cons.key.max() + 1, vars.key.max() + 1)
             cons["vars"] = cons.vars.map(vars.set_index("labels").key)
             return csc_matrix((cons.coeffs, (cons.key, cons.vars)), shape=shape)
         else:
-            shape = (self.model._cCounter, self.model._xCounter)
+            shape = self.model.shape
             return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
 
     def reset_dual(self):

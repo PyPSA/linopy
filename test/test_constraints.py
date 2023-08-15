@@ -13,6 +13,7 @@ import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
+from linopy.testing import assert_conequal
 
 # Test model functions
 
@@ -25,7 +26,7 @@ def test_constraint_assignment():
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 
-    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    con0 = m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
     for attr in m.constraints.dataset_attrs:
         assert "con0" in getattr(m.constraints, attr)
@@ -35,6 +36,8 @@ def test_constraint_assignment():
     assert m.constraints.coeffs.con0.dtype in (int, float)
     assert m.constraints.vars.con0.dtype in (int, float)
     assert m.constraints.rhs.con0.dtype in (int, float)
+
+    assert_conequal(m.constraints.con0, con0)
 
 
 def test_anonymous_constraint_assignment():
@@ -123,3 +126,23 @@ def test_masked_constraints():
     m.add_constraints(1 * x + 10 * y, EQUAL, 0, mask=mask)
     assert (m.constraints.labels.con0[0:5, :] != -1).all()
     assert (m.constraints.labels.con0[5:10, :] == -1).all()
+
+
+def test_constraints_flat():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+
+    assert isinstance(m.constraints.flat, pd.DataFrame)
+    assert m.constraints.flat.empty
+    assert m.constraints.to_matrix() is None
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_constraints(1 * x + 10 * y, LESS_EQUAL, 0)
+    m.add_constraints(1 * x + 10 * y, GREATER_EQUAL, 0)
+
+    assert isinstance(m.constraints.flat, pd.DataFrame)
+    assert not m.constraints.flat.empty

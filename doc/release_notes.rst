@@ -1,26 +1,66 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+
+Version 0.2.1
+-------------
+
+**Bugfixes**
+
+* When multiplying a `LinearExpression` with a constant value, the constant in the `LinearExpression` was not updated. This is fixed now.
+
+**New Features**
+
+* The `Variable` and the `LinearExpression` have a new method `cumsum`, which allows to compute the cumulative sum.
+
+Version 0.2.1
+-------------
+
+
+* The documentation was revised and extended.
+* A new function `print_labels` was added to the `Variables` and `Constraints` class. This function allows to print the variables/constraints from a list of labels.
+* A new function `compute_infeasibilities` and `print_infeasibilities` was added to the `Model` class. This function allows to compute the infeasibilities of an infeasible model and print them out. The function only supports the `gurobi` solver so far.
+
+
+
+Version 0.2.1
+-------------
+
+
+* Backwards compatibility for python 3.8.
+* `Variable`, `LinearExpression` and `Constraint` now have a print function to easily print the objects with larger layouts, i.e. showing more terms and lines.
+
+
+Version 0.2.0
+-------------
 
 
 **New Features**
+
+* Linopy now supports quadratic programming. Therefore a new class `QuadraticExpression` was created, which can be assigned to the objective function. The `QuadraticExpression` class supports the same arithmetic operations as the `LinearExpression` and can be created by multiplying two `Variable` or `LinearExpression` objects. Note for the latter, the number of stacked terms must be equal to one (`expr.nterm == 1`).
 * `LinearExpression`'s now support constant values. This allows defining linear expressions with numeric constant values, like `x + 5`.
 * When defining constraints, it is not needed to separate variables from constants anymore. Thus, expressions  like `x <= y` or `5 * x + 10 >= y` are supported.
+* The new default solver will now be the first element in `available_solvers`.
 * The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
 * The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
 * It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
 * Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
-* The `groupby` function now supports passing `pandas.Dataframe`s as groupby keys. These allows to group by multiple variables at once.
+* The `groupby` function now supports passing a `pandas.Dataframe` as `groupby` keys. These allows to group by multiple variables at once.
 * The performance of the `groupby` function was strongly increased. In large operations a speedup of 10x was observed.
+* New test functions `assert_varequal`, `assert_conequal` were added to the `testing` module.
+
 
 **Deprecations**
+
 * The class `AnonymousConstraint` is now deprecated in the favor of `Constraint`. The latter can now be assigned to a model or not.
 * The `ravel` and `iter_ravel` method of the `Variables` and `Constraints` class is now deprecated in favor of the `flat` method.
 
 
 **Breaking Changes**
+
 * The `data` attribute of Variables and Constraints now returns a `xarray.Dataset` object instead of a `xarray.DataArray` object with the labels only.
 * The deprecated `groupby_sum` function was removed in favor of the `groupby` method.
 * The deprecated `rolling_sum` function was removed in favor of the `rolling` method.
@@ -34,10 +74,12 @@ Upcoming Release
 
 
 **Internal Changes**
+
 * The internal data fields in `Variable` and `Constraint` are now always broadcasted to have aligned indexes. This allows for a more consistent handling of the objects.
 * The inner structure of the `Variable`, `Variables`, `Constraint` and `Constraints` class has changed to a more stable design. All information of the `Variable` and the `Constraint` class is now stored in the `data` field. The `data` field is a `xarray.Dataset` object. The `Variables` and `Constraints` class "simple" containers for the `Variable` and `Constraint` objects, stored in dictionary under the `data` field. This design allows for a more flexible handling of individual variables and constraints.
 
 **Other**
+
 * License changed to MIT license.
 
 
@@ -103,7 +145,7 @@ This is the first major-minor release of linopy!  With this release, the package
 Version 0.0.15
 --------------
 
-* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
+* Using the python `sum()` function over a `ScalarVariable` or a `ScalarLinearExpression` is now supported.
 * Returning None type in `from_rule` assignment is now supported.
 * Python 3.11 is now supported
 * Xarray versions higher and lower `v2022.06.` are now supported.

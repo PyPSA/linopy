@@ -299,6 +299,10 @@ def test_constraint_sel(c):
     assert isinstance(c.isel(first=[1, 2]), linopy.constraints.Constraint)
 
 
+def test_constraint_flat(c):
+    assert isinstance(c.flat, pd.DataFrame)
+
+
 def test_constraint_assignment_with_anonymous_constraints(m, x, y):
     m.add_constraints(x + y == 0, name="c2")
     assert m.constraints["c2"].vars.notnull().all()
@@ -372,7 +376,7 @@ def test_constraint_matrix_masked_variables():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_constraint_matrix_masked_constraints():
@@ -390,7 +394,7 @@ def test_constraint_matrix_masked_constraints():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_constraint_matrix_masked_constraints_and_variables():
@@ -408,7 +412,7 @@ def test_constraint_matrix_masked_constraints_and_variables():
     assert A.shape == (m.ncons, m.nvars)
 
     A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m._cCounter, m._xCounter)
+    assert A.shape == m.shape
 
 
 def test_get_name_by_label():

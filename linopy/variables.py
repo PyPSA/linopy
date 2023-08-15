@@ -9,7 +9,7 @@ import functools
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Sequence, Union
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 from warnings import warn
 
 import dask
@@ -18,6 +18,7 @@ import pandas as pd
 from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, align, broadcast, zeros_like
+from xarray.core.types import Dims
 
 import linopy.expressions as expressions
 from linopy.common import (
@@ -26,6 +27,7 @@ from linopy.common import (
     fill_missing_coords,
     forward_as_properties,
     generate_indices_for_printout,
+    get_label_position,
     has_optimized_model,
     is_constant,
     print_coord,
@@ -33,6 +35,7 @@ from linopy.common import (
     save_join,
 )
 from linopy.config import options
+from linopy.constants import TERM_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +57,7 @@ def varwrap(method, *default_args, **new_default_kwargs):
 
 
 def _var_unwrap(var):
-    if isinstance(var, Variable):
-        return var.data
-    return var
+    return var.data if isinstance(var, Variable) else var
 
 
 @forward_as_properties(
@@ -166,7 +167,7 @@ class Variable:
         self._model = model
 
     def __getitem__(self, keys) -> "ScalarVariable":
-        keys = (keys,) if not isinstance(keys, tuple) else keys
+        keys = keys if isinstance(keys, tuple) else (keys,)
         assert all(map(pd.api.types.is_scalar, keys)), (
             "The get function of Variable is different as of xarray.DataArray. "
             "Set single values for each dimension in order to obtain a "
@@ -209,7 +210,7 @@ class Variable:
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
-            "_term", -1
+            TERM_DIM, -1
         )
         return expressions.LinearExpression(ds, self.model)
 
@@ -253,6 +254,21 @@ class Variable:
 
         return "\n".join(lines)
 
+    def print(self, display_max_rows=20):
+        """
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(display_max_rows=display_max_rows)
+            print(self)
+
     def __neg__(self):
         """
         Calculate the negative of the variables (converts coefficients only).
@@ -263,13 +279,10 @@ class Variable:
         """
         Multiply variables with a coefficient.
         """
-        if isinstance(other, (expressions.LinearExpression, Variable)):
-            raise TypeError(
-                "unsupported operand type(s) for *: "
-                f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
-            )
-        return self.to_linexpr(other)
+        if isinstance(other, (expressions.LinearExpression, Variable, ScalarVariable)):
+            return self.to_linexpr() * other
+        else:
+            return self.to_linexpr(other)
 
     def __rmul__(self, other):
         """
@@ -303,10 +316,7 @@ class Variable:
 
     def __radd__(self, other):
         # This is needed for using python's sum function
-        if other == 0:
-            return self
-        else:
-            return NotImplemented
+        return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         """
@@ -406,6 +416,46 @@ class Variable:
             dim=dim, min_periods=min_periods, center=center, **window_kwargs
         )
 
+    def cumsum(
+        self,
+        dim: Dims = None,
+        *,
+        skipna: Optional[bool] = None,
+        keep_attrs: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> "expressions.LinearExpression":
+        """
+        Cumulated sum along a given axis.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.cumsum`
+
+        Parameters
+        ----------
+        dim : str, Iterable of Hashable, "..." or None, default: None
+            Name of dimension[s] along which to apply ``cumsum``. For e.g. ``dim="x"``
+            or ``dim=["x", "y"]``. If "..." or None, will reduce over all dimensions.
+        skipna : bool or None, optional
+            If True, skip missing values (as marked by NaN). By default, only
+            skips missing values for float dtypes; other dtypes either do not
+            have a sentinel missing value (int) or ``skipna=True`` has not been
+            implemented (object, datetime64 or timedelta64).
+        keep_attrs : bool or None, optional
+            If True, ``attrs`` will be copied from the original
+            object to the new one.  If False, the new object will be
+            returned without attributes.
+        **kwargs : Any
+            Additional keyword arguments passed on to the appropriate array
+            function for calculating ``cumsum`` on this object's data.
+            These could include dask-specific kwargs like ``split_every``.
+
+        Returns
+        -------
+        linopy.expression.LinearExpression
+        """
+        return self.to_linexpr().cumsum(
+            dim=dim, skipna=skipna, keep_attrs=keep_attrs, **kwargs
+        )
+
     @property
     def name(self):
         """
@@ -461,11 +511,11 @@ class Variable:
 
     @classmethod
     @property
-    def fill_value(self):
+    def fill_value(cls):
         """
         Return the fill value of the variable.
         """
-        return self._fill_value
+        return cls._fill_value
 
     @property
     def mask(self):
@@ -479,7 +529,7 @@ class Variable:
         -------
         xr.DataArray
         """
-        return (self.labels != self.fill_value["labels"]).astype(bool)
+        return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def upper(self):
@@ -683,7 +733,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self.fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -710,7 +760,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self.fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -808,7 +858,7 @@ class Variables:
             coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
             r += f" * {name}{coords}\n"
         if not len(list(self)):
-            r += "<empty>"
+            r += "<empty>\n"
         return r
 
     def __len__(self):
@@ -944,30 +994,19 @@ class Variables:
         """
         Get tuple of name and coordinate for variable labels.
         """
-        coords = []
-        return_list = True
-        if not isinstance(values, Iterable):
-            values = [values]
-            return_list = False
+        return get_label_position(self, values)
 
-        for value in values:
-            for name, var in self.items():
-                labels = var.labels
-                start, stop = var.range
+    def print_labels(self, values):
+        """
+        Print a selection of labels of the variables.
 
-                if value >= start and value < stop:
-                    index = np.unravel_index(value - start, labels.shape)
-
-                    # Extract the coordinates from the indices
-                    coord = {
-                        dim: labels.indexes[dim][i]
-                        for dim, i in zip(labels.dims, index)
-                    }
-
-                    # Add the name of the DataArray and the coordinates to the result list
-                    coords.append((name, coord))
-
-        return coords if return_list else coords[0]
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        """
+        res = [print_single_variable(self.model, v) for v in values]
+        print("\n".join(res))
 
     @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
     def iter_ravel(self, key, filter_missings=False):
@@ -1035,10 +1074,7 @@ class Variables:
             One dimensional data with all values in `key`.
         """
         res = np.concatenate(list(self.iter_ravel(key, filter_missings)))
-        if compute:
-            return dask.compute(res)[0]
-        else:
-            return res
+        return dask.compute(res)[0] if compute else res
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1155,10 +1191,7 @@ class ScalarVariable:
 
     def __radd__(self, other):
         # This is needed for using python's sum function
-        if other == 0:
-            return self
-        else:
-            return NotImplemented
+        return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other

@@ -18,7 +18,14 @@ from xarray import DataArray, Dataset, align, apply_ufunc, merge
 from xarray.core import indexing, utils
 
 from linopy.config import options
-from linopy.constants import SIGNS, SIGNS_alternative, sign_replace_dict
+from linopy.constants import (
+    HELPER_DIMS,
+    SIGNS,
+    TERM_DIM,
+    SIGNS_alternative,
+    SIGNS_pretty,
+    sign_replace_dict,
+)
 
 
 def maybe_replace_sign(sign):
@@ -49,13 +56,16 @@ def as_dataarray(
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif isinstance(arr, np.ndarray):
-        dims = list(dims)[: arr.ndim] if dims else []
+        ndim = max(arr.ndim, 0 if coords is None else len(coords))
 
-        if isinstance(coords, list):
-            coords = {dim: coord for dim, coord in zip(dims, coords)}
+        if dims is not None and len(dims):
+            # ensure dims is defined for ndim
+            dims = list(dims)[:ndim] if dims else []
+            dims = dims + [f"dim_{i}" for i in range(len(dims), ndim)]
 
-        if len(dims) < arr.ndim:
-            dims = list(dims) + [f"dim_{i}" for i in range(len(dims), arr.ndim)]
+        if isinstance(coords, list) and dims is not None and len(dims):
+            coords = dict(zip(dims, coords))
+
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif isinstance(arr, (np.number, int, float, str, bool, list)):
@@ -94,7 +104,7 @@ def save_join(*dataarrays):
     return Dataset({ds.name: ds for ds in labels})
 
 
-def fill_missing_coords(ds):
+def fill_missing_coords(ds, fill_helper_dims=False):
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -104,14 +114,19 @@ def fill_missing_coords(ds):
     Parameters
     ----------
     ds : xarray.DataArray or xarray.Dataset
+    fill_helper_dims : bool, optional
+        Whether to fill in integer coordinates for helper dimensions, by default False.
+
     """
     ds = ds.copy()
     if not isinstance(ds, (Dataset, DataArray)):
         raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
 
+    skip_dims = [] if fill_helper_dims else HELPER_DIMS
+
     # Fill in missing integer coordinates
     for dim in ds.dims:
-        if dim not in ds.coords and not dim.endswith("_term"):
+        if dim not in ds.coords and dim not in skip_dims:
             ds.coords[dim] = arange(ds.sizes[dim])
 
     return ds
@@ -150,10 +165,7 @@ def get_index_map(*arrays):
     # Create unique combinations
     unique_combinations = set(zip(*arrays))
 
-    # Create a map from combinations to integers
-    index_map = {combination: i for i, combination in enumerate(unique_combinations)}
-
-    return index_map
+    return {combination: i for i, combination in enumerate(unique_combinations)}
 
 
 def generate_indices_for_printout(dim_sizes, max_lines):
@@ -192,13 +204,44 @@ def align_lines_by_delimiter(lines, delimiter):
     return formatted_lines
 
 
+def get_label_position(obj, values):
+    """
+    Get tuple of name and coordinate for variable labels.
+    """
+
+    def find_single(value):
+        if value == -1:
+            return None, None
+        for name, val in obj.items():
+            labels = val.labels
+            start, stop = val.range
+
+            if value >= start and value < stop:
+                index = np.unravel_index(value - start, labels.shape)
+
+                # Extract the coordinates from the indices
+                coord = {
+                    dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
+                }
+
+                # Add the name of the DataArray and the coordinates to the result list
+                return name, coord
+
+    ndim = np.array(values).ndim
+    if ndim == 0:
+        return find_single(values)
+    elif ndim == 1:
+        return [find_single(v) for v in values]
+    elif ndim == 2:
+        return [[find_single(v) for v in _] for _ in values.T]
+    else:
+        raise ValueError("Array's with more than two dimensions is not supported")
+
+
 def print_coord(coord):
     if isinstance(coord, dict):
         coord = coord.values()
-    if len(coord):
-        return "[" + ", ".join([str(c) for c in coord]) + "]"
-    else:
-        return ""
+    return "[" + ", ".join([str(c) for c in coord]) + "]" if len(coord) else ""
 
 
 def print_single_variable(model, label):
@@ -231,15 +274,25 @@ def print_single_expression(c, v, const, model):
     # catch case that to many terms would be printed
     def print_line(expr, const):
         res = []
-        for i, (coeff, (name, coord)) in enumerate(expr):
-            coord_string = print_coord(coord)
+        for i, (coeff, var) in enumerate(expr):
+            coeff_string = f"{coeff:+.4g}"
             if i:
-                coeff_string = f"{coeff:+.4g}"
                 # split sign and coefficient
-                res.append(f"{coeff_string[0]} {coeff_string[1:]} {name}{coord_string}")
+                coeff_string = f"{coeff_string[0]} {coeff_string[1:]}"
+
+            if isinstance(var, list):
+                var_string = ""
+                for name, coords in var:
+                    if name is not None:
+                        coord_string = print_coord(coords)
+                        var_string += f" {name}{coord_string}"
             else:
-                coeff_string = f"{coeff:+.4g} " if coeff != 1 else ""
-                res.append(f"{coeff_string}{name}{coord_string}")
+                name, coords = var
+                coord_string = print_coord(coords)
+                var_string = f" {name}{coord_string}"
+
+            res.append(f"{coeff_string}{var_string}")
+
         if const != 0:
             const_string = f"{const:+.4g}"
             if len(res):
@@ -248,14 +301,19 @@ def print_single_expression(c, v, const, model):
                 res.append(const_string)
         return " ".join(res) if len(res) else "None"
 
-    if isinstance(c, np.ndarray):
+    if v.ndim == 1:
         mask = v != -1
         c, v = c[mask], v[mask]
+    else:
+        mask = (v != -1).any(0)
+        c = c[mask]
+        v = v[:, mask]
 
     max_terms = options.get_value("display_max_terms")
     if len(c) > max_terms:
         truncate = max_terms // 2
-        expr = list(zip(c[:truncate], model.variables.get_label_position(v[:truncate])))
+        positions = model.variables.get_label_position(v[..., :truncate])
+        expr = list(zip(c[:truncate], positions))
         res = print_line(expr, const)
         res += " ... "
         expr = list(
@@ -267,6 +325,21 @@ def print_single_expression(c, v, const, model):
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
     return print_line(expr, const)
+
+
+def print_single_constraint(model, label):
+    constraints = model.constraints
+    name, coord = constraints.get_label_position(label)
+
+    coeffs = model.constraints[name].coeffs.sel(coord).values
+    vars = model.constraints[name].vars.sel(coord).values
+    sign = model.constraints[name].sign.sel(coord).item()
+    rhs = model.constraints[name].rhs.sel(coord).item()
+
+    expr = print_single_expression(coeffs, vars, 0, model)
+    sign = SIGNS_pretty[sign]
+
+    return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
 def has_optimized_model(func):
@@ -337,9 +410,7 @@ def check_common_keys_values(list_of_dicts: List[Dict[str, Any]]) -> bool:
         True if all common keys have the same value across all dictionaries, False otherwise.
     """
     common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
-    return all(
-        len(set(d[k] for d in list_of_dicts if k in d)) == 1 for k in common_keys
-    )
+    return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
 class LocIndexer:

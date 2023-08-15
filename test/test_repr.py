@@ -44,7 +44,9 @@ lc = 1 * c
 ld = 1 * d
 lav = 1 * a + 1 * v
 luc = 1 * v + 10
-
+lq = x * x
+lq2 = x * x + 1 * x
+lq3 = x * x + 1 * x + 1 + 1 * y + 1 * z
 
 # create anonymous constraint for linear expression
 cu_ = lu >= 0
@@ -92,7 +94,7 @@ def test_single_variable_repr():
 
 
 def test_linear_expression_repr():
-    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc]:
+    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc, lq, lq2, lq3]:
         repr(expr)
 
 
@@ -146,3 +148,11 @@ def test_print_options():
             opts.set_value(display_max_rows=20)
             longer_repr = repr(o)
         assert len(default_repr) < len(longer_repr)
+
+        longer_repr = o.print(display_max_rows=20)
+
+
+def test_print_labels():
+    m.variables.print_labels([1, 2, 3])
+    m.constraints.print_labels([1, 2, 3])
+    m.constraints.print_labels([1, 2, 3], display_max_terms=10)

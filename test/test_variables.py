@@ -10,6 +10,7 @@ import pytest
 
 import linopy
 from linopy import Model
+from linopy.testing import assert_varequal
 
 
 @pytest.fixture
@@ -36,13 +37,16 @@ def test_variables_assignment_with_merge():
     m = Model()
 
     upper = pd.Series(np.ones((10)))
-    m.add_variables(upper)
+    var0 = m.add_variables(upper)
 
     upper = pd.Series(np.ones((12)))
-    m.add_variables(upper)
+    var1 = m.add_variables(upper)
 
     with pytest.warns(UserWarning):
         assert m.variables.labels.var0[-1].item() == -1
+
+    assert_varequal(var0, m.variables.var0)
+    assert_varequal(var1, m.variables.var1)
 
 
 def test_variables_assignment_with_reindex(m):

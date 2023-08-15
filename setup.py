@@ -43,6 +43,7 @@ setup(
             "numpydoc",
             "sphinx",
             "sphinx_rtd_theme",
+            "sphinx_book_theme",
             "nbsphinx",
             "nbsphinx-link",
             "gurobipy",
@@ -56,8 +57,6 @@ setup(
             "paramiko",
             "gurobipy",
             "highspy",
-            "cplex",
-            "xpress",
         ],
         "solvers": [
             "gurobipy",

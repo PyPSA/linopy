@@ -13,19 +13,77 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
+from scipy.sparse import csc_matrix, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.constants import EQUAL, GREATER_EQUAL
+from linopy.constants import CONCAT_DIM, EQUAL, GREATER_EQUAL
 
 logger = logging.getLogger(__name__)
 
 
 ufunc_kwargs = dict(vectorize=True)
-concat_dim = "_concat_dim"
-concat_kwargs = dict(dim=concat_dim, coords="minimal")
+concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 
 TQDM_COLOR = "#80bfff"
+
+
+def handle_batch(batch, f, batch_size):
+    """
+    Write out a batch to a file and reset the batch.
+    """
+    if len(batch) >= batch_size:
+        f.writelines(batch)  # write out a batch
+        batch = []  # reset batch
+    return batch
+
+
+def objective_write_linear_terms(df, f, batch, batch_size):
+    """
+    Write the linear terms of the objective to a file.
+    """
+    coeffs = df.coeffs.values
+    vars = df.vars.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"{coeff:+.12g} x{var}\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
+
+
+def objective_write_cross_terms(quadratic, f, batch, batch_size):
+    """
+    Write the cross terms of the objective to a file.
+    """
+    is_cross = quadratic.vars1 != quadratic.vars2
+    cross = quadratic[is_cross]
+    coeffs = cross.coeffs.values
+    vars1 = cross.vars1.values
+    vars2 = cross.vars2.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var1 = vars1[idx]
+        var2 = vars2[idx]
+        batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
+
+
+def objective_write_quad_terms(quadratic, f, batch, batch_size):
+    """
+    Write the quadratic terms of the objective to a file.
+    """
+    is_cross = quadratic.vars1 != quadratic.vars2
+    quad = quadratic[~is_cross]
+    coeffs = quad.coeffs.values
+    vars = quad.vars1.values
+    for idx in range(len(coeffs)):
+        coeff = coeffs[idx]
+        var = vars[idx]
+        batch.append(f"{coeff:+.12g} x{var} ^ 2\n")
+        batch = handle_batch(batch, f, batch_size)
+    return batch
 
 
 def objective_to_file(m, f, log=False, batch_size=10000):
@@ -39,29 +97,37 @@ def objective_to_file(m, f, log=False, batch_size=10000):
     df = m.objective.flat
 
     if np.isnan(df.coeffs).any():
-        raise ValueError(
+        logger.warning(
             "Objective coefficients are missing (nan) where variables are not (-1)."
         )
 
-    coeffs = df.coeffs.values
-    vars = df.vars.values
+    if m.is_linear:
+        batch = objective_write_linear_terms(df, f, [], batch_size)
 
-    batch = []  # to store batch of lines
-    for idx in range(len(df)):
-        coeff = coeffs[idx]
-        var = vars[idx]
+    elif m.is_quadratic:
+        is_linear = (df.vars1 == -1) | (df.vars2 == -1)
+        linear = df[is_linear]
+        linear = linear.assign(
+            vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
+        )
+        batch = objective_write_linear_terms(linear, f, [], batch_size)
 
-        batch.append(f"{coeff:+.12g} x{var}\n")
-
-        if len(batch) >= batch_size:
-            f.writelines(batch)  # write out a batch
-            batch = []  # reset batch
+        if not is_linear.all():
+            batch.append("+ [\n")
+            quadratic = df[~is_linear]
+            quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
+            batch = objective_write_cross_terms(quadratic, f, batch, batch_size)
+            batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
+            batch.append("] / 2\n")
 
     if batch:  # write the remaining lines
         f.writelines(batch)
 
 
 def constraints_to_file(m, f, log=False, batch_size=50000):
+    if not len(m.constraints):
+        return
+
     f.write("\n\ns.t.\n\n")
     names = m.constraints
     if log:
@@ -109,9 +175,7 @@ def constraints_to_file(m, f, log=False, batch_size=50000):
             else:
                 batch.append(f"{coeff:+.12g} x{var}\n")
 
-            if len(batch) >= batch_size:
-                f.writelines(batch)
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
             prev_label = label
 
@@ -150,10 +214,7 @@ def bounds_to_file(m, f, log=False, batch_size=10000):
             lower = lowers[idx]
             upper = uppers[idx]
             batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -181,10 +242,7 @@ def binaries_to_file(m, f, log=False, batch_size=1000):
 
         for label in df.labels.values:
             batch.append(f"x{label}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -212,10 +270,7 @@ def integers_to_file(m, f, log=False, batch_size=1000):
 
         for label in df.labels.values:
             batch.append(f"x{label}\n")
-
-            if len(batch) >= batch_size:
-                f.writelines(batch)  # write out a batch
-                batch = []  # reset batch
+            batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -226,13 +281,13 @@ def to_file(m, fn):
     Write out a model to a lp or mps file.
     """
     fn = Path(m.get_problem_file(fn))
-    batch_size = 5000
-
     if fn.exists():
         fn.unlink()
 
     if fn.suffix == ".lp":
         log = m._xCounter > 10_000
+
+        batch_size = 5000
 
         with open(fn, mode="w") as f:
             start = time.time()
@@ -247,16 +302,15 @@ def to_file(m, fn):
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
     elif fn.suffix == ".mps":
-        if "highs" in solvers.available_solvers:
-            # Use very fast highspy implementation
-            # Might be replaced by custom writer, however needs C bindings for performance
-            h = m.to_highspy()
-            h.writeModel(str(fn))
-        else:
+        if "highs" not in solvers.available_solvers:
             raise RuntimeError(
                 "Package highspy not installed. This is required to exporting to MPS file."
             )
 
+        # Use very fast highspy implementation
+        # Might be replaced by custom writer, however needs C bindings for performance
+        h = m.to_highspy()
+        h.writeModel(str(fn))
     else:
         raise ValueError(
             f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
@@ -294,11 +348,15 @@ def to_gurobipy(m):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
-    model.setObjective(M.c @ x)
+    if m.is_quadratic:
+        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+    else:
+        model.setObjective(M.c @ x)
 
-    names = "c" + M.clabels.astype(str).astype(object)
-    c = model.addMConstr(M.A, x, M.sense, M.b)
-    c.setAttr("ConstrName", list(names))
+    if len(m.constraints):
+        names = "c" + M.clabels.astype(str).astype(object)
+        c = model.addMConstr(M.A, x, M.sense, M.b)
+        c.setAttr("ConstrName", list(names))
 
     model.update()
     return model
@@ -335,16 +393,33 @@ def to_highspy(m):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
             h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
+
+    # linear objective
     h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
-    A = M.A.tocsr()
-    num_cons = A.shape[0]
-    lower = np.where(M.sense != "<", M.b, -np.inf)
-    upper = np.where(M.sense != ">", M.b, np.inf)
-    h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
+    # linear constraints
+    A = M.A
+    if A is not None:
+        A = A.tocsr()
+        num_cons = A.shape[0]
+        lower = np.where(M.sense != "<", M.b, -np.inf)
+        upper = np.where(M.sense != ">", M.b, np.inf)
+        h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
     lp = h.getLp()
-    lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
     lp.col_names_ = "x" + M.vlabels.astype(str).astype(object)
+    if len(M.clabels):
+        lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
     h.passModel(lp)
+
+    # quadrative objective
+    Q = M.Q
+    if Q is not None:
+        Q = triu(Q)
+        Q = Q.tocsr()
+        num_vars = Q.shape[0]
+        h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
+
     return h
 
 
@@ -425,9 +500,7 @@ def to_block_files(m, fn):
         PIPS requires this information to set the shape of sub-matrices.
         """
         assert key in keys
-        if key == "coeffs":
-            return np.where(mask, arr, 0)
-        return arr
+        return np.where(mask, arr, 0) if key == "coeffs" else arr
 
     for key, suffix in zip(keys, ["row", "data", "col"]):
         arr = cons.ravel(key, "vars", filter_missings=True)
@@ -468,7 +541,7 @@ def non_bool_dict(d):
     """
     Convert bool to int for netCDF4 storing.
     """
-    return {k: v if not isinstance(v, bool) else int(v) for k, v in d.items()}
+    return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
 def to_netcdf(m, *args, **kwargs):
@@ -549,12 +622,12 @@ def read_netcdf(path, **kwargs):
         return ds
 
     vars = get_prefix(ds, "variables")
-    var_names = list(set([k.split("-", 1)[0] for k in vars]))
+    var_names = list({k.split("-", 1)[0] for k in vars})
     variables = {k: Variable(get_prefix(vars, k), m, k) for k in var_names}
     m._variables = Variables(variables, m)
 
     cons = get_prefix(ds, "constraints")
-    con_names = list(set([k.split("-", 1)[0] for k in cons]))
+    con_names = list({k.split("-", 1)[0] for k in cons})
     constraints = {k: Constraint(get_prefix(cons, k), m, k) for k in con_names}
     m._constraints = Constraints(constraints, m)
 
