@@ -1,11 +1,18 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
 
 
-Version 0.2.1
+Version 0.2.4
+-------------
+
+
+* The IO to LP/MPS file was made more memory-efficient. In particular, the memory excessive operation `to_dataframe` (see https://github.com/pydata/xarray/issues/6561) was replaced by an in-house implementation.
+
+
+Version 0.2.3
 -------------
 
 **Bugfixes**
@@ -15,10 +22,9 @@ Version 0.2.1
 **New Features**
 
 * The `Variable` and the `LinearExpression` have a new method `cumsum`, which allows to compute the cumulative sum.
-* The IO to LP/MPS file was made more memory-efficient. In particular, the memory excessive operation `to_dataframe` (see https://github.com/pydata/xarray/issues/6561) was replaced by an in-house implementation.
 
 
-Version 0.2.1
+Version 0.2.2
 -------------
 
 
