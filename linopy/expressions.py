@@ -35,6 +35,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_index_map,
     print_single_expression,
+    to_dataframe,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -1026,7 +1027,7 @@ class LinearExpression:
             # fallback for weird error raised due to missing index
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
-            df = ds.to_dataframe()
+            df = to_dataframe(ds)
         if "mask" in df:
             mask = df.pop("mask")
             df = df[mask]
@@ -1204,7 +1205,7 @@ class QuadraticExpression(LinearExpression):
             # fallback for weird error raised due to missing index
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
-            df = ds.to_dataframe()
+            df = to_dataframe(ds)
         if "mask" in df:
             mask = df.pop("mask")
             df = df[mask]
