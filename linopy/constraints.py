@@ -36,6 +36,7 @@ from linopy.common import (
     print_single_expression,
     replace_by_map,
     save_join,
+    to_dataframe,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -473,7 +474,7 @@ class Constraint:
             # fallback for weird error raised due to missing index
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
-            df = ds.to_dataframe()
+            df = to_dataframe(ds)
         df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")

@@ -33,6 +33,7 @@ from linopy.common import (
     print_coord,
     print_single_variable,
     save_join,
+    to_dataframe,
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
@@ -630,7 +631,7 @@ class Variable:
             # fallback for weird error raised due to missing index
             df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
         else:
-            df = ds.to_dataframe()
+            df = to_dataframe(ds)
         df = df[df.labels != -1]
 
         any_nan = df.isna().any()

@@ -14,7 +14,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 from numpy import arange, hstack
-from xarray import DataArray, Dataset, align, apply_ufunc, merge
+from xarray import DataArray, Dataset, align, apply_ufunc, broadcast, merge
 from xarray.core import indexing, utils
 
 from linopy.config import options
@@ -89,6 +89,25 @@ def as_dataarray(
 
     arr = fill_missing_coords(arr)
     return arr
+
+
+def to_dataframe(ds):
+    """
+    Convert an xarray Dataset to a pandas DataFrame.
+
+    This is an memory efficient alternative implementation to the built-in `to_dataframe` method, which
+    does not create a multi-indexed DataFrame.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset to convert to a DataFrame.
+    """
+    data = broadcast(ds)[0]
+    df = pd.DataFrame(index=range(np.prod(list(data.dims.values()))))
+    for k, v in data.items():
+        df[k] = np.ravel(v)
+    return df
 
 
 def save_join(*dataarrays):
