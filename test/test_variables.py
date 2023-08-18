@@ -56,6 +56,15 @@ def test_variables_assignment_with_reindex(m):
     with pytest.warns(UserWarning):
         m.variables.labels
 
+        for dtype in m.variables.labels.dtypes.values():
+            assert np.issubdtype(dtype, np.integer)
+
+        for dtype in m.variables.lower.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
+
+        for dtype in m.variables.upper.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
+
 
 def test_scalar_variables_name_counter():
     m = Model()

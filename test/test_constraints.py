@@ -128,6 +128,34 @@ def test_masked_constraints():
     assert (m.constraints.labels.con0[5:10, :] == -1).all()
 
 
+def test_non_aligned_constraints():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros(10), coords=[range(10)])
+    x = m.add_variables(lower, name="x")
+
+    lower = xr.DataArray(np.zeros(8), coords=[range(8)])
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x == 0.0)
+    m.add_constraints(y == 0.0)
+
+    with pytest.warns(UserWarning):
+        m.constraints.labels
+
+        for dtype in m.constraints.labels.dtypes.values():
+            assert np.issubdtype(dtype, np.integer)
+
+        for dtype in m.constraints.coeffs.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
+
+        for dtype in m.constraints.vars.dtypes.values():
+            assert np.issubdtype(dtype, np.integer)
+
+        for dtype in m.constraints.rhs.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
+
+
 def test_constraints_flat():
     m = Model()
 

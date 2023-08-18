@@ -110,17 +110,18 @@ def to_dataframe(ds):
     return df
 
 
-def save_join(*dataarrays):
+def save_join(*dataarrays, integer_dtype=False):
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
     try:
-        labels = align(*dataarrays, join="exact")
+        arrs = align(*dataarrays, join="exact")
     except ValueError:
         warn("Coordinates across variables not equal. Perform outer join.", UserWarning)
-        labels = align(*dataarrays, join="outer")
-        labels = [ds.fillna(-1).astype(int) for ds in labels]
-    return Dataset({ds.name: ds for ds in labels})
+        arrs = align(*dataarrays, join="outer")
+        if integer_dtype:
+            arrs = [ds.fillna(-1).astype(int) for ds in arrs]
+    return Dataset({ds.name: ds for ds in arrs})
 
 
 def fill_missing_coords(ds, fill_helper_dims=False):

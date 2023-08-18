@@ -898,7 +898,9 @@ class Variables:
         """
         Get the labels of all variables.
         """
-        return save_join(*[v.labels.rename(k) for k, v in self.items()])
+        return save_join(
+            *[v.labels.rename(k) for k, v in self.items()], integer_dtype=True
+        )
 
     @property
     def lower(self):
