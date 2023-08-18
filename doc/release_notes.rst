@@ -5,6 +5,9 @@ Upcoming Release
 ----------------
 
 
+* The solution getter `model.solution` was falsely returning integer dtype in case of non-aligned indexes. This is fixed now.
+
+
 Version 0.2.4
 -------------
 
