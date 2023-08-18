@@ -98,6 +98,21 @@ def model_with_duplicated_variables():
 
 
 @pytest.fixture
+def model_with_non_aligned_variables():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower=lower, coords=[lower.index], name="x")
+    lower = pd.Series(0, range(8))
+    y = m.add_variables(lower=lower, coords=[lower.index], name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10.5)
+    m.objective = 1 * x + 0.5 * y
+
+    return m
+
+
+@pytest.fixture
 def milp_binary_model():
     m = Model()
 
@@ -312,6 +327,20 @@ def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
     assert all(model_with_duplicated_variables.solution["x"] == 5)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_non_aligned_variables(model_with_non_aligned_variables, solver, io_api):
+    status, condition = model_with_non_aligned_variables.solve(solver, io_api=io_api)
+    assert status == "ok"
+    with pytest.warns(UserWarning):
+        assert model_with_non_aligned_variables.solution["x"][0] == 0
+        assert model_with_non_aligned_variables.solution["x"][-1] == 10.5
+        assert model_with_non_aligned_variables.solution["y"][0] == 10.5
+        assert np.isnan(model_with_non_aligned_variables.solution["y"][-1])
+
+        for dtype in model_with_non_aligned_variables.solution.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

@@ -584,7 +584,9 @@ class Constraints:
         """
         Get the labels of all constraints.
         """
-        return save_join(*[v.labels.rename(k) for k, v in self.items()])
+        return save_join(
+            *[v.labels.rename(k) for k, v in self.items()], integer_dtype=True
+        )
 
     @property
     def coeffs(self):
@@ -598,7 +600,11 @@ class Constraints:
         """
         Get the variables of all constraints.
         """
-        return save_join(*[v.vars.rename(k) for k, v in self.items()])
+        rename_term_dim = lambda ds: ds.rename({TERM_DIM: ds.name + TERM_DIM})
+        return save_join(
+            *[rename_term_dim(v.vars.rename(k)) for k, v in self.items()],
+            integer_dtype=True,
+        )
 
     @property
     def sign(self):
