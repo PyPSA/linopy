@@ -5,7 +5,12 @@ Upcoming Release
 ----------------
 
 
+Version 0.2.5
+-------------
+
+
 * The solution getter `model.solution` was falsely returning integer dtype in case of non-aligned indexes. This is fixed now.
+* Highs is now in the set of default solvers when install `linopy` via pip.
 
 
 Version 0.2.4
