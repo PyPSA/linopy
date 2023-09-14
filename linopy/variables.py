@@ -627,12 +627,11 @@ class Variable:
         df : pandas.DataFrame
         """
         ds = self.data
-        if not ds.sizes:
-            # fallback for weird error raised due to missing index
-            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
-        else:
-            df = to_dataframe(ds)
-        df = df[df.labels != -1]
+
+        def mask_func(data):
+            return data["labels"] != -1
+
+        df = to_dataframe(ds, mask_func=mask_func)
 
         any_nan = df.isna().any()
         if any_nan.any():

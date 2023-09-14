@@ -91,7 +91,7 @@ def as_dataarray(
     return arr
 
 
-def to_dataframe(ds):
+def to_dataframe(ds, mask_func=None):
     """
     Convert an xarray Dataset to a pandas DataFrame.
 
@@ -104,10 +104,14 @@ def to_dataframe(ds):
         Dataset to convert to a DataFrame.
     """
     data = broadcast(ds)[0]
-    df = pd.DataFrame(index=range(np.prod(list(data.dims.values()))))
-    for k, v in data.items():
-        df[k] = np.ravel(v)
-    return df
+    data = {k: np.ravel(v) for k, v in data.items()}
+
+    if mask_func is not None:
+        mask = mask_func(data)
+        for k, v in data.items():
+            data[k] = v[mask]
+
+    return pd.DataFrame(data, copy=False)
 
 
 def save_join(*dataarrays, integer_dtype=False):
