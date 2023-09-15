@@ -1026,8 +1026,6 @@ class LinearExpression:
 
         def mask_func(data):
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
-            if "mask" in data:
-                mask &= data.pop["mask"]
             return mask
 
         df = to_dataframe(ds, mask_func=mask_func)
@@ -1206,8 +1204,6 @@ class QuadraticExpression(LinearExpression):
             mask = ((data["vars1"] != -1) | (data["vars2"] != -1)) & (
                 data["coeffs"] != 0
             )
-            if "mask" in data:
-                mask &= data.pop["mask"]
             return mask
 
         df = to_dataframe(ds, mask_func=mask_func)
