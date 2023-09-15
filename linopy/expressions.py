@@ -1023,15 +1023,13 @@ class LinearExpression:
         df : pandas.DataFrame
         """
         ds = self.data
-        if not ds.sizes:
-            # fallback for weird error raised due to missing index
-            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
-        else:
-            df = to_dataframe(ds)
-        if "mask" in df:
-            mask = df.pop("mask")
-            df = df[mask]
-        df = df[(df.vars != -1) & (df.coeffs != 0)]
+
+        def mask_func(data):
+            mask = (data["vars"] != -1) & (data["coeffs"] != 0)
+            return mask
+
+        df = to_dataframe(ds, mask_func=mask_func)
+
         # Group repeated variables in the same constraint
         df = df.groupby("vars", as_index=False).sum()
 
@@ -1201,15 +1199,14 @@ class QuadraticExpression(LinearExpression):
             {FACTOR_DIM: ["vars1", "vars2"]}
         ).to_dataset(FACTOR_DIM)
         ds = self.data.drop_vars("vars").assign(vars)
-        if not ds.sizes:
-            # fallback for weird error raised due to missing index
-            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
-        else:
-            df = to_dataframe(ds)
-        if "mask" in df:
-            mask = df.pop("mask")
-            df = df[mask]
-        df = df[((df.vars1 != -1) | (df.vars2 != -1)) & (df.coeffs != 0)]
+
+        def mask_func(data):
+            mask = ((data["vars1"] != -1) | (data["vars2"] != -1)) & (
+                data["coeffs"] != 0
+            )
+            return mask
+
+        df = to_dataframe(ds, mask_func=mask_func)
         # Group repeated variables in the same constraint
         df = df.groupby(["vars1", "vars2"], as_index=False).sum()
 

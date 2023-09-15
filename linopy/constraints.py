@@ -6,7 +6,6 @@ This module contains implementations for the Constraint{s} class.
 """
 
 import functools
-import re
 import warnings
 from dataclasses import dataclass, field
 from itertools import product
@@ -466,16 +465,15 @@ class Constraint:
         df : pandas.DataFrame
         """
         ds = self.data
-        # if keys is not None:
-        #     if isinstance(keys, str):
-        #         keys = [keys]
-        #     ds = ds[keys]
-        if not ds.sizes:
-            # fallback for weird error raised due to missing index
-            df = pd.DataFrame({k: ds[k].item() for k in ds}, index=[0])
-        else:
-            df = to_dataframe(ds)
-        df = df[(df.labels != -1) & (df.vars != -1) & (df.coeffs != 0)]
+
+        def mask_func(data):
+            mask = (data["vars"] != -1) & (data["coeffs"] != 0)
+            if "labels" in data:
+                mask &= data["labels"] != -1
+            return mask
+
+        df = to_dataframe(ds, mask_func=mask_func)
+
         # Group repeated variables in the same constraint
         agg = dict(coeffs="sum", rhs="first", sign="first")
         agg.update({k: "first" for k in df.columns if k not in agg})
