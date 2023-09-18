@@ -319,7 +319,7 @@ def to_file(m, fn):
     return fn
 
 
-def to_gurobipy(m):
+def to_gurobipy(m, env=None):
     """
     Export the model to gurobipy.
 
@@ -330,6 +330,7 @@ def to_gurobipy(m):
     Parameters
     ----------
     m : linopy.Model
+    env : gurobipy.Env
 
     Returns
     -------
@@ -338,7 +339,7 @@ def to_gurobipy(m):
     import gurobipy
 
     m.constraints.sanitize_missings()
-    model = gurobipy.Model()
+    model = gurobipy.Model(env=env)
 
     M = m.matrices
 

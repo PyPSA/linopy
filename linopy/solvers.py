@@ -545,27 +545,28 @@ def run_gurobi(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io_api is None or io_api in ["lp", "mps"]:
-        problem_fn = model.to_file(problem_fn)
-        problem_fn = maybe_convert_path(problem_fn)
-        m = gurobipy.read(problem_fn)
-    elif io_api == "direct":
-        problem_fn = None
-        m = model.to_gurobipy()
-    else:
-        raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
-        )
+    with gurobipy.Env() as env:
+        if io_api is None or io_api in ["lp", "mps"]:
+            problem_fn = model.to_file(problem_fn)
+            problem_fn = maybe_convert_path(problem_fn)
+            m = gurobipy.read(problem_fn, env=env)
+        elif io_api == "direct":
+            problem_fn = None
+            m = model.to_gurobipy(env=env)
+        else:
+            raise ValueError(
+                "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
+            )
 
-    if solver_options is not None:
-        for key, value in solver_options.items():
-            m.setParam(key, value)
-    if log_fn is not None:
-        m.setParam("logfile", log_fn)
+        if solver_options is not None:
+            for key, value in solver_options.items():
+                m.setParam(key, value)
+        if log_fn is not None:
+            m.setParam("logfile", log_fn)
 
-    if warmstart_fn:
-        m.read(warmstart_fn)
-    m.optimize()
+        if warmstart_fn:
+            m.read(warmstart_fn)
+        m.optimize()
     logging.disable(1)
 
     if basis_fn:
