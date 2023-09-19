@@ -231,7 +231,7 @@ class Variable:
                     lines.append("\t\t...")
                 else:
                     coord = [
-                        self.data[dims[i]].values[ind] for i, ind in enumerate(indices)
+                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
                     ]
                     label = self.labels.values[indices]
                     line = (

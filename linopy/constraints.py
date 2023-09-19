@@ -179,7 +179,7 @@ class Constraint:
                     lines.append("\t\t...")
                 else:
                     coord = [
-                        self.data[dims[i]].values[ind] for i, ind in enumerate(indices)
+                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
                         expr = print_single_expression(
