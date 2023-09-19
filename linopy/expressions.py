@@ -340,7 +340,7 @@ class LinearExpression:
                     lines.append("\t\t...")
                 else:
                     coord_values = ", ".join(
-                        str(self.data[dims[i]].values[ind])
+                        str(self.data.indexes[dims[i]][ind])
                         for i, ind in enumerate(indices)
                     )
                     if self.mask is None or self.mask.values[indices]:
