@@ -52,36 +52,18 @@ def objective_write_linear_terms(df, f, batch, batch_size):
     return batch
 
 
-def objective_write_cross_terms(quadratic, f, batch, batch_size):
+def objective_write_quad_terms(quadratic, f, batch, batch_size):
     """
     Write the cross terms of the objective to a file.
     """
-    is_cross = quadratic.vars1 != quadratic.vars2
-    cross = quadratic[is_cross]
-    coeffs = cross.coeffs.values
-    vars1 = cross.vars1.values
-    vars2 = cross.vars2.values
+    coeffs = quadratic.coeffs.values
+    vars1 = quadratic.vars1.values
+    vars2 = quadratic.vars2.values
     for idx in range(len(coeffs)):
         coeff = coeffs[idx]
         var1 = vars1[idx]
         var2 = vars2[idx]
         batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
-        batch = handle_batch(batch, f, batch_size)
-    return batch
-
-
-def objective_write_quad_terms(quadratic, f, batch, batch_size):
-    """
-    Write the quadratic terms of the objective to a file.
-    """
-    is_cross = quadratic.vars1 != quadratic.vars2
-    quad = quadratic[~is_cross]
-    coeffs = quad.coeffs.values
-    vars = quad.vars1.values
-    for idx in range(len(coeffs)):
-        coeff = coeffs[idx]
-        var = vars[idx]
-        batch.append(f"{coeff:+.12g} x{var} ^ 2\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
 
@@ -116,7 +98,6 @@ def objective_to_file(m, f, log=False, batch_size=10000):
             batch.append("+ [\n")
             quadratic = df[~is_linear]
             quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_cross_terms(quadratic, f, batch, batch_size)
             batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
             batch.append("] / 2\n")
 

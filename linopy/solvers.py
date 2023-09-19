@@ -22,7 +22,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "scip"]
 
 available_solvers = []
 
@@ -624,8 +624,6 @@ def run_scip(
 
     This function communicates with scip using the pyscipopt package.
     """
-    import pyscipopt
-
     CONDITION_MAP = {}
 
     log_fn = maybe_convert_path(log_fn)
@@ -647,15 +645,15 @@ def run_scip(
     if solver_options is not None:
         emphasis = solver_options.pop("setEmphasis", None)
         if emphasis is not None:
-            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMEMPHASIS, emphasis.upper()))
+            m.setEmphasis(getattr(scip.SCIP_PARAMEMPHASIS, emphasis.upper()))
 
         heuristics = solver_options.pop("setHeuristics", None)
         if heuristics is not None:
-            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMSETTING, heuristics.upper()))
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, heuristics.upper()))
 
         presolve = solver_options.pop("setPresolve", None)
         if presolve is not None:
-            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMSETTING, presolve.upper()))
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, presolve.upper()))
 
         m.setParams(solver_options)
 
@@ -669,7 +667,6 @@ def run_scip(
     m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
 
     m.optimize()
-    logging.disable(1)
 
     if basis_fn:
         logger.warning("Basis not implemented for SCIP")
@@ -684,6 +681,7 @@ def run_scip(
 
         s = m.getSols()[0]
         sol = pd.Series({v.name: s[v] for v in m.getVars()})
+        sol.drop(["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0)
         sol = set_int_index(sol)
 
         cons = m.getConss()
