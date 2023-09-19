@@ -624,14 +624,15 @@ def run_scip(
 
     This function communicates with scip using the pyscipopt package.
     """
-    # see ...
+    import pyscipopt
+
     CONDITION_MAP = {}
 
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io_api is None or (io_api == "lp"):
+    if io_api is None or io_api in ["lp", "mps"]:
         problem_fn = model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
         m = scip.Model()
@@ -644,8 +645,20 @@ def run_scip(
         )
 
     if solver_options is not None:
-        for key, value in solver_options.items():
-            model.setRealParam(key, value)
+        emphasis = solver_options.pop("setEmphasis", None)
+        if emphasis is not None:
+            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMEMPHASIS, emphasis.upper()))
+
+        heuristics = solver_options.pop("setHeuristics", None)
+        if heuristics is not None:
+            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMSETTING, heuristics.upper()))
+
+        presolve = solver_options.pop("setPresolve", None)
+        if presolve is not None:
+            m.setEmphasis(getattr(pyscipopt.SCIP_PARAMSETTING, presolve.upper()))
+
+        m.setParams(solver_options)
+
     if log_fn is not None:
         m.setLogfile(log_fn)
 
