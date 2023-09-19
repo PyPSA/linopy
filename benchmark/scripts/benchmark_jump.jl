@@ -7,26 +7,23 @@ using Random
 Random.seed!(125)
 
 function basic_model(n, solver)
-    m = Model(Gurobi.Optimizer)
-    N = 1:n
-    M = 1:n
-    @variable(m, x[N, M])
-    @variable(m, y[N, M])
-    @constraint(m, [i=N, j=M], x[i, j] - y[i, j] >= i-1)
-    @constraint(m, [i=N, j=M], x[i, j] + y[i, j] >= 0)
-    @objective(m, Min, sum(2 * x[i, j] + y[i, j] for i in N, j in M))
+    m = Model(solver)
+    @variable(m, x[1:n, 1:n])
+    @variable(m, y[1:n, 1:n])
+    @constraint(m, x - y .>= 0:(n-1))
+    @constraint(m, x + y .>= 0)
+    @objective(m, Min, 2 * sum(x) + sum(y))
     optimize!(m)
     return objective_value(m)
 end
 
 function knapsack_model(n, solver)
     m = Model(solver)
-    N = 1:n
-    @variable(m, x[N], Bin)
+    @variable(m, x[1:n], Bin)
     weight = rand(1:100, n)
     value = rand(1:100, n)
-    @constraint(m, sum(weight[i] * x[i] for i in N) <= 200)
-    @objective(m, Max, sum(value[i] * x[i] for i in N))
+    @constraint(m, weight' * x <= 200)
+    @objective(m, Max, value' * x)
     optimize!(m)
     return objective_value(m)
 end
@@ -35,8 +32,8 @@ end
 if snakemake.config["solver"] == "gurobi"
     solver = Gurobi.Optimizer
 elseif snakemake.config["solver"] == "cbc"
-    using CBC
-    solver = CBC.Optimizer
+    using Cbc
+    solver = Cbc.Optimizer
 end
 
 if snakemake.config["benchmark"] == "basic"
