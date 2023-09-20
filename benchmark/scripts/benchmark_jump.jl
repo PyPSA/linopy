@@ -1,44 +1,59 @@
 using JuMP
+using Gurobi
 using DataFrames
 using CSV
 using Dates
+using Random
+Random.seed!(125)
 
-function model(n, solver, integerlabel=false)
-    m = Model(Gurobi.Optimizer)
-    N = 1:n
-    M = 1:n
-    if !integerlabel
-        N = float.(N)
-        M = string.(M)
-    end
-    @variable(m, x[N, M])
-    @variable(m, y[N, M])
-    @constraint(m, [i=N, j=M], x[i, j] - y[i, j] >= i-1)
-    @constraint(m, [i=N, j=M], x[i, j] + y[i, j] >= 0)
-    @objective(m, Min, sum(2 * x[i, j] + y[i, j] for i in N, j in M))
+function basic_model(n, solver)
+    m = Model(solver)
+    @variable(m, x[1:n, 1:n])
+    @variable(m, y[1:n, 1:n])
+    @constraint(m, x - y .>= 0:(n-1))
+    @constraint(m, x + y .>= 0)
+    @objective(m, Min, 2 * sum(x) + sum(y))
     optimize!(m)
-    return m
+    return objective_value(m)
 end
 
-if snakemake.wildcards["solver"] == "gurobi"
-    using Gurobi
+function knapsack_model(n, solver)
+    m = Model(solver)
+    @variable(m, x[1:n], Bin)
+    weight = rand(1:100, n)
+    value = rand(1:100, n)
+    @constraint(m, weight' * x <= 200)
+    @objective(m, Max, value' * x)
+    optimize!(m)
+    return objective_value(m)
+end
+
+
+if snakemake.config["solver"] == "gurobi"
     solver = Gurobi.Optimizer
-elseif snakemake.wildcards["solver"] == "cbc"
-    using CBC
-    solver = CBC.Optimizer
+elseif snakemake.config["solver"] == "cbc"
+    using Cbc
+    solver = Cbc.Optimizer
+end
+
+if snakemake.config["benchmark"] == "basic"
+    model = basic_model
+elseif snakemake.config["benchmark"] == "knapsack"
+    model = knapsack_model
 end
 
 # jit compile everything
 model(1, solver)
 
-profile = DataFrame(N=Int[], Time=Float64[], Memory=Float64[])
+profile = DataFrame(N=Int[], Time=Float64[], Memory=Float64[], Objective=Float64[])
 
 for N in snakemake.params[1]
-    time = @elapsed(model(N, solver))
     mem = @allocated(model(N, solver))/10^6
-    push!(profile, [N, time, mem])
+    time = @elapsed(model(N, solver))
+    objective = model(N, solver)
+    push!(profile, [N, time, mem, objective])
 end
-profile[:API] = "jump"
+profile[!, :API] .= "jump"
 insertcols!(profile, 1, :Row => 1:nrow(profile))
 
 CSV.write(snakemake.output[1], profile)

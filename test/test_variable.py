@@ -39,12 +39,26 @@ def test_variable_repr(x):
     x.__repr__()
 
 
-def test_wrong_variable_init(m, x):
-    with pytest.raises(ValueError):
-        linopy.Variable(x.labels.values, m)
+def test_variable_labels(x):
+    isinstance(x.labels, xr.DataArray)
 
+
+def test_variable_data(x):
+    isinstance(x.data, xr.DataArray)
+
+
+def test_wrong_variable_init(m, x):
+    # without explicit name
+    with pytest.raises(TypeError):
+        linopy.Variable(x.data, m)
+
+    # wrong data type
     with pytest.raises(ValueError):
-        linopy.Variable(x.labels, None)
+        linopy.Variable(x.labels.values, m, "")
+
+    # no model
+    with pytest.raises(ValueError):
+        linopy.Variable(x.labels, None, "")
 
 
 def test_variable_getter(x, z):
@@ -132,18 +146,29 @@ def test_variable_sum(x):
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.values[9] == -1
+    assert x.labels[9] == x._fill_value["labels"]
+
+    x = x.where([True] * 4 + [False] * 6, x[0])
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.labels[9] == x[0].label
+
+    x = x.where([True] * 4 + [False] * 6, x.loc[0])
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.labels[9] == x[0].label
 
 
 def test_variable_shift(x):
     x = x.shift(first=3)
     assert isinstance(x, linopy.variables.Variable)
-    assert x.values[0] == -1
+    assert x.labels[0] == -1
 
 
 def test_variable_bfill(x):
-    result = x.bfill("first")
-    assert isinstance(result, linopy.variables.Variable)
+    x = x.where([False] * 4 + [True] * 6)
+    x = x.bfill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.labels[2] == x.labels[4]
+    assert x.labels[2] != x.labels[5]
 
 
 def test_variable_broadcast_like(x):
@@ -152,8 +177,11 @@ def test_variable_broadcast_like(x):
 
 
 def test_variable_ffill(x):
-    result = x.ffill("first")
-    assert isinstance(result, linopy.variables.Variable)
+    x = x.where([True] * 4 + [False] * 6)
+    x = x.ffill("first")
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.labels[9] == x.labels[3]
+    assert x.labels[3] != x.labels[2]
 
 
 def test_variable_fillna(x):
@@ -166,4 +194,4 @@ def test_variable_sanitize(x):
     x = x.where([True] * 4 + [False] * 6, np.nan)
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
-    assert x.values[9] == -1
+    assert x.labels[9] == -1

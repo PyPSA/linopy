@@ -1,8 +1,8 @@
-# linopy: Linear optimization with N-D labeled variables
+# linopy: Linear optimization with N-dimensional labeled variables
 
-[![PyPI](https://img.shields.io/pypi/v/linopy)](https://pypi.org/project/linopy/) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/) [![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
+[![PyPI](https://img.shields.io/pypi/v/linopy)](https://pypi.org/project/linopy/) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml) [![License](https://img.shields.io/pypi/l/linopy.svg)](LICENSE.txt) [![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/) [![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
 
-**linopy** is an open-source python package that facilitates **linear or mixed-integer optimisation** with **real world data**. It builds a bridge between data analysis packages like [xarray](https://github.com/pydata/xarray) & [pandas](https://pandas.pydata.org/) and linear problem solvers like [cbc](https://projects.coin-or.org/Cbc), [gurobi](https://www.gurobi.com/) (see the full list below). The project aims to make linear programming in python easy, highly-flexible and performant.
+**linopy** is an open-source python package that facilitates **optimization** with **real world data**. It builds a bridge between data analysis packages like [xarray](https://github.com/pydata/xarray) & [pandas](https://pandas.pydata.org/) and problem solvers like [cbc](https://projects.coin-or.org/Cbc), [gurobi](https://www.gurobi.com/) (see the full list below). **Linopy** supports **Linear, Integer, Mixed-Integer and Quadratic Programming** while aiming to make linear programming in Python easy, highly-flexible and performant.
 
 
 ## Main features
@@ -28,6 +28,13 @@ So far **linopy** is available on the PyPI repository
 pip install linopy
 ```
 
+or on conda-forge
+
+```bash
+conda install -c conda-forge linopy
+```
+
+
 ## Supported solvers
 
 **linopy** supports the following solvers
@@ -41,11 +48,34 @@ pip install linopy
 
 Note that these do have to be installed by the user separately.
 
+## Citing Linopy
 
-# License
+If you use Linopy in your research, please cite the following paper:
+
+- Hofmann, F., (2023). Linopy: Linear optimization with n-dimensional labeled variables.
+Journal of Open Source Software, 8(84), 4823, [https://doi.org/10.21105/joss.04823](https://doi.org/10.21105/joss.04823)
+
+A BibTeX entry for LaTeX users is
+
+```latex
+@article{Hofmann2023,
+    doi = {10.21105/joss.04823},
+    url = {https://doi.org/10.21105/joss.04823},
+    year = {2023}, publisher = {The Open Journal},
+    volume = {8},
+    number = {84},
+    pages = {4823},
+    author = {Fabian Hofmann},
+    title = {Linopy: Linear optimization with n-dimensional labeled variables},
+    journal = {Journal of Open Source Software}
+}
+```
+
+
+## License
 
 Copyright 2021 Fabian Hofmann
 
 
 
-This package is published under license GNU Public License GPLv3
+This package is published under MIT license. See [LICENSE.txt](LICENSE.txt) for details.

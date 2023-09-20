@@ -10,6 +10,7 @@ import pytest
 
 import linopy
 from linopy import Model
+from linopy.testing import assert_varequal
 
 
 @pytest.fixture
@@ -30,16 +31,39 @@ def test_variables_assignment_with_merge():
     Test the merger of a variables with same dimension name but with different
     lengths.
 
-    Missing values should be filled up with -1.
+    New coordinates are aligned to the existing ones. Thus this should
+    raise a warning.
     """
     m = Model()
 
     upper = pd.Series(np.ones((10)))
-    m.add_variables(upper)
+    var0 = m.add_variables(upper)
 
     upper = pd.Series(np.ones((12)))
-    m.add_variables(upper)
-    assert m.variables.labels.var0[-1].item() == -1
+    var1 = m.add_variables(upper)
+
+    with pytest.warns(UserWarning):
+        assert m.variables.labels.var0[-1].item() == -1
+
+    assert_varequal(var0, m.variables.var0)
+    assert_varequal(var1, m.variables.var1)
+
+
+def test_variables_assignment_with_reindex(m):
+    shuffled_coords = [pd.Index([2, 1, 3, 4, 6, 5, 7, 9, 8, 0], name="first")]
+    m.add_variables(coords=shuffled_coords, name="a")
+
+    with pytest.warns(UserWarning):
+        m.variables.labels
+
+        for dtype in m.variables.labels.dtypes.values():
+            assert np.issubdtype(dtype, np.integer)
+
+        for dtype in m.variables.lower.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
+
+        for dtype in m.variables.upper.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
 
 
 def test_scalar_variables_name_counter():

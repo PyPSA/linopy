@@ -1,0 +1,14 @@
+
+benchmark: 'knapsack'
+
+solver: gurobi
+
+basic:
+  name: basic
+  nrange: [20, 50, 100, 180, 400, 600, 900, 1200]
+  apis: ['linopy', 'jump', 'pyomo', 'cvxpy', 'pulp', 'gurobipy', 'solver']
+
+knapsack:
+  name: knapsack
+  nrange: [1000, 100000, 200000, 400000, 1000000]
+  apis: ['linopy', 'jump', 'pyomo', 'cvxpy', 'pulp', 'gurobipy', 'solver']

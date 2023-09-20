@@ -13,6 +13,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
+from linopy.constants import TERM_DIM
 from linopy.testing import assert_linequal
 
 
@@ -73,12 +74,21 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, m)
 
-    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name="_term")]
+    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
     coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
     vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
     data = xr.Dataset({"coeffs": coeffs, "vars": vars})
     with pytest.raises(ValueError):
         LinearExpression(data, None)
+
+
+def test_linexpr_with_data_without_coords(m):
+    lhs = 1 * m["x"]
+    vars = xr.DataArray(lhs.vars.values, dims=["dim_0", TERM_DIM])
+    coeffs = xr.DataArray(lhs.coeffs.values, dims=["dim_0", TERM_DIM])
+    data = xr.Dataset({"vars": vars, "coeffs": coeffs})
+    expr = LinearExpression(data, m)
+    assert_linequal(expr, lhs)
 
 
 def test_repr(m):
@@ -87,13 +97,13 @@ def test_repr(m):
 
 
 def test_fill_value():
-    isinstance(LinearExpression.fill_value, dict)
+    isinstance(LinearExpression._fill_value, dict)
 
 
 def test_linexpr_with_scalars(m):
     expr = m.linexpr((10, "x"), (1, "y"))
     target = xr.DataArray(
-        [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", "_term"]
+        [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", TERM_DIM]
     )
     assert_equal(expr.coeffs, target)
 
@@ -133,6 +143,9 @@ def test_linear_expression_with_multiplication(x):
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
 
+    expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
+    assert isinstance(expr, LinearExpression)
+
 
 def test_linear_expression_with_addition(m, x, y):
     expr = 10 * x + y
@@ -158,6 +171,24 @@ def test_linear_expression_with_subtraction(m, x, y):
     assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
 
 
+def test_linear_expression_with_constant(m, x, y):
+    expr = x + 1
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 1).all()
+
+    expr = -x - 8 * y - 10
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == -10).all()
+    assert expr.nterm == 2
+
+
+def test_linear_expression_with_constant_multiplication(m, x, y):
+    expr = x + 1
+    expr = expr * 10
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
 def test_linear_expression_multi_indexed(u):
     expr = 3 * u + 1 * u
     assert isinstance(expr, LinearExpression)
@@ -165,22 +196,7 @@ def test_linear_expression_multi_indexed(u):
 
 def test_linear_expression_with_errors(m, x):
     with pytest.raises(TypeError):
-        x.to_linexpr(x)
-
-    with pytest.raises(TypeError):
-        x + 10
-
-    with pytest.raises(TypeError):
-        x - 10
-
-    with pytest.raises(TypeError):
-        x * x
-
-    with pytest.raises(TypeError):
         x / x
-
-    with pytest.raises(TypeError):
-        x * (1 * x)
 
     with pytest.raises(TypeError):
         x / (1 * x)
@@ -231,16 +247,29 @@ def test_linear_expression_addition(x, y, z):
     assert isinstance(x + expr, LinearExpression)
 
 
-def test_linear_expression_addition_invalid(x, y, z):
-    expr = 10 * x + y
+def test_linear_expression_addition_with_constant(x, y, z):
+    expr = 10 * x + y + 10
+    assert (expr.const == 10).all()
 
-    with pytest.raises(TypeError):
-        expr + 10
-    with pytest.raises(TypeError):
-        expr - 10
+    expr = 10 * x + y + np.array([2, 3])
+    assert list(expr.const) == [2, 3]
+
+    expr = 10 * x + y + pd.Series([2, 3])
+    assert list(expr.const) == [2, 3]
 
 
-def test_linear_expression_substraction(x, y, z):
+def test_linear_expression_subtraction(x, y, z):
+    expr = 10 * x + y - 10
+    assert (expr.const == -10).all()
+
+    expr = 10 * x + y - np.array([2, 3])
+    assert list(expr.const) == [-2, -3]
+
+    expr = 10 * x + y - pd.Series([2, 3])
+    assert list(expr.const) == [-2, -3]
+
+
+def test_linear_expression_substraction(x, y, z, v):
     expr = 10 * x + y
     other = 2 * y - z
     res = expr - other
@@ -251,7 +280,7 @@ def test_linear_expression_substraction(x, y, z):
     assert res.data.notnull().all().to_array().all()
 
 
-def test_linear_expression_sum(x, y, z):
+def test_linear_expression_sum(x, y, z, v):
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
 
@@ -263,7 +292,34 @@ def test_linear_expression_sum(x, y, z):
     assert res.nterm == expr.size
     assert res.data.notnull().all().to_array().all()
 
-    assert_linequal(expr.sum(["dim_0", "_term"]), expr.sum("dim_0"))
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
+
+    # test special case otherride coords
+    expr = v.loc[:9] + v.loc[10:]
+    assert expr.nterm == 2
+    assert len(expr.coords["dim_2"]) == 10
+
+
+def test_linear_expression_sum_with_const(x, y, z, v):
+    expr = 10 * x + y + z + 10
+    res = expr.sum("dim_0")
+
+    assert res.size == expr.size
+    assert res.nterm == expr.nterm * len(expr.data.dim_0)
+    assert (res.const == 20).all()
+
+    res = expr.sum()
+    assert res.size == expr.size
+    assert res.nterm == expr.size
+    assert res.data.notnull().all().to_array().all()
+    assert (res.const == 60).item()
+
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
+
+    # test special case otherride coords
+    expr = v.loc[:9] + v.loc[10:]
+    assert expr.nterm == 2
+    assert len(expr.coords["dim_2"]) == 10
 
 
 def test_linear_expression_sum_drop_zeros(z):
@@ -309,11 +365,16 @@ def test_linear_expression_multiplication_invalid(x, y, z):
 
     with pytest.raises(TypeError):
         expr = 10 * x + y + z
-        expr * x
+        expr * expr
 
     with pytest.raises(TypeError):
         expr = 10 * x + y + z
         expr / x
+
+
+def test_linear_expression_loc(x, y):
+    expr = x + y
+    assert expr.loc[0].size < expr.loc[:5].size
 
 
 def test_linear_expression_where(v):
@@ -328,6 +389,21 @@ def test_linear_expression_where(v):
     assert expr.nterm == 10
 
 
+def test_linear_expression_where_with_const(v):
+    expr = np.arange(20) * v + 10
+    expr = expr.where(expr.coeffs >= 10)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 1
+    assert (expr.const[:10] == 0).all()
+    assert (expr.const[10:] == 10).all()
+
+    expr = np.arange(20) * v + 10
+    expr = expr.where(expr.coeffs >= 10, drop=True).sum()
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 10
+    assert expr.const == 100
+
+
 def test_linear_expression_shift(v):
     shifted = v.to_linexpr().shift(dim_2=2)
     assert shifted.nterm == 1
@@ -340,32 +416,103 @@ def test_linear_expression_diff(v):
     assert diff.nterm == 2
 
 
-def test_linear_expression_diff(v):
-    diff = v.diff("dim_2")
-    assert diff.nterm == 2
-
-
-def test_linear_expression_groupby(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby(v, use_fallback):
     expr = 1 * v
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.nterm == 10
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_name(v, use_fallback):
+    expr = 1 * v
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords, name="my_group")
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "my_group" in grouped.dims
+    assert (grouped.data.my_group == [1, 2]).all()
+    assert grouped.nterm == 10
+
+
+def test_linear_expression_groupby_with_series(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
     grouped = expr.groupby(groups).sum()
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
+    assert grouped.nterm == 10
 
 
-def test_linear_expression_groupby_asymmetric(v):
+def test_linear_expression_groupby_with_series_false(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
+    groups.name = "dim_2"
+    with pytest.raises(ValueError):
+        grouped = expr.groupby(groups).sum()
+
+
+def test_linear_expression_groupby_with_series_false(v):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
+    groups.name = "dim_2"
+    with pytest.raises(ValueError):
+        grouped = expr.groupby(groups).sum()
+
+
+def test_linear_expression_groupby_with_dataframe(v):
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    grouped = expr.groupby(xr.DataArray(groups)).sum()
+    index = pd.MultiIndex.from_frame(groups)
+    assert "group" in grouped.dims
+    assert set(grouped.data.group.values) == set(index.values)
+    assert grouped.nterm == 3
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_const(v, use_fallback):
+    expr = 1 * v + 15
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "group" in grouped.dims
+    assert (grouped.data.group == [1, 2]).all()
+    assert grouped.nterm == 10
+    assert (grouped.const == 150).all()
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_asymmetric(v, use_fallback):
     expr = 1 * v
     # now asymetric groups which result in different nterms
     groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = expr.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     assert "group" in grouped.dims
     # first group must be full with vars
     assert (grouped.data.sel(group=1) > 0).all()
     # the last 4 entries of the second group must be empty, i.e. -1
     assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
     assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
-    assert grouped.data._term.size == 12
+    assert grouped.nterm == 12
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_asymmetric_with_const(v, use_fallback):
+    expr = 1 * v + 15
+    # now asymetric groups which result in different nterms
+    groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "group" in grouped.dims
+    # first group must be full with vars
+    assert (grouped.data.sel(group=1) > 0).all()
+    # the last 4 entries of the second group must be empty, i.e. -1
+    assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
+    assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
+    assert grouped.nterm == 12
+    assert list(grouped.const) == [180, 120]
 
 
 def test_linear_expression_groupby_roll(v):
@@ -376,12 +523,21 @@ def test_linear_expression_groupby_roll(v):
     assert grouped.vars[0].item() == 19
 
 
+def test_linear_expression_groupby_roll_with_const(v):
+    expr = 1 * v + np.arange(20)
+    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
+    grouped = expr.groupby(groups).roll(dim_2=1)
+    assert grouped.nterm == 1
+    assert grouped.vars[0].item() == 19
+    assert grouped.const[0].item() == 9
+
+
 def test_linear_expression_groupby_from_variable(v):
     groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
     grouped = v.groupby(groups).sum()
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
+    assert grouped.nterm == 10
 
 
 def test_linear_expression_rolling(v):
@@ -391,6 +547,20 @@ def test_linear_expression_rolling(v):
 
     rolled = expr.rolling(dim_2=3).sum()
     assert rolled.nterm == 3
+
+
+def test_linear_expression_rolling_with_const(v):
+    expr = 1 * v + 15
+    rolled = expr.rolling(dim_2=2).sum()
+    assert rolled.nterm == 2
+    assert rolled.const[0].item() == 15
+    assert (rolled.const[1:] == 30).all()
+
+    rolled = expr.rolling(dim_2=3).sum()
+    assert rolled.nterm == 3
+    assert rolled.const[0].item() == 15
+    assert rolled.const[1].item() == 30
+    assert (rolled.const[2:] == 45).all()
 
 
 def test_linear_expression_rolling_from_variable(v):
@@ -429,46 +599,35 @@ def test_merge(x, y, z):
     assert res.sel(dim_1=0).vars[2].item() == -1
 
 
-# -------------------------------- deprecated -------------------------------- #
+def test_linear_expression_outer_sum(x, y):
+    expr = x + y
+    expr2 = sum([x, y])
+    assert_linequal(expr, expr2)
+
+    expr = 1 * x + 2 * y
+    expr2 = sum([1 * x, 2 * y])
+    assert_linequal(expr, expr2)
 
 
-def test_rolling_sum_variable_deprecated(v):
-    rolled = v.rolling_sum(dim_2=2)
-    assert rolled.nterm == 2
+def test_rename(x, y, z):
+    expr = 10 * x + y + z
+    renamed = expr.rename({"dim_0": "dim_5"})
+    assert set(renamed.dims) == {"dim_1", "dim_5", TERM_DIM}
+    assert renamed.nterm == 3
+
+    renamed = expr.rename({"dim_0": "dim_1", "dim_1": "dim_2"})
+    assert set(renamed.dims) == {"dim_1", "dim_2", TERM_DIM}
+    assert renamed.nterm == 3
 
 
-def test_linear_expression_rolling_sum_deprecated(x, v):
-    rolled = v.to_linexpr().rolling_sum(dim_2=2)
-    assert rolled.nterm == 2
+@pytest.mark.parametrize("multiple", [1.0, 0.5, 2.0, 0.0])
+def test_cumsum(m, multiple):
+    # Test cumsum on variable x
+    var = m.variables["x"]
+    cumsum = (multiple * var).cumsum()
+    cumsum.nterm == 2
 
-    # multi-dimensional rolling with non-scalar _term dimension
-    expr = 10 * x + v
-    rolled = expr.rolling_sum(dim_2=3)
-    assert rolled.nterm == 6
-
-
-def test_variable_groupby_sum_deprecated(v):
-    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.groupby_sum(groups)
-    assert "group" in grouped.dims
-    assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
-
-
-def test_linear_expression_groupby_sum_deprecated(v):
-    groups = xr.DataArray([1] * 10 + [2] * 10, coords=v.coords)
-    grouped = v.to_linexpr().groupby_sum(groups)
-    assert "group" in grouped.dims
-    assert (grouped.data.group == [1, 2]).all()
-    assert grouped.data._term.size == 10
-
-    # now asymetric groups which result in different nterms
-    groups = xr.DataArray([1] * 12 + [2] * 8, coords=v.coords)
-    grouped = v.to_linexpr().groupby_sum(groups)
-    assert "group" in grouped.dims
-    # first group must be full with vars
-    assert (grouped.data.sel(group=1) > 0).all()
-    # the last 4 entries of the second group must be empty, i.e. -1
-    assert (grouped.data.sel(group=2).isel(_term=slice(None, -4)).vars >= 0).all()
-    assert (grouped.data.sel(group=2).isel(_term=slice(-4, None)).vars == -1).all()
-    assert grouped.data._term.size == 12
+    # Test cumsum on sum of variables
+    var = m.variables["x"] + m.variables["y"]
+    cumsum = (multiple * var).cumsum()
+    cumsum.nterm == 2

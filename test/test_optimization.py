@@ -12,9 +12,14 @@ import pytest
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, Model
-from linopy.solvers import available_solvers
+from linopy.constants import SolverStatus, Status, TerminationCondition
+from linopy.solvers import available_solvers, quadratic_solvers
 
 params = [(name, "lp") for name in available_solvers]
+# mps io is only supported via highspy
+if "highs" in available_solvers:
+    params += [(name, "mps") for name in available_solvers]
+
 if "gurobi" in available_solvers:
     params.append(("gurobi", "direct"))
 if "highs" in available_solvers:
@@ -93,6 +98,21 @@ def model_with_duplicated_variables():
 
 
 @pytest.fixture
+def model_with_non_aligned_variables():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower=lower, coords=[lower.index], name="x")
+    lower = pd.Series(0, range(8))
+    y = m.add_variables(lower=lower, coords=[lower.index], name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10.5)
+    m.objective = 1 * x + 0.5 * y
+
+    return m
+
+
+@pytest.fixture
 def milp_binary_model():
     m = Model()
 
@@ -149,6 +169,34 @@ def milp_model_r():
 
 
 @pytest.fixture
+def quadratic_model():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
+
+    m.add_objective(x * x)
+    return m
+
+
+@pytest.fixture
+def quadratic_model_cross_terms():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y >= 10)
+
+    m.add_objective(-2 * x + y + x * x)
+    return m
+
+
+@pytest.fixture
 def modified_model():
     m = Model()
 
@@ -199,6 +247,32 @@ def masked_constraint_model():
     return m
 
 
+def test_model_types(
+    model,
+    model_with_duplicated_variables,
+    milp_binary_model,
+    milp_binary_model_r,
+    milp_model,
+    milp_model_r,
+    quadratic_model,
+    quadratic_model_cross_terms,
+    modified_model,
+    masked_variable_model,
+    masked_constraint_model,
+):
+    assert model.type == "LP"
+    assert model_with_duplicated_variables.type == "LP"
+    assert milp_binary_model.type == "MILP"
+    assert milp_binary_model_r.type == "MILP"
+    assert milp_model.type == "MILP"
+    assert milp_model_r.type == "MILP"
+    assert quadratic_model.type == "QP"
+    assert quadratic_model_cross_terms.type == "QP"
+    assert modified_model.type == "MILP"
+    assert masked_variable_model.type == "LP"
+    assert masked_constraint_model.type == "LP"
+
+
 @pytest.mark.parametrize("solver,io_api", params)
 def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
@@ -211,7 +285,7 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     x = model["x"]
-    assert_equal(x.sol, model.solution["x"])
+    assert_equal(x.solution, model.solution["x"])
     c = model.constraints["con1"]
     assert_equal(c.dual, model.dual["con1"])
 
@@ -234,10 +308,39 @@ def test_default_settings_chunked(model_chunked, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_solver_options(model, solver, io_api):
+    time_limit_option = {
+        "cbc": {"sec": 1},
+        "gurobi": {"TimeLimit": 1},
+        "glpk": {"tmlim": 1},
+        "cplex": {"timelimit": 1},
+        "scip": {"time_limit": 1},
+        "xpress": {"maxtime": 1},
+        "highs": {"time_limit": 1},
+    }
+    status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])
+    assert status == "ok"
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
     assert all(model_with_duplicated_variables.solution["x"] == 5)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_non_aligned_variables(model_with_non_aligned_variables, solver, io_api):
+    status, condition = model_with_non_aligned_variables.solve(solver, io_api=io_api)
+    assert status == "ok"
+    with pytest.warns(UserWarning):
+        assert model_with_non_aligned_variables.solution["x"][0] == 0
+        assert model_with_non_aligned_variables.solution["x"][-1] == 10.5
+        assert model_with_non_aligned_variables.solution["y"][0] == 10.5
+        assert np.isnan(model_with_non_aligned_variables.solution["y"][-1])
+
+        for dtype in model_with_non_aligned_variables.solution.dtypes.values():
+            assert np.issubdtype(dtype, np.floating)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -275,10 +378,14 @@ def test_infeasible_model(model, solver, io_api):
     assert "infeasible" in condition
 
     if solver == "gurobi":
-        model.compute_set_of_infeasible_constraints()
-    else:
-        with pytest.raises(NotImplementedError):
+        # ignore deprecated warning
+        with pytest.warns(DeprecationWarning):
             model.compute_set_of_infeasible_constraints()
+        model.compute_infeasibilities()
+        model.print_infeasibilities()
+    else:
+        with pytest.raises((NotImplementedError, ImportError)):
+            model.compute_infeasibilities()
 
 
 @pytest.mark.parametrize(
@@ -318,9 +425,62 @@ def test_milp_model(milp_model, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_milp_model_r(milp_model_r, solver, io_api):
-    status, condition = milp_model_r.solve(solver, io_api=io_api)
-    assert condition == "optimal"
-    assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
+    # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
+    # skip it
+    if io_api != "mps":
+        status, condition = milp_model_r.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model(quadratic_model, solver, io_api):
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model.solution.x.round(3) == 0).all()
+        assert (quadratic_model.solution.y.round(3) == 10).all()
+        assert round(quadratic_model.objective_value, 3) == 0
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
+        assert (quadratic_model_cross_terms.solution.y.round(3) == 8.5).all()
+        assert round(quadratic_model_cross_terms.objective_value, 3) == 77.5
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model_cross_terms.solve(solver, io_api=io_api)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
+    quadratic_model.constraints.remove("con0")
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (quadratic_model.solution.x.round(3) == 0).all()
+        assert round(quadratic_model.objective_value, 3) == 0
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
+    quadratic_model.objective = -quadratic_model.objective
+    if solver in quadratic_solvers:
+        status, condition = quadratic_model.solve(solver, io_api=io_api)
+        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+    else:
+        with pytest.raises(ValueError):
+            quadratic_model.solve(solver, io_api=io_api)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

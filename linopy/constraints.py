@@ -5,10 +5,11 @@ Linopy constraints module.
 This module contains implementations for the Constraint{s} class.
 """
 
-import re
+import functools
+import warnings
 from dataclasses import dataclass, field
 from itertools import product
-from typing import Any, Sequence, Union
+from typing import Any, Dict, Sequence, Union
 
 import dask
 import numpy as np
@@ -16,36 +17,68 @@ import pandas as pd
 import xarray as xr
 from deprecation import deprecated
 from numpy import arange, array
-from scipy.sparse import coo_matrix
+from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 
 from linopy import expressions, variables
 from linopy.common import (
-    _merge_inplace,
+    LocIndexer,
+    align_lines_by_delimiter,
     forward_as_properties,
+    generate_indices_for_printout,
+    get_label_position,
     has_optimized_model,
     is_constant,
     maybe_replace_signs,
     print_coord,
+    print_single_constraint,
     print_single_expression,
     replace_by_map,
+    save_join,
+    to_dataframe,
 )
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.config import options
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    SIGNS_pretty,
+)
+
+
+def conwrap(method, *default_args, **new_default_kwargs):
+    @functools.wraps(method)
+    def _conwrap(con, *args, **kwargs):
+        for k, v in new_default_kwargs.items():
+            kwargs.setdefault(k, v)
+        return con.__class__(
+            method(con.data, *default_args, *args, **kwargs), con.model, con.name
+        )
+
+    _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
+    if new_default_kwargs:
+        _conwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
+
+    return _conwrap
+
+
+def _con_unwrap(con):
+    return con.data if isinstance(con, Constraint) else con
 
 
 @forward_as_properties(
-    labels=[
+    data=[
         "attrs",
         "coords",
         "indexes",
-        "name",
-        "shape",
-        "size",
-        "values",
         "dims",
-        "ndim",
+        "sizes",
     ],
+    labels=["values"],
     lhs=["nterm"],
+    rhs=["ndim", "shape", "size"],
 )
 class Constraint:
     """
@@ -55,9 +88,9 @@ class Constraint:
     functions can be applied to it.
     """
 
-    __slots__ = ("_model", "_name", "_labels")
+    __slots__ = ("_data", "_model", "_assigned")
 
-    def __init__(self, labels: DataArray, model: Any, name: str):
+    def __init__(self, data: Dataset, model: Any, name: str = ""):
         """
         Initialize the Constraint.
 
@@ -70,16 +103,40 @@ class Constraint:
         name : str
             Name of the constraint.
         """
-        self._labels = labels
+
+        from linopy.model import Model
+
+        if not isinstance(data, Dataset):
+            raise ValueError(f"data must be a Dataset, got {type(data)}")
+
+        if not isinstance(model, Model):
+            raise ValueError(f"model must be a Model, got {type(model)}")
+
+        # check that `labels`, `lower` and `upper`, `sign` and `mask` are in data
+        for attr in ("coeffs", "vars", "sign", "rhs"):
+            if attr not in data:
+                raise ValueError(f"missing '{attr}' in data")
+
+        data = data.assign_attrs(name=name)
+
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
+        self._data = data
         self._model = model
-        self._name = name
+
+    @property
+    def data(self):
+        """
+        Get the underlying DataArray.
+        """
+        return self._data
 
     @property
     def labels(self):
         """
         Get the labels of the constraint.
         """
-        return self._labels
+        return self.data.labels if self.is_assigned else None
 
     @property
     def model(self):
@@ -91,101 +148,122 @@ class Constraint:
     @property
     def name(self):
         """
-        Get the name of the constraint.
+        Return the name of the constraint.
         """
-        return self._name
+        return self.attrs["name"]
+
+    @property
+    def coord_dims(self):
+        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
+
+    @property
+    def is_assigned(self):
+        return "labels" in self.data
 
     def __repr__(self):
         """
-        Get the string representation of the Constraint.
+        Print the constraint arrays.
         """
-        # return single if only one exist
-        if self.size == self.nterm:
-            expr_string = print_single_expression(
-                self.lhs.coeffs.values, self.lhs.vars.values, self.lhs.model
+        max_lines = options["display_max_rows"]
+        dims = list(self.dims)
+        dim_sizes = list(self.sizes.values())[:-1]
+        size = np.prod(dim_sizes)  # that the number of theoretical printouts
+        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        lines = []
+
+        header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
+
+        if size > 1:
+            for indices in generate_indices_for_printout(dim_sizes, max_lines):
+                if indices is None:
+                    lines.append("\t\t...")
+                else:
+                    coord = [
+                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
+                    ]
+                    if self.mask is None or self.mask.values[indices]:
+                        expr = print_single_expression(
+                            self.coeffs.values[indices],
+                            self.vars.values[indices],
+                            0,
+                            self.model,
+                        )
+                        sign = SIGNS_pretty[self.sign.values[indices]]
+                        rhs = self.rhs.values[indices]
+                        line = f"{print_coord(coord)}: {expr} {sign} {rhs}"
+                    else:
+                        line = f"{print_coord(coord)}: None"
+                    lines.append(line)
+            lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
+
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
+            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+        elif size == 1:
+            expr = print_single_expression(self.coeffs, self.vars, 0, self.model)
+            lines.append(
+                f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
-            header = f"{self.type}\n" + "-" * (len(self.type) + 1)
-            return f"{header}\n{expr_string} {self.sign.item()} {self.rhs.item()}"
+        else:
+            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
 
-        # print only a few values
-        max_print = 14
-        split_at = max_print // 2
-        to_print = np.flatnonzero(self.mask)
-        truncate = len(to_print) > max_print
-        if truncate:
-            to_print = np.hstack([to_print[:split_at], to_print[-split_at:]])
+        return "\n".join(lines)
 
-        # create string, we use numpy to get the indexes
-        data_string = ""
-        idx = np.unravel_index(to_print, self.shape)
-        indexes = np.stack(idx)
-        coords = [self.indexes[self.dims[i]][idx[i]] for i in range(len(self.dims))]
-
-        # loop over all values to LinearExpression(print
-        data_string = ""
-        for i in range(len(to_print)):
-            # this is the index for the labels array
-            ix = tuple(indexes[..., i])
-            # sign and rhs might only be defined for some dimensions
-            six = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.sign.dims
-            )
-            rix = tuple(
-                ix[i] for i in range(self.ndim) if self.dims[i] in self.rhs.dims
-            )
-
-            coord = [c[i] for c in coords]
-            coord_string = print_coord(coord)
-            expr_string = print_single_expression(
-                self.coeffs.values[ix], self.vars.values[ix], self.lhs.model
-            )
-            sign_string = f"{self.sign.values[six]}"
-            rhs_string = f"{self.rhs.values[rix]}"
-
-            data_string += f"\n{self.name}{coord_string}:  {expr_string} {sign_string} {rhs_string}"
-
-            if i == split_at - 1 and truncate:
-                data_string += "\n\t\t..."
-
-        # create shape string
-        shape_string = ", ".join(
-            [f"{self.dims[i]}: {self.shape[i]}" for i in range(self.ndim)]
-        )
-        shape_string = f"({shape_string})"
-        n_masked = (~self.mask).sum().item()
-        mask_string = f" - {n_masked} masked entries" if n_masked else ""
-        header = f"{self.type} {shape_string}{mask_string}\n" + "-" * (
-            len(self.type) + len(shape_string) + len(mask_string) + 1
-        )
-        return f"{header}{data_string}"
-
-    @deprecated(details="Use the `labels` property instead of `to_array`")
-    def to_array(self):
+    def print(self, display_max_rows=20, display_max_terms=20):
         """
-        Convert the variable array to a xarray.DataArray.
+        Print the linear expression.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
         """
-        return self.labels
+        with options as opts:
+            opts.set_value(
+                display_max_rows=display_max_rows, display_max_terms=display_max_terms
+            )
+            print(self)
+
+    def __contains__(self, value):
+        return self.data.__contains__(value)
 
     @property
     def type(self):
         """
         Get the type of the constraint.
         """
-        return "Constraint"
+        return "Constraint" if self.is_assigned else "Constraint (unassigned)"
+
+    @property
+    def range(self):
+        """
+        Return the range of the constraint.
+        """
+        return self.data.attrs["label_range"]
+
+    @property
+    def term_dim(self):
+        """
+        Return the term dimension of the constraint.
+        """
+        return TERM_DIM
 
     @property
     def mask(self):
         """
         Get the mask of the constraint.
 
-        The mask indicates on which coordinates the constraint array is enabled
+        The mask indicates on which coordinates the constraint is enabled
         (True) and disabled (False).
 
         Returns
         -------
         xr.DataArray
         """
-        return (self.labels != -1).astype(bool)
+        return self.data.get("mask")
 
     @property
     def coeffs(self):
@@ -195,15 +273,13 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.constraints.coeffs[self.name]
+        return self.data.coeffs
 
     @coeffs.setter
     def coeffs(self, value):
-        term_dim = self.name + "_term"
-        value = DataArray(value).broadcast_like(self.vars, exclude=[term_dim])
-        self.model.constraints.coeffs = self.model.constraints.coeffs.drop_vars(
-            self.name
-        ).assign({self.name: value})
+        value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
+        self._data = self.data.assign(coeffs=value)
+        self.data["coeffs"] = value
 
     @property
     def vars(self):
@@ -213,19 +289,16 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.constraints.vars[self.name]
+        return self.data.vars
 
     @vars.setter
     def vars(self, value):
-        term_dim = self.name + "_term"
         if isinstance(value, variables.Variable):
             value = value.labels
         if not isinstance(value, DataArray):
             raise TypeError("Expected value to be of type DataArray or Variable")
-        value = value.broadcast_like(self.coeffs, exclude=[term_dim])
-        self.model.constraints.vars = self.model.constraints.vars.drop_vars(
-            self.name
-        ).assign({self.name: value})
+        value = value.broadcast_like(self.coeffs, exclude=[self.term_dim])
+        self.data["vars"] = value
 
     @property
     def lhs(self):
@@ -235,20 +308,17 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        term_dim = self.name + "_term"
-        coeffs = self.coeffs.rename({term_dim: "_term"})
-        vars = self.vars.rename({term_dim: "_term"})
-        ds = Dataset({"coeffs": coeffs, "vars": vars})
-        return expressions.LinearExpression(ds, self.model)
+        data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
+        return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
     def lhs(self, value):
-        if not isinstance(value, expressions.LinearExpression):
-            raise TypeError("Assigned lhs must be a LinearExpression.")
-
-        value = value.rename(_term=self.name + "_term")
-        self.coeffs = value.coeffs
-        self.vars = value.vars
+        value = expressions.as_expression(
+            value, self.model, coords=self.coords, dims=self.coord_dims
+        )
+        self._data = self.data.drop_vars(["coeffs", "vars"]).assign(
+            coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const
+        )
 
     @property
     def sign(self):
@@ -258,13 +328,13 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.constraints.sign[self.name]
+        return self.data.sign
 
     @sign.setter
     @is_constant
     def sign(self, value):
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
-        self.model.constraints.sign[self.name] = value
+        self.data["sign"] = value
 
     @property
     def rhs(self):
@@ -274,15 +344,15 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference.
         """
-        return self.model.constraints.rhs[self.name]
+        return self.data.rhs
 
     @rhs.setter
-    @is_constant
     def rhs(self, value):
-        if isinstance(value, (variables.Variable, expressions.LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(value)}).")
-        value = DataArray(value).broadcast_like(self.rhs)
-        self.model.constraints.rhs[self.name] = value
+        value = expressions.as_expression(
+            value, self.model, coords=self.coords, dims=self.coord_dims
+        )
+        self.lhs = self.lhs - value.reset_const()
+        self.data["rhs"] = value.const
 
     @property
     @has_optimized_model
@@ -293,460 +363,23 @@ class Constraint:
         The function raises an error in case no model is set as a
         reference or the model status is not okay.
         """
-        if not list(self.model.dual):
+        if "dual" not in self.data:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
-        return self.model.dual[self.name]
+        return self.data["dual"]
+
+    @dual.setter
+    def dual(self, value):
+        """
+        Get the dual values of the constraint.
+        """
+        value = DataArray(value).broadcast_like(self.labels)
+        self.data["dual"] = value
 
     @property
     def shape(self):
         return self.labels.shape
-
-
-@dataclass(repr=False)
-class Constraints:
-    """
-    A constraint container used for storing multiple constraint arrays.
-    """
-
-    labels: Dataset = field(default_factory=Dataset)
-    coeffs: Dataset = field(default_factory=Dataset)
-    vars: Dataset = field(default_factory=Dataset)
-    sign: Dataset = field(default_factory=Dataset)
-    rhs: Dataset = field(default_factory=Dataset)
-    blocks: Dataset = field(default_factory=Dataset)
-    model: Any = None  # Model is not defined due to circular imports
-
-    dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
-    dataset_names = [
-        "Labels",
-        "Left-hand-side coefficients",
-        "Left-hand-side variables",
-        "Signs",
-        "Right-hand-side constants",
-    ]
-
-    def __repr__(self):
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Constraints"
-        line = "-" * len(r)
-        r += f"\n{line}\n\n"
-        # matches string between "Data variables" and "Attributes"/end of string
-        coordspattern = r"(?s)(?<=\<xarray\.Dataset\>\n).*?(?=Data variables:)"
-        datapattern = r"(?s)(?<=Data variables:).*?(?=($|\nAttributes))"
-        for (k, K) in zip(self.dataset_attrs, self.dataset_names):
-            orig = getattr(self, k).__repr__()
-            if k == "labels":
-                r += re.search(coordspattern, orig).group() + "\n"
-            data = re.search(datapattern, orig).group()
-            # drop first line which includes counter for long ds
-            data = data.split("\n", 1)[1]
-            line = "-" * (len(K) + 1)
-            r += f"{K}:\n{data}\n\n"
-        return r
-
-    def __getitem__(
-        self, names: Union[str, Sequence[str]]
-    ) -> Union[Constraint, "Constraints"]:
-        if isinstance(names, str):
-            return Constraint(self.labels[names], self.model, names)
-
-        return self.__class__(
-            self.labels[names],
-            self.coeffs[names],
-            self.vars[names],
-            self.sign[names],
-            self.rhs[names],
-            self.model,
-        )
-
-    def __iter__(self):
-        return self.labels.__iter__()
-
-    _merge_inplace = _merge_inplace
-
-    def _ipython_key_completions_(self):
-        """
-        Provide method for the key-autocompletions in IPython.
-
-        See
-        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
-        For the details.
-        """
-        return list(self)
-
-    def add(
-        self,
-        name,
-        labels: DataArray,
-        coeffs: DataArray,
-        vars: DataArray,
-        sign: DataArray,
-        rhs: DataArray,
-    ):
-        """
-        Add constraint `name`.
-        """
-        self._merge_inplace("labels", labels, name, fill_value=-1)
-        self._merge_inplace("coeffs", coeffs, name)
-        self._merge_inplace("vars", vars, name, fill_value=-1)
-        self._merge_inplace("sign", sign, name)
-        self._merge_inplace("rhs", rhs, name)
-
-    def remove(self, name):
-        """
-        Remove constraint `name` from the constraints.
-        """
-        for attr in self.dataset_attrs:
-            setattr(self, attr, getattr(self, attr).drop_vars(name))
-
-    @property
-    def coefficientrange(self):
-        """
-        Coefficient range of the constraint.
-        """
-        return (
-            xr.concat(
-                [self.coeffs.min(), self.coeffs.max()],
-                dim=pd.Index(["min", "max"]),
-            )
-            .to_dataframe()
-            .T
-        )
-
-    @property
-    def ncons(self):
-        """
-        Get the number all constraints which were at some point added to the
-        model.
-
-        These also include constraints with missing labels.
-        """
-        return self.ravel("labels", filter_missings=True).shape[0]
-
-    @property
-    def inequalities(self):
-        """
-        Get the subset of constraints which are purely inequalities.
-        """
-        return self[
-            [n for n, s in self.sign.items() if s in (LESS_EQUAL, GREATER_EQUAL)]
-        ]
-
-    @property
-    def equalities(self):
-        """
-        Get the subset of constraints which are purely equalities.
-        """
-        return self[[n for n, s in self.sign.items() if s == EQUAL]]
-
-    def sanitize_zeros(self):
-        """
-        Filter out terms with zero and close-to-zero coefficient.
-        """
-        for name in self:
-            not_zero = abs(self.coeffs[name]) > 1e-10
-            self.vars[name] = self.vars[name].where(not_zero, -1)
-            self.coeffs[name] = self.coeffs[name].where(not_zero)
-
-    def sanitize_missings(self):
-        """
-        Set constraints labels to -1 where all variables in the lhs are
-        missing.
-        """
-        for name in self:
-            term_dim = name + "_term"
-            contains_non_missing = (self.vars[name] != -1).any(term_dim)
-            self.labels[name] = self.labels[name].where(contains_non_missing, -1)
-
-    def get_name_by_label(self, label):
-        """
-        Get the constraint name of the constraint containing the passed label.
-
-        Parameters
-        ----------
-        label : int
-            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
-            constraint label.
-
-        Raises
-        ------
-        ValueError
-            If label is not contained by any constraint.
-
-        Returns
-        -------
-        name : str
-            Name of the containing constraint.
-        """
-        if not isinstance(label, (float, int)) or label < 0:
-            raise ValueError("Label must be a positive number.")
-        for name, labels in self.labels.items():
-            if label in labels:
-                return name
-        raise ValueError(f"No constraint found containing the label {label}.")
-
-    def get_blocks(self, block_map):
-        """
-        Get a dataset of same shape as constraints.labels with block values.
-
-        Let N be the number of blocks.
-        The following cases are considered:
-
-            * where are all vars are -1, the block is -1
-            * where are all vars are 0, the block is 0
-            * where all vars are n, the block is n
-            * where vars are n or 0 (both present), the block is n
-            * N+1 otherwise
-        """
-        N = block_map.max()
-        var_blocks = replace_by_map(self.vars, block_map)
-        res = xr.full_like(self.labels, N + 1, dtype=block_map.dtype)
-
-        for name, entries in var_blocks.items():
-            term_dim = f"{name}_term"
-
-            not_zero = entries != 0
-            not_missing = entries != -1
-            for n in range(N + 1):
-                not_n = entries != n
-                mask = not_n & not_zero & not_missing
-                res[name] = res[name].where(mask.any(term_dim), n)
-
-            res[name] = res[name].where(not_missing.any(term_dim), -1)
-            res[name] = res[name].where(not_zero.any(term_dim), 0)
-
-        self.blocks = res
-        self.var_blocks = var_blocks
-        return self.blocks
-
-    def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
-        """
-        Create an generator which iterates over all arrays in `key` and
-        flattens them.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            Must be one of "labels", "vars". The default is "labels".
-        filter_missings : bool, optional
-            Filter out values where `labels` data is -1. If broadcast is `vars`
-            also values where `vars` is -1 are filtered. This will raise an
-            error if the filtered data still contains nan's.
-            When enabled, the data is load into memory. The default is False.
-
-
-        Yields
-        ------
-        flat : np.array/dask.array
-        """
-        if isinstance(key, str):
-            ds = getattr(self, key)
-        elif isinstance(key, xr.Dataset):
-            ds = key
-        else:
-            raise TypeError("Argument `key` must be of type string or xarray.Dataset")
-
-        assert broadcast_like in ["labels", "vars"]
-
-        for name, values in getattr(self, broadcast_like).items():
-
-            broadcasted = ds[name].broadcast_like(values)
-            if values.chunks is not None:
-                broadcasted = broadcasted.chunk(values.chunks)
-
-            if filter_missings:
-                flat = np.ravel(broadcasted)
-                mask = np.ravel(values) != -1
-                if broadcast_like != "labels":
-                    labels = np.ravel(self.labels[name].broadcast_like(values))
-                    mask &= labels != -1
-                flat = flat[mask]
-                if pd.isna(flat).any():
-                    names = self.dataset_names
-                    ds_name = names[self.dataset_attrs.index(key)]
-                    bc_name = names[self.dataset_attrs.index(broadcast_like)]
-                    err = (
-                        f"{ds_name} of constraint '{name}' are missing (nan) "
-                        f"where {bc_name.lower()} are defined (not -1)."
-                    )
-                    raise ValueError(err)
-            else:
-                flat = broadcasted.data.ravel()
-            yield flat
-
-    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
-        """
-        Ravel and concate all arrays in `key` while aligning to
-        `broadcast_like`.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            The default is "labels".
-        filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1.
-            The default is False.
-        compute : bool, optional
-            Whether to compute lazy data. The default is False.
-
-        Returns
-        -------
-        flat
-            One dimensional data with all values in `key`.
-        """
-        res = list(self.iter_ravel(key, broadcast_like, filter_missings))
-        res = np.concatenate(res)
-        if compute:
-            return dask.compute(res)[0]
-        else:
-            return res
-
-    def to_matrix(self, filter_missings=False):
-        """
-        Construct a constraint matrix in sparse format.
-
-        Missing values, i.e. -1 in labels and vars, are ignored filtered out.
-
-        If filter_missings is set to True, the index of the rows and columns
-        correspond to the constraint and variable labels stored in the model.
-        If set to False, the rows correspond to the constraints given by
-        `m.constraints.ravel('labels', filter_missings=True)` and columns to
-        `m.variables.ravel('labels', filter_missings=True)` where `m` is the
-        underlying model. The matrix has then a shape of (`m.ncons`, `m.nvars`).
-        """
-        self.sanitize_missings()
-
-        keys = ["coeffs", "labels", "vars"]
-        data, rows, cols = [
-            self.ravel(k, broadcast_like="vars", filter_missings=True) for k in keys
-        ]
-        shape = (self.model._cCounter, self.model._xCounter)
-
-        if filter_missings:
-            # We have to map the variables to the filtered layout
-            clabels = self.ravel("labels", filter_missings=True)
-            ncons = clabels.shape[0]
-            cmap = np.empty(self.model._cCounter)
-            cmap[clabels] = arange(clabels.shape[0])
-            rows = cmap[rows]
-
-            variables = self.model.variables
-            vlabels = variables.ravel("labels", filter_missings=True)
-            nvars = vlabels.shape[0]
-            vmap = np.empty(self.model._xCounter)
-            vmap[vlabels] = arange(nvars)
-            cols = vmap[cols]
-
-            shape = (ncons, nvars)  # same as model.nvars/ncons but already there
-
-        # Group repeated variables in the same constraint
-        df = pd.DataFrame({"data": data, "rows": rows, "cols": cols})
-        df = df.groupby(["rows", "cols"], as_index=False).sum()
-
-        return coo_matrix((df.data, (df.rows, df.cols)), shape=shape)
-
-
-@dataclass(repr=False)
-@forward_as_properties(
-    labels=[
-        "attrs",
-        "coords",
-        "indexes",
-        "shape",
-        "size",
-        "values",
-        "dims",
-        "ndim",
-    ],
-    lhs=["nterm", "coeffs", "vars"],
-)
-class AnonymousConstraint:
-    """
-    A constraint container used for storing multiple constraint arrays.
-    """
-
-    _lhs: "expressions.LinearExpression"
-    _sign: Union[DataArray, str]
-    _rhs: Union[DataArray, float, int]
-
-    def __post_init__(self):
-        """
-        Initialize a anonymous constraint.
-        """
-        if isinstance(self.rhs, (variables.Variable, expressions.LinearExpression)):
-            raise TypeError(f"Assigned rhs must be a constant, got {type(self.rhs)}).")
-        lhs_data, rhs = xr.align(self.lhs.data, DataArray(self.rhs))
-        self._labels = (lhs_data.vars.chunk() + rhs).sum("_term")
-        self._labels.data = np.full(self.labels.shape, np.nan)
-        self._lhs = expressions.LinearExpression(lhs_data, self.lhs.model)
-        self._rhs = rhs
-        self._sign = DataArray(self.sign)
-
-    def __repr__(self):
-        """
-        Get the representation of the AnonymousConstraint.
-        """
-        return Constraint.__repr__(self)
-
-    @property
-    def name(self):
-        return ""
-
-    @property
-    def type(self):
-        """
-        Get the type of the constraint.
-        """
-        # needed for __repr__ compatibility.
-        return "AnomymousConstraint"
-
-    @property
-    def mask(self):
-        """
-        Get the mask of the constraint.
-        """
-        # needed for __repr__ compatibility.
-        return xr.full_like(self.labels, True, dtype=bool)
-
-    @property
-    def labels(self):
-        """
-        Get the labels of the constraint.
-        """
-        return self._labels
-
-    @property
-    def lhs(self):
-        """
-        Get the left hand side of the constraint.
-        """
-        return self._lhs
-
-    @property
-    def sign(self):
-        """
-        Get the sign of the constraint.
-        """
-        return self._sign
-
-    @property
-    def rhs(self):
-        """
-        Get the right hand side of the constraint.
-        """
-        return self._rhs
 
     @classmethod
     def from_rule(cls, model, rule, coords):
@@ -777,11 +410,11 @@ class AnonymousConstraint:
 
         Returns
         -------
-        linopy.AnonymousConstraint
+        linopy.Constraint
 
         Examples
         --------
-        >>> from linopy import Model, LinearExpression
+        >>> from linopy import Model, LinearExpression, Constraint
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> x = m.add_variables(0, 100, coords)
@@ -791,7 +424,7 @@ class AnonymousConstraint:
         ...     else:
         ...         return i * x[i, j] >= 0
         ...
-        >>> con = AnonymousConstraint.from_rule(m, bound, coords)
+        >>> con = Constraint.from_rule(m, bound, coords)
         >>> con = m.add_constraints(con)
         """
         if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
@@ -800,7 +433,7 @@ class AnonymousConstraint:
 
         # test output type
         output = rule(model, *[c.values[0] for c in coords.values()])
-        if not isinstance(output, AnonymousScalarConstraint) and not output is None:
+        if not isinstance(output, AnonymousScalarConstraint) and output is not None:
             msg = f"`rule` has to return AnonymousScalarConstraint not {type(output)}."
             raise TypeError(msg)
 
@@ -815,7 +448,469 @@ class AnonymousConstraint:
         )
         sign = DataArray(array([c.sign for c in cons]).reshape(shape), coords)
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
-        return cls(lhs, sign, rhs)
+        data = lhs.data.assign(sign=sign, rhs=rhs)
+        return cls(data, model=model)
+
+    @property
+    def flat(self):
+        """
+        Convert the constraint to a pandas DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked constraints with non-zero coefficients. It contains the
+        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+        """
+        ds = self.data
+
+        def mask_func(data):
+            mask = (data["vars"] != -1) & (data["coeffs"] != 0)
+            if "labels" in data:
+                mask &= data["labels"] != -1
+            return mask
+
+        df = to_dataframe(ds, mask_func=mask_func)
+
+        # Group repeated variables in the same constraint
+        agg = dict(coeffs="sum", rhs="first", sign="first")
+        agg.update({k: "first" for k in df.columns if k not in agg})
+        df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
+
+        any_nan = df.isna().any()
+        if any_nan.any():
+            fields = ", ".join("`" + df.columns[any_nan] + "`")
+            raise ValueError(
+                f"Constraint `{self.name}` contains nan's in field(s) {fields}"
+            )
+        return df
+
+    sel = conwrap(Dataset.sel)
+
+    isel = conwrap(Dataset.isel)
+
+
+@dataclass(repr=False)
+class Constraints:
+    """
+    A constraint container used for storing multiple constraint arrays.
+    """
+
+    data: Dict[str, Constraint] = field(default_factory=dict)
+    model: Any = None  # Model is not defined due to circular imports
+
+    dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
+    dataset_names = [
+        "Labels",
+        "Left-hand-side coefficients",
+        "Left-hand-side variables",
+        "Signs",
+        "Right-hand-side constants",
+    ]
+
+    def __repr__(self):
+        """
+        Return a string representation of the linopy model.
+        """
+        r = "linopy.model.Constraints"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+
+        for name, ds in self.items():
+            coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
+            r += f" * {name}{coords}\n"
+        if not len(list(self)):
+            r += "<empty>\n"
+        return r
+
+    def __getitem__(
+        self, names: Union[str, Sequence[str]]
+    ) -> Union[Constraint, "Constraints"]:
+        if isinstance(names, str):
+            return self.data[names]
+
+        return self.__class__({name: self.data[name] for name in names}, self.model)
+
+    def __getattr__(self, name: str):
+        # If name is an attribute of self (including methods and properties), return that
+        if name in self.data:
+            return self.data[name]
+        else:
+            raise AttributeError(
+                f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
+            )
+
+    def __len__(self):
+        return self.data.__len__()
+
+    def __iter__(self):
+        return self.data.__iter__()
+
+    def items(self):
+        return self.data.items()
+
+    def _ipython_key_completions_(self):
+        """
+        Provide method for the key-autocompletions in IPython.
+
+        See
+        http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        return list(self)
+
+    def add(self, constraint):
+        """
+        Add a constraint to the constraints constrainer.
+        """
+        self.data[constraint.name] = constraint
+
+    def remove(self, name):
+        """
+        Remove constraint `name` from the constraints.
+        """
+        self.data.pop(name)
+
+    @property
+    def loc(self):
+        return LocIndexer(self)
+
+    @property
+    def labels(self):
+        """
+        Get the labels of all constraints.
+        """
+        return save_join(
+            *[v.labels.rename(k) for k, v in self.items()], integer_dtype=True
+        )
+
+    @property
+    def coeffs(self):
+        """
+        Get the coefficients of all constraints.
+        """
+        return save_join(*[v.coeffs.rename(k) for k, v in self.items()])
+
+    @property
+    def vars(self):
+        """
+        Get the variables of all constraints.
+        """
+        rename_term_dim = lambda ds: ds.rename({TERM_DIM: ds.name + TERM_DIM})
+        return save_join(
+            *[rename_term_dim(v.vars.rename(k)) for k, v in self.items()],
+            integer_dtype=True,
+        )
+
+    @property
+    def sign(self):
+        """
+        Get the signs of all constraints.
+        """
+        return save_join(*[v.sign.rename(k) for k, v in self.items()])
+
+    @property
+    def rhs(self):
+        """
+        Get the right-hand-side constants of all constraints.
+        """
+        return save_join(*[v.rhs.rename(k) for k, v in self.items()])
+
+    @property
+    def dual(self):
+        """
+        Get the dual values of all constraints.
+        """
+        try:
+            return save_join(*[v.dual.rename(k) for k, v in self.items()])
+        except AttributeError:
+            return Dataset()
+
+    @property
+    def coefficientrange(self):
+        """
+        Coefficient range of the constraint.
+        """
+        d = {
+            k: [self[k].coeffs.min().item(), self[k].coeffs.max().item()] for k in self
+        }
+        return pd.DataFrame(d, index=["min", "max"]).T
+
+    @property
+    def ncons(self):
+        """
+        Get the number all constraints effectively used by the model.
+
+        These excludes constraints with missing labels.
+        """
+        return len(self.flat.labels.unique())
+
+    @property
+    def inequalities(self):
+        """
+        Get the subset of constraints which are purely inequalities.
+        """
+        return self[[n for n, s in self.items() if (s.sign != EQUAL).all()]]
+
+    @property
+    def equalities(self):
+        """
+        Get the subset of constraints which are purely equalities.
+        """
+        return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
+
+    def sanitize_zeros(self):
+        """
+        Filter out terms with zero and close-to-zero coefficient.
+        """
+        for name in self:
+            not_zero = abs(self[name].coeffs) > 1e-10
+            self[name].vars = self[name].vars.where(not_zero, -1)
+            self[name].coeffs = self[name].coeffs.where(not_zero)
+
+    def sanitize_missings(self):
+        """
+        Set constraints labels to -1 where all variables in the lhs are
+        missing.
+        """
+        for name in self:
+            contains_non_missing = (self[name].vars != -1).any(self[name].term_dim)
+            self[name].data["labels"] = self[name].labels.where(
+                contains_non_missing, -1
+            )
+
+    def get_name_by_label(self, label):
+        """
+        Get the constraint name of the constraint containing the passed label.
+
+        Parameters
+        ----------
+        label : int
+            Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
+            constraint label.
+
+        Raises
+        ------
+        ValueError
+            If label is not contained by any constraint.
+
+        Returns
+        -------
+        name : str
+            Name of the containing constraint.
+        """
+        if not isinstance(label, (float, int)) or label < 0:
+            raise ValueError("Label must be a positive number.")
+        for name, ds in self.items():
+            if label in ds.labels:
+                return name
+        raise ValueError(f"No constraint found containing the label {label}.")
+
+    def get_label_position(self, values):
+        """
+        Get tuple of name and coordinate for constraint labels.
+        """
+        return get_label_position(self, values)
+
+    def print_labels(self, values, display_max_terms=None):
+        """
+        Print a selection of labels of the constraints.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [print_single_constraint(self.model, v) for v in values]
+        print("\n".join(res))
+
+    def set_blocks(self, block_map):
+        """
+        Get a dataset of same shape as constraints.labels with block values.
+
+        Let N be the number of blocks.
+        The following cases are considered:
+
+            * where are all vars are -1, the block is -1
+            * where are all vars are 0, the block is 0
+            * where all vars are n, the block is n
+            * where vars are n or 0 (both present), the block is n
+            * N+1 otherwise
+        """
+        N = block_map.max()
+
+        for name, constraint in self.items():
+            res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
+            entries = replace_by_map(constraint.vars, block_map)
+
+            not_zero = entries != 0
+            not_missing = entries != -1
+            for n in range(N + 1):
+                not_n = entries != n
+                mask = not_n & not_zero & not_missing
+                res = res.where(mask.any(constraint.term_dim), n)
+
+            res = res.where(not_missing.any(constraint.term_dim), -1)
+            res = res.where(not_zero.any(constraint.term_dim), 0)
+            constraint.data["blocks"] = res
+
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
+    def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
+        """
+        Create an generator which iterates over all arrays in `key` and
+        flattens them.
+
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            Must be one of "labels", "vars". The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `labels` data is -1. If broadcast is `vars`
+            also values where `vars` is -1 are filtered. This will raise an
+            error if the filtered data still contains nan's.
+            When enabled, the data is load into memory. The default is False.
+
+
+        Yields
+        ------
+        flat : np.array/dask.array
+        """
+        assert broadcast_like in ["labels", "vars"]
+
+        for name, constraint in self.items():
+            values = constraint.data[broadcast_like]
+            ds = constraint.data[key]
+            broadcasted = ds.broadcast_like(values)
+            if values.chunks is not None:
+                broadcasted = broadcasted.chunk(values.chunks)
+
+            if filter_missings:
+                flat = np.ravel(broadcasted)
+                mask = np.ravel(values) != -1
+                if broadcast_like != "labels":
+                    labels = np.ravel(constraint.labels.broadcast_like(values))
+                    mask &= labels != -1
+                flat = flat[mask]
+                if pd.isna(flat).any():
+                    names = self.dataset_names
+                    ds_name = names[self.dataset_attrs.index(key)]
+                    bc_name = names[self.dataset_attrs.index(broadcast_like)]
+                    err = (
+                        f"{ds_name} of constraint '{name}' are missing (nan) "
+                        f"where {bc_name.lower()} are defined (not -1)."
+                    )
+                    raise ValueError(err)
+            else:
+                flat = broadcasted.data.ravel()
+            yield flat
+
+    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
+    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
+        """
+        Ravel and concate all arrays in `key` while aligning to
+        `broadcast_like`.
+
+        Parameters
+        ----------
+        key : str/Dataset
+            Key to be iterated over. Optionally pass a dataset which is
+            broadcastable to `broadcast_like`.
+        broadcast_like : str, optional
+            Name of the dataset to which the input data in `key` is aligned to.
+            The default is "labels".
+        filter_missings : bool, optional
+            Filter out values where `broadcast_like` data is -1.
+            The default is False.
+        compute : bool, optional
+            Whether to compute lazy data. The default is False.
+
+        Returns
+        -------
+        flat
+            One dimensional data with all values in `key`.
+        """
+        res = list(self.iter_ravel(key, broadcast_like, filter_missings))
+        res = np.concatenate(res)
+        return dask.compute(res)[0] if compute else res
+
+    @property
+    def flat(self) -> pd.DataFrame:
+        """
+        Convert all constraint to a single pandas Dataframe.
+
+        The resulting dataframe is a long format with columns
+        `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        dfs = [self[k].flat for k in self]
+        if not len(dfs):
+            return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
+        df = pd.concat(dfs, ignore_index=True)
+        unique_labels = df.labels.unique()
+        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        df["key"] = df.labels.map(map_labels)
+        return df
+
+    def to_matrix(self, filter_missings=True):
+        """
+        Construct a constraint matrix in sparse format.
+
+        Missing values, i.e. -1 in labels and vars, are ignored filtered
+        out.
+        """
+        # TODO: rename "filter_missings" to "~labels_as_coordinates"
+        cons = self.flat
+
+        if not len(self):
+            return None
+
+        if filter_missings:
+            vars = self.model.variables.flat
+            shape = (cons.key.max() + 1, vars.key.max() + 1)
+            cons["vars"] = cons.vars.map(vars.set_index("labels").key)
+            return csc_matrix((cons.coeffs, (cons.key, cons.vars)), shape=shape)
+        else:
+            shape = self.model.shape
+            return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
+
+    def reset_dual(self):
+        """
+        Reset the stored solution of variables.
+        """
+        for k, c in self.items():
+            if "dual" in c:
+                c._data = c.data.drop_vars("dual")
+
+
+# define AnonymousConstraint for backwards compatibility
+class AnonymousConstraint(Constraint):
+    def __init__(self, lhs, sign, rhs):
+        """
+        Initialize a anonymous constraint.
+        """
+        # raise deprecation warning
+        warnings.warn(
+            "AnonymousConstraint is deprecated, use Constraint instead.",
+        )
+
+        if not isinstance(lhs, expressions.LinearExpression):
+            raise TypeError(
+                f"Assigned lhs must be a LinearExpression, got {type(lhs)})."
+            )
+        data = lhs.data.assign(sign=sign, rhs=rhs)
+        super().__init__(data, lhs.model)
 
 
 class AnonymousScalarConstraint:
@@ -845,7 +940,7 @@ class AnonymousScalarConstraint:
         Get the representation of the AnonymousScalarConstraint.
         """
         expr_string = print_single_expression(
-            self.lhs.coeffs, self.lhs.vars, self.lhs.model
+            self.lhs.coeffs, self.lhs.vars, 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
 
@@ -870,5 +965,10 @@ class AnonymousScalarConstraint:
         """
         return self._rhs
 
+    def to_constraint(self):
+        data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
+        return Constraint(data=data, model=self.lhs.model)
+
+    @deprecated(details="Use to_constraint instead.")
     def to_anonymous_constraint(self):
-        return AnonymousConstraint(self.lhs.to_linexpr(), self.sign, self.rhs)
+        return self.to_constraint()

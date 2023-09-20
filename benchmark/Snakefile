@@ -1,160 +1,326 @@
-import linopy
-import pyomo
+configfile: "config.yaml"
 
-NRANGE = [10, 20, 50, 100, 200, 300, 400, 500, 600, 800]
-#NRANGE = [10, 20]
-SOLVERS = ["gurobi"]
-APIS = ['pyomo', 'linopy', 'jump', 'solver']
-INTEGERLABELS = True
 
+benchmark = config["benchmark"]
+SOLVER = config["solver"]
+NRANGE = config[benchmark]["nrange"]
+APIS = config[benchmark]["apis"]
 
 rule all:
-    input: expand("benchmarks/{solver}/time.pdf", solver=SOLVERS)
+    input:
+        expand(
+            "benchmarks/{model}/benchmark-{kind}.pdf",
+            model=benchmark,
+            kind=["absolute", "overhead"],
+        ),
+        expand(
+            "benchmarks/{model}/benchmark_resource-{kind}.pdf",
+            model=benchmark,
+            kind=["absolute", "overhead"],
+        ),
 
-# For time benchmarks, use one process for all runs (skip import and jit compilation times)
+
+# LINOPY
+rule benchmark_time_linopy:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/linopy/time.csv",
+    script:
+        "scripts/benchmark_linopy.py"
+
+
+rule benchmark_memory_single_linopy:
+    params:
+        nrange=NRANGE,
+    benchmark:
+        "benchmarks/{model}/linopy/memory-{N}.txt"
+    threads: 4
+    script:
+        "scripts/run-linopy.py"
+
+
 rule benchmark_linopy:
     params:
-        nrange = NRANGE,
-        integerlabels = INTEGERLABELS
-    output:
-        "benchmarks/{solver}/linopy-time.csv"
-    script: "scripts/benchmark_linopy.py"
-
-# For memory benchmarks, use single processes
-rule benchmark_linopy_single:
-    params:
-        nrange = NRANGE,
-        integerlabels = INTEGERLABELS
-    benchmark:
-        "benchmarks/{solver}/linopy/{N}.txt"
-    script: "scripts/run-linopy.py"
-
-
-# For time benchmarks, use one process for all runs (skip import and jit compilation times)
-rule benchmark_pyomo:
-    params:
-        nrange = NRANGE,
-        integerlabels = INTEGERLABELS
-    output:
-        "benchmarks/{solver}/pyomo-time.csv"
-    script: "scripts/benchmark_pyomo.py"
-
-# For memory benchmarks, use single processes
-rule benchmark_pyomo_single:
-    params:
-        nrange = NRANGE,
-        integerlabels = INTEGERLABELS
-    benchmark:
-        "benchmarks/{solver}/pyomo/{N}.txt"
-    script: "scripts/run-pyomo.py"
-
-
-# For time & memory benchmarks, use one process for all runs (skip import and jit compilation times)
-rule benchmark_jump:
-    params:
-        nrange = NRANGE,
-        integerlabels = INTEGERLABELS
-    output:
-        "benchmarks/{solver}/jump.csv"
-    script: "scripts/benchmark_jump.jl"
-
-
-# For benchmarking solver processes only, we have to start from the lp files
-rule write_lp_files:
-    output:
-        expand("benchmarks/lp_files/{N}.lp", N=NRANGE)
-    script: "scripts/write-lp-file.py"
-
-
-rule benchmark_glpk_single:
+        nrange=NRANGE,
+        api="linopy",
     input:
-        "benchmarks/lp_files/{N}.lp"
-    benchmark:
-        "benchmarks/glpk/solver/{N}.txt"
-    shell: "glpsol --lp {input} --output {input}.sol"
-
-
-rule benchmark_cbc_single:
-    input:
-        "benchmarks/lp_files/{N}.lp"
-    benchmark:
-        "benchmarks/cbc/solver/{N}.txt"
-    shell: "cbc -import {input} -solve -solu {input}.sol"
-
-rule benchmark_gurobi_single:
-    input:
-        "benchmarks/lp_files/{N}.lp"
-    benchmark:
-        "benchmarks/gurobi/solver/{N}.txt"
-    shell: "gurobi_cl ResultFile={input}.sol {input}"
-
-
-# Concat benchmark of single processes
-rule concat_benchmarks:
-    params:
-        nrange = NRANGE
-    input:
-        lambda w: expand("benchmarks/{solver}/{api}/{N}.txt", N=NRANGE, solver=w.solver, api=w.api)
+        memory=lambda w: expand(
+            "benchmarks/{model}/linopy/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/linopy/time.csv",
+    threads: 4
     output:
-        benchmark="benchmarks/{solver}/{api}.csv"
+        benchmark="benchmarks/{model}/linopy.csv",
     script:
         "scripts/concat-benchmarks.py"
 
 
-# Merge and manipulate all benchmarks
+# PULP
+rule benchmark_time_pulp:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/pulp/time.csv",
+    script:
+        "scripts/benchmark_pulp.py"
+
+
+rule benchmark_memory_single_pulp:
+    params:
+        nrange=NRANGE,
+    benchmark:
+        "benchmarks/{model}/pulp/memory-{N}.txt"
+    script:
+        "scripts/run-pulp.py"
+
+
+rule benchmark_pulp:
+    params:
+        nrange=NRANGE,
+        api="pulp",
+    input:
+        memory=lambda w: expand(
+            "benchmarks/{model}/pulp/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/pulp/time.csv",
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/pulp.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# CVXPY
+rule benchmark_time_cvxpy:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/cvxpy/time.csv",
+    script:
+        "scripts/benchmark_cvxpy.py"
+
+
+rule benchmark_memory_single_cvxpy:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    benchmark:
+        "benchmarks/{model}/cvxpy/memory-{N}.txt"
+    script:
+        "scripts/run-cvxpy.py"
+
+
+rule benchmark_cvxpy:
+    params:
+        nrange=NRANGE,
+        api="cvxpy",
+    input:
+        memory=lambda w: expand(
+            "benchmarks/{model}/cvxpy/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/cvxpy/time.csv",
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/cvxpy.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# PYOMO
+rule benchmark_time_pyomo:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/pyomo/time.csv",
+    script:
+        "scripts/benchmark_pyomo.py"
+
+
+rule benchmark_memory_single_pyomo:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    benchmark:
+        "benchmarks/{model}/pyomo/memory-{N}.txt"
+    script:
+        "scripts/run-pyomo.py"
+
+
+rule benchmark_pyomo:
+    params:
+        nrange=NRANGE,
+        api="pyomo",
+    input:
+        memory=lambda w: expand(
+            "benchmarks/{model}/pyomo/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/pyomo/time.csv",
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/pyomo.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# GUROBIPY
+rule benchmark_time_gurobipy:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/gurobipy/time.csv",
+    script:
+        "scripts/benchmark_gurobipy.py"
+
+
+rule benchmark_memory_single_gurobipy:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    benchmark:
+        "benchmarks/{model}/gurobipy/memory-{N}.txt"
+    script:
+        "scripts/run-gurobipy.py"
+
+
+rule benchmark_gurobipy:
+    params:
+        nrange=NRANGE,
+        api="gurobipy",
+    input:
+        memory=lambda w: expand(
+            "benchmarks/{model}/gurobipy/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/gurobipy/time.csv",
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/gurobipy.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# ORTOOLS
+rule benchmark_time_ortools:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/ortools/time.csv",
+    script:
+        "scripts/benchmark_ortools.py"
+
+
+rule benchmark_memory_single_ortools:
+    params:
+        nrange=NRANGE,
+    threads: 4
+    benchmark:
+        "benchmarks/{model}/ortools/memory-{N}.txt"
+    script:
+        "scripts/run-ortools.py"
+
+
+rule benchmark_ortools:
+    params:
+        nrange=NRANGE,
+        api="ortools",
+    input:
+        memory=lambda w: expand(
+            "benchmarks/{model}/ortools/memory-{N}.txt", N=NRANGE, model=benchmark
+        ),
+        time="benchmarks/{model}/ortools/time.csv",
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/ortools.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+rule benchmark_jump:
+    "For time & memory benchmarks, use one process for all runs (skip import and jit compilation times)"
+    params:
+        nrange=NRANGE,
+    threads: 4
+    output:
+        "benchmarks/{model}/jump.csv",
+    script:
+        "scripts/benchmark_jump.jl"
+
+
+# For benchmarking solver processes only, we have to start from the lp files
+rule write_lp:
+    output:
+        expand("benchmarks/{model}/lp_files/{N}.lp", model=benchmark, N=NRANGE),
+    script:
+        "scripts/write-lp-file.py"
+
+
+rule benchmark_memory_single_gurobi:
+    input:
+        lp="benchmarks/{model}/lp_files/{N}.lp",
+    threads: 4
+    benchmark:
+        "benchmarks/{model}/solver/memory-{N}.txt"
+    shell:
+        "gurobi_cl ResultFile=/dev/null {input.lp}"
+
+
+rule benchmark_time_single_gurobi:
+    input:
+        lp="benchmarks/{model}/lp_files/{N}.lp",
+    threads: 4
+    output:
+        time="benchmarks/{model}/solver/time-{N}.txt",
+    run:
+        import gurobipy
+
+        m = gurobipy.read(input.lp)
+        m.optimize()
+
+        with open(output.time, "w") as f:
+            f.write(str(m.RunTime))
+
+
+rule benchmark_gurobi:
+    params:
+        nrange=NRANGE,
+        api="Solving Process",
+    input:
+        memory=expand("benchmarks/{model}/solver/memory-{N}.txt", model=benchmark, N=NRANGE),
+        time=expand("benchmarks/{model}/solver/time-{N}.txt", model=benchmark, N=NRANGE),
+    threads: 4
+    output:
+        benchmark="benchmarks/{model}/solver.csv",
+    script:
+        "scripts/concat-benchmarks.py"
+
+
+# Merge all benchmarks
 rule merge_benchmarks:
     params:
-        nrange = NRANGE
+        nrange=NRANGE,
+        apis=[api for api in APIS if api != "solver"],
     input:
-        benchmarks = lambda w: expand("benchmarks/{solver}/{api}.csv", solver=w.solver, api=APIS),
-        benchmarks_time = lambda w: expand("benchmarks/{solver}/{api}-time.csv", solver=w.solver, api=[api for api in APIS if api in ['pyomo', 'linopy']]),
+        benchmarks=lambda w: expand(
+            "benchmarks/{model}/{api}.csv", model=benchmark, api=APIS
+        ),
     output:
-        benchmark="benchmarks/{solver}/benchmarks.csv"
+        absolute="benchmarks/{model}/benchmarks-absolute.csv",
+        overhead="benchmarks/{model}/benchmarks-overhead.csv",
     script:
         "scripts/merge-benchmarks.py"
 
 
-
 rule plot_benchmarks:
     input:
-        "benchmarks/{solver}/benchmarks.csv"
+        "benchmarks/{model}/benchmarks-{kind}.csv",
     output:
-        "benchmarks/{solver}/benchmark.pdf",
+        time_memory = "benchmarks/{model}/benchmark-{kind}.{ext}",
+        resource = "benchmarks/{model}/benchmark_resource-{kind}.{ext}",
     notebook:
         "notebooks/plot-benchmarks.py.ipynb"
-
-
-# Benchmark from network optimization, use a PyPSA-EUR network from https://github.com/PyPSA/pypsa-eur and solve it with the pypsa-linopy/pypsa-pyomo implementation in https://github.com/PyPSA/PyPSA/tree/linopy-optimization
-
-
-rule benchmark_linopy_pypsa_eur:
-    output: "benchmarks/benchmark-linopy-pypsa-eur.dat"
-    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-linopy.py"
-
-rule benchmark_pyomo_pypsa_eur:
-    output: "benchmarks/benchmark-pyomo-pypsa-eur.dat"
-    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pyomo.py"
-
-rule benchmark_pypsa_linopf_pypsa_eur:
-    output: "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
-    shell: "mprof run --include-children --output {output} --interval 1 scripts/benchmarks-pypsa-eur/benchmark-pypsa-linopf.py"
-
-
-rule plot_pypsa_eur_benchmarks:
-    input:
-        linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
-        pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
-    output:
-        "benchmarks/benchmark-pypsa-eur.pdf"
-    script:
-        "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"
-
-rule plot_pypsa_eur_benchmarks_with_pypsa:
-    input:
-        linopy = "benchmarks/benchmark-linopy-pypsa-eur.dat",
-        pyomo = "benchmarks/benchmark-pyomo-pypsa-eur.dat",
-        pypsa_linopf = "benchmarks/benchmark-pypsa_linopf-pypsa-eur.dat"
-    output:
-        "benchmarks/benchmark-pypsa-eur-with-pypsa.pdf"
-    script:
-        "scripts/benchmarks-pypsa-eur/plot-benchmarks.py"

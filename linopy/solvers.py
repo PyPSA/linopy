@@ -3,6 +3,7 @@
 """
 Linopy module for solving lp files with different solvers.
 """
+
 import io
 import logging
 import os
@@ -10,6 +11,7 @@ import re
 import subprocess as sub
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from linopy.constants import (
@@ -20,19 +22,13 @@ from linopy.constants import (
     TerminationCondition,
 )
 
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+
 available_solvers = []
 
-if os.name == "nt":
-    which = "where"
-else:
-    which = "which"
+which = "where" if os.name == "nt" else "which"
 
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL).returncode == 0:
-    available_solvers.append("glpk")
-
-if sub.run([which, "cbc"], stdout=sub.DEVNULL).returncode == 0:
-    available_solvers.append("cbc")
-
+# the first available solver will be the default solver
 try:
     import gurobipy
 
@@ -47,6 +43,12 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
+if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("glpk")
+
+
+if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
+    available_solvers.append("cbc")
 
 try:
     import cplex
@@ -119,7 +121,7 @@ def run_cbc(
     and constraint dual values. For more information on the solver
     options, run 'cbc' in your shell
     """
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for cbc solver. "
             "Falling back to `lp`."
@@ -133,7 +135,11 @@ def run_cbc(
     if warmstart_fn:
         command += f"-basisI {warmstart_fn} "
 
-    command += " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+    if solver_options:
+        command += (
+            " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+            + " "
+        )
     command += f"-solve -solu {solution_fn} "
 
     if basis_fn:
@@ -141,6 +147,8 @@ def run_cbc(
 
     if not os.path.exists(solution_fn):
         os.mknod(solution_fn)
+
+    command = command.strip()
 
     if log_fn is None:
         p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
@@ -203,11 +211,14 @@ def run_glpk(
     """
     Solve a linear problem using the glpk solver.
 
-    This function reads the linear problem file and passes it to the glpk
-    solver. If the solution is successful it returns variable solutions and
+    This function reads the linear problem file and passes it to the
+    glpk
+    solver. If the solution is successful it returns variable solutions
+    and
     constraint dual values.
 
-    For more information on the glpk solver options:
+    For more information on the glpk solver options, see
+
     https://kam.mff.cuni.cz/~elias/glpk.pdf
     """
     CONDITION_MAP = {
@@ -215,23 +226,29 @@ def run_glpk(
         "undefined": "infeasible_or_unbounded",
     }
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for glpk solver. "
             "Falling back to `lp`."
         )
 
     problem_fn = model.to_file(problem_fn)
+    suffix = problem_fn.suffix[1:]
 
     # TODO use --nopresol argument for non-optimal solution output
-    command = f"glpsol --lp {problem_fn} --output {solution_fn}"
+    command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
     if log_fn is not None:
-        command += f" --log {log_fn}"
+        command += f"--log {log_fn} "
     if warmstart_fn:
-        command += f" --ini {warmstart_fn}"
+        command += f"--ini {warmstart_fn} "
     if basis_fn:
-        command += f" -w {basis_fn}"
-    command += " ".join("-" + " ".join([k, str(v)]) for k, v in solver_options.items())
+        command += f"-w {basis_fn} "
+    if solver_options:
+        command += (
+            " ".join("--" + " ".join([k, str(v)]) for k, v in solver_options.items())
+            + " "
+        )
+    command = command.strip()
 
     p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
     if log_fn is None:
@@ -242,13 +259,17 @@ def run_glpk(
     else:
         p.wait()
 
+    if not os.path.exists(solution_fn):
+        status = Status(SolverStatus.warning, TerminationCondition.unknown)
+        return Result(status, Solution())
+
     f = open(solution_fn)
 
     def read_until_break(f):
-        linebreak = False
-        while not linebreak:
+        while True:
             line = f.readline()
-            linebreak = line == "\n"
+            if line == "\n" or line == "":
+                break
             yield line
 
     info = io.StringIO("".join(read_until_break(f))[:-2])
@@ -328,7 +349,7 @@ def run_highs(
     if warmstart_fn:
         logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
 
-    if io_api is None or (io_api == "lp"):
+    if io_api is None or io_api in ["lp", "mps"]:
         model.to_file(problem_fn)
         h = highspy.Highs()
         h.readModel(maybe_convert_path(problem_fn))
@@ -336,7 +357,7 @@ def run_highs(
         h = model.to_highspy()
     else:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     if log_fn is None:
@@ -360,14 +381,14 @@ def run_highs(
 
         if io_api == "direct":
             sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-            dual = pd.Series(solution.row_value, model.matrices.clabels, dtype=float)
+            dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
         else:
             sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float).pipe(
                 set_int_index
             )
-            dual = pd.Series(
-                solution.row_value, h.getLp().row_names_, dtype=float
-            ).pipe(set_int_index)
+            dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float).pipe(
+                set_int_index
+            )
 
         return Solution(sol, dual, objective)
 
@@ -400,7 +421,7 @@ def run_cplex(
     """
     CONDITION_MAP = {"integer optimal solution": "optimal"}
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for cplex solver. "
             "Falling back to `lp`."
@@ -433,16 +454,21 @@ def run_cplex(
 
     if warmstart_fn:
         m.start.read_basis(warmstart_fn)
-    m.solve()
+
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-    if log_fn is not None:
-        log_f.close()
+    try:
+        m.solve()
+    except cplex.exceptions.errors.CplexSolverError as e:
+        pass
 
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
+
+    if log_fn is not None:
+        log_f.close()
 
     def get_solver_solution() -> Solution:
         if basis_fn and is_lp:
@@ -519,27 +545,28 @@ def run_gurobi(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io_api is None or (io_api == "lp"):
-        problem_fn = model.to_file(problem_fn)
-        problem_fn = maybe_convert_path(problem_fn)
-        m = gurobipy.read(problem_fn)
-    elif io_api == "direct":
-        problem_fn = None
-        m = model.to_gurobipy()
-    else:
-        raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
-        )
+    with gurobipy.Env() as env:
+        if io_api is None or io_api in ["lp", "mps"]:
+            problem_fn = model.to_file(problem_fn)
+            problem_fn = maybe_convert_path(problem_fn)
+            m = gurobipy.read(problem_fn, env=env)
+        elif io_api == "direct":
+            problem_fn = None
+            m = model.to_gurobipy(env=env)
+        else:
+            raise ValueError(
+                "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
+            )
 
-    if solver_options is not None:
-        for key, value in solver_options.items():
-            m.setParam(key, value)
-    if log_fn is not None:
-        m.setParam("logfile", log_fn)
+        if solver_options is not None:
+            for key, value in solver_options.items():
+                m.setParam(key, value)
+        if log_fn is not None:
+            m.setParam("logfile", log_fn)
 
-    if warmstart_fn:
-        m.read(warmstart_fn)
-    m.optimize()
+        if warmstart_fn:
+            m.read(warmstart_fn)
+        m.optimize()
     logging.disable(1)
 
     if basis_fn:
@@ -592,7 +619,7 @@ def run_xpress(
     variable solutions and constraint dual values. The xpress module
     must be installed for using this function.
 
-    For more information on solver options:
+    For more information on solver options, see
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
     """
     CONDITION_MAP = {
@@ -605,7 +632,7 @@ def run_xpress(
         "mip_unbounded": "unbounded",
     }
 
-    if io_api is not None and (io_api != "lp"):
+    if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
             f"IO setting '{io_api}' not available for xpress solver. "
             "Falling back to `lp`."

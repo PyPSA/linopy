@@ -25,12 +25,20 @@ short_LESS_EQUAL = "<"
 
 SIGNS = {EQUAL, GREATER_EQUAL, LESS_EQUAL}
 SIGNS_alternative = {long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL}
+SIGNS_pretty = {EQUAL: "=", GREATER_EQUAL: "≥", LESS_EQUAL: "≤"}
 
 sign_replace_dict = {
     long_EQUAL: EQUAL,
     short_GREATER_EQUAL: GREATER_EQUAL,
     short_LESS_EQUAL: LESS_EQUAL,
 }
+
+TERM_DIM = "_term"
+STACKED_TERM_DIM = "_stacked_term"
+GROUPED_TERM_DIM = "_grouped_term"
+FACTOR_DIM = "_factor"
+CONCAT_DIM = "_concat"
+HELPER_DIMS = [TERM_DIM, STACKED_TERM_DIM, GROUPED_TERM_DIM, FACTOR_DIM, CONCAT_DIM]
 
 
 class ModelStatus(Enum):
@@ -74,7 +82,7 @@ class SolverStatus(Enum):
         for status in STATUS_TO_TERMINATION_CONDITION_MAP:
             if termination_condition in STATUS_TO_TERMINATION_CONDITION_MAP[status]:
                 return status
-        return cls.unknown
+        return cls("unknown")
 
 
 class TerminationCondition(Enum):
@@ -121,7 +129,6 @@ STATUS_TO_TERMINATION_CONDITION_MAP = {
         TerminationCondition.iteration_limit,
         TerminationCondition.time_limit,
         TerminationCondition.terminated_by_limit,
-        TerminationCondition.other,
         TerminationCondition.suboptimal,
     ],
     SolverStatus.warning: [
@@ -200,12 +207,15 @@ class Result:
     solver_model: Optional[Any] = None
 
     def __repr__(self) -> str:
+        solver_model_string = (
+            "not available" if self.solver_model is None else "available"
+        )
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
             f"Solution: {len(self.solution.primal)} primals, {len(self.solution.dual)} duals\n"
             f"Objective: {self.solution.objective:.2e}\n"
-            f"Solver model: {'not' or self.solver_model} available\n"
+            f"Solver model: {solver_model_string}\n"
             f"Solver message: {self.status.legacy_status}"
         )
 

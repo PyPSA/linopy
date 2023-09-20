@@ -4,22 +4,168 @@ Release Notes
 Upcoming Release
 ----------------
 
-* The classes Variable, LinearExpression and Constraint now have a `__repr__` method. This allows for a better representation of the class in the console.
-* Linopy now defines and uses a fixed set of solver status and termination codes. This allows for a more consistent and reliable handling of solver results. The new codes are defined in the `linopy.consants` module. The implementation is inspired by https://github.com/0b11001111 and the implementation in this `PyPSA fork <https://github.com/0b11001111/PyPSA/blob/innoptem-lopf/pypsa/linear_program/solver.py>`_
+
+* The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.
+* The printout of time stamps was modified to be more readable, leaving out the display of seconds and below if not necessary.
+
+
+Version 0.2.5
+-------------
+
+
+* The solution getter `model.solution` was falsely returning integer dtype in case of non-aligned indexes. This is fixed now.
+* Highs is now in the set of default solvers when install `linopy` via pip.
+
+
+Version 0.2.4
+-------------
+
+
+* The IO to LP/MPS file was made more memory-efficient. In particular, the memory excessive operation `to_dataframe` (see https://github.com/pydata/xarray/issues/6561) was replaced by an in-house implementation.
+
+
+Version 0.2.3
+-------------
+
+**Bugfixes**
+
+* When multiplying a `LinearExpression` with a constant value, the constant in the `LinearExpression` was not updated. This is fixed now.
+
+**New Features**
+
+* The `Variable` and the `LinearExpression` have a new method `cumsum`, which allows to compute the cumulative sum.
+
+
+Version 0.2.2
+-------------
+
+
+* The documentation was revised and extended.
+* A new function `print_labels` was added to the `Variables` and `Constraints` class. This function allows to print the variables/constraints from a list of labels.
+* A new function `compute_infeasibilities` and `print_infeasibilities` was added to the `Model` class. This function allows to compute the infeasibilities of an infeasible model and print them out. The function only supports the `gurobi` solver so far.
+
+
+
+Version 0.2.1
+-------------
+
+
+* Backwards compatibility for python 3.8.
+* `Variable`, `LinearExpression` and `Constraint` now have a print function to easily print the objects with larger layouts, i.e. showing more terms and lines.
+
+
+Version 0.2.0
+-------------
+
+
+**New Features**
+
+* Linopy now supports quadratic programming. Therefore a new class `QuadraticExpression` was created, which can be assigned to the objective function. The `QuadraticExpression` class supports the same arithmetic operations as the `LinearExpression` and can be created by multiplying two `Variable` or `LinearExpression` objects. Note for the latter, the number of stacked terms must be equal to one (`expr.nterm == 1`).
+* `LinearExpression`'s now support constant values. This allows defining linear expressions with numeric constant values, like `x + 5`.
+* When defining constraints, it is not needed to separate variables from constants anymore. Thus, expressions  like `x <= y` or `5 * x + 10 >= y` are supported.
+* The new default solver will now be the first element in `available_solvers`.
+* The classes `Variable`, `LinearExpression` and `Constraint` now have a `loc` method.
+* The classes `Variable`, `LinearExpression`, `Constraint`, `Variables` and `Constraints` now have a `flat` method, which returns a flattened `pandas.DataFrame` of the object in long-table format.
+* It is now possible to access variables and constraints by a dot notation. For example, `model.variables.x` returns the variable `x` of the model.
+* Variable assignment without explicit coordinates is now supported. In an internal step, integer coordinates are assigned to the dimensions without explicit coordinates.
+* The `groupby` function now supports passing a `pandas.Dataframe` as `groupby` keys. These allows to group by multiple variables at once.
+* The performance of the `groupby` function was strongly increased. In large operations a speedup of 10x was observed.
+* New test functions `assert_varequal`, `assert_conequal` were added to the `testing` module.
+
+
+**Deprecations**
+
+* The class `AnonymousConstraint` is now deprecated in the favor of `Constraint`. The latter can now be assigned to a model or not.
+* The `ravel` and `iter_ravel` method of the `Variables` and `Constraints` class is now deprecated in favor of the `flat` method.
+
+
+**Breaking Changes**
+
+* The `data` attribute of Variables and Constraints now returns a `xarray.Dataset` object instead of a `xarray.DataArray` object with the labels only.
+* The deprecated `groupby_sum` function was removed in favor of the `groupby` method.
+* The deprecated `rolling_sum` function was removed in favor of the `rolling` method.
+* The deprecated `eval` module was removed in favor of the arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
+* The deprecated attribute `values` of the classes `Variable`, `LinearExpression` and `Constraint` was removed in favor of the `data` attribute.
+* The deprecated `to_array` method of the classes `Variable` and `Constraint` was removed in favor of the `data` attribute.
+* The deprecated `to_dataset` of the `LinearExpression` class was removed in favor of the `data` attribute.
+* The function `get_lower_bound`, `get_upper_bound`, `get_variable_labels`, `get_variable_types`, `get_objective_coefficient`, `get_constraint_labels`, `get_constraint_sense`, `get_constraint_rhs`, `get_constraint_matrix` were removed in favor of the `matrices` accessor, i.e. `ub`, `lb`, `vlabels`, etc.
+* The `LinearExpressionGroupby` class now takes a different set of arguments when initializing. These are `data: xr.Dataset`, `group: xr.DataArray`, `model: Any`, `kwargs: Mapping[str, Any]`.
+* When grouping with a `xr.DataArray` / `pd.Series` / `pd.DataFrame` and summing afterwards, the keyword arguments like `squeeze`, `restore_coords` are ignored.
+
+
+**Internal Changes**
+
+* The internal data fields in `Variable` and `Constraint` are now always broadcasted to have aligned indexes. This allows for a more consistent handling of the objects.
+* The inner structure of the `Variable`, `Variables`, `Constraint` and `Constraints` class has changed to a more stable design. All information of the `Variable` and the `Constraint` class is now stored in the `data` field. The `data` field is a `xarray.Dataset` object. The `Variables` and `Constraints` class "simple" containers for the `Variable` and `Constraint` objects, stored in dictionary under the `data` field. This design allows for a more flexible handling of individual variables and constraints.
+
+**Other**
+
+* License changed to MIT license.
+
+
+
+Version 0.1.5
+-------------
+
+
+* Add `sel` functions to `Constraint` and `AnonymousConstraint` to allow for selection and inspection of constraints by coordinate.
+* The printout of `Variables` and `Constraints` was refactored to a more concise layout.
+* The solving termination condition "other" is now tagged as solving status "warning".
+
+Version 0.1.4
+-------------
+
+* Fix representation of empty variables and linear expressions.
+* The benchmark reported in [here](https://github.com/PyPSA/linopy/tree/master/benchmark) was updated to the latest version of linopy and adjusted to be fully reproducible.
+
+
+Version 0.1.3
+-------------
+
+* **Hotfix** dual value retrieval for ``highs``.
+* The MPS file writing was fixed for ``glpk`` solver. The MPS file writing is now tested against all solvers.
+
+
+Version 0.1.2
+-------------
+
+
+* Fix display for constraint with single entry and no coordinates.
+
+
+Version 0.1.1
+-------------
+
+
+* Printing out long LinearExpression is now accelerated in the `__repr__` function.
+* Multiplication of LinearExpression's with pandas object was stabilized.
+* A options handler was introduced that allows the user to change the maximum of printed lines and terms in the display of Variable's, LinearExpression's and Constraint's.
+* If LinearExpression of exactly the same shape are joined together (in arithmetic operations), the coordinates of the first object is used to override the coordinates of the consecutive objects.
+
+
+Version 0.1
+-----------
+
+This is the first major-minor release of linopy!  With this release, the package should more stable and consistent. The main changes are:
+
+* The classes Variable, LinearExpression and Constraint now have a `__repr__` method. This allows for a better representation of the classes in the console.
+* Linopy now defines and uses a fixed set of solver status and termination codes. This allows for a more consistent and reliable handling of solver results. The new codes are defined in the `linopy.constants` module. The implementation is inspired by https://github.com/0b11001111 and the implementation in this `PyPSA fork <https://github.com/0b11001111/PyPSA/blob/innoptem-lopf/pypsa/linear_program/solver.py>`_
 * The automated summation of repeated variables in one constraint is now supported. Before the implementation for constraints like `x + x + x <= 5` was only working for solvers with a corresponding fallback computation. This is now fixed.
 * Integer variables are now fully supported.
-* Support exporting problems to MPS file via fast highspy MPS-writer.
-* The internal data structure of linopy classes were updated to a safer design. Instead of being defined as inherited xarray classes, the class `Variable`, `LinearExpression` and `Constraint` are now dataclasses with containing the xarray objects in the data field. This allows the package to have more flexible function design and a reduced set of wrapped functions that are sensible to use in the optimization context.
+* Support exporting problems to MPS file via fast highspy MPS-writer (highspy installation required).
+* The internal data structure of linopy classes were updated to a safer design. Instead of being defined as inherited xarray classes, the class `Variable`, `LinearExpression` and `Constraint` are now no inherited classes but contain the xarray objects in the `data` field. This allows the package to have more flexible function design and a reduced set of wrapped functions that are sensible to use in the optimization context.
 * The class `Variable` and `LinearExpression` have new functions `groupby` and `rolling` imitating the corresponding xarray functions but with safe type inheritance and application of appended operations.
 * Coefficients very close to zero (`< 1e-10`) are now automatically set to zero to avoid numerical issues with solvers.
 * Coefficients of variables are no also allowed to be `np.nan`. These coefficients are ignored in the LP file writing.
 * The classes Variable, LinearExpression, Constraint, ScalarVariable, ScalarLinearExpression and ScalarConstraint now require the model in the initialization (mostly internal code is affected).
 * The `eval` module was removed in favor of arithmetic operations on the classes `Variable`, `LinearExpression` and `Constraint`.
+* Solver options are now printed out in the console when solving a model.
+* If a variable with indexes differing from the model internal indexes are assigned, linopy will raise a warning and align the variable to the model indexes.
 
 Version 0.0.15
 --------------
 
-* Using the python `sum()` function over `ScalarVariable`s and `ScalarLinearExpression`s is now supported.
+* Using the python `sum()` function over a `ScalarVariable` or a `ScalarLinearExpression` is now supported.
 * Returning None type in `from_rule` assignment is now supported.
 * Python 3.11 is now supported
 * Xarray versions higher and lower `v2022.06.` are now supported.
