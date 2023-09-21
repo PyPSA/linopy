@@ -1,13 +1,15 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
 
+Version 0.2.5
+-------------
 
 * The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.
 * The printout of time stamps was modified to be more readable, leaving out the display of seconds and below if not necessary.
-
+* The gurobi environment is now enclosed in a context manager to avoid any unwanted use of a token.
 
 Version 0.2.5
 -------------
