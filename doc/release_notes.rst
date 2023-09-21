@@ -6,6 +6,7 @@ Upcoming Release
 
 
 * The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.
+* Improve usage of Gurobi license (especially for single-use licenses).
 
 
 Version 0.2.5
