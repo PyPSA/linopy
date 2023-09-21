@@ -50,6 +50,8 @@ apples = m.add_variables(lower=0, name='apples', coords=[days])
 bananas = m.add_variables(lower=0, name='bananas', coords=[days])
 apples
 ```
+Output:
+
     Variable (day: 5)
     -----------------
     [Mon]: apples[Mon] ∈ [0, inf]
@@ -64,6 +66,8 @@ Add daily vitamin constraints
 ```python
 >>> m.add_constraints(3 * apples + 2 * bananas >= 8, name='daily_vitamins')
 ```
+Output:
+
     Constraint `daily_vitamins` (day: 5):
     -------------------------------------
     [Mon]: +3 apples[Mon] + 2 bananas[Mon] ≥ 8
@@ -77,6 +81,8 @@ Add weekly vitamin constraint
 ```python
 >>> m.add_constraints((3 * apples + 2 * bananas).sum() >= 50, name='weekly_vitamins')
 ```
+Output:
+
     Constraint `weekly_vitamins`
     ----------------------------
     +3 apples[Mon] + 2 bananas[Mon] + 3 apples[Tue] ... +2 bananas[Thu] + 3 apples[Fri] + 2 bananas[Fri] ≥ 50
@@ -95,12 +101,16 @@ Finally, we can solve the problem and get the optimal solution:
 >>> m.solve()
 >>> m.objective_value
 ```
+Output:
+
     17.166
 
 ... and display the solution as a pandas DataFrame
 ```python
 >>> m.solution.to_pandas()
 ```
+Output:
+
           apples  bananas
     day
     Mon    2.667      0
