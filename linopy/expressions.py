@@ -1102,6 +1102,9 @@ class QuadraticExpression(LinearExpression):
     def __init__(self, data, model):
         super().__init__(data, model)
 
+        if data is None:
+            da = xr.DataArray([[], []], dims=[FACTOR_DIM, TERM_DIM])
+            data = Dataset({"coeffs": da, "vars": da, "const": 0})
         if FACTOR_DIM not in data.vars.dims:
             raise ValueError(f"Data does not include dimension {FACTOR_DIM}")
         elif data.sizes[FACTOR_DIM] != 2:

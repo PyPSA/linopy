@@ -87,6 +87,20 @@ def safe_get_solution(status, func):
     return Solution()
 
 
+def maybe_adjust_objective_sign(solution, sense, io_api, solver_name):
+    if sense == "min":
+        return
+
+    if np.isnan(solution.objective):
+        return
+
+    if io_api == "mps":
+        logger.info(
+            "Adjusting objective sign due to switched coefficients in MPS file."
+        )
+        solution.objective *= -1
+
+
 def set_int_index(series):
     """
     Convert string index to int index.
@@ -193,6 +207,7 @@ def run_cbc(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cbc")
 
     return Result(status, solution)
 
@@ -303,6 +318,7 @@ def run_glpk(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "glpk")
 
     return Result(status, solution)
 
@@ -393,6 +409,7 @@ def run_highs(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "highs")
 
     return Result(status, solution, h)
 
@@ -497,6 +514,7 @@ def run_cplex(
         return Solution(solution, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cplex")
 
     return Result(status, solution, m)
 
@@ -596,6 +614,7 @@ def run_gurobi(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
 
     return Result(status, solution, m)
 
@@ -688,6 +707,7 @@ def run_xpress(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
 
     return Result(status, solution, m)
 
