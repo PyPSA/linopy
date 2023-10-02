@@ -921,6 +921,7 @@ class Model:
         basis_fn=None,
         warmstart_fn=None,
         keep_files=False,
+        env=None,
         sanitize_zeros=True,
         remote=None,
         **solver_options,
@@ -964,6 +965,9 @@ class Model:
             Whether to keep all temporary files like lp file, solution file.
             This argument is ignored for the logger file `log_fn`. The default
             is False.
+        env : gurobi.Env, optional
+            Existing environment passed to the solver (e.g. `gurobipy.Env`).
+            Currently only in use for Gurobi. The default is None.
         sanitize_zeros : bool, optional
             Whether to set terms with zero coeffficient as missing.
             This will remove unneeded overhead in the lp file writing.
@@ -1048,6 +1052,7 @@ class Model:
                 warmstart_fn,
                 basis_fn,
                 keep_files,
+                env,
                 **solver_options,
             )
         finally:

@@ -4,6 +4,7 @@
 Linopy module for solving lp files with different solvers.
 """
 
+import contextlib
 import io
 import logging
 import os
@@ -111,6 +112,7 @@ def run_cbc(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -206,6 +208,7 @@ def run_glpk(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -316,6 +319,7 @@ def run_highs(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -406,6 +410,7 @@ def run_cplex(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -510,6 +515,7 @@ def run_gurobi(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -545,7 +551,10 @@ def run_gurobi(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    with gurobipy.Env() as env:
+    with contextlib.ExitStack() as stack:
+        if env is None:
+            env = stack.enter_context(gurobipy.Env())
+
         if io_api is None or io_api in ["lp", "mps"]:
             problem_fn = model.to_file(problem_fn)
             problem_fn = maybe_convert_path(problem_fn)
@@ -609,6 +618,7 @@ def run_xpress(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -701,6 +711,7 @@ def run_pips(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
