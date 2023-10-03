@@ -111,6 +111,7 @@ This package is published under MIT license.
    infeasible-model
    solve-on-remote
    migrating-from-pyomo
+   gurobi-double-logging
 
 
 .. toctree::
