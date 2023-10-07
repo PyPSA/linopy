@@ -4,6 +4,7 @@
 Linopy module for solving lp files with different solvers.
 """
 
+
 import contextlib
 import io
 import logging
@@ -30,20 +31,14 @@ available_solvers = []
 which = "where" if os.name == "nt" else "which"
 
 # the first available solver will be the default solver
-try:
+with contextlib.suppress(ImportError):
     import gurobipy
 
     available_solvers.append("gurobi")
-except (ModuleNotFoundError, ImportError):
-    pass
-
-try:
+with contextlib.suppress(ImportError):
     import highspy
 
     available_solvers.append("highs")
-except (ModuleNotFoundError, ImportError):
-    pass
-
 if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 
@@ -51,20 +46,14 @@ if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode 
 if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
-try:
+with contextlib.suppress(ImportError):
     import cplex
 
     available_solvers.append("cplex")
-except (ModuleNotFoundError, ImportError):
-    pass
-
-try:
+with contextlib.suppress(ImportError):
     import xpress
 
     available_solvers.append("xpress")
-except (ModuleNotFoundError, ImportError):
-    pass
-
 logger = logging.getLogger(__name__)
 
 
@@ -80,11 +69,9 @@ def safe_get_solution(status, func):
     if status.is_ok:
         return func()
     elif status.status == SolverStatus.unknown:
-        try:
+        with contextlib.suppress(Exception):
             logger.warning("Solution status unknown. Trying to parse solution.")
             return func()
-        except Exception:
-            pass
     return Solution()
 
 
@@ -271,7 +258,7 @@ def run_glpk(
     def read_until_break(f):
         while True:
             line = f.readline()
-            if line == "\n" or line == "":
+            if line in ["\n", ""]:
                 break
             yield line
 
@@ -462,11 +449,8 @@ def run_cplex(
 
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-    try:
+    with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
         m.solve()
-    except cplex.exceptions.errors.CplexSolverError as e:
-        pass
-
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)

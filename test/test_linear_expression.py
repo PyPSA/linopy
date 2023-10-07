@@ -207,10 +207,7 @@ def test_linear_expression_with_errors(m, x):
 
 def test_linear_expression_from_rule(m, x, y):
     def bound(m, i):
-        if i == 1:
-            return (i - 1) * x[i - 1] + y[i] + 1 * x[i]
-        else:
-            return i * x[i] - y[i]
+        return (i - 1) * x[i - 1] + y[i] + 1 * x[i] if i == 1 else i * x[i] - y[i]
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)

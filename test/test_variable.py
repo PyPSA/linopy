@@ -70,7 +70,7 @@ def test_variable_getter(x, z):
         x[0, 0]
 
     with pytest.raises(AssertionError):
-        x[0:5]
+        x[:5]
 
     with pytest.raises(AssertionError):
         x[[1, 2, 3]]
