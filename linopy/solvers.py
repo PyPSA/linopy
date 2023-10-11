@@ -544,9 +544,6 @@ def run_gurobi(
         17: "internal_solver_error",
     }
 
-    # disable logging for this part, as gurobi output is doubled otherwise
-    logging.disable(50)
-
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
@@ -576,7 +573,6 @@ def run_gurobi(
         if warmstart_fn:
             m.read(warmstart_fn)
         m.optimize()
-    logging.disable(1)
 
     if basis_fn:
         try:
