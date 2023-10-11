@@ -6,6 +6,7 @@ Created on Mon Feb 14 18:00:44 2022.
 @author: fabian
 """
 
+
 from pathlib import Path
 
 import pandas as pd
@@ -24,7 +25,7 @@ solver_memory = df.loc[df.API == "Solving Process", "Memory"].values
 solver_time = df.loc[df.API == "Solving Process", "Time"].values
 
 # Make a correction of the memory usage, some APIs use external processes for the solving process
-api_with_external_process = set(["pyomo"])
+api_with_external_process = {"pyomo"}
 api_with_internal_process = set(snakemake.params.apis).difference(
     api_with_external_process
 )

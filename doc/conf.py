@@ -23,13 +23,7 @@ author = "Fabian Hofmann"
 
 # The full version, including alpha/beta/rc tags
 version = pkg_resources.get_distribution("linopy").version
-if "dev" in version:
-    # remove the dev description and reduce by minor one release
-    release = "master"
-else:
-    release = version
-
-
+release = "master" if "dev" in version else version
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be

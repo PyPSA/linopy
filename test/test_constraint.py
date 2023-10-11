@@ -166,10 +166,7 @@ def test_anonymous_constraint_sel(x, y):
 
 def test_constraint_from_rule(m, x, y):
     def bound(m, i, j):
-        if i % 2:
-            return (i - 1) * x[i - 1] + y[j] >= 0
-        else:
-            return i * x[i] >= 0
+        return (i - 1) * x[i - 1] + y[j] >= 0 if i % 2 else i * x[i] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)

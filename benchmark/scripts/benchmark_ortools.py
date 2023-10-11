@@ -44,11 +44,7 @@ def knapsack_model(n, solver):
     weight = randint(1, 100, size=n)
     value = randint(1, 100, size=n)
 
-    # Create variables
-    x = {}
-    for i in range(n):
-        x[i] = solver.BoolVar("x_%d" % i)
-
+    x = {i: solver.BoolVar("x_%d" % i) for i in range(n)}
     # Create constraints
     solver.Add(solver.Sum([weight[i] * x[i] for i in range(n)]) <= 200)
 
