@@ -411,7 +411,10 @@ def run_cplex(
     layered parameters, use a dot as a separator here,
     i.e. `**{'aa.bb.cc' : x}`.
     """
-    CONDITION_MAP = {"integer optimal solution": "optimal"}
+    CONDITION_MAP = {
+        "integer optimal solution": "optimal",
+        "integer optimal, tolerance": "optimal",
+    }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
