@@ -294,6 +294,9 @@ def test_default_setting(model, solver, io_api):
     assert status == "ok"
     assert np.isclose(model.objective.value, 3.3)
 
+    with pytest.warns(DeprecationWarning):
+        assert np.isclose(model.objective_value, 3.3)
+
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_default_setting_sol_and_dual_accessor(model, solver, io_api):

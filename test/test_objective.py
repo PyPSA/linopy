@@ -111,8 +111,20 @@ def test_add(linear_objective, quadratic_objective):
     assert isinstance(obj.expression, QuadraticExpression)
 
 
+def test_add_expr(linear_objective, quadratic_objective):
+    obj = linear_objective + quadratic_objective.expression
+    assert isinstance(obj, Objective)
+    assert isinstance(obj.expression, QuadraticExpression)
+
+
 def test_sub(linear_objective, quadratic_objective):
     obj = quadratic_objective - linear_objective
+    assert isinstance(obj, Objective)
+    assert isinstance(obj.expression, QuadraticExpression)
+
+
+def test_sub_epxr(linear_objective, quadratic_objective):
+    obj = quadratic_objective - linear_objective.expression
     assert isinstance(obj, Objective)
     assert isinstance(obj.expression, QuadraticExpression)
 
@@ -135,9 +147,21 @@ def test_truediv(quadratic_objective):
     assert isinstance(obj.expression, QuadraticExpression)
 
 
+def test_truediv_false(quadratic_objective):
+    with pytest.raises(ValueError):
+        quadratic_objective / quadratic_objective
+
+
 def test_repr(linear_objective, quadratic_objective):
     assert isinstance(linear_objective.__repr__(), str)
     assert isinstance(quadratic_objective.__repr__(), str)
 
     assert "Linear" in linear_objective.__repr__()
     assert "Quadratic" in quadratic_objective.__repr__()
+
+
+def test_objective_constant():
+    m = Model()
+    linear_expr = LinearExpression(None, m) + 1
+    with pytest.raises(ValueError):
+        m.objective = Objective(linear_expr, m)
