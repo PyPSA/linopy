@@ -505,11 +505,6 @@ class LinearExpression:
         # do explicitly sort as in vars (same as in coeffs)
         return {k: self.data.dims[k] for k in self.vars.dims}
 
-    @deprecated(details="Use `coord_dims` instead")
-    @property
-    def non_helper_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if not k.startswith("_")}
-
     @property
     def coord_dims(self):
         return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}

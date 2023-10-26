@@ -759,89 +759,6 @@ class Constraints:
             res = res.where(not_zero.any(constraint.term_dim), 0)
             constraint.data["blocks"] = res
 
-    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
-    def iter_ravel(self, key, broadcast_like="labels", filter_missings=False):
-        """
-        Create an generator which iterates over all arrays in `key` and
-        flattens them.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            Must be one of "labels", "vars". The default is "labels".
-        filter_missings : bool, optional
-            Filter out values where `labels` data is -1. If broadcast is `vars`
-            also values where `vars` is -1 are filtered. This will raise an
-            error if the filtered data still contains nan's.
-            When enabled, the data is load into memory. The default is False.
-
-
-        Yields
-        ------
-        flat : np.array/dask.array
-        """
-        assert broadcast_like in ["labels", "vars"]
-
-        for name, constraint in self.items():
-            values = constraint.data[broadcast_like]
-            ds = constraint.data[key]
-            broadcasted = ds.broadcast_like(values)
-            if values.chunks is not None:
-                broadcasted = broadcasted.chunk(values.chunks)
-
-            if filter_missings:
-                flat = np.ravel(broadcasted)
-                mask = np.ravel(values) != -1
-                if broadcast_like != "labels":
-                    labels = np.ravel(constraint.labels.broadcast_like(values))
-                    mask &= labels != -1
-                flat = flat[mask]
-                if pd.isna(flat).any():
-                    names = self.dataset_names
-                    ds_name = names[self.dataset_attrs.index(key)]
-                    bc_name = names[self.dataset_attrs.index(broadcast_like)]
-                    err = (
-                        f"{ds_name} of constraint '{name}' are missing (nan) "
-                        f"where {bc_name.lower()} are defined (not -1)."
-                    )
-                    raise ValueError(err)
-            else:
-                flat = broadcasted.data.ravel()
-            yield flat
-
-    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
-    def ravel(self, key, broadcast_like="labels", filter_missings=False, compute=True):
-        """
-        Ravel and concate all arrays in `key` while aligning to
-        `broadcast_like`.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            The default is "labels".
-        filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1.
-            The default is False.
-        compute : bool, optional
-            Whether to compute lazy data. The default is False.
-
-        Returns
-        -------
-        flat
-            One dimensional data with all values in `key`.
-        """
-        res = list(self.iter_ravel(key, broadcast_like, filter_missings))
-        res = np.concatenate(res)
-        return dask.compute(res)[0] if compute else res
-
     @property
     def flat(self) -> pd.DataFrame:
         """
@@ -968,7 +885,3 @@ class AnonymousScalarConstraint:
     def to_constraint(self):
         data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
         return Constraint(data=data, model=self.lhs.model)
-
-    @deprecated(details="Use to_constraint instead.")
-    def to_anonymous_constraint(self):
-        return self.to_constraint()
