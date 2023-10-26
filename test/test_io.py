@@ -107,5 +107,5 @@ def test_to_blocks(tmp_path):
 
     m.blocks = xr.DataArray([1] * 10 + [2] * 10)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(NotImplementedError):
         m.to_block_files(tmp_path)

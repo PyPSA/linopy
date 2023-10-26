@@ -15,7 +15,6 @@ import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from deprecation import deprecated
 from numpy import arange, array
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset

@@ -18,7 +18,6 @@ import pandas as pd
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from deprecation import deprecated
 from numpy import arange, array, nan
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
