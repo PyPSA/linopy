@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from xarray.testing import assert_equal
 
-from linopy import GREATER_EQUAL, Model
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model
 from linopy.constants import SolverStatus, Status, TerminationCondition
 from linopy.solvers import available_solvers, quadratic_solvers
 
@@ -65,6 +65,20 @@ def model_chunked():
     m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
 
     m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.fixture
+def model_maximization():
+    m = Model()
+
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(2 * x + 6 * y, LESS_EQUAL, 10)
+    m.add_constraints(4 * x + 2 * y, LESS_EQUAL, 3)
+
+    m.add_objective(2 * y + x, sense="max")
     return m
 
 
@@ -275,9 +289,13 @@ def test_model_types(
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_default_setting(model, solver, io_api):
+    assert model.objective.sense == "min"
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model.objective_value, 3.3)
+    assert np.isclose(model.objective.value, 3.3)
+
+    with pytest.warns(DeprecationWarning):
+        assert np.isclose(model.objective_value, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -294,17 +312,27 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
 def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api):
     status, condition = model_anonymous_constraint.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model_anonymous_constraint.objective_value, 3.3)
+    assert np.isclose(model_anonymous_constraint.objective.value, 3.3)
 
     model.solve(solver, io_api=io_api)
     assert_equal(model.solution, model_anonymous_constraint.solution)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_model_maximization(model_maximization, solver, io_api):
+    m = model_maximization
+    assert m.objective.sense == "max"
+    assert m.objective.value is None
+    status, condition = m.solve(solver, io_api=io_api)
+    assert status == "ok"
+    assert np.isclose(m.objective.value, 3.3)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_default_settings_chunked(model_chunked, solver, io_api):
     status, condition = model_chunked.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model_chunked.objective_value, 3.3)
+    assert np.isclose(model_chunked.objective.value, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -440,7 +468,7 @@ def test_quadratic_model(quadratic_model, solver, io_api):
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
         assert (quadratic_model.solution.y.round(3) == 10).all()
-        assert round(quadratic_model.objective_value, 3) == 0
+        assert round(quadratic_model.objective.value, 3) == 0
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)
@@ -453,7 +481,7 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
         assert condition == "optimal"
         assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
         assert (quadratic_model_cross_terms.solution.y.round(3) == 8.5).all()
-        assert round(quadratic_model_cross_terms.objective_value, 3) == 77.5
+        assert round(quadratic_model_cross_terms.objective.value, 3) == 77.5
     else:
         with pytest.raises(ValueError):
             quadratic_model_cross_terms.solve(solver, io_api=io_api)
@@ -466,7 +494,7 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
-        assert round(quadratic_model.objective_value, 3) == 0
+        assert round(quadratic_model.objective.value, 3) == 0
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)

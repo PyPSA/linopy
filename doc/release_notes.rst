@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* It is now possible to set the sense of the objective function to `minimize` or `maximize`. Therefore, a new class `Objective` was introduced which is used in `Model.objective`. It supports the same arithmetic operations as `LinearExpression` and `QuadraticExpression` and contains a `sense` attribute which can be set to `minimize` or `maximize`.
+
 
 Version 0.2.5
 -------------

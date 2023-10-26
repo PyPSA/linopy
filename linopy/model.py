@@ -8,7 +8,6 @@ This module contains frontend implementations of the package.
 import logging
 import os
 import re
-import warnings
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 
@@ -20,13 +19,7 @@ from numpy import inf, nan
 from xarray import DataArray, Dataset
 
 from linopy import solvers
-from linopy.common import (
-    as_dataarray,
-    best_int,
-    maybe_replace_signs,
-    replace_by_map,
-    save_join,
-)
+from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import (
@@ -36,6 +29,7 @@ from linopy.expressions import (
 )
 from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
+from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers
 from linopy.variables import ScalarVariable, Variable, Variables
 
@@ -75,7 +69,6 @@ class Model:
         "_varnameCounter",
         "_connameCounter",
         "_blocks",
-        "_objective_value",
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
@@ -110,10 +103,8 @@ class Model:
         """
         self._variables = Variables(model=self)
         self._constraints = Constraints(model=self)
-        self._objective = LinearExpression(None, self)
+        self._objective = Objective(LinearExpression(None, self), self)
         self._parameters = Dataset()
-
-        self._objective_value = nan
 
         self._status = "initialized"
         self._termination_condition = ""
@@ -151,8 +142,23 @@ class Model:
         return self._objective
 
     @objective.setter
-    def objective(self, value) -> LinearExpression:
-        self.add_objective(value, overwrite=True)
+    def objective(self, obj) -> Objective:
+        if not isinstance(obj, Objective):
+            obj = Objective(obj, self)
+
+        self._objective = obj
+        return self._objective
+
+    @property
+    def sense(self):
+        """
+        Sense of the objective function.
+        """
+        return self.objective.sense
+
+    @sense.setter
+    def sense(self, value):
+        self.objective.sense = value
 
     @property
     def parameters(self):
@@ -205,15 +211,16 @@ class Model:
         self._termination_condition = TerminationCondition[value].value
 
     @property
+    @deprecated("0.2.7", "Use `objective.value` instead.")
     def objective_value(self):
         """
         Objective value of the model.
         """
-        return self._objective_value
+        return self._objective.value
 
     @objective_value.setter
     def objective_value(self, value):
-        self._objective_value = float(value)
+        self._objective.value = value
 
     @property
     def chunk(self):
@@ -276,7 +283,6 @@ class Model:
     @property
     def scalar_attrs(self):
         return [
-            "objective_value",
             "status",
             "_xCounter",
             "_cCounter",
@@ -586,14 +592,14 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
-    def add_objective(self, expr, overwrite=False):
+    def add_objective(self, expr, overwrite=False, sense="min"):
         """
-        Add a linear objective function to the model.
+        Add an objective function to the model.
 
         Parameters
         ----------
-        expr : linopy.LinearExpression
-            Linear Expressions describing the objective function.
+        expr : linopy.LinearExpression, linopy.QuadraticExpression
+            Expression describing the objective function.
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
 
@@ -603,31 +609,12 @@ class Model:
             The objective function assigned to the model.
         """
         if not overwrite:
-            assert self.objective.empty(), (
+            assert self.objective.expression.empty(), (
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-
-        if isinstance(expr, (list, tuple)):
-            expr = self.linexpr(*expr)
-
-        if not isinstance(expr, (LinearExpression, QuadraticExpression)):
-            raise ValueError(
-                f"Invalid type of `expr` ({type(expr)})."
-                " Must be a LinearExpression or QuadraticExpression."
-            )
-
-        if self.chunk is not None:
-            expr = expr.chunk(self.chunk)
-
-        if len(expr.coord_dims):
-            expr = expr.sum()
-
-        if expr.const != 0:
-            raise ValueError("Constant values in objective function not supported.")
-
-        self._objective = expr
-        return self._objective
+        self.objective.expression = expr
+        self.objective.sense = sense
 
     def remove_variables(self, name):
         """
@@ -697,11 +684,11 @@ class Model:
 
     @property
     def is_linear(self):
-        return type(self.objective) is LinearExpression
+        return self.objective.is_linear
 
     @property
     def is_quadratic(self):
-        return type(self.objective) is QuadraticExpression
+        return self.objective.is_quadratic
 
     @property
     def type(self):
@@ -999,7 +986,7 @@ class Model:
                 **solver_options,
             )
 
-            self.objective_value = solved.objective_value
+            self.objective.value = solved.objective.value
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
@@ -1062,7 +1049,7 @@ class Model:
 
         result.info()
 
-        self.objective_value = result.solution.objective
+        self.objective._value = result.solution.objective
         self.status = result.status.status.value
         self.termination_condition = result.status.termination_condition.value
         self.solver_model = result.solver_model

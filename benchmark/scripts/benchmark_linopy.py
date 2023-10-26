@@ -27,7 +27,7 @@ def basic_model(n, solver):
     m.add_objective(2 * x.sum() + y.sum())
     # m.to_file(f"linopy-model.lp")
     m.solve(solver)
-    return m.objective_value
+    return m.objective.value
 
 
 def knapsack_model(n, solver):
@@ -38,7 +38,7 @@ def knapsack_model(n, solver):
     m.add_constraints((weight * packages).sum() <= 200)
     m.add_objective(-(value * packages).sum())  # use minus because of minimization
     m.solve(solver_name=solver)
-    return -m.objective_value
+    return -m.objective.value
 
 
 if __name__ == "__main__":

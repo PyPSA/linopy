@@ -16,5 +16,6 @@ from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, available_solvers
+from linopy.objective import Objective
 from linopy.remote import RemoteHandler
 from linopy.version import version as __version__

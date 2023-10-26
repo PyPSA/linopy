@@ -98,7 +98,7 @@ Finally, we can solve the problem and get the optimal solution:
 
 ```python
 >>> m.solve()
->>> m.objective_value
+>>> m.objective.value
 ```
 ```
 17.166

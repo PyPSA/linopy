@@ -93,7 +93,8 @@ def objective_to_file(m, f, log=False, batch_size=10000):
     if log:
         logger.info("Writing objective.")
 
-    f.write("min\n\nobj:\n\n")
+    sense = m.objective.sense
+    f.write(f"{sense}\n\nobj:\n\n")
     df = m.objective.flat
 
     if np.isnan(df.coeffs).any():
@@ -354,6 +355,9 @@ def to_gurobipy(m, env=None):
     else:
         model.setObjective(M.c @ x)
 
+    if m.objective.sense == "max":
+        model.ModelSense = -1
+
     if len(m.constraints):
         names = "c" + M.clabels.astype(str).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)
@@ -420,6 +424,10 @@ def to_highspy(m):
         Q = Q.tocsr()
         num_vars = Q.shape[0]
         h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
+
+    # change objective sense
+    if m.objective.sense == "max":
+        h.changeObjectiveSense(highspy.highs_bindings.ObjSense.kMaximize)
 
     return h
 

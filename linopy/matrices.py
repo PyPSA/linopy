@@ -110,7 +110,7 @@ class MatrixAccessor:
         "Vector of objective coefficients of all non-missing variables."
         m = self._parent
         ds = m.objective.flat
-        if isinstance(m.objective, expressions.QuadraticExpression):
+        if isinstance(m.objective.expression, expressions.QuadraticExpression):
             ds = ds[(ds.vars1 == -1) | (ds.vars2 == -1)]
             ds["vars"] = ds.vars1.where(ds.vars1 != -1, ds.vars2)
 
@@ -125,4 +125,4 @@ class MatrixAccessor:
         if m.is_linear:
             return None
 
-        return m.objective.to_matrix()[self.vlabels][:, self.vlabels]
+        return m.objective.expression.to_matrix()[self.vlabels][:, self.vlabels]
