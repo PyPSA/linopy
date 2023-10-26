@@ -5,7 +5,9 @@ Upcoming Release
 ----------------
 
 * It is now possible to set the sense of the objective function to `minimize` or `maximize`. Therefore, a new class `Objective` was introduced which is used in `Model.objective`. It supports the same arithmetic operations as `LinearExpression` and `QuadraticExpression` and contains a `sense` attribute which can be set to `minimize` or `maximize`.
-
+* The `fill_value` of default of constants in the LinearExpression and QuadraticExpression classes was changed to ``NaN``.
+* The `fillna` function for variables was made more secure by raising a warning if the fill value is not of  variable-like type.
+* The `where` and `fillna` functions for expressions were made more flexible: When passing a scalar value or a DataArray, the values are added as constants to the expression, where there were missing values before. If another expression is passed, the values are added to the expression, where there were missing values before.
 
 Version 0.2.5
 -------------

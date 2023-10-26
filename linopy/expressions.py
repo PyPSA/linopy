@@ -67,7 +67,7 @@ def exprwrap(method, *default_args, **new_default_kwargs):
 
 
 def _expr_unwrap(maybe_expr):
-    if isinstance(maybe_expr, LinearExpression):
+    if isinstance(maybe_expr, (LinearExpression, QuadraticExpression)):
         return maybe_expr.data
 
     return maybe_expr
@@ -271,7 +271,7 @@ class LinearExpression:
     __array_ufunc__ = None
     __array_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
     def __init__(self, data, model):
         from linopy.model import Model
@@ -814,7 +814,18 @@ class LinearExpression:
         """
         return self.__class__(self.data[["coeffs", "vars"]], self.model)
 
-    def where(self, cond, other=xr.core.dtypes.NA, **kwargs):
+    def isnull(self):
+        """
+        Get a boolean mask with true values where there is only missing values in an expression.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
+        return (self.vars == -1).all(helper_dims) & self.const.isnull()
+
+    def where(self, cond, other=None, **kwargs):
         """
         Filter variables based on a condition.
 
@@ -826,6 +837,11 @@ class LinearExpression:
         cond : DataArray or callable
             Locations at which to preserve this object's values. dtype must be `bool`.
             If a callable, it must expect this object as its only parameter.
+        other : expression-like, DataArray or scalar, optional
+            Data to use in place of values where cond is False.
+            If a DataArray or a scalar is provided, it is only used to fill
+            the missing values of constant values (`const`).
+            If a DataArray, its coordinates must match this object's.
         **kwargs :
             Keyword arguments passed to ``xarray.Dataset.where``
 
@@ -834,13 +850,44 @@ class LinearExpression:
         linopy.LinearExpression
         """
         # Cannot set `other` if drop=True
-        if other is xr.core.dtypes.NA:
+        if other is None or other is np.nan:
             if not kwargs.get("drop", False):
                 other = self._fill_value
+        elif isinstance(other, (DataArray, np.floating, np.integer, int, float)):
+            other = {**self._fill_value, "const": other}
         else:
             other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
+        if isinstance(cond, DataArray):
+            if helper_dims := set(HELPER_DIMS).intersection(cond.dims):
+                raise ValueError(
+                    f"Filtering by a DataArray with a helper dimension(s) ({helper_dims!r}) is not supported."
+                )
         return self.__class__(self.data.where(cond, other=other, **kwargs), self.model)
+
+    def fillna(self, value):
+        """
+        Fill missing values with a given value.
+
+        This method fills missing values in the data with a given value. It calls the `fillna` method of the underlying
+        `xarray.Dataset` object, but sets the default fill value to -1 for variables and ensures that the output is of
+        type `linopy.LinearExpression`.
+
+        Parameters
+        ----------
+        value : scalar or array_like
+            Value(s) to use to fill missing values. If a scalar is provided, it will be used to fill all missing values as a constant.
+            If an array-like object is provided, it should have the same shape as the data and will be used to fill missing values element-wise as a constant.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            A new `linopy.LinearExpression` object with missing values filled with the given value.
+        """
+        value = _expr_unwrap(value)
+        if isinstance(value, (DataArray, np.floating, np.integer, int, float)):
+            value = {"const": value}
+        return self.__class__(self.data.fillna(value), self.model)
 
     def diff(self, dim, n=1):
         """
@@ -1065,8 +1112,6 @@ class LinearExpression:
 
     ffill = exprwrap(Dataset.ffill)
 
-    fillna = exprwrap(Dataset.fillna, value=_fill_value)
-
     sel = exprwrap(Dataset.sel)
 
     isel = exprwrap(Dataset.isel)
@@ -1097,7 +1142,7 @@ class QuadraticExpression(LinearExpression):
     __array_ufunc__ = None
     __array_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
     def __init__(self, data, model):
         super().__init__(data, model)

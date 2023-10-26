@@ -163,6 +163,21 @@ def test_variable_shift(x):
     assert x.labels[0] == -1
 
 
+def test_isnull(x):
+    x = x.where([True] * 4 + [False] * 6)
+    assert isinstance(x.isnull(), xr.DataArray)
+    assert (x.isnull() == [False] * 4 + [True] * 6).all()
+
+
+def test_variable_fillna(x):
+    x = x.where([True] * 4 + [False] * 6)
+
+    with pytest.warns(FutureWarning):
+        x.fillna(0)
+
+    isinstance(x.fillna(x[0]), linopy.variables.Variable)
+
+
 def test_variable_bfill(x):
     x = x.where([False] * 4 + [True] * 6)
     x = x.bfill("first")
@@ -185,13 +200,14 @@ def test_variable_ffill(x):
 
 
 def test_variable_fillna(x):
-    result = x.fillna(-1)
+    result = x.fillna(x[0])
     assert isinstance(result, linopy.variables.Variable)
 
 
 def test_variable_sanitize(x):
     # convert intentionally to float with nans
-    x = x.where([True] * 4 + [False] * 6, np.nan)
+    fill_value = {"labels": np.nan, "lower": np.nan, "upper": np.nan}
+    x = x.where([True] * 4 + [False] * 6, fill_value)
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
     assert x.labels[9] == -1
