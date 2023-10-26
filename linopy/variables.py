@@ -681,7 +681,13 @@ class Variable:
         """
         return self.to_linexpr().diff(dim, n)
 
-    def where(self, cond, other=-1, **kwargs):
+    def isnull(self):
+        """
+        Get a boolean mask with true values where there is missing values.
+        """
+        return self.labels == -1
+
+    def where(self, cond, other=None, **kwargs):
         """
         Filter variables based on a condition.
 
@@ -703,13 +709,35 @@ class Variable:
         -------
         linopy.Variable
         """
-        if isinstance(other, Variable):
+        if other is None:
+            other = self._fill_value
+        elif isinstance(other, Variable):
             other = other.data
         elif isinstance(other, ScalarVariable):
             other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
+        elif not isinstance(other, (dict, Dataset)):
+            warn(
+                "other argument of Variable.where should be a Variable, ScalarVariable or dict. "
+                "Other types will not be supported in the future.",
+                FutureWarning,
+            )
         return self.__class__(
             self.data.where(cond, other, **kwargs), self.model, self.name
         )
+
+    def fillna(self, fill_value):
+        """
+        Fill missing values with a variable.
+
+        This operation call ``xarray.DataArray.fillna`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        fill_value : Variable/ScalarVariable
+            Variable to use for filling.
+        """
+        return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim, limit=None):
         """
@@ -757,7 +785,7 @@ class Variable:
         linopy.Variable
         """
         data = (
-            self.data.where(self.labels != -1)
+            self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
             .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
@@ -795,8 +823,6 @@ class Variable:
     drop_sel = varwrap(Dataset.drop_sel)
 
     drop_isel = varwrap(Dataset.drop_isel)
-
-    fillna = varwrap(Dataset.fillna)
 
     sel = varwrap(Dataset.sel)
 
