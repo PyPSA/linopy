@@ -18,7 +18,7 @@ Upcoming Release
 * The functions ``ravel`` and ``iter_ravel`` for Variables and Constraints were removed in favor of the ``flat`` function.
 * The property ``non_helper_dims`` for Variables and Constraints was removed in favor of the ``coord_dims`` property.
 * The function ``to_anonymous_constraint`` was removed in favor of the ``to_constraint`` function.
-
+* The support for python 3.8 has been dropped.
 
 Version 0.2.5
 -------------
