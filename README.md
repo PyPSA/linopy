@@ -34,7 +34,89 @@ or on conda-forge
 conda install -c conda-forge linopy
 ```
 
+## In a Nutshell
 
+Linopy aims to make optimization programs transparent and flexible. To illustrate its usage, let's consider a scenario where we aim to minimize the cost of buying apples and bananas over a week, subject to daily and weekly vitamin intake constraints.
+
+
+```python
+>>> import pandas as pd
+>>> import linopy
+
+>>> m = linopy.Model()
+
+>>> days = pd.Index(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], name='day')
+>>> apples = m.add_variables(lower=0, name='apples', coords=[days])
+>>> bananas = m.add_variables(lower=0, name='bananas', coords=[days])
+>>> apples
+```
+```
+Variable (day: 5)
+-----------------
+[Mon]: apples[Mon] ∈ [0, inf]
+[Tue]: apples[Tue] ∈ [0, inf]
+[Wed]: apples[Wed] ∈ [0, inf]
+[Thu]: apples[Thu] ∈ [0, inf]
+[Fri]: apples[Fri] ∈ [0, inf]
+```
+
+Add daily vitamin constraints
+
+```python
+>>> m.add_constraints(3 * apples + 2 * bananas >= 8, name='daily_vitamins')
+```
+```
+Constraint `daily_vitamins` (day: 5):
+-------------------------------------
+[Mon]: +3 apples[Mon] + 2 bananas[Mon] ≥ 8
+[Tue]: +3 apples[Tue] + 2 bananas[Tue] ≥ 8
+[Wed]: +3 apples[Wed] + 2 bananas[Wed] ≥ 8
+[Thu]: +3 apples[Thu] + 2 bananas[Thu] ≥ 8
+[Fri]: +3 apples[Fri] + 2 bananas[Fri] ≥ 8
+```
+
+Add weekly vitamin constraint
+
+```python
+>>> m.add_constraints((3 * apples + 2 * bananas).sum() >= 50, name='weekly_vitamins')
+```
+```
+Constraint `weekly_vitamins`
+----------------------------
++3 apples[Mon] + 2 bananas[Mon] + 3 apples[Tue] ... +2 bananas[Thu] + 3 apples[Fri] + 2 bananas[Fri] ≥ 50
+```
+
+Define the prices of apples and bananas and the objective function
+
+```python
+>>> apple_price = [1, 1.5, 1, 2, 1]
+>>> banana_price = [1, 1, 0.5, 1, 0.5]
+>>> m.objective = apple_price * apples + banana_price * bananas
+```
+
+Finally, we can solve the problem and get the optimal solution:
+
+```python
+>>> m.solve()
+>>> m.objective.value
+```
+```
+17.166
+```
+
+... and display the solution as a pandas DataFrame
+```python
+>>> m.solution.to_pandas()
+```
+```
+        apples  bananas
+day
+Mon    2.667      0
+Tue    0          4
+Wed    0          9
+Thu    0          4
+Fri    0          4
+```
 ## Supported solvers
 
 **linopy** supports the following solvers

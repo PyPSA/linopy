@@ -14,7 +14,7 @@ function basic_model(n, solver)
     @constraint(m, x + y .>= 0)
     @objective(m, Min, 2 * sum(x) + sum(y))
     optimize!(m)
-    return objective_value(m)
+    return objective.value(m)
 end
 
 function knapsack_model(n, solver)
@@ -25,7 +25,7 @@ function knapsack_model(n, solver)
     @constraint(m, weight' * x <= 200)
     @objective(m, Max, value' * x)
     optimize!(m)
-    return objective_value(m)
+    return objective.value(m)
 end
 
 

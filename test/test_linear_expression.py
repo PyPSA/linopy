@@ -207,10 +207,7 @@ def test_linear_expression_with_errors(m, x):
 
 def test_linear_expression_from_rule(m, x, y):
     def bound(m, i):
-        if i == 1:
-            return (i - 1) * x[i - 1] + y[i] + 1 * x[i]
-        else:
-            return i * x[i] - y[i]
+        return (i - 1) * x[i - 1] + y[i] + 1 * x[i] if i == 1 else i * x[i] - y[i]
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
@@ -377,31 +374,79 @@ def test_linear_expression_loc(x, y):
     assert expr.loc[0].size < expr.loc[:5].size
 
 
+def test_linear_expression_isnull(v):
+    expr = np.arange(20) * v
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    expr = expr.where(filter)
+    assert expr.isnull().sum() == 10
+
+
 def test_linear_expression_where(v):
     expr = np.arange(20) * v
-    expr = expr.where(expr.coeffs >= 10)
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    expr = expr.where(filter)
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 1
 
     expr = np.arange(20) * v
-    expr = expr.where(expr.coeffs >= 10, drop=True).sum()
+    expr = expr.where(filter, drop=True).sum()
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 10
 
 
 def test_linear_expression_where_with_const(v):
     expr = np.arange(20) * v + 10
-    expr = expr.where(expr.coeffs >= 10)
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    expr = expr.where(filter)
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 1
-    assert (expr.const[:10] == 0).all()
+    assert expr.const[:10].isnull().all()
     assert (expr.const[10:] == 10).all()
 
     expr = np.arange(20) * v + 10
-    expr = expr.where(expr.coeffs >= 10, drop=True).sum()
+    expr = expr.where(filter, drop=True).sum()
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 10
     assert expr.const == 100
+
+
+def test_linear_expression_where_scalar_fill_value(v):
+    expr = np.arange(20) * v + 10
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    expr = expr.where(filter, 200)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 1
+    assert (expr.const[:10] == 200).all()
+    assert (expr.const[10:] == 10).all()
+
+
+def test_linear_expression_where_array_fill_value(v):
+    expr = np.arange(20) * v + 10
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    other = expr.coeffs
+    expr = expr.where(filter, other)
+    assert isinstance(expr, LinearExpression)
+    assert expr.nterm == 1
+    assert (expr.const[:10] == other[:10]).all()
+    assert (expr.const[10:] == 10).all()
+
+
+def test_linear_expression_where_expr_fill_value(v):
+    expr = np.arange(20) * v + 10
+    expr2 = np.arange(20) * v + 5
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    res = expr.where(filter, expr2)
+    assert isinstance(res, LinearExpression)
+    assert res.nterm == 1
+    assert (res.const[:10] == expr2.const[:10]).all()
+    assert (res.const[10:] == 10).all()
+
+
+def test_where_with_helper_dim_false(v):
+    expr = np.arange(20) * v
+    with pytest.raises(ValueError):
+        filter = expr.coeffs >= 10
+        expr.where(filter)
 
 
 def test_linear_expression_shift(v):
@@ -409,6 +454,21 @@ def test_linear_expression_shift(v):
     assert shifted.nterm == 1
     assert shifted.coeffs.loc[:1].isnull().all()
     assert (shifted.vars.loc[:1] == -1).all()
+
+
+def test_linear_expression_fillna(v):
+    expr = np.arange(20) * v + 10
+    assert expr.const.sum() == 200
+
+    filter = (expr.coeffs >= 10).any(TERM_DIM)
+    filtered = expr.where(filter)
+    assert isinstance(filtered, LinearExpression)
+    assert filtered.const.sum() == 100
+
+    filled = filtered.fillna(10)
+    assert isinstance(filled, LinearExpression)
+    assert filled.const.sum() == 200
+    assert filled.coeffs.isnull().sum() == 10
 
 
 def test_linear_expression_diff(v):

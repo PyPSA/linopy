@@ -317,7 +317,7 @@ def print_single_expression(c, v, const, model):
 
             res.append(f"{coeff_string}{var_string}")
 
-        if const != 0:
+        if not np.isnan(const):
             const_string = f"{const:+.4g}"
             if len(res):
                 res.append(f"{const_string[0]} {const_string[1:]}")

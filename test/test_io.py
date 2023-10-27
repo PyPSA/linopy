@@ -34,7 +34,7 @@ def test_to_netcdf(m, tmp_path):
     p = read_netcdf(fn)
 
     for k in m.scalar_attrs:
-        if k != "objective_value":
+        if k != "objective.value":
             assert getattr(m, k) == getattr(p, k)
 
     for k in m.dataset_attrs:
@@ -107,5 +107,5 @@ def test_to_blocks(tmp_path):
 
     m.blocks = xr.DataArray([1] * 10 + [2] * 10)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(NotImplementedError):
         m.to_block_files(tmp_path)

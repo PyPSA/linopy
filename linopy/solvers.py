@@ -4,6 +4,8 @@
 Linopy module for solving lp files with different solvers.
 """
 
+
+import contextlib
 import io
 import logging
 import os
@@ -29,20 +31,14 @@ available_solvers = []
 which = "where" if os.name == "nt" else "which"
 
 # the first available solver will be the default solver
-try:
+with contextlib.suppress(ImportError):
     import gurobipy
 
     available_solvers.append("gurobi")
-except (ModuleNotFoundError, ImportError):
-    pass
-
-try:
+with contextlib.suppress(ImportError):
     import highspy
 
     available_solvers.append("highs")
-except (ModuleNotFoundError, ImportError):
-    pass
-
 if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 
@@ -50,28 +46,18 @@ if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode 
 if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
-try:
+with contextlib.suppress(ImportError):
     import pyscipopt as scip
 
     available_solvers.append("scip")
-except (ModuleNotFoundError, ImportError):
-    pass
-
-
-try:
+with contextlib.suppress(ImportError):
     import cplex
 
     available_solvers.append("cplex")
-except (ModuleNotFoundError, ImportError):
-    pass
-
-try:
+with contextlib.suppress(ImportError):
     import xpress
 
     available_solvers.append("xpress")
-except (ModuleNotFoundError, ImportError):
-    pass
-
 logger = logging.getLogger(__name__)
 
 
@@ -87,12 +73,24 @@ def safe_get_solution(status, func):
     if status.is_ok:
         return func()
     elif status.status == SolverStatus.unknown:
-        try:
+        with contextlib.suppress(Exception):
             logger.warning("Solution status unknown. Trying to parse solution.")
             return func()
-        except Exception:
-            pass
     return Solution()
+
+
+def maybe_adjust_objective_sign(solution, sense, io_api, solver_name):
+    if sense == "min":
+        return
+
+    if np.isnan(solution.objective):
+        return
+
+    if io_api == "mps":
+        logger.info(
+            "Adjusting objective sign due to switched coefficients in MPS file."
+        )
+        solution.objective *= -1
 
 
 def set_int_index(series):
@@ -119,6 +117,7 @@ def run_cbc(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -201,6 +200,7 @@ def run_cbc(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cbc")
 
     return Result(status, solution)
 
@@ -214,6 +214,7 @@ def run_glpk(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -276,7 +277,7 @@ def run_glpk(
     def read_until_break(f):
         while True:
             line = f.readline()
-            if line == "\n" or line == "":
+            if line in ["\n", ""]:
                 break
             yield line
 
@@ -311,6 +312,7 @@ def run_glpk(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "glpk")
 
     return Result(status, solution)
 
@@ -324,6 +326,7 @@ def run_highs(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -401,6 +404,7 @@ def run_highs(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "highs")
 
     return Result(status, solution, h)
 
@@ -414,6 +418,7 @@ def run_cplex(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -427,7 +432,10 @@ def run_cplex(
     layered parameters, use a dot as a separator here,
     i.e. `**{'aa.bb.cc' : x}`.
     """
-    CONDITION_MAP = {"integer optimal solution": "optimal"}
+    CONDITION_MAP = {
+        "integer optimal solution": "optimal",
+        "integer optimal, tolerance": "optimal",
+    }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
@@ -465,11 +473,8 @@ def run_cplex(
 
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-    try:
+    with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
         m.solve()
-    except cplex.exceptions.errors.CplexSolverError as e:
-        pass
-
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -505,6 +510,7 @@ def run_cplex(
         return Solution(solution, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cplex")
 
     return Result(status, solution, m)
 
@@ -518,6 +524,7 @@ def run_gurobi(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -546,14 +553,14 @@ def run_gurobi(
         17: "internal_solver_error",
     }
 
-    # disable logging for this part, as gurobi output is doubled otherwise
-    logging.disable(50)
-
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    with gurobipy.Env() as env:
+    with contextlib.ExitStack() as stack:
+        if env is None:
+            env = stack.enter_context(gurobipy.Env())
+
         if io_api is None or io_api in ["lp", "mps"]:
             problem_fn = model.to_file(problem_fn)
             problem_fn = maybe_convert_path(problem_fn)
@@ -575,7 +582,6 @@ def run_gurobi(
         if warmstart_fn:
             m.read(warmstart_fn)
         m.optimize()
-    logging.disable(1)
 
     if basis_fn:
         try:
@@ -604,6 +610,7 @@ def run_gurobi(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
 
     return Result(status, solution, m)
 
@@ -709,6 +716,7 @@ def run_xpress(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -788,6 +796,7 @@ def run_xpress(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
 
     return Result(status, solution, m)
 
@@ -801,6 +810,7 @@ def run_pips(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """

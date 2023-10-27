@@ -15,7 +15,6 @@ from warnings import warn
 import dask
 import numpy as np
 import pandas as pd
-from deprecation import deprecated
 from numpy import floating, inf, issubdtype
 from xarray import DataArray, Dataset, align, broadcast, zeros_like
 from xarray.core.types import Dims
@@ -681,7 +680,13 @@ class Variable:
         """
         return self.to_linexpr().diff(dim, n)
 
-    def where(self, cond, other=-1, **kwargs):
+    def isnull(self):
+        """
+        Get a boolean mask with true values where there is missing values.
+        """
+        return self.labels == -1
+
+    def where(self, cond, other=None, **kwargs):
         """
         Filter variables based on a condition.
 
@@ -703,13 +708,35 @@ class Variable:
         -------
         linopy.Variable
         """
-        if isinstance(other, Variable):
+        if other is None:
+            other = self._fill_value
+        elif isinstance(other, Variable):
             other = other.data
         elif isinstance(other, ScalarVariable):
             other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
+        elif not isinstance(other, (dict, Dataset)):
+            warn(
+                "other argument of Variable.where should be a Variable, ScalarVariable or dict. "
+                "Other types will not be supported in the future.",
+                FutureWarning,
+            )
         return self.__class__(
             self.data.where(cond, other, **kwargs), self.model, self.name
         )
+
+    def fillna(self, fill_value):
+        """
+        Fill missing values with a variable.
+
+        This operation call ``xarray.DataArray.fillna`` but ensures preserving
+        the linopy.Variable type.
+
+        Parameters
+        ----------
+        fill_value : Variable/ScalarVariable
+            Variable to use for filling.
+        """
+        return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim, limit=None):
         """
@@ -757,7 +784,7 @@ class Variable:
         linopy.Variable
         """
         data = (
-            self.data.where(self.labels != -1)
+            self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
             .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
@@ -795,8 +822,6 @@ class Variable:
     drop_sel = varwrap(Dataset.drop_sel)
 
     drop_isel = varwrap(Dataset.drop_isel)
-
-    fillna = varwrap(Dataset.fillna)
 
     sel = varwrap(Dataset.sel)
 
@@ -1009,74 +1034,6 @@ class Variables:
         """
         res = [print_single_variable(self.model, v) for v in values]
         print("\n".join(res))
-
-    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
-    def iter_ravel(self, key, filter_missings=False):
-        """
-        Create an generator which iterates over all arrays in `key` and
-        flattens them.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to the variable labels.
-        filter_missings : bool, optional
-            Filter out values where the variables labels are -1. This will
-            raise an error if the filtered data still contains nan's.
-            When enabled, the data is loaded into memory. The default is False.
-
-
-        Yields
-        ------
-        flat : np.array/dask.array
-        """
-
-        for name, variable in self.items():
-            labels = variable.labels
-            ds = variable.data[key]
-            broadcasted = ds.broadcast_like(labels)
-            if labels.chunks is not None:
-                broadcasted = broadcasted.chunk(labels.chunks)
-
-            if filter_missings:
-                flat = np.ravel(broadcasted)
-                flat = flat[np.ravel(labels) != -1]
-                if pd.isna(flat).any():
-                    ds_name = self.dataset_names[self.dataset_attrs.index(key)]
-                    err = f"{ds_name} of variable '{name}' contains nan's."
-                    raise ValueError(err)
-            else:
-                flat = broadcasted.data.ravel()
-            yield flat
-
-    @deprecated("0.2", details="Use `to_dataframe` or `flat` instead.")
-    def ravel(self, key, filter_missings=False, compute=True):
-        """
-        Ravel and concate all arrays in `key` while aligning to
-        `broadcast_like`.
-
-        Parameters
-        ----------
-        key : str/Dataset
-            Key to be iterated over. Optionally pass a dataset which is
-            broadcastable to `broadcast_like`.
-        broadcast_like : str, optional
-            Name of the dataset to which the input data in `key` is aligned to.
-            The default is "labels".
-        filter_missings : bool, optional
-            Filter out values where `broadcast_like` data is -1.
-            The default is False.
-        compute : bool, optional
-            Whether to compute lazy data. The default is False.
-
-        Returns
-        -------
-        flat
-            One dimensional data with all values in `key`.
-        """
-        res = np.concatenate(list(self.iter_ravel(key, filter_missings)))
-        return dask.compute(res)[0] if compute else res
 
     @property
     def flat(self) -> pd.DataFrame:

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from scipy.sparse import csc_matrix
+from xarray import DataArray
 
 from linopy import Model, merge
 from linopy.constants import FACTOR_DIM, TERM_DIM
@@ -122,6 +123,15 @@ def test_merge_linear_expression_and_quadratic_expression(x, y):
 def test_quadratic_expression_loc(x):
     expr = x * x
     assert expr.loc[0].size < expr.loc[:5].size
+
+
+def test_quadratic_expression_isnull(x):
+    expr = np.arange(2) * x * x
+    filter = (expr.coeffs > 0).any(TERM_DIM)
+    expr = expr.where(filter)
+    isnull = expr.isnull()
+    assert isinstance(isnull, DataArray)
+    assert isnull.sum() == 1
 
 
 def test_quadratic_expression_flat(x, y):
