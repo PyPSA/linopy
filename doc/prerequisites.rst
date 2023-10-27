@@ -5,7 +5,7 @@ This guide will provide you with the necessary steps to get started with Linopy,
 
 Before you start, make sure you have the following:
 
-- Python 3.8 or later installed on your system.
+- Python 3.9 or later installed on your system.
 - Basic knowledge of Python and linear programming.
 
 
