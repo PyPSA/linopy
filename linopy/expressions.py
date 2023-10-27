@@ -18,7 +18,6 @@ import pandas as pd
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from deprecation import deprecated
 from numpy import arange, array, nan
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
@@ -504,11 +503,6 @@ class LinearExpression:
     def dims(self):
         # do explicitly sort as in vars (same as in coeffs)
         return {k: self.data.dims[k] for k in self.vars.dims}
-
-    @deprecated(details="Use `coord_dims` instead")
-    @property
-    def non_helper_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if not k.startswith("_")}
 
     @property
     def coord_dims(self):
