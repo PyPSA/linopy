@@ -79,7 +79,7 @@ def safe_get_solution(status, func):
     return Solution()
 
 
-def maybe_adjust_objective_sign(solution, sense, io_api, solver_name):
+def maybe_adjust_objective_sign(solution, sense, io_api):
     if sense == "min":
         return
 
@@ -200,7 +200,7 @@ def run_cbc(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cbc")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -312,7 +312,7 @@ def run_glpk(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "glpk")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -404,7 +404,7 @@ def run_highs(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "highs")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, h)
 
@@ -510,7 +510,7 @@ def run_cplex(
         return Solution(solution, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cplex")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -610,7 +610,7 @@ def run_gurobi(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -624,6 +624,7 @@ def run_scip(
     warmstart_fn=None,
     basis_fn=None,
     keep_files=False,
+    env=None,
     **solver_options,
 ):
     """
@@ -703,6 +704,7 @@ def run_scip(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -796,7 +798,7 @@ def run_xpress(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 

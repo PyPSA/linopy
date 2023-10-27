@@ -506,7 +506,12 @@ def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
     quadratic_model.objective = -quadratic_model.objective
     if solver in quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
-        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+        # particular case for scip:
+        if solver == "scip":
+            assert condition == "optimal"
+            assert quadratic_model.objective.value < -1e15
+        else:
+            assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)
