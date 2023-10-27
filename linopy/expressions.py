@@ -172,7 +172,8 @@ class LinearExpressionGroupby:
             idx = pd.MultiIndex.from_arrays(
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
-            ds = self.data.assign_coords({group_dim: idx})
+            coords = xr.Coordinates.from_pandas_multiindex(idx, group_dim)
+            ds = self.data.assign_coords(coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
 
@@ -180,7 +181,8 @@ class LinearExpressionGroupby:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
                 index.names = orig_group.columns
                 index.name = group_name
-                ds = xr.Dataset(ds.assign_coords({group_name: index}))
+                coords = xarray.Coordinates.from_pandas_multiindex(index, group_name)
+                ds = xr.Dataset(ds.assign_coords(coords))
 
             return LinearExpression(ds, self.model)
 
