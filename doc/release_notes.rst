@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.3.0
+-------------
+
 
 **New Features**
 
@@ -18,7 +22,7 @@ Upcoming Release
 * The function ``to_anonymous_constraint`` was removed in favor of the ``to_constraint`` function.
 * The support for python 3.8 has been dropped.
 
-Version 0.2.5
+Version 0.2.6
 -------------
 
 * The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.
