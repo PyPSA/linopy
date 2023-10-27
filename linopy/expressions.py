@@ -20,7 +20,7 @@ import xarray.core.groupby
 import xarray.core.rolling
 from numpy import arange, array, nan
 from scipy.sparse import csc_matrix
-from xarray import DataArray, Dataset
+from xarray import Coordinates, DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 from xarray.core.types import Dims
 
@@ -172,7 +172,7 @@ class LinearExpressionGroupby:
             idx = pd.MultiIndex.from_arrays(
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
-            coords = xr.Coordinates.from_pandas_multiindex(idx, group_dim)
+            coords = Coordinates.from_pandas_multiindex(idx, group_dim)
             ds = self.data.assign_coords(coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
@@ -181,7 +181,7 @@ class LinearExpressionGroupby:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
                 index.names = orig_group.columns
                 index.name = group_name
-                coords = xarray.Coordinates.from_pandas_multiindex(index, group_name)
+                coords = Coordinates.from_pandas_multiindex(index, group_name)
                 ds = xr.Dataset(ds.assign_coords(coords))
 
             return LinearExpression(ds, self.model)
