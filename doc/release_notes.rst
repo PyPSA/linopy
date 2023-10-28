@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+* Added solver interface for COPT by Cardinal Optimizer.
 
 Version 0.3.0
 -------------

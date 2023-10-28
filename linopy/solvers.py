@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "copt"]
 
 available_solvers = []
 
@@ -54,6 +54,10 @@ with contextlib.suppress(ImportError):
     import xpress
 
     available_solvers.append("xpress")
+with contextlib.suppress(ImportError):
+    import coptpy
+
+    available_solvers.append("copt")
 logger = logging.getLogger(__name__)
 
 
@@ -703,6 +707,95 @@ def run_xpress(
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
 
     return Result(status, solution, m)
+
+
+def run_copt(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the COPT solver.
+
+    https://guide.coap.online/copt/en-doc/index.html
+
+    For more information on solver options, see
+    https://guide.coap.online/copt/en-doc/parameter.html
+    """
+    # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
+    CONDITION_MAP = {}
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        logger.warning(
+            f"IO setting '{io_api}' not available for COPT solver. "
+            "Falling back to `lp`."
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    env = coptpy.Envr()
+
+    m = env.createModel()
+
+    m.read(problem_fn)
+
+    if log_fn:
+        m.setLogFile(log_fn)
+
+    for k, v in solver_options.items():
+        m.setParam(k, v)
+
+    if warmstart_fn:
+        m.readBasis(warmstart_fn)
+
+    m.solve()
+
+    if basis_fn and m.HasBasis:
+        try:
+            m.write(basis_fn)
+        except Exception as err:
+            logger.info("No model basis stored. Raised error: ", err)
+
+    condition = m.LpStatus if model.type == 'LP' else m.MipStatus
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.LpObjval if model.type == 'LP' else m.BestObj
+
+        m.getValues() # potential alternative
+        sol = m.getVars()
+        sol = pd.Series({v.index: v.x for v in sol}, dtype=float)
+        sol = set_int_index(sol)
+
+        try:
+            dual = m.getDuals()
+            dual = pd.Series(dtype=float)
+            dual = set_int_index(dual)
+        except coptpy.CoptError:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "copt")
+
+    return Result(status, solution, m)
+
 
 
 def run_pips(
