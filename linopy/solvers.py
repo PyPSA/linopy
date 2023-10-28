@@ -57,6 +57,9 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import mosek
 
+    with mosek.Task() as m:
+        m.optimize()
+
     available_solvers.append("mosek")
 logger = logging.getLogger(__name__)
 
