@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "mosek"]
 
 available_solvers = []
 
@@ -54,11 +54,15 @@ with contextlib.suppress(ImportError):
     import xpress
 
     available_solvers.append("xpress")
+with contextlib.suppress(ImportError):
+    import mosek
+
+    available_solvers.append("mosek")
 logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex"}, blocks={"pips"}
+    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek"}, blocks={"pips"}
 )
 
 
@@ -703,6 +707,113 @@ def run_xpress(
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
 
     return Result(status, solution, m)
+
+
+def run_mosek(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the MOSEK solver.
+
+    https://www.mosek.com/
+
+    For more information on solver options, see
+    https://docs.mosek.com/latest/pythonapi/parameters.html#doc-all-parameter-list
+    """
+    CONDITION_MAP = {
+        "solsta.unknown": "unknown",
+        "solsta.optimal": "optimal",
+        "solsta.integer_optimal": "optimal",
+        "solsta.prim_infeas_cer": "infeasible",
+        "solsta.dual_infeas_cer": "infeasible",
+    }
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        logger.warning(
+            f"IO setting '{io_api}' not available for xpress solver. "
+            "Falling back to `lp`."
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    with contextlib.ExitStack() as stack:
+        if env is None:
+            env = stack.enter_context(mosek.Env())
+
+        with env.Task() as m:
+
+            m.readdata(problem_fn)
+
+            for k, v in solver_options.items():
+                m.putparam(k, str(v))
+
+            if log_fn is not None:
+                m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
+
+            if warmstart_fn:
+                m.readdata(warmstart_fn)
+
+            m.optimize()
+
+            m.solutionsummary(mosek.streamtype.log)
+
+            if basis_fn:
+                try:
+                    m.writedata(basis_fn)
+                except mosek.Error as err:
+                    logger.info("No model basis stored. Raised error:", err)
+
+            soltype = None
+            possible_soltypes = [mosek.soltype.bas, mosek.soltype.itr, mosek.soltype.itg]
+            for possible_soltype in possible_soltypes:
+                try:
+                    if m.solutiondef(possible_soltype):
+                        soltype = possible_soltype
+                except mosek.Error:
+                    pass
+
+            condition = str(m.getsolsta(soltype))
+            termination_condition = CONDITION_MAP.get(condition, condition)
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = condition
+
+            def get_solver_solution() -> Solution:
+                objective = m.getprimalobj(soltype)
+
+                sol = m.getxx(soltype)
+                sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
+                sol = pd.Series(sol, dtype=float)
+                sol = set_int_index(sol)
+
+                try:
+                    dual = m.gety(soltype)
+                    dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
+                    dual = pd.Series(dual, dtype=float)
+                    dual = set_int_index(dual)
+                except mosek.Error:
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = pd.Series(dtype=float)
+
+                return Solution(sol, dual, objective)
+
+            solution = safe_get_solution(status, get_solver_solution)
+            maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mosek")
+
+    return Result(status, solution)
 
 
 def run_pips(

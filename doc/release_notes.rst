@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+**New Features**
+
+* Added solver interface for MOSEK.
 
 Version 0.3.0
 -------------
