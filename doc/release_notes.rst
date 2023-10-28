@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+**New Features**
+
+* Support for MindOpt solver was added.
 
 Version 0.3.0
 -------------
