@@ -768,15 +768,15 @@ def run_copt(
         except Exception as err:
             logger.info("No model basis stored. Raised error: ", err)
 
-    condition = m.LpStatus if model.type == 'LP' else m.MipStatus
+    condition = m.LpStatus if model.type == "LP" else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
 
     def get_solver_solution() -> Solution:
-        objective = m.LpObjval if model.type == 'LP' else m.BestObj
+        objective = m.LpObjval if model.type == "LP" else m.BestObj
 
-        m.getValues() # potential alternative
+        m.getValues()  # potential alternative
         sol = m.getVars()
         sol = pd.Series({v.index: v.x for v in sol}, dtype=float)
         sol = set_int_index(sol)
@@ -795,7 +795,6 @@ def run_copt(
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "copt")
 
     return Result(status, solution, m)
-
 
 
 def run_pips(
