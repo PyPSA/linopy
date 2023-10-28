@@ -755,7 +755,6 @@ def run_mosek(
             env = stack.enter_context(mosek.Env())
 
         with env.Task() as m:
-
             m.readdata(problem_fn)
 
             for k, v in solver_options.items():
@@ -778,7 +777,11 @@ def run_mosek(
                     logger.info("No model basis stored. Raised error:", err)
 
             soltype = None
-            possible_soltypes = [mosek.soltype.bas, mosek.soltype.itr, mosek.soltype.itg]
+            possible_soltypes = [
+                mosek.soltype.bas,
+                mosek.soltype.itr,
+                mosek.soltype.itg,
+            ]
             for possible_soltype in possible_soltypes:
                 try:
                     if m.solutiondef(possible_soltype):
@@ -811,7 +814,9 @@ def run_mosek(
                 return Solution(sol, dual, objective)
 
             solution = safe_get_solution(status, get_solver_solution)
-            maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mosek")
+            maybe_adjust_objective_sign(
+                solution, model.objective.sense, io_api, "mosek"
+            )
 
     return Result(status, solution)
 
