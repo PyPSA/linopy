@@ -749,6 +749,8 @@ def run_mindopt(
 
     problem_fn = maybe_convert_path(problem_fn)
     log_fn = "" if not log_fn else maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
 
     env = mindoptpy.Env(log_fn)
     env.start()
@@ -758,7 +760,19 @@ def run_mindopt(
     for k, v in solver_options.items():
         m.setParam(k, v)
 
+    if warmstart_fn:
+        try:
+            m.read(warmstart_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("Model basis could not be read. Raised error:", err)
+
     m.optimize()
+
+    if basis_fn:
+        try:
+            m.write(basis_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("No model basis stored. Raised error:", err)
 
     condition = m.status
     termination_condition = CONDITION_MAP.get(condition, condition)
