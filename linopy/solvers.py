@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "copt"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
 
 available_solvers = []
 
@@ -730,7 +730,19 @@ def run_copt(
     https://guide.coap.online/copt/en-doc/parameter.html
     """
     # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
-    CONDITION_MAP = {}
+    CONDITION_MAP = {
+        0: "unstarted",
+        1: "optimal",
+        2: "infeasible",
+        3: "unbounded",
+        4: "infeasible_or_unbounded",
+        5: "numerical",
+        6: "node_limit",
+        7: "imprecise",
+        8: "time_limit",
+        9: "unfinished",
+        10: "interrupted",
+    }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
@@ -749,7 +761,7 @@ def run_copt(
 
     m = env.createModel()
 
-    m.read(problem_fn)
+    m.read(str(problem_fn))
 
     if log_fn:
         m.setLogFile(log_fn)
@@ -776,14 +788,11 @@ def run_copt(
     def get_solver_solution() -> Solution:
         objective = m.LpObjval if model.type == "LP" else m.BestObj
 
-        m.getValues()  # potential alternative
-        sol = m.getVars()
-        sol = pd.Series({v.index: v.x for v in sol}, dtype=float)
+        sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
         sol = set_int_index(sol)
 
         try:
-            dual = m.getDuals()
-            dual = pd.Series(dtype=float)
+            dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
             dual = set_int_index(dual)
         except coptpy.CoptError:
             logger.warning("Dual values of MILP couldn't be parsed")
@@ -793,6 +802,8 @@ def run_copt(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "copt")
+
+    env.close()
 
     return Result(status, solution, m)
 
