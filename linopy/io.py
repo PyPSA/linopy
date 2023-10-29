@@ -277,7 +277,7 @@ def integers_to_file(m, f, log=False, batch_size=1000, integer_label="general"):
         f.writelines(batch)
 
 
-def to_file(m, fn, integer_label='general'):
+def to_file(m, fn, integer_label="general"):
     """
     Write out a model to a lp or mps file.
     """
@@ -297,7 +297,9 @@ def to_file(m, fn, integer_label='general'):
             constraints_to_file(m, f, log=log, batch_size=batch_size)
             bounds_to_file(m, f, log=log, batch_size=batch_size)
             binaries_to_file(m, f, log=log, batch_size=batch_size)
-            integers_to_file(m, f, log=log, batch_size=batch_size, integer_label=integer_label)
+            integers_to_file(
+                m, f, log=log, batch_size=batch_size, integer_label=integer_label
+            )
             f.write("end\n")
 
             logger.info(f" Writing time: {round(time.time()-start, 2)}s")
