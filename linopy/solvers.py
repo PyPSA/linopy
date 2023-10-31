@@ -927,9 +927,7 @@ def run_mosek(
                 return Solution(sol, dual, objective)
 
             solution = safe_get_solution(status, get_solver_solution)
-            maybe_adjust_objective_sign(
-                solution, model.objective.sense, io_api
-            )
+            maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 

@@ -62,7 +62,6 @@ setup(
             "gurobipy",
             "highspy",
         ],
-
         "solvers": [
             "gurobipy",
             "highspy",
