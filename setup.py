@@ -15,9 +15,6 @@ from setuptools import find_packages, setup
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
-if sys.version_info >= (3, 11):
-    SOLVERS.append("pyscipopt")
-
 setup(
     name="linopy",
     author="Fabian Hofmann",
@@ -70,7 +67,7 @@ setup(
             "mosek",
             "mindoptpy",
             "coptpy",
-            "sciptopt",
+            "pyscipopt",
         ],
     },
     classifiers=[
