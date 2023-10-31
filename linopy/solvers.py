@@ -747,7 +747,16 @@ def run_mosek(
 
     if io_api is not None and io_api not in ["lp", "mps"]:
         logger.warning(
-            f"IO setting '{io_api}' not available for xpress solver. "
+            f"IO setting '{io_api}' not available for mosek solver. "
+            "Falling back to `lp`."
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
 
     with contextlib.ExitStack() as stack:
         if env is None:
