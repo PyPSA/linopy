@@ -127,6 +127,7 @@ Fri    0          4
 * [Gurobi](https://www.gurobi.com/)
 * [Xpress](https://www.fico.com/en/products/fico-xpress-solver)
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
+* [MOSEK](https://www.mosek.com/)
 * [COPT](https://www.shanshu.ai/copt)
 
 Note that these do have to be installed by the user separately.

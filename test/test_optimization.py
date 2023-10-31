@@ -345,6 +345,7 @@ def test_solver_options(model, solver, io_api):
         "scip": {"time_limit": 1},
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
+        "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }

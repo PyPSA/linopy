@@ -133,6 +133,7 @@ Solvers
     solvers.run_cplex
     solvers.run_gurobi
     solvers.run_xpress
+    solvers.run_mosek
     solvers.run_mindopt
     solvers.run_copt
 

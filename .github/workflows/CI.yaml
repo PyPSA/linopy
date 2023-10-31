@@ -75,6 +75,8 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
     - name: Test with pytest
+      env:
+        MOSEKLM_LICENSE_FILE: ${{ secrets.MSK_LICENSE }}
       run: |
         pytest --cov=./ --cov-report=xml linopy --doctest-modules test
 
