@@ -134,6 +134,7 @@ Solvers
     solvers.run_gurobi
     solvers.run_xpress
     solvers.run_mosek
+    solvers.run_copt
 
 Solving
 =======

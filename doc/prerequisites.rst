@@ -37,6 +37,7 @@ Linopy won't work without a solver. Currently, the following solvers are support
 -  `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__ - closed source, commercial, very fast
 -  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
 -  `MOSEK <https://www.mosek.com/>`__
+-  `COPT <https://www.shanshu.ai/copt>`__ - closed source, commercial, very fast
 
 For a subset of the solvers, Linopy provides a wrapper.
 

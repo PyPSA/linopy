@@ -46,6 +46,7 @@ flexible data-handling features:
    - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
    - `MOSEK <https://www.mosek.com/>`__
+   - `COPT <https://www.shanshu.ai/copt>`__
 
 
 
