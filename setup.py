@@ -64,6 +64,7 @@ setup(
             "cplex",
             "xpress",
             "mindoptpy",
+            "coptpy",
         ],
     },
     classifiers=[

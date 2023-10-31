@@ -346,6 +346,7 @@ def test_solver_options(model, solver, io_api):
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
         "mindopt": {"MaxTime": 1},
+        "copt": {"TimeLimit": 1},
     }
     status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])
     assert status == "ok"
