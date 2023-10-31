@@ -65,7 +65,7 @@ with contextlib.suppress(ImportError):
     import coptpy
 
     available_solvers.append("copt")
-    
+
 logger = logging.getLogger(__name__)
 
 
@@ -819,7 +819,7 @@ def run_mosek(
 
     return Result(status, solution)
 
-  
+
 def run_copt(
     model,
     io_api=None,
