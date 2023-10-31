@@ -4,6 +4,9 @@ Release Notes
 Upcoming Release
 ----------------
 
+**New Features**
+
+* Support for MindOpt solver was added.
 * Added solver interface for COPT by Cardinal Optimizer.
 
 Version 0.3.0

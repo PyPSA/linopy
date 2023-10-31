@@ -55,6 +55,10 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("xpress")
 with contextlib.suppress(ImportError):
+    import mindoptpy
+
+    available_solvers.append("mindopt")
+with contextlib.suppress(ImportError):
     import coptpy
 
     available_solvers.append("copt")
@@ -62,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex"}, blocks={"pips"}
+    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mindopt"}, blocks={"pips"}
 )
 
 
@@ -806,6 +810,98 @@ def run_copt(
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "copt")
 
     env.close()
+
+    return Result(status, solution, m)
+
+
+def run_mindopt(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the MindOpt solver.
+
+    https://solver.damo.alibaba.com/doc/en/html/index.html
+
+    For more information on solver options, see
+    https://solver.damo.alibaba.com/doc/en/html/API2/param/index.html
+    """
+    CONDITION_MAP = {
+        -1: "error",
+        0: "unknown",
+        1: "optimal",
+        2: "infeasible",
+        3: "unbounded",
+        4: "infeasible_or_unbounded",
+        5: "suboptimal",
+    }
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        logger.warning(
+            f"IO setting '{io_api}' not available for mindopt solver. "
+            "Falling back to `lp`."
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = "" if not log_fn else maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if env is None:
+        env = mindoptpy.Env(log_fn)
+    env.start()
+
+    m = mindoptpy.read(problem_fn, env)
+
+    for k, v in solver_options.items():
+        m.setParam(k, v)
+
+    if warmstart_fn:
+        try:
+            m.read(warmstart_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("Model basis could not be read. Raised error:", err)
+
+    m.optimize()
+
+    if basis_fn:
+        try:
+            m.write(basis_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("No model basis stored. Raised error:", err)
+
+    condition = m.status
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.objval
+
+        sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
+        sol = set_int_index(sol)
+
+        try:
+            dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
+            dual = set_int_index(dual)
+        except mindoptpy.MindoptError:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mindopt")
 
     return Result(status, solution, m)
 
