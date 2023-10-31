@@ -7,6 +7,16 @@ Upcoming Release
 
 **New Features**
 
+* Added solver interface for MOSEK.
+* Support for MindOpt solver was added.
+* Added solver interface for COPT by Cardinal Optimizer.
+
+Version 0.3.0
+-------------
+
+
+**New Features**
+
 * It is now possible to set the sense of the objective function to `minimize` or `maximize`. Therefore, a new class `Objective` was introduced which is used in `Model.objective`. It supports the same arithmetic operations as `LinearExpression` and `QuadraticExpression` and contains a `sense` attribute which can be set to `minimize` or `maximize`.
 * The `fillna` function for variables was made more secure by raising a warning if the fill value is not of  variable-like type.
 * The `where` and `fillna` functions for expressions were made more flexible: When passing a scalar value or a DataArray, the values are added as constants to the expression, where there were missing values before. If another expression is passed, the values are added to the expression, where there were missing values before.
@@ -20,7 +30,7 @@ Upcoming Release
 * The function ``to_anonymous_constraint`` was removed in favor of the ``to_constraint`` function.
 * The support for python 3.8 has been dropped.
 
-Version 0.2.5
+Version 0.2.6
 -------------
 
 * The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.

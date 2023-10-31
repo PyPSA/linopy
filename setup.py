@@ -15,13 +15,6 @@ from setuptools import find_packages, setup
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
-SOLVERS = [
-    "gurobipy",
-    "highspy",
-    "cplex",
-    "xpress",
-]
-
 if sys.version_info >= (3, 11):
     SOLVERS.append("pyscipopt")
 
@@ -69,7 +62,17 @@ setup(
             "gurobipy",
             "highspy",
         ],
-        "solvers": SOLVERS,
+
+        "solvers": [
+            "gurobipy",
+            "highspy",
+            "cplex",
+            "xpress",
+            "mosek",
+            "mindoptpy",
+            "coptpy",
+            "sciptopt",
+        ],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
