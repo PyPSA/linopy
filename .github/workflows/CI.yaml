@@ -36,7 +36,7 @@ jobs:
       run: |
         sudo apt-get install glpk-utils
         sudo apt-get install coinor-cbc
-        pip install highspy
+        pip install highspy mindoptpy
 
     - name: Install macos dependencies
       if: matrix.os == 'macos-latest'

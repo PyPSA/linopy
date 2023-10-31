@@ -64,6 +64,7 @@ setup(
             "cplex",
             "xpress",
             "mosek",
+            "mindoptpy",
             "coptpy",
         ],
     },

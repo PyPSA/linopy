@@ -7,6 +7,7 @@ Upcoming Release
 **New Features**
 
 * Added solver interface for MOSEK.
+* Support for MindOpt solver was added.
 * Added solver interface for COPT by Cardinal Optimizer.
 
 Version 0.3.0

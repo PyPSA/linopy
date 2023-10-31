@@ -42,6 +42,7 @@ flexible data-handling features:
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
    - `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
+   - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
    - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
