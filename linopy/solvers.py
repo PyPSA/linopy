@@ -579,34 +579,36 @@ def run_gurobi(
             m.read(warmstart_fn)
         m.optimize()
 
-    if basis_fn:
-        try:
-            m.write(basis_fn)
-        except gurobipy.GurobiError as err:
-            logger.info("No model basis stored. Raised error: ", err)
+        if basis_fn:
+            try:
+                m.write(basis_fn)
+            except gurobipy.GurobiError as err:
+                logger.info("No model basis stored. Raised error: ", err)
 
-    condition = m.status
-    termination_condition = CONDITION_MAP.get(condition, condition)
-    status = Status.from_termination_condition(termination_condition)
-    status.legacy_status = condition
+        condition = m.status
+        termination_condition = CONDITION_MAP.get(condition, condition)
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = condition
 
-    def get_solver_solution() -> Solution:
-        objective = m.ObjVal
+        def get_solver_solution() -> Solution:
+            objective = m.ObjVal
 
-        sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
-        sol = set_int_index(sol)
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+            sol = set_int_index(sol)
 
-        try:
-            dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float)
-            dual = set_int_index(dual)
-        except AttributeError:
-            logger.warning("Dual values of MILP couldn't be parsed")
-            dual = pd.Series(dtype=float)
+            try:
+                dual = pd.Series(
+                    {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
+                )
+                dual = set_int_index(dual)
+            except AttributeError:
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = pd.Series(dtype=float)
 
-        return Solution(sol, dual, objective)
+            return Solution(sol, dual, objective)
 
-    solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
+        solution = safe_get_solution(status, get_solver_solution)
+        maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
 
     return Result(status, solution, m)
 
