@@ -855,7 +855,8 @@ def run_mindopt(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    env = mindoptpy.Env(log_fn)
+    if env is None:
+        env = mindoptpy.Env(log_fn)
     env.start()
 
     m = mindoptpy.read(problem_fn, env)
