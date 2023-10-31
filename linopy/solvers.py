@@ -74,7 +74,8 @@ logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek", "mindopt"}, blocks={"pips"}
+    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek", "mindopt"},
+    blocks={"pips"},
 )
 
 
