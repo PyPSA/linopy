@@ -45,6 +45,7 @@ flexible data-handling features:
    - `Gurobi <https://www.gurobi.com/>`__
    - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
+   - `COPT <https://www.shanshu.ai/copt>`__
 
 
 

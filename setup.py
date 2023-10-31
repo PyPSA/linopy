@@ -63,6 +63,7 @@ setup(
             "highspy",
             "cplex",
             "xpress",
+            "coptpy",
         ],
     },
     classifiers=[
