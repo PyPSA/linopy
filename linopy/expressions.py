@@ -279,7 +279,7 @@ class LinearExpression:
 
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": 0})
+            data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
         elif isinstance(data, DataArray):
             # assume only constant are passed
             const = fill_missing_coords(data)
@@ -306,7 +306,9 @@ class LinearExpression:
             raise ValueError("data must contain one dimension ending with '_term'")
 
         if "const" not in data:
-            data = data.assign(const=0)
+            data = data.assign(const=0.0)
+        elif not np.issubdtype(data.const, np.floating):
+            data["const"] = data.const.astype(float)
 
         data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
         data[["coeffs", "vars"]] = xr.broadcast(
