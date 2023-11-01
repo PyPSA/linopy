@@ -68,7 +68,10 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import coptpy
 
-    available_solvers.append("copt")
+    with contextlib.suppress(coptpy.CoptError):
+        coptpy.Envr()
+
+        available_solvers.append("copt")
 
 logger = logging.getLogger(__name__)
 
