@@ -121,7 +121,10 @@ def save_join(*dataarrays, integer_dtype=False):
     try:
         arrs = align(*dataarrays, join="exact")
     except ValueError:
-        warn("Coordinates across variables not equal. Perform outer join.", UserWarning)
+        warn(
+            "Coordinates across variables not equal. Perform outer join.",
+            UserWarning,
+        )
         arrs = align(*dataarrays, join="outer")
         if integer_dtype:
             arrs = [ds.fillna(-1).astype(int) for ds in arrs]
@@ -317,7 +320,7 @@ def print_single_expression(c, v, const, model):
 
             res.append(f"{coeff_string}{var_string}")
 
-        if not np.isnan(const):
+        if not np.isnan(const) and not (const == 0.0 and len(res) >= 1):
             const_string = f"{const:+.4g}"
             if len(res):
                 res.append(f"{const_string[0]} {const_string[1:]}")
@@ -341,7 +344,10 @@ def print_single_expression(c, v, const, model):
         res = print_line(expr, const)
         res += " ... "
         expr = list(
-            zip(c[-truncate:], model.variables.get_label_position(v[-truncate:]))
+            zip(
+                c[-truncate:],
+                model.variables.get_label_position(v[-truncate:]),
+            )
         )
         residual = print_line(expr, const)
         if residual != " None":

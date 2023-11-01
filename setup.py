@@ -7,12 +7,26 @@ Created on Wed Mar 10 11:04:43 2021.
 """
 
 
+import sys
 from codecs import open
 
 from setuptools import find_packages, setup
 
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
+
+
+SOLVERS = [
+    "gurobipy",
+    "highspy",
+    "cplex",
+    "mosek",
+    "mindoptpy",
+    "coptpy",
+]
+
+if sys.version_info <= (3, 10):
+    SOLVERS.append("xpress")
 
 setup(
     name="linopy",
@@ -58,15 +72,7 @@ setup(
             "gurobipy",
             "highspy",
         ],
-        "solvers": [
-            "gurobipy",
-            "highspy",
-            "cplex",
-            "xpress",
-            "mosek",
-            "mindoptpy",
-            "coptpy",
-        ],
+        "solvers": SOLVERS,
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

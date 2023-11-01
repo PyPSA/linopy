@@ -126,7 +126,7 @@ def test_anonymous_constraint_with_constant_on_lhs(x, y):
     expr = 10 * x + y + 10
     con = expr == 0
     assert isinstance(con.lhs, LinearExpression)
-    assert (con.lhs.const == 0).all()
+    assert (con.lhs.const == 0.0).all()
     assert (con.sign == EQUAL).all()
     assert (con.rhs == -10).all()
 

@@ -68,7 +68,10 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import coptpy
 
-    available_solvers.append("copt")
+    with contextlib.suppress(coptpy.CoptError):
+        coptpy.Envr()
+
+        available_solvers.append("copt")
 
 logger = logging.getLogger(__name__)
 
@@ -884,7 +887,8 @@ def run_copt(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    env = coptpy.Envr()
+    if env is None:
+        env = coptpy.Envr()
 
     m = env.createModel()
 
@@ -1023,6 +1027,8 @@ def run_mindopt(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mindopt")
+
+    env.dispose()
 
     return Result(status, solution, m)
 
