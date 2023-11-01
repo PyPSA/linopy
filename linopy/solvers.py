@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "copt"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
 
 available_solvers = []
 
