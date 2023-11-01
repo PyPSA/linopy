@@ -884,7 +884,8 @@ def run_copt(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    env = coptpy.Envr()
+    if env is None:
+        env = coptpy.Envr()
 
     m = env.createModel()
 
