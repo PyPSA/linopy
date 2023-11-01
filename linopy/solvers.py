@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "copt"]
 
 available_solvers = []
 
@@ -1027,6 +1027,8 @@ def run_mindopt(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mindopt")
+
+    env.dispose()
 
     return Result(status, solution, m)
 
