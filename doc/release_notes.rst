@@ -1,14 +1,18 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.3.0
+-------------
 
 **New Features**
 
 * Added solver interface for MOSEK.
 * Support for MindOpt solver was added.
 * Added solver interface for COPT by Cardinal Optimizer.
+* Type consistency with fill values for constant values was improved, this prevent dtype warnings put out by xarray/numpy.
 
 Version 0.3.0
 -------------
