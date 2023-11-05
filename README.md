@@ -9,7 +9,7 @@
 
 **linopy** is heavily based on [xarray](https://github.com/pydata/xarray) which allows for many flexible data-handling features:
 
-* Define (arrays of) contnuous or binary variables with **coordinates**, e.g. time, consumers, etc.
+* Define (arrays of) continuous or binary variables with **coordinates**, e.g. time, consumers, etc.
 * Apply **arithmetic operations** on the variables like adding, substracting, multiplying with all the  **broadcasting** potentials of xarray
 * Apply **arithmetic operations** on the **linear expressions** (combination of variables)
 * **Group terms** of a linear expression by coordinates
