@@ -57,10 +57,11 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import mosek
 
-    with mosek.Task() as m:
-        m.optimize()
+    with contextlib.suppress(mosek.Error):
+        with mosek.Task() as m:
+            m.optimize()
 
-    available_solvers.append("mosek")
+        available_solvers.append("mosek")
 with contextlib.suppress(ImportError):
     import mindoptpy
 
