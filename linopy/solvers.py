@@ -58,8 +58,10 @@ with contextlib.suppress(ImportError):
     import mosek
 
     with contextlib.suppress(mosek.Error):
-        with mosek.Task() as m:
-            m.optimize()
+        with mosek.Env() as m:
+            t = m.Task()
+            t.optimize()
+            m.checkinall()
 
         available_solvers.append("mosek")
 with contextlib.suppress(ImportError):
