@@ -330,6 +330,7 @@ class LinearExpression:
         """
         max_lines = options["display_max_rows"]
         dims = list(self.coord_dims)
+        ndim = len(dims)
         dim_sizes = list(self.coord_dims.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
@@ -337,7 +338,7 @@ class LinearExpression:
 
         header_string = self.type
 
-        if size > 1:
+        if size > 1 or ndim > 0:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
