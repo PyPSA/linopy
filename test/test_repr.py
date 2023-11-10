@@ -144,9 +144,9 @@ def test_single_constraint_repr(var):
 
 @pytest.mark.parametrize("var", variables)
 def test_single_array_constraint_repr(var):
-    coord = [[var.indexes[c][0]] for c in var.dims]
-    repr(var.loc[*coord] == 0)
-    repr(1 * var.loc[*coord] - var.loc[*coord] == 0)
+    coord = {c: [var.indexes[c][0]] for c in var.dims}
+    repr(var.sel(coord) == 0)
+    repr(1 * var.sel(coord) - var.sel(coord) == 0)
 
 
 @pytest.mark.parametrize("con", constraints)
