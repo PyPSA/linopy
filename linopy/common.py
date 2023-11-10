@@ -332,6 +332,7 @@ def print_single_expression(c, v, const, model):
         mask = v != -1
         c, v = c[mask], v[mask]
     else:
+        # case for quadratic expressions
         mask = (v != -1).any(0)
         c = c[mask]
         v = v[:, mask]

@@ -76,63 +76,82 @@ cuc = m.add_constraints(cuc_, name="cuc")
 cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.labels, False))
 
 
-def test_variable_repr():
-    for var in [u, v, x, y, z, a, b, c, d, e, f]:
-        repr(var)
+variables = [u, v, x, y, z, a, b, c, d, e, f]
+expressions = [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc, lq, lq2, lq3]
+anonymous_constraints = [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_]
+constraints = [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked]
 
 
-def test_scalar_variable_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
-        coord = tuple(var.indexes[c][0] for c in var.dims)
-        repr(var[coord])
+@pytest.mark.parametrize("var", variables)
+def test_variable_repr(var):
+    repr(var)
 
 
-def test_single_variable_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
-        coord = tuple(var.indexes[c][0] for c in var.dims)
-        repr(var.loc[coord])
+@pytest.mark.parametrize("var", variables)
+def test_scalar_variable_repr(var):
+    coord = tuple(var.indexes[c][0] for c in var.dims)
+    repr(var[coord])
 
 
-def test_linear_expression_repr():
-    for expr in [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc, lq, lq2, lq3]:
-        repr(expr)
+@pytest.mark.parametrize("var", variables)
+def test_single_variable_repr(var):
+    coord = tuple(var.indexes[c][0] for c in var.dims)
+    repr(var.loc[coord])
+
+
+@pytest.mark.parametrize("expr", expressions)
+def test_linear_expression_repr(expr):
+    repr(expr)
 
 
 def test_linear_expression_long():
     repr(x.sum())
 
 
-def test_scalar_linear_expression_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
-        coord = tuple(var.indexes[c][0] for c in var.dims)
-        repr(1 * var[coord])
+@pytest.mark.parametrize("var", variables)
+def test_scalar_linear_expression_repr(var):
+    coord = tuple(var.indexes[c][0] for c in var.dims)
+    repr(1 * var[coord])
 
 
-def test_single_linear_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
-        coord = tuple(var.indexes[c][0] for c in var.dims)
-        repr(1 * var.loc[coord])
+@pytest.mark.parametrize("var", variables)
+def test_single_linear_repr(var):
+    coord = tuple(var.indexes[c][0] for c in var.dims)
+    repr(1 * var.loc[coord])
 
 
-def test_anonymous_constraint_repr():
-    for con in [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_]:
-        repr(con)
+@pytest.mark.parametrize("var", variables)
+def test_single_array_linear_repr(var):
+    coord = [[var.indexes[c][0]] for c in var.dims]
+    repr(1 * var.loc[*coord])
+
+
+@pytest.mark.parametrize("con", anonymous_constraints)
+def test_anonymous_constraint_repr(con):
+    repr(con)
 
 
 def test_scalar_constraint_repr():
     repr(u[0, 0] >= 0)
 
 
-def test_single_constraint_repr():
-    for var in [u, v, x, y, z, a, b, c, d]:
-        coord = tuple(var.indexes[c][0] for c in var.dims)
-        repr(var.loc[coord] == 0)
-        repr(1 * var.loc[coord] - var.loc[coord] == 0)
+@pytest.mark.parametrize("var", variables)
+def test_single_constraint_repr(var):
+    coord = tuple(var.indexes[c][0] for c in var.dims)
+    repr(var.loc[coord] == 0)
+    repr(1 * var.loc[coord] - var.loc[coord] == 0)
 
 
-def test_constraint_repr():
-    for con in [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked]:
-        repr(con)
+@pytest.mark.parametrize("var", variables)
+def test_single_array_constraint_repr(var):
+    coord = [[var.indexes[c][0]] for c in var.dims]
+    repr(var.loc[*coord] == 0)
+    repr(1 * var.loc[*coord] - var.loc[*coord] == 0)
+
+
+@pytest.mark.parametrize("con", constraints)
+def test_constraint_repr(con):
+    repr(con)
 
 
 def test_empty_repr():
@@ -141,15 +160,15 @@ def test_empty_repr():
     repr(lu.sel(dim_0=[]) >= 0)
 
 
-def test_print_options():
-    for o in [v, lv, cv_, cv]:
-        default_repr = repr(o)
-        with options as opts:
-            opts.set_value(display_max_rows=20)
-            longer_repr = repr(o)
-        assert len(default_repr) < len(longer_repr)
+@pytest.mark.parametrize("obj", [v, lv, cv_, cv])
+def test_print_options(obj):
+    default_repr = repr(obj)
+    with options as opts:
+        opts.set_value(display_max_rows=20)
+        longer_repr = repr(obj)
+    assert len(default_repr) < len(longer_repr)
 
-        longer_repr = o.print(display_max_rows=20)
+    longer_repr = obj.print(display_max_rows=20)
 
 
 def test_print_labels():
