@@ -122,8 +122,8 @@ def test_single_linear_repr(var):
 
 @pytest.mark.parametrize("var", variables)
 def test_single_array_linear_repr(var):
-    coord = [[var.indexes[c][0]] for c in var.dims]
-    repr(1 * var.loc[*coord])  # noqa: E999
+    coord = {c: [var.indexes[c][0]] for c in var.dims}
+    repr(1 * var.sel(coord))
 
 
 @pytest.mark.parametrize("con", anonymous_constraints)
