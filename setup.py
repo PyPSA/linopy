@@ -67,6 +67,7 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
+            "netcdf4",
             "pre-commit",
             "paramiko",
             "gurobipy",
