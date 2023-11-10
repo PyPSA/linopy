@@ -63,3 +63,14 @@ def test_matrices_duplicated_variables():
     A = m.matrices.A.todense()
     assert A[0, 0] == 2
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
+
+
+def test_matrices_float_c():
+    # https://github.com/PyPSA/linopy/issues/200
+    m = Model()
+
+    x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+    m.add_objective(x * 1.5)
+
+    c = m.matrices.c
+    assert np.all(c == np.array([1.5, 1.5]))
