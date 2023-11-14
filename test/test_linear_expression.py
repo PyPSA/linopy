@@ -13,7 +13,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
-from linopy.constants import TERM_DIM
+from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.testing import assert_linequal
 
 
@@ -74,12 +74,24 @@ def test_linexpr_with_wrong_data(m):
     with pytest.raises(ValueError):
         LinearExpression(data, m)
 
-    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
-    coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
-    vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    # with model as None
+    coeffs = xr.DataArray(np.array([1, 2]), dims=[TERM_DIM])
+    vars = xr.DataArray(np.array([1, 2]), dims=[TERM_DIM])
     data = xr.Dataset({"coeffs": coeffs, "vars": vars})
     with pytest.raises(ValueError):
         LinearExpression(data, None)
+
+
+def test_linexpr_with_helper_dims_as_coords(m):
+    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
+    coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
+
+    data = xr.Dataset({"coeffs": coeffs, "vars": vars})
+    assert set(HELPER_DIMS).intersection(set(data.coords))
+
+    expr = LinearExpression(data, m)
+    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
 
 
 def test_linexpr_with_data_without_coords(m):
