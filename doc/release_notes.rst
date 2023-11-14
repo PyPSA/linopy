@@ -7,7 +7,7 @@ Upcoming Release
 * The IO with NetCDF files was made more secure and fixed for some cases. In particular, variables and constraints with a dash in the name are now supported (as used by PyPSA). The object sense and value are now properly stored and retrieved from the netcdf file.
 * The IO with NetCDF file now supports multiindexed coordinates.
 * The representation of single indexed expressions and constraints with non-empty dimensions/coordinates was fixed, e.g. `x.loc[["a"]] > 0` where `x` has only one dimension. Therefore the representation now shows the coordinates.
-
+* The creation of ``LinearExpression`` and ``Constraints`` was made robust against the case where the ``data`` argument is a ``xarray.DataArray`` with helper dimensions (like "_term" etc.) unintentionally assigned as coordinates.
 
 Version 0.3.1
 -------------
