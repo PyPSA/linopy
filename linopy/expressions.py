@@ -318,6 +318,11 @@ class LinearExpression:
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., TERM_DIM))
 
+        # ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            # TODO: add a warning here, routines should be safe against this
+            data = data.drop(drop_dims)
+
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
 

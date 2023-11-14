@@ -650,6 +650,11 @@ def read_netcdf(path, **kwargs):
 
     def get_prefix(ds, prefix):
         ds = ds[[k for k in ds if has_prefix(k, prefix)]]
+        multiindexes = []
+        for dim in ds.dims:
+            for name in ds.attrs.get(f"{dim}_multiindex", []):
+                multiindexes.append(prefix + "-" + name)
+        ds = ds.drop(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
@@ -668,15 +673,16 @@ def read_netcdf(path, **kwargs):
     vars = [k for k in ds if k.startswith("variables")]
     var_names = list({k.rsplit("-", 1)[0] for k in vars})
     variables = {}
-    for k in var_names:
+    for k in sorted(var_names):
         name = remove_prefix(k, "variables")
         variables[name] = Variable(get_prefix(ds, k), m, name)
+
     m._variables = Variables(variables, m)
 
     cons = [k for k in ds if k.startswith("constraints")]
     con_names = list({k.rsplit("-", 1)[0] for k in cons})
     constraints = {}
-    for k in con_names:
+    for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
         constraints[name] = Constraint(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
