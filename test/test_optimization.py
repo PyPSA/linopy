@@ -555,6 +555,13 @@ def test_basis_and_warmstart(tmp_path, model, solver, io_api):
     model.solve(solver, warmstart_fn=basis_fn)
 
 
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
+    solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
+    status, condition = model.solve(solver, io_api=io_api, solution_fn=solution_fn)
+    assert status == "ok"
+
+
 # def init_model_large():
 #     m = Model()
 #     time = pd.Index(range(10), name="time")

@@ -171,8 +171,7 @@ def run_cbc(
     if basis_fn:
         command += f"-basisO {basis_fn} "
 
-    if not os.path.exists(solution_fn):
-        os.mknod(solution_fn)
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     command = command.strip()
 
@@ -262,6 +261,8 @@ def run_glpk(
 
     problem_fn = model.to_file(problem_fn)
     suffix = problem_fn.suffix[1:]
+
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
