@@ -20,7 +20,7 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
-from linopy.constants import TERM_DIM, ModelStatus, TerminationCondition
+from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import (
     LinearExpression,
@@ -561,6 +561,11 @@ class Model:
             raise ValueError(
                 f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
             )
+
+        # ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            # TODO: add a warning here, routines should be safe against this
+            data = data.drop(drop_dims)
 
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
