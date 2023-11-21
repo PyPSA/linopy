@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+
+Version 0.3.2
+-------------
 
 * The IO with NetCDF files was made more secure and fixed for some cases. In particular, variables and constraints with a dash in the name are now supported (as used by PyPSA). The object sense and value are now properly stored and retrieved from the netcdf file.
 * The IO with NetCDF file now supports multiindexed coordinates.
