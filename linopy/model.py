@@ -651,19 +651,28 @@ class Model:
 
     def remove_constraints(self, name):
         """
-        Remove all constraints stored under reference name `name` from the
+        Remove all constraints stored under reference name 'name' from the
         model.
 
         Parameters
         ----------
-        name : str
-            Reference name of the constraints which to remove, same as used in
-            `model.add_constraints`.
+        name : str or list of str
+            Reference name(s) of the constraints to remove. If a single name is
+            provided, only that constraint will be removed. If a list of names
+            is provided, all constraints with those names will be removed.
 
         Returns
         -------
         None.
         """
+
+        if isinstance(name, list):
+            for n in name:
+                logger.info(f"Removed constraint: {name}")
+                self.remove_constraints(n)
+            return
+
+        logger.info(f"Removed constraint: {name}")
         self.constraints.remove(name)
 
     @property
