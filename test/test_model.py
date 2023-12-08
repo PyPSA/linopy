@@ -114,6 +114,19 @@ def test_remove_constraint():
     assert not len(m.constraints.labels)
 
 
+def test_remove_objective():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])
+    upper = xr.DataArray(np.ones((2, 2)), coords=[range(2), range(2)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(lower, upper, name="y")
+    obj = (10 * x + 5 * y).sum()
+    m.add_objective(obj)
+    m.remove_objective()
+    assert not len(m.objective.vars)
+
+
 def test_assert_model_equal():
     m = Model()
 
