@@ -126,6 +126,7 @@ def test_remove_constraints_with_list():
     assert "constraint_y" not in m.constraints.labels
     assert not len(m.constraints.labels)
 
+
 def test_remove_objective():
     m = Model()
 
@@ -137,6 +138,7 @@ def test_remove_objective():
     m.add_objective(obj)
     m.remove_objective()
     assert not len(m.objective.vars)
+
 
 def test_assert_model_equal():
     m = Model()
