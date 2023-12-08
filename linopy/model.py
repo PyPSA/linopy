@@ -665,15 +665,13 @@ class Model:
         -------
         None.
         """
-
         if isinstance(name, list):
             for n in name:
-                logger.info(f"Removed constraint: {name}")
-                self.remove_constraints(n)
-            return
-
-        logger.info(f"Removed constraint: {name}")
-        self.constraints.remove(name)
+                logger.info(f"Removed constraint: {n}")
+                self.constraints.remove(n)
+        else:
+            logger.info(f"Removed constraint: {name}")
+            self.constraints.remove(name)
 
     @property
     def continuous(self):
