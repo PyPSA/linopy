@@ -666,6 +666,16 @@ class Model:
         """
         self.constraints.remove(name)
 
+    def remove_objective(self):
+        """
+        Remove the objective's linear expression from the model.
+
+        Returns
+        -------
+        None.
+        """
+        self.objective = Objective(LinearExpression(None, self), self)
+
     @property
     def continuous(self):
         """
