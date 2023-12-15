@@ -670,7 +670,7 @@ class Model:
                 logger.debug(f"Removed constraint: {n}")
                 self.constraints.remove(n)
         else:
-            logger.info(f"Removed constraint: {name}")
+            logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
 
     def remove_objective(self):
