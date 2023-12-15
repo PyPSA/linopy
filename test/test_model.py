@@ -114,6 +114,19 @@ def test_remove_constraint():
     assert not len(m.constraints.labels)
 
 
+def test_remove_constraints_with_list():
+    m = Model()
+
+    x = m.add_variables()
+    y = m.add_variables()
+    m.add_constraints(x, EQUAL, 0, name="constraint_x")
+    m.add_constraints(y, EQUAL, 0, name="constraint_y")
+    m.remove_constraints(["constraint_x", "constraint_y"])
+    assert "constraint_x" not in m.constraints.labels
+    assert "constraint_y" not in m.constraints.labels
+    assert not len(m.constraints.labels)
+
+
 def test_remove_objective():
     m = Model()
 
