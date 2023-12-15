@@ -667,7 +667,7 @@ class Model:
         """
         if isinstance(name, list):
             for n in name:
-                logger.info(f"Removed constraint: {n}")
+                logger.debug(f"Removed constraint: {n}")
                 self.constraints.remove(n)
         else:
             logger.info(f"Removed constraint: {name}")
