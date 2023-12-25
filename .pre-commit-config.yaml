@@ -6,7 +6,7 @@ repos:
     -   id: trailing-whitespace
     -   id: check-merge-conflict
 -   repo: https://github.com/psf/black
-    rev: 23.11.0
+    rev: 23.12.1
     hooks:
     -   id: black
     # Current docformatter version has a problem with urls (it's annoying)
@@ -24,7 +24,7 @@ repos:
     hooks:
     -   id: absolufy-imports
 -   repo: https://github.com/PyCQA/isort
-    rev: 5.13.0
+    rev: 5.13.2
     hooks:
       - id: isort
         args: ["--profile", "black", "--filter-files"]
