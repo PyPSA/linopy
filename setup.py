@@ -46,7 +46,7 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray>=2023.1.0",
+        "xarray>=2023.9.0",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",
