@@ -279,7 +279,7 @@ class LinearExpression:
 
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": 0})
+            data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
         elif isinstance(data, DataArray):
             # assume only constant are passed
             const = fill_missing_coords(data)
@@ -306,7 +306,9 @@ class LinearExpression:
             raise ValueError("data must contain one dimension ending with '_term'")
 
         if "const" not in data:
-            data = data.assign(const=0)
+            data = data.assign(const=0.0)
+        elif not np.issubdtype(data.const, np.floating):
+            data["const"] = data.const.astype(float)
 
         data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
         data[["coeffs", "vars"]] = xr.broadcast(
@@ -315,6 +317,11 @@ class LinearExpression:
 
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., TERM_DIM))
+
+        # ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            # TODO: add a warning here, routines should be safe against this
+            data = data.drop(drop_dims)
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -328,6 +335,7 @@ class LinearExpression:
         """
         max_lines = options["display_max_rows"]
         dims = list(self.coord_dims)
+        ndim = len(dims)
         dim_sizes = list(self.coord_dims.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
@@ -335,7 +343,7 @@ class LinearExpression:
 
         header_string = self.type
 
-        if size > 1:
+        if size > 1 or ndim > 0:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")

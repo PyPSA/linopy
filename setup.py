@@ -15,6 +15,20 @@ from setuptools import find_packages, setup
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
+
+SOLVERS = [
+    "gurobipy",
+    "highspy",
+    "cplex",
+    "mosek",
+    "mindoptpy",
+    "coptpy",
+    "pyscipopt",
+]
+
+if sys.version_info <= (3, 10):
+    SOLVERS.append("xpress")
+
 setup(
     name="linopy",
     author="Fabian Hofmann",
@@ -33,7 +47,7 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray>=2023.1.0",
+        "xarray>=2023.9.0",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",
@@ -54,21 +68,13 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
+            "netcdf4",
             "pre-commit",
             "paramiko",
             "gurobipy",
             "highspy",
         ],
-        "solvers": [
-            "gurobipy",
-            "highspy",
-            "cplex",
-            "xpress",
-            "mosek",
-            "mindoptpy",
-            "coptpy",
-            "pyscipopt",
-        ],
+        "solvers": SOLVERS,
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

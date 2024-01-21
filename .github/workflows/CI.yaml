@@ -36,7 +36,6 @@ jobs:
       run: |
         sudo apt-get install glpk-utils
         sudo apt-get install coinor-cbc
-        pip install highspy mindoptpy pyscipopt
 
     - name: Install macos dependencies
       if: matrix.os == 'macos-latest'
@@ -55,13 +54,6 @@ jobs:
         choco install glpk
 
     - name: Install dependencies for python ${{ matrix.python-version }}
-      if: matrix.python-version == '3.11'
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e .[dev]
-
-    - name: Install dependencies for python ${{ matrix.python-version }}
-      if: matrix.python-version != '3.11'
       run: |
         python -m pip install --upgrade pip
         pip install -e .[dev,solvers]
@@ -81,4 +73,4 @@ jobs:
         pytest --cov=./ --cov-report=xml linopy --doctest-modules test
 
     - name: Upload code coverage report
-      uses: codecov/codecov-action@v2
+      uses: codecov/codecov-action@v3

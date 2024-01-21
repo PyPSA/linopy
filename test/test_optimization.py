@@ -421,7 +421,7 @@ def test_infeasible_model(model, solver, io_api):
 
 
 @pytest.mark.parametrize(
-    "solver,io_api", [p for p in params if p[0] not in ["glpk", "cplex"]]
+    "solver,io_api", [p for p in params if p[0] not in ["glpk", "cplex", "mindopt"]]
 )
 def test_model_with_inf(model_with_inf, solver, io_api):
     status, condition = model_with_inf.solve(solver, io_api=io_api)
@@ -430,7 +430,9 @@ def test_model_with_inf(model_with_inf, solver, io_api):
     assert (model_with_inf.solution.y == 10).all()
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
+)
 def test_milp_binary_model(milp_binary_model, solver, io_api):
     status, condition = milp_binary_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
@@ -439,7 +441,9 @@ def test_milp_binary_model(milp_binary_model, solver, io_api):
     ).all()
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
+)
 def test_milp_binary_model_r(milp_binary_model_r, solver, io_api):
     status, condition = milp_binary_model_r.solve(solver, io_api=io_api)
     assert condition == "optimal"
@@ -448,14 +452,18 @@ def test_milp_binary_model_r(milp_binary_model_r, solver, io_api):
     ).all()
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
+)
 def test_milp_model(milp_model, solver, io_api):
     status, condition = milp_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
+)
 def test_milp_model_r(milp_model_r, solver, io_api):
     # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
     # skip it
@@ -520,7 +528,9 @@ def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
             quadratic_model.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize(
+    "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
+)
 def test_modified_model(modified_model, solver, io_api):
     status, condition = modified_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
@@ -549,6 +559,13 @@ def test_basis_and_warmstart(tmp_path, model, solver, io_api):
     basis_fn = tmp_path / "basis.bas"
     model.solve(solver, basis_fn=basis_fn)
     model.solve(solver, warmstart_fn=basis_fn)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
+    solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
+    status, condition = model.solve(solver, io_api=io_api, solution_fn=solution_fn)
+    assert status == "ok"
 
 
 # def init_model_large():

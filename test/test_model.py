@@ -12,6 +12,7 @@ import pytest
 import xarray as xr
 
 from linopy import EQUAL, Model
+from linopy.testing import assert_model_equal
 
 target_shape = (10, 10)
 
@@ -111,3 +112,45 @@ def test_remove_constraint():
     m.add_constraints(x, EQUAL, 0, name="x")
     m.remove_constraints("x")
     assert not len(m.constraints.labels)
+
+
+def test_remove_constraints_with_list():
+    m = Model()
+
+    x = m.add_variables()
+    y = m.add_variables()
+    m.add_constraints(x, EQUAL, 0, name="constraint_x")
+    m.add_constraints(y, EQUAL, 0, name="constraint_y")
+    m.remove_constraints(["constraint_x", "constraint_y"])
+    assert "constraint_x" not in m.constraints.labels
+    assert "constraint_y" not in m.constraints.labels
+    assert not len(m.constraints.labels)
+
+
+def test_remove_objective():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])
+    upper = xr.DataArray(np.ones((2, 2)), coords=[range(2), range(2)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(lower, upper, name="y")
+    obj = (10 * x + 5 * y).sum()
+    m.add_objective(obj)
+    m.remove_objective()
+    assert not len(m.objective.vars)
+
+
+def test_assert_model_equal():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+
+    obj = (10 * x + 5 * y).sum()
+    m.add_objective(obj)
+
+    assert_model_equal(m, m)

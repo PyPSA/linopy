@@ -279,7 +279,11 @@ def to_file(m, fn, integer_label="general"):
             bounds_to_file(m, f, log=log, batch_size=batch_size)
             binaries_to_file(m, f, log=log, batch_size=batch_size)
             integers_to_file(
-                m, f, log=log, batch_size=batch_size, integer_label=integer_label
+                m,
+                f,
+                log=log,
+                batch_size=batch_size,
+                integer_label=integer_label,
             )
             f.write("end\n")
 
@@ -553,8 +557,18 @@ def to_netcdf(m, *args, **kwargs):
     """
 
     def with_prefix(ds, prefix):
-        ds = ds.rename({d: f"{prefix}-{d}" for d in [*ds.dims, *ds]})
+        to_rename = set([*ds.dims, *ds.coords, *ds])
+        ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
+
+        # Flatten multiindexes
+        for dim in ds.dims:
+            if isinstance(ds[dim].to_index(), pd.MultiIndex):
+                prefix_len = len(prefix) + 1  # leave original index level name
+                names = [n[prefix_len:] for n in ds[dim].to_index().names]
+                ds = ds.reset_index(dim)
+                ds.attrs[f"{dim}_multiindex"] = list(names)
+
         return ds
 
     vars = [
@@ -564,11 +578,15 @@ def to_netcdf(m, *args, **kwargs):
         with_prefix(con.data, f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
-    obj = [with_prefix(m.objective.data, "objective")]
+    objective = m.objective.data
+    objective = objective.assign_attrs(sense=m.objective.sense)
+    if m.objective.value is not None:
+        objective = objective.assign_attrs(value=m.objective.value)
+    obj = [with_prefix(objective, "objective")]
     params = [with_prefix(m.parameters, "params")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + obj + params)
+    ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs = non_bool_dict(ds.attrs)
 
@@ -605,30 +623,57 @@ def read_netcdf(path, **kwargs):
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
 
+    def has_prefix(k, prefix):
+        return k.rsplit("-", 1)[0] == prefix
+
+    def remove_prefix(k, prefix):
+        return k[len(prefix) + 1 :]
+
     def get_prefix(ds, prefix):
-        ds = ds[[k for k in ds if k.startswith(prefix)]]
-        ds = ds.rename({d: d.split(prefix + "-", 1)[1] for d in [*ds.dims, *ds]})
+        ds = ds[[k for k in ds if has_prefix(k, prefix)]]
+        multiindexes = []
+        for dim in ds.dims:
+            for name in ds.attrs.get(f"{dim}_multiindex", []):
+                multiindexes.append(prefix + "-" + name)
+        ds = ds.drop(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        to_rename = set([*ds.dims, *ds.coords, *ds])
+        ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
-            k.split(prefix + "-", 1)[1]: v
+            remove_prefix(k, prefix): v
             for k, v in ds.attrs.items()
-            if k.startswith(prefix + "-")
+            if has_prefix(k, prefix)
         }
+
+        for dim in ds.dims:
+            if f"{dim}_multiindex" in ds.attrs:
+                names = ds.attrs.pop(f"{dim}_multiindex")
+                ds = ds.set_index({dim: names})
+
         return ds
 
-    vars = get_prefix(ds, "variables")
-    var_names = list({k.split("-", 1)[0] for k in vars})
-    variables = {k: Variable(get_prefix(vars, k), m, k) for k in var_names}
+    vars = [k for k in ds if k.startswith("variables")]
+    var_names = list({k.rsplit("-", 1)[0] for k in vars})
+    variables = {}
+    for k in sorted(var_names):
+        name = remove_prefix(k, "variables")
+        variables[name] = Variable(get_prefix(ds, k), m, name)
+
     m._variables = Variables(variables, m)
 
-    cons = get_prefix(ds, "constraints")
-    con_names = list({k.split("-", 1)[0] for k in cons})
-    constraints = {k: Constraint(get_prefix(cons, k), m, k) for k in con_names}
+    cons = [k for k in ds if k.startswith("constraints")]
+    con_names = list({k.rsplit("-", 1)[0] for k in cons})
+    constraints = {}
+    for k in sorted(con_names):
+        name = remove_prefix(k, "constraints")
+        constraints[name] = Constraint(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    m._objective = LinearExpression(objective, m)
+    m.objective = LinearExpression(objective, m)
+    m.objective.sense = objective.attrs.pop("sense")
+    m.objective._value = objective.attrs.pop("value", None)
 
-    m._parameters = get_prefix(ds, "parameter")
+    m.parameters = get_prefix(ds, "parameter")
 
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))

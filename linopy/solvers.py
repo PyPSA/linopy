@@ -61,10 +61,13 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import mosek
 
-    with mosek.Task() as m:
-        m.optimize()
+    with contextlib.suppress(mosek.Error):
+        with mosek.Env() as m:
+            t = m.Task()
+            t.optimize()
+            m.checkinall()
 
-    available_solvers.append("mosek")
+        available_solvers.append("mosek")
 with contextlib.suppress(ImportError):
     import mindoptpy
 
@@ -72,7 +75,10 @@ with contextlib.suppress(ImportError):
 with contextlib.suppress(ImportError):
     import coptpy
 
-    available_solvers.append("copt")
+    with contextlib.suppress(coptpy.CoptError):
+        coptpy.Envr()
+
+        available_solvers.append("copt")
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +175,7 @@ def run_cbc(
     if basis_fn:
         command += f"-basisO {basis_fn} "
 
-    if not os.path.exists(solution_fn):
-        os.mknod(solution_fn)
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     command = command.strip()
 
@@ -260,6 +265,8 @@ def run_glpk(
 
     problem_fn = model.to_file(problem_fn)
     suffix = problem_fn.suffix[1:]
+
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
@@ -980,7 +987,8 @@ def run_copt(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    env = coptpy.Envr()
+    if env is None:
+        env = coptpy.Envr()
 
     m = env.createModel()
 
@@ -1119,6 +1127,8 @@ def run_mindopt(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    env.dispose()
 
     return Result(status, solution, m)
 
