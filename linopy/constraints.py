@@ -153,7 +153,7 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
+        return {k for k in self.dims if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):

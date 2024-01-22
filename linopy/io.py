@@ -635,7 +635,7 @@ def read_netcdf(path, **kwargs):
         for dim in ds.dims:
             for name in ds.attrs.get(f"{dim}_multiindex", []):
                 multiindexes.append(prefix + "-" + name)
-        ds = ds.drop(set(ds.coords) - set(ds.dims) - set(multiindexes))
+        ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: remove_prefix(d, prefix) for d in to_rename})
         ds.attrs = {
