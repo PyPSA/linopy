@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs", "scip"]
+QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip"]
 
 available_solvers = []
 
@@ -80,6 +80,7 @@ with contextlib.suppress(ImportError):
 
         available_solvers.append("copt")
 
+quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
 
