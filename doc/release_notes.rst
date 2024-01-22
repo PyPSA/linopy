@@ -1,9 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
 
+
+* Linopy now supports the SCIP solver via the `pyscipopt` package. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
+* Linopy was refactored to use the new xarray API (>=2024.01) without the deprecation warnings.
 
 Version 0.3.2
 -------------
