@@ -35,13 +35,13 @@ def z(model):
 def test_quadratic_expression_from_variables_multiplication(x, y):
     expr = x * y
     assert isinstance(expr, QuadraticExpression)
-    assert expr.data.dims[FACTOR_DIM] == 2
+    assert expr.data.sizes[FACTOR_DIM] == 2
 
 
 def test_quadratic_expression_from_linexpr_multiplication(x, y):
     expr = (10 * x + y) * y
     assert isinstance(expr, QuadraticExpression)
-    assert expr.data.dims[FACTOR_DIM] == 2
+    assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 2
 
 
