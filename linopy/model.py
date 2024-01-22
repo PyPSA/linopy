@@ -565,7 +565,7 @@ class Model:
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
-            data = data.drop(drop_dims)
+            data = data.drop_vars(drop_dims)
 
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
