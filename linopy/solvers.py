@@ -610,7 +610,7 @@ def run_gurobi(
             try:
                 m.write(basis_fn)
             except gurobipy.GurobiError as err:
-                logger.info("No model basis stored. Raised error: ", err)
+                logger.info("No model basis stored. Raised error: %s", err)
 
         condition = m.status
         termination_condition = CONDITION_MAP.get(condition, condition)
@@ -797,7 +797,7 @@ def run_xpress(
         try:
             m.writebasis(basis_fn)
         except Exception as err:
-            logger.info("No model basis stored. Raised error: ", err)
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.getProbStatusString()
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -892,7 +892,7 @@ def run_mosek(
                 try:
                     m.writedata(basis_fn)
                 except mosek.Error as err:
-                    logger.info("No model basis stored. Raised error:", err)
+                    logger.info("No model basis stored. Raised error: %s", err)
 
             soltype = None
             possible_soltypes = [
@@ -973,9 +973,8 @@ def run_copt(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for COPT solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -1006,8 +1005,8 @@ def run_copt(
     if basis_fn and m.HasBasis:
         try:
             m.write(basis_fn)
-        except Exception as err:
-            logger.info("No model basis stored. Raised error: ", err)
+        except coptpy.CoptError as err:
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.LpStatus if model.type == "LP" else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -1092,7 +1091,7 @@ def run_mindopt(
         try:
             m.read(warmstart_fn)
         except mindoptpy.MindoptError as err:
-            logger.info("Model basis could not be read. Raised error:", err)
+            logger.info("Model basis could not be read. Raised error: %s", err)
 
     m.optimize()
 
@@ -1100,7 +1099,7 @@ def run_mindopt(
         try:
             m.write(basis_fn)
         except mindoptpy.MindoptError as err:
-            logger.info("No model basis stored. Raised error:", err)
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.status
     termination_condition = CONDITION_MAP.get(condition, condition)
