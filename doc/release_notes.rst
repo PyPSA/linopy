@@ -5,7 +5,7 @@ Upcoming Release
 ----------------
 
 
-* Linopy now supports the SCIP solver via the `pyscipopt` package. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
+* New solver interface for `SCIP <https://www.scipopt.org/>`. This solver is now supported by `linopy` and can be used with the `solve` function if the `pyscipopt` package is installed. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
 * Linopy was refactored to use the new xarray API (>=2024.01) without the deprecation warnings.
 * The set "quadratic_solvers" now only contains quadratic solvers which are installed and available to the user.
 
@@ -37,7 +37,6 @@ Version 0.3.0
 * It is now possible to set the sense of the objective function to `minimize` or `maximize`. Therefore, a new class `Objective` was introduced which is used in `Model.objective`. It supports the same arithmetic operations as `LinearExpression` and `QuadraticExpression` and contains a `sense` attribute which can be set to `minimize` or `maximize`.
 * The `fillna` function for variables was made more secure by raising a warning if the fill value is not of  variable-like type.
 * The `where` and `fillna` functions for expressions were made more flexible: When passing a scalar value or a DataArray, the values are added as constants to the expression, where there were missing values before. If another expression is passed, the values are added to the expression, where there were missing values before.
-* New solver interface for `SCIP <https://www.scipopt.org/>`. This solver is now supported by `linopy` and can be used with the `solve` function if the `pyscipopt` package is installed. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
 
 **Breaking Changes**
 

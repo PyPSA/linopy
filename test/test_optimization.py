@@ -576,6 +576,12 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
     assert status == "ok"
 
 
+@pytest.mark.parametrize("solver", available_solvers)
+def test_non_supported_solver_io(model, solver):
+    with pytest.raises(ValueError):
+        model.solve(solver, io_api="non_supported")
+
+
 # def init_model_large():
 #     m = Model()
 #     time = pd.Index(range(10), name="time")

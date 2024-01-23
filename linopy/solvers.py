@@ -153,9 +153,8 @@ def run_cbc(
     options, run 'cbc' in your shell
     """
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cbc solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -259,9 +258,8 @@ def run_glpk(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for glpk solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -859,9 +857,8 @@ def run_mosek(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for mosek solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -1071,9 +1068,8 @@ def run_mindopt(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for mindopt solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
