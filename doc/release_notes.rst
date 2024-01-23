@@ -1,13 +1,17 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+.. Upcoming Release
+.. ----------------
+
+Version 0.3.3
+-------------
 
 
 * New solver interface for `SCIP <https://www.scipopt.org/>`. This solver is now supported by `linopy` and can be used with the `solve` function if the `pyscipopt` package is installed. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
 * Linopy was refactored to use the new xarray API (>=2024.01) without the deprecation warnings.
 * The set "quadratic_solvers" now only contains quadratic solvers which are installed and available to the user.
+* The `solve` function now throws an error instead of a warning if the set value for ``io_api`` is not available for a solver.
 
 Version 0.3.2
 -------------
