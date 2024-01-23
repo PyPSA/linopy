@@ -461,9 +461,8 @@ def run_cplex(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cplex solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     model.to_file(problem_fn)
@@ -768,9 +767,8 @@ def run_xpress(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for xpress solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
