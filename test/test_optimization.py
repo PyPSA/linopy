@@ -30,8 +30,8 @@ if "highs" in available_solvers:
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
-if platform.system() == "Windows":
-    feasible_quadratic_solvers.remove("scipopt")
+if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
+    feasible_quadratic_solvers.remove("scip")
 
 
 @pytest.fixture
