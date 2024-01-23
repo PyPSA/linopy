@@ -6,6 +6,8 @@ Created on Thu Mar 18 08:49:08 2021.
 @author: fabian
 """
 
+import platform
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -24,6 +26,12 @@ if "gurobi" in available_solvers:
     params.append(("gurobi", "direct"))
 if "highs" in available_solvers:
     params.append(("highs", "direct"))
+
+feasible_quadratic_solvers = quadratic_solvers
+# There seems to be a bug in scipopt with quadratic models on windows, see
+# https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
+if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
+    feasible_quadratic_solvers.remove("scip")
 
 
 @pytest.fixture
@@ -345,6 +353,7 @@ def test_solver_options(model, solver, io_api):
         "scip": {"time_limit": 1},
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
+        "scip": {"limits/time": 1},
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
@@ -474,7 +483,7 @@ def test_milp_model_r(milp_model_r, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model(quadratic_model, solver, io_api):
-    if solver in quadratic_solvers:
+    if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
@@ -487,7 +496,7 @@ def test_quadratic_model(quadratic_model, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
-    if solver in quadratic_solvers:
+    if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
@@ -501,7 +510,7 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
     quadratic_model.constraints.remove("con0")
-    if solver in quadratic_solvers:
+    if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
@@ -514,9 +523,14 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
 @pytest.mark.parametrize("solver,io_api", params)
 def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
     quadratic_model.objective = -quadratic_model.objective
-    if solver in quadratic_solvers:
+    if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
-        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+        # particular case for scip:
+        if solver == "scip":
+            assert condition == "optimal"
+            assert quadratic_model.objective.value < -1e15
+        else:
+            assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)
@@ -560,6 +574,12 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
     solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
     status, condition = model.solve(solver, io_api=io_api, solution_fn=solution_fn)
     assert status == "ok"
+
+
+@pytest.mark.parametrize("solver", available_solvers)
+def test_non_supported_solver_io(model, solver):
+    with pytest.raises(ValueError):
+        model.solve(solver, io_api="non_supported")
 
 
 # def init_model_large():

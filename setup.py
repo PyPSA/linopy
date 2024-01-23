@@ -23,6 +23,7 @@ SOLVERS = [
     "mosek",
     "mindoptpy",
     "coptpy",
+    "pyscipopt",
 ]
 
 if sys.version_info <= (3, 10):

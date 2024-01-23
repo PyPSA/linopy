@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip"]
 
 available_solvers = []
 
@@ -46,6 +46,10 @@ if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode 
 if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
+with contextlib.suppress(ImportError):
+    import pyscipopt as scip
+
+    available_solvers.append("scip")
 with contextlib.suppress(ImportError):
     import cplex
 
@@ -76,6 +80,7 @@ with contextlib.suppress(ImportError):
 
         available_solvers.append("copt")
 
+quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
 
@@ -98,7 +103,7 @@ def safe_get_solution(status, func):
     return Solution()
 
 
-def maybe_adjust_objective_sign(solution, sense, io_api, solver_name):
+def maybe_adjust_objective_sign(solution, sense, io_api):
     if sense == "min":
         return
 
@@ -148,9 +153,8 @@ def run_cbc(
     options, run 'cbc' in your shell
     """
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cbc solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -218,7 +222,7 @@ def run_cbc(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cbc")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -254,9 +258,8 @@ def run_glpk(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for glpk solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -332,7 +335,7 @@ def run_glpk(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "glpk")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -424,7 +427,7 @@ def run_highs(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "highs")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, h)
 
@@ -458,9 +461,8 @@ def run_cplex(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cplex solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     model.to_file(problem_fn)
@@ -530,7 +532,7 @@ def run_cplex(
         return Solution(solution, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cplex")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -607,7 +609,7 @@ def run_gurobi(
             try:
                 m.write(basis_fn)
             except gurobipy.GurobiError as err:
-                logger.info("No model basis stored. Raised error: ", err)
+                logger.info("No model basis stored. Raised error: %s", err)
 
         condition = m.status
         termination_condition = CONDITION_MAP.get(condition, condition)
@@ -631,8 +633,102 @@ def run_gurobi(
 
             return Solution(sol, dual, objective)
 
-        solution = safe_get_solution(status, get_solver_solution)
-        maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    return Result(status, solution, m)
+
+
+def run_scip(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the scip solver.
+
+    This function communicates with scip using the pyscipopt package.
+    """
+    CONDITION_MAP = {}
+
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if io_api is None or io_api in ["lp", "mps"]:
+        problem_fn = model.to_file(problem_fn)
+        problem_fn = maybe_convert_path(problem_fn)
+        m = scip.Model()
+        m.readProblem(problem_fn)
+    elif io_api == "direct":
+        raise NotImplementedError("Direct API not implemented for SCIP")
+    else:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+        )
+
+    if solver_options is not None:
+        emphasis = solver_options.pop("setEmphasis", None)
+        if emphasis is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMEMPHASIS, emphasis.upper()))
+
+        heuristics = solver_options.pop("setHeuristics", None)
+        if heuristics is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, heuristics.upper()))
+
+        presolve = solver_options.pop("setPresolve", None)
+        if presolve is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, presolve.upper()))
+
+        m.setParams(solver_options)
+
+    if log_fn is not None:
+        m.setLogfile(log_fn)
+
+    if warmstart_fn:
+        logger.warning("Warmstart not implemented for SCIP")
+
+    # In order to retrieve the dual values, we need to turn off presolve
+    m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
+
+    m.optimize()
+
+    if basis_fn:
+        logger.warning("Basis not implemented for SCIP")
+
+    condition = m.getStatus()
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.getObjVal()
+
+        s = m.getSols()[0]
+        sol = pd.Series({v.name: s[v] for v in m.getVars()})
+        sol.drop(["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0)
+        sol = set_int_index(sol)
+
+        cons = m.getConss()
+        if len(cons) != 0:
+            dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
+            dual = dual[dual.index.str.startswith("c")]
+            dual = set_int_index(dual)
+        else:
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -671,9 +767,8 @@ def run_xpress(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for xpress solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -700,7 +795,7 @@ def run_xpress(
         try:
             m.writebasis(basis_fn)
         except Exception as err:
-            logger.info("No model basis stored. Raised error: ", err)
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.getProbStatusString()
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -726,7 +821,7 @@ def run_xpress(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -760,9 +855,8 @@ def run_mosek(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for mosek solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -796,7 +890,7 @@ def run_mosek(
                 try:
                     m.writedata(basis_fn)
                 except mosek.Error as err:
-                    logger.info("No model basis stored. Raised error:", err)
+                    logger.info("No model basis stored. Raised error: %s", err)
 
             soltype = None
             possible_soltypes = [
@@ -836,9 +930,7 @@ def run_mosek(
                 return Solution(sol, dual, objective)
 
             solution = safe_get_solution(status, get_solver_solution)
-            maybe_adjust_objective_sign(
-                solution, model.objective.sense, io_api, "mosek"
-            )
+            maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -879,9 +971,8 @@ def run_copt(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for COPT solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -912,8 +1003,8 @@ def run_copt(
     if basis_fn and m.HasBasis:
         try:
             m.write(basis_fn)
-        except Exception as err:
-            logger.info("No model basis stored. Raised error: ", err)
+        except coptpy.CoptError as err:
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.LpStatus if model.type == "LP" else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -936,7 +1027,7 @@ def run_copt(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "copt")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     env.close()
 
@@ -974,9 +1065,8 @@ def run_mindopt(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for mindopt solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -999,7 +1089,7 @@ def run_mindopt(
         try:
             m.read(warmstart_fn)
         except mindoptpy.MindoptError as err:
-            logger.info("Model basis could not be read. Raised error:", err)
+            logger.info("Model basis could not be read. Raised error: %s", err)
 
     m.optimize()
 
@@ -1007,7 +1097,7 @@ def run_mindopt(
         try:
             m.write(basis_fn)
         except mindoptpy.MindoptError as err:
-            logger.info("No model basis stored. Raised error:", err)
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.status
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -1030,7 +1120,7 @@ def run_mindopt(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "mindopt")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     env.dispose()
 

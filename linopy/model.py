@@ -1054,14 +1054,14 @@ class Model:
             func = getattr(solvers, f"run_{solver_name}")
             result = func(
                 self,
-                io_api,
-                problem_fn,
-                solution_fn,
-                log_fn,
-                warmstart_fn,
-                basis_fn,
-                keep_files,
-                env,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                keep_files=keep_files,
+                env=env,
                 **solver_options,
             )
         finally:
