@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
+Upcoming Release
+----------------
+
+- Added support for QP problems with MOSEK and COPT.
 
 Version 0.3.3
 -------------
