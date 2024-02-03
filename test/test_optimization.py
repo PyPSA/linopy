@@ -203,6 +203,7 @@ def quadratic_model():
     m.add_objective(x * x)
     return m
 
+
 @pytest.fixture
 def quadratic_model_unbounded():
     m = Model()
@@ -213,8 +214,9 @@ def quadratic_model_unbounded():
 
     m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    m.add_objective(- x - y + x * x)
+    m.add_objective(-x - y + x * x)
     return m
+
 
 @pytest.fixture
 def quadratic_model_cross_terms():
