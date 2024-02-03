@@ -203,6 +203,18 @@ def quadratic_model():
     m.add_objective(x * x)
     return m
 
+@pytest.fixture
+def quadratic_model_unbounded():
+    m = Model()
+
+    lower = pd.Series(0, range(10))
+    x = m.add_variables(lower, name="x")
+    y = m.add_variables(lower, name="y")
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
+
+    m.add_objective(- x - y + x * x)
+    return m
 
 @pytest.fixture
 def quadratic_model_cross_terms():
@@ -277,6 +289,7 @@ def test_model_types(
     milp_model,
     milp_model_r,
     quadratic_model,
+    quadratic_model_unbounded,
     quadratic_model_cross_terms,
     modified_model,
     masked_variable_model,
@@ -289,6 +302,7 @@ def test_model_types(
     assert milp_model.type == "MILP"
     assert milp_model_r.type == "MILP"
     assert quadratic_model.type == "QP"
+    assert quadratic_model_unbounded.type == "QP"
     assert quadratic_model_cross_terms.type == "QP"
     assert modified_model.type == "MILP"
     assert masked_variable_model.type == "LP"
@@ -487,7 +501,7 @@ def test_quadratic_model(quadratic_model, solver, io_api):
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
-        assert (quadratic_model.solution.y.round(3) == 10).all()
+        assert (quadratic_model.solution.y.round(3) >= 10).all()
         assert round(quadratic_model.objective.value, 3) == 0
     else:
         with pytest.raises(ValueError):
@@ -521,19 +535,13 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_quadratic_model_unbounded(quadratic_model, solver, io_api):
-    quadratic_model.objective = -quadratic_model.objective
+def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
     if solver in feasible_quadratic_solvers:
-        status, condition = quadratic_model.solve(solver, io_api=io_api)
-        # particular case for scip:
-        if solver == "scip":
-            assert condition == "optimal"
-            assert quadratic_model.objective.value < -1e15
-        else:
-            assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
+        status, condition = quadratic_model_unbounded.solve(solver, io_api=io_api)
+        assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
     else:
         with pytest.raises(ValueError):
-            quadratic_model.solve(solver, io_api=io_api)
+            quadratic_model_unbounded.solve(solver, io_api=io_api)
 
 
 @pytest.mark.parametrize(

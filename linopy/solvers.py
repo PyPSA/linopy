@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip"]
+QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip", "mosek", "copt"]
 
 available_solvers = []
 
@@ -851,7 +851,7 @@ def run_mosek(
         "solsta.optimal": "optimal",
         "solsta.integer_optimal": "optimal",
         "solsta.prim_infeas_cer": "infeasible",
-        "solsta.dual_infeas_cer": "infeasible",
+        "solsta.dual_infeas_cer": "infeasible_or_unbounded",
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
@@ -923,7 +923,7 @@ def run_mosek(
                     dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
                     dual = pd.Series(dual, dtype=float)
                     dual = set_int_index(dual)
-                except mosek.Error:
+                except (mosek.Error, AttributeError):
                     logger.warning("Dual values of MILP couldn't be parsed")
                     dual = pd.Series(dtype=float)
 
@@ -1006,13 +1006,13 @@ def run_copt(
         except coptpy.CoptError as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
-    condition = m.LpStatus if model.type == "LP" else m.MipStatus
+    condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
 
     def get_solver_solution() -> Solution:
-        objective = m.LpObjval if model.type == "LP" else m.BestObj
+        objective = m.LpObjval if model.type in ["LP", "QP"] else m.BestObj
 
         sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
         sol = set_int_index(sol)
@@ -1020,7 +1020,7 @@ def run_copt(
         try:
             dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
             dual = set_int_index(dual)
-        except coptpy.CoptError:
+        except (coptpy.CoptError, AttributeError):
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 

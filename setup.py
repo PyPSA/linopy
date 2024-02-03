@@ -24,6 +24,7 @@ SOLVERS = [
     "mindoptpy",
     "coptpy",
     "pyscipopt",
+    "xpress",
 ]
 
 if sys.version_info <= (3, 10):
