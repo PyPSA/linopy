@@ -383,6 +383,12 @@ def run_highs(
     if warmstart_fn:
         logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
 
+    if solver_options.get("solver") in ["simplex", "ipm"] and model.type == "QP":
+        logger.warning(
+            "The HiGHS solver ignores quadratic terms if the solver is set to 'simplex' or 'ipm'. "
+            "Drop the solver option or use 'choose' to enable quadratic terms."
+        )
+
     if io_api is None or io_api in ["lp", "mps"]:
         model.to_file(problem_fn)
         h = highspy.Highs()
