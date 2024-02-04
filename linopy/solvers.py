@@ -24,7 +24,16 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip", "mosek", "copt"]
+QUADRATIC_SOLVERS = [
+    "gurobi",
+    "xpress",
+    "cplex",
+    "highs",
+    "scip",
+    "mosek",
+    "copt",
+    "mindopt",
+]
 
 available_solvers = []
 
@@ -1074,6 +1083,10 @@ def run_mindopt(
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
+    if (io_api == "lp" or str(problem_fn).endswith(".lp")) and model.type == "QP":
+        raise ValueError(
+            "MindOpt does not support QP problems in LP format. Use `io_api='mps'` instead."
+        )
 
     problem_fn = model.to_file(problem_fn)
 
@@ -1119,7 +1132,7 @@ def run_mindopt(
         try:
             dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
             dual = set_int_index(dual)
-        except mindoptpy.MindoptError:
+        except (mindoptpy.MindoptError, AttributeError):
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 

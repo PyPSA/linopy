@@ -497,7 +497,7 @@ def test_milp_model_r(milp_model_r, solver, io_api):
         assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
 def test_quadratic_model(quadratic_model, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
@@ -510,7 +510,7 @@ def test_quadratic_model(quadratic_model, solver, io_api):
             quadratic_model.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
 def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
@@ -523,7 +523,7 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
             quadratic_model_cross_terms.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
 def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
     quadratic_model.constraints.remove("con0")
     if solver in feasible_quadratic_solvers:
@@ -536,7 +536,7 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
             quadratic_model.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", params)
+@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
 def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_unbounded.solve(solver, io_api=io_api)
