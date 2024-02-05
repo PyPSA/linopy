@@ -181,8 +181,10 @@ def run_cbc(
 
     if log_fn is None:
         p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
+        output = ""
         for line in iter(p.stdout.readline, b""):
-            print(line.decode(), end="")
+            output += line.decode()
+        logger.info(output)
         p.stdout.close()
         p.wait()
     else:
@@ -284,8 +286,10 @@ def run_glpk(
 
     p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
     if log_fn is None:
+        output = ""
         for line in iter(p.stdout.readline, b""):
-            print(line.decode(), end="")
+            output += line.decode()
+        logger.info(output)
         p.stdout.close()
         p.wait()
     else:
