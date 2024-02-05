@@ -894,7 +894,7 @@ def run_mosek(
                 # docs are a bit sparse on the format. Does it include dual
                 # information?
                 xx = [0.0] * m.getnumvar()
-                with open(wormstart_fn, "rt") as f:
+                with open(warmstart_fn, "rt") as f:
                     for line in f:
                         l = line.strip()
                         if not l.startswith("#"):
