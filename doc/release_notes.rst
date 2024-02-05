@@ -6,6 +6,11 @@ Upcoming Release
 
 - Added support for QP problems with MOSEK and COPT.
 
+Version 0.3.4
+-------------
+
+* Solver output of CBC and GLPK is sent to logging with level INFO instead of stdout
+
 Version 0.3.3
 -------------
 
