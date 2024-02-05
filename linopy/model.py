@@ -27,7 +27,14 @@ from linopy.expressions import (
     QuadraticExpression,
     ScalarLinearExpression,
 )
-from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf, to_mosekpy
+from linopy.io import (
+    to_block_files,
+    to_file,
+    to_gurobipy,
+    to_highspy,
+    to_mosekpy,
+    to_netcdf,
+)
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers

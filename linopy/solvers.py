@@ -865,7 +865,7 @@ def run_mosek(
 
     problem_fn = model.to_file(problem_fn)
 
-    if io_api != 'direct':
+    if io_api != "direct":
         problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     # warmstart_fn = maybe_convert_path(warmstart_fn)
@@ -876,8 +876,8 @@ def run_mosek(
             env = stack.enter_context(mosek.Env())
 
         with env.Task() as m:
-            if io_api == 'direct':
-                to_mosekpy(model,task)
+            if io_api == "direct":
+                to_mosekpy(model, task)
             else:
                 m.readdata(problem_fn)
 
@@ -892,30 +892,32 @@ def run_mosek(
                 # What is the warmstart file? A Gurobi .sol file? The gurobi
                 # docs are a bit sparse on the format. Does it include dual
                 # information?
-                xx = [ 0.0 ] * m.getnumvar()
-                with open(wormstart_fn,'rt') as f:
+                xx = [0.0] * m.getnumvar()
+                with open(wormstart_fn, "rt") as f:
                     for line in f:
                         l = line.strip()
-                        if not l.startswith('#'):
+                        if not l.startswith("#"):
                             try:
-                                name,value = l.strip(' ',1)
-                                numvar[task.getvarnameindex(name)] = float(value.strip())
+                                name, value = l.strip(" ", 1)
+                                numvar[task.getvarnameindex(name)] = float(
+                                    value.strip()
+                                )
                             except:
                                 pass
-                m.putxx(mosek.soltype.itg,xx)
+                m.putxx(mosek.soltype.itg, xx)
 
             m.optimize()
 
             m.solutionsummary(mosek.streamtype.log)
 
-            if basis_fn:                
+            if basis_fn:
                 # MOSEK has no support for GUROBU/CPLEX basis format.
                 # It may be possible to read the basis here and input it in the
-                # task. 
+                # task.
 
-                #try:
+                # try:
                 #    m.writedata(basis_fn)
-                #except mosek.Error as err:
+                # except mosek.Error as err:
                 #    logger.info("No model basis stored. Raised error: %s", err)
                 pass
 
