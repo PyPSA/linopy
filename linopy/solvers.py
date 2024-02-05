@@ -846,7 +846,7 @@ def run_mosek(
     Solve a linear problem using the MOSEK solver. Both 'direct' mode, mps and
     lp mode are supported; None is interpret as 'direct' mode. MPS mode does
     not support quadratic terms.
-    
+
     https://www.mosek.com/
 
     For more information on solver options, see
