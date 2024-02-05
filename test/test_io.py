@@ -93,7 +93,7 @@ def test_model_to_netcdf_with_dash_names(model_with_dash_names, tmp_path):
 
 # skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
 @pytest.mark.skipif(
-    xr.__version__ == "2024.1.0",
+    xr.__version__ in ["2024.1.0", "2024.1.1"],
     reason="xarray version 2024.1.0 has a bug with MultiIndex deserialize",
 )
 def test_model_to_netcdf_with_multiindex(model_with_multiindex, tmp_path):
