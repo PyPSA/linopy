@@ -900,9 +900,7 @@ def run_mosek(
                         if not l.startswith("#"):
                             try:
                                 name, value = l.strip(" ", 1)
-                                xx[task.getvarnameindex(name)] = float(
-                                    value.strip()
-                                )
+                                xx[task.getvarnameindex(name)] = float(value.strip())
                             except:
                                 pass
                 m.putxx(mosek.soltype.itg, xx)
