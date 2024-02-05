@@ -878,7 +878,7 @@ def run_mosek(
         with env.Task() as m:
             if io_api == "direct":
                 model.to_mosekpy(m)
-                m.writedata('test.opf')
+                m.writedata("test.opf")
             else:
                 m.readdata(problem_fn)
 
@@ -888,7 +888,7 @@ def run_mosek(
             if log_fn is not None:
                 m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
 
-            if warmstart_fn:                
+            if warmstart_fn:
                 # Gurobi solution format is not supported by MOSEK.
                 # What is the warmstart file? A Gurobi .sol file? The gurobi
                 # docs are a bit sparse on the format. Does it include dual

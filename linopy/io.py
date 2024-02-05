@@ -334,7 +334,6 @@ def to_mosekpy(model, task):
 
     ## Variables
 
-
     bkx = [
         (
             (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
