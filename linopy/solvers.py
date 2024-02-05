@@ -24,7 +24,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip"]
+QUADRATIC_SOLVERS = ["gurobi", "xpress", "cplex", "highs", "scip", "mosek"]
 
 available_solvers = []
 
@@ -854,24 +854,28 @@ def run_mosek(
         "solsta.dual_infeas_cer": "infeasible",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in ["lp", "mps", "direct"]:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
 
-    problem_fn = maybe_convert_path(problem_fn)
+    if io_api != 'direct':
+        problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
+    # warmstart_fn = maybe_convert_path(warmstart_fn)
+    # basis_fn = maybe_convert_path(basis_fn)
 
     with contextlib.ExitStack() as stack:
         if env is None:
             env = stack.enter_context(mosek.Env())
 
         with env.Task() as m:
-            m.readdata(problem_fn)
+            if io_api == 'direct':
+                to_mosekpy(model,task)
+            else:
+                m.readdata(problem_fn)
 
             for k, v in solver_options.items():
                 m.putparam(k, str(v))
@@ -880,17 +884,36 @@ def run_mosek(
                 m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
 
             if warmstart_fn:
-                m.readdata(warmstart_fn)
+                # Gurobi solution format is not supported by MOSEK.
+                # What is the warmstart file? A Gurobi .sol file? The gurobi
+                # docs are a bit sparse on the format. Does it include dual
+                # information?
+                xx = [ 0.0 ] * m.getnumvar()
+                with open(wormstart_fn,'rt') as f:
+                    for line in f:
+                        l = line.strip()
+                        if not l.startswith('#'):
+                            try:
+                                name,value = l.strip(' ',1)
+                                numvar[task.getvarnameindex(name)] = float(value.strip())
+                            except:
+                                pass
+                m.putxx(mosek.soltype.itg,xx)
 
             m.optimize()
 
             m.solutionsummary(mosek.streamtype.log)
 
-            if basis_fn:
-                try:
-                    m.writedata(basis_fn)
-                except mosek.Error as err:
-                    logger.info("No model basis stored. Raised error: %s", err)
+            if basis_fn:                
+                # MOSEK has no support for GUROBU/CPLEX basis format.
+                # It may be possible to read the basis here and input it in the
+                # task. 
+
+                #try:
+                #    m.writedata(basis_fn)
+                #except mosek.Error as err:
+                #    logger.info("No model basis stored. Raised error: %s", err)
+                pass
 
             soltype = None
             possible_soltypes = [

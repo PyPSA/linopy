@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from numpy import asarray, concatenate, ones_like, zeros_like
-from scipy.sparse import csc_matrix, triu
+from scipy.sparse import csc_matrix, triu, tril
 from tqdm import tqdm
 
 from linopy import solvers
@@ -306,6 +306,74 @@ def to_file(m, fn, integer_label="general"):
 
     return fn
 
+
+
+def to_mosekpy(model,task):
+    """
+    Export model to MOSEK.
+
+    Export the model directly to MOSEK without writing files.
+
+    Parameters
+    ----------
+    m : linopy.Model
+    task : empty MOSEK task
+    
+    Returns
+    -------
+    task : MOSEK Task object
+    """
+
+    import mosek
+    
+        
+    task.appendvars(model.nvars)
+    task.appendcons(model.ncons)
+
+    M = model.matrices
+    for (j,n) in enumerate(("x" + M.vlabels.astype(str).astype(object))):
+        task.putvarname(j,n)
+
+    ## Variables
+
+    bkx = [( ( mosek.boundkey.ra if l < u else mosek.boundkey.fx ) if u < np.inf else mosek.boundkey.up )
+           if (l > -np.inf) else
+           ( mosek.boundkey.lo if (u < np.inf) else mosek.boundkey.fr ) 
+           for (l,u) in zip(M.lb,M.ub)]
+    blx = [ b if b > -np.inf else 0.0 for b in M.lb ]
+    bux = [ b if b <  np.inf else 0.0 for b in M.ub ]
+    task.putvarboundslice(0,model.nvars,bkx,blx,bux)
+
+    ## Constraints
+    
+    if len(model.constraints) > 0:
+        names = "c" + M.clabels.astype(str).astype(object)
+        for (i,n) in enumerate(names):
+            task.putconname(i,n)
+        bkc = [mosek.boundkey.lo 
+               if s == '<' else
+               (mosek.boundkey.up 
+                if s == '>' else 
+                mosek.boundkey.fx)
+               for s in M.sense ]
+        blx = M.b 
+        bux = M.b
+        A = M.A.tocsr()
+        task.putarowslice(0,model.ncons,A.indptr[:-1],A.indptr[1:],A.indices,A.data)
+        task.putconboundslice(0,model.ncons,bkx,blx,bux)
+
+    ## Objective
+    if model.is_quadratic:
+        Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
+        task.putqobj(Q.row, Q.col, Q.data)
+    task.putclist(np.arange(model.nvars),M.c)
+
+    if model.objective.sense == 'max':
+        task.putobjsense(mosek.objsense.maximize)
+    else:
+        task.putobjsense(mosek.objsense.minimize)
+
+    return task
 
 def to_gurobipy(m, env=None):
     """
