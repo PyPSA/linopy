@@ -843,8 +843,10 @@ def run_mosek(
     **solver_options,
 ):
     """
-    Solve a linear problem using the MOSEK solver.
-
+    Solve a linear problem using the MOSEK solver. Both 'direct' mode, mps and
+    lp mode are supported; None is interpret as 'direct' mode. MPS mode does
+    not support quadratic terms.
+    
     https://www.mosek.com/
 
     For more information on solver options, see
@@ -865,7 +867,7 @@ def run_mosek(
 
     problem_fn = model.to_file(problem_fn)
 
-    if io_api != "direct":
+    if io_api != "direct" and io_api is not None:
         problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     # warmstart_fn = maybe_convert_path(warmstart_fn)
@@ -876,9 +878,8 @@ def run_mosek(
             env = stack.enter_context(mosek.Env())
 
         with env.Task() as m:
-            if io_api == "direct":
+            if io_api is None or io_api == "direct":
                 model.to_mosekpy(m)
-                m.writedata("test.opf")
             else:
                 m.readdata(problem_fn)
 
