@@ -4,6 +4,11 @@ Release Notes
 .. Upcoming Release
 .. ----------------
 
+Version 0.3.4
+-------------
+
+* Solver output of CBC and GLPK is sent to logging with level INFO instead of stdout
+
 Version 0.3.3
 -------------
 
