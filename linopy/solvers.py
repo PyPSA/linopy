@@ -900,7 +900,7 @@ def run_mosek(
                         if not l.startswith("#"):
                             try:
                                 name, value = l.strip(" ", 1)
-                                numvar[task.getvarnameindex(name)] = float(
+                                xx[task.getvarnameindex(name)] = float(
                                     value.strip()
                                 )
                             except:
