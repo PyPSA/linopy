@@ -877,7 +877,7 @@ def run_mosek(
 
         with env.Task() as m:
             if io_api == 'direct':
-                to_mosekpy(model,task)
+                model.to_mosekpy(m)
             else:
                 m.readdata(problem_fn)
 
@@ -908,10 +908,10 @@ def run_mosek(
 
             m.solutionsummary(mosek.streamtype.log)
 
-            if basis_fn:                
+            if basis_fn:
                 # MOSEK has no support for GUROBU/CPLEX basis format.
                 # It may be possible to read the basis here and input it in the
-                # task. 
+                # task.
 
                 #try:
                 #    m.writedata(basis_fn)

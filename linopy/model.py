@@ -1183,6 +1183,8 @@ class Model:
 
     to_gurobipy = to_gurobipy
 
+    to_mosekpy = to_mosekpy
+
     to_highspy = to_highspy
 
     to_block_files = to_block_files
