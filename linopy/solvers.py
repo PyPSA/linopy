@@ -830,6 +830,9 @@ def run_xpress(
     return Result(status, solution, m)
 
 
+mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
+
+
 def run_mosek(
     model,
     io_api=None,
@@ -890,30 +893,107 @@ def run_mosek(
                 m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
 
             if warmstart_fn:
-                # Gurobi solution format is not supported by MOSEK.
-                # What is the warmstart file? A Gurobi .sol file? The gurobi
-                # docs are a bit sparse on the format. Does it include dual
-                # information?
-                xx = [0.0] * m.getnumvar()
+                m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+                skx = [mosek.stakey.low] * m.getnumvar()
+                skc = [mosek.stakey.bas] * m.getnumcon()
+
                 with open(warmstart_fn, "rt") as f:
                     for line in f:
-                        l = line.strip()
-                        if not l.startswith("#"):
-                            try:
-                                name, value = l.strip(" ", 1)
-                                xx[m.getvarnameindex(name)] = float(value.strip())
-                            except:
-                                pass
-                m.putxx(mosek.soltype.itg, xx)
+                        if line.startswith("NAME "):
+                            break
 
+                    for line in f:
+                        if line.startswith("ENDATA"):
+                            break
+
+                        o = mosek_bas_re.match(line)
+                        if o is not None:
+                            if o.group(1) is not None:
+                                key = o.group(1)
+                                try:
+                                    skx[
+                                        m.getvarnameindex(o.group(2))
+                                    ] = mosek.stakey.basis
+                                except:
+                                    pass
+                                try:
+                                    skc[m.getvarnameindex(o.group(3))] = (
+                                        mosek.stakey.low if key == "XL" else "XU"
+                                    )
+                                except:
+                                    pass
+                            else:
+                                key = o.group(4)
+                                name = o.group(5)
+                                stakey = (
+                                    mosek.stakey.low
+                                    if key == "LL"
+                                    else (
+                                        mosek.stakey.upr
+                                        if key == "UL"
+                                        else mosek.stakey.bas
+                                    )
+                                )
+
+                                try:
+                                    skx[m.getvarnameindex(name)] = stakey
+                                except:
+                                    try:
+                                        skc[m.getvarnameindex(name)] = stakey
+                                    except:
+                                        pass
+                m.putskc(mosek.soltype.bas, skc)
+                m.putskx(mosek.soltype.bas, skx)
             m.optimize()
 
             m.solutionsummary(mosek.streamtype.log)
 
             if basis_fn:
-                # MOSEK has no support for GUROBU/CPLEX basis format.
-                # It may be possible to read the basis here and input it in the
-                # task.
+                if m.solutiondef(mosek.soltype.bas):
+                    with open(basis_fn, "wt") as f:
+                        f.write(f"NAME {basis_fn}\n")
+
+                        skc = [
+                            (0 if sk != mosek.stakey.bas else 1, i, sk)
+                            for (i, sk) in enumerate(m.getskc(mosek.soltype.bas))
+                        ]
+                        skx = [
+                            (0 if sk == mosek.stakey.bas else 1, j, sk)
+                            for (j, sk) in enumerate(m.getskx(mosek.soltype.bas))
+                        ]
+                        skc.sort()
+                        skc.reverse()
+                        skx.sort()
+                        skx.reverse()
+                        numcon = m.getnumcon()
+                        while skx and skc and skx[-1][0] == 0 and skc[-1][0] == 0:
+                            (_, i, kc) = skc.pop()
+                            (_, j, kx) = skx.pop()
+
+                            namex = m.getvarname(j)
+                            namec = m.getconname(i)
+
+                            if kc in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" XL {namex} {namec}\n")
+                            else:
+                                f.write(f" XU {namex} {namec}\n")
+                        while skc and skc[-1][0] == 0:
+                            (_, i, kc) = skc.pop()
+                            namec = m.getconname(i)
+                            if sk in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" LL {namex}\n")
+                            else:
+                                f.write(f" UL {namex}\n")
+                        while skx:
+                            (_, j, kx) = skx.pop()
+                            namex = m.getvarname(j)
+                            if kx == mosek.stakey.bas:
+                                f.write(f" BS {namex}\n")
+                            elif kx in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" LL {namex}\n")
+                            elif kx == mosek.stakey.upr:
+                                f.write(f" UL {namex}\n")
+                        f.write(f"ENDATA\n")
 
                 # try:
                 #    m.writedata(basis_fn)
