@@ -995,12 +995,6 @@ def run_mosek(
                                 f.write(f" UL {namex}\n")
                         f.write(f"ENDATA\n")
 
-                # try:
-                #    m.writedata(basis_fn)
-                # except mosek.Error as err:
-                #    logger.info("No model basis stored. Raised error: %s", err)
-                pass
-
             soltype = None
             possible_soltypes = [
                 mosek.soltype.bas,
