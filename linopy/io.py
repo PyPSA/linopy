@@ -307,7 +307,7 @@ def to_file(m, fn, integer_label="general"):
     return fn
 
 
-def to_mosekpy(model, task):
+def to_mosekpy(model, task=None):
     """
     Export model to MOSEK.
 
@@ -324,6 +324,9 @@ def to_mosekpy(model, task):
     """
 
     import mosek
+
+    if task is None: 
+        task = mosek.Task()
 
     task.appendvars(model.nvars)
     task.appendcons(model.ncons)

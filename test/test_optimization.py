@@ -27,6 +27,9 @@ if "gurobi" in available_solvers:
 if "highs" in available_solvers:
     params.append(("highs", "direct"))
 
+if "mosek" in available_solvers:
+    params.append(("mosek","direct"))
+
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
