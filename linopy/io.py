@@ -325,7 +325,7 @@ def to_mosekpy(model, task=None):
 
     import mosek
 
-    if task is None: 
+    if task is None:
         task = mosek.Task()
 
     task.appendvars(model.nvars)
