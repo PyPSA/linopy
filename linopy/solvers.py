@@ -980,7 +980,7 @@ def run_mosek(
                         while skc and skc[-1][0] == 0:
                             (_, i, kc) = skc.pop()
                             namec = m.getconname(i)
-                            if sk in [mosek.stakey.low, mosek.stakey.fix]:
+                            if kc in [mosek.stakey.low, mosek.stakey.fix]:
                                 f.write(f" LL {namex}\n")
                             else:
                                 f.write(f" UL {namex}\n")
