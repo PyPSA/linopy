@@ -23,11 +23,15 @@ SOLVERS = [
     "mosek",
     "mindoptpy",
     "coptpy",
-    "pyscipopt",
+    # "pyscipopt",
+    # "xpress",
 ]
 
-if sys.version_info <= (3, 10):
+if not (sys.version_info == (3, 11) and sys.platform == "darwin"):
     SOLVERS.append("xpress")
+
+if not sys.platform == "darwin":
+    SOLVERS.append("pyscipopt")
 
 setup(
     name="linopy",
