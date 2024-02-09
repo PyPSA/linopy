@@ -116,7 +116,7 @@ class MatrixAccessor:
 
         vars = ds.vars.map(self.flat_vars.set_index("labels").key)
         shape = self.flat_vars.key.max() + 1
-        return create_vector(vars, ds.coeffs, fill_value=0, shape=shape)
+        return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
 
     @property
     def Q(self):

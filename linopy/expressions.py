@@ -119,7 +119,6 @@ class LinearExpressionGroupby:
         LinearExpression
             The result of applying the function to the groupby object.
         """
-
         return LinearExpression(
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
@@ -191,7 +190,7 @@ class LinearExpressionGroupby:
             ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
             return ds
 
-        return self.map(func, **kwargs)
+        return self.map(func, **kwargs, shortcut=True)
 
     def roll(self, **kwargs):
         """
@@ -279,7 +278,7 @@ class LinearExpression:
 
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
-            data = Dataset({"coeffs": da, "vars": da, "const": 0})
+            data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
         elif isinstance(data, DataArray):
             # assume only constant are passed
             const = fill_missing_coords(data)
@@ -306,7 +305,9 @@ class LinearExpression:
             raise ValueError("data must contain one dimension ending with '_term'")
 
         if "const" not in data:
-            data = data.assign(const=0)
+            data = data.assign(const=0.0)
+        elif not np.issubdtype(data.const, np.floating):
+            data["const"] = data.const.astype(float)
 
         data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
         data[["coeffs", "vars"]] = xr.broadcast(
@@ -315,6 +316,11 @@ class LinearExpression:
 
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., TERM_DIM))
+
+        # ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            # TODO: add a warning here, routines should be safe against this
+            data = data.drop_vars(drop_dims)
 
         if not isinstance(model, Model):
             raise ValueError("model must be an instance of linopy.Model")
@@ -328,14 +334,15 @@ class LinearExpression:
         """
         max_lines = options["display_max_rows"]
         dims = list(self.coord_dims)
-        dim_sizes = list(self.coord_dims.values())
+        ndim = len(dims)
+        dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []
 
         header_string = self.type
 
-        if size > 1:
+        if size > 1 or ndim > 0:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
@@ -504,11 +511,15 @@ class LinearExpression:
     @property
     def dims(self):
         # do explicitly sort as in vars (same as in coeffs)
-        return {k: self.data.dims[k] for k in self.vars.dims}
+        return self.vars.dims
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
+        return {k for k in self.dims if k not in HELPER_DIMS}
+
+    @property
+    def coord_sizes(self):
+        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
     def vars(self):
@@ -629,7 +640,7 @@ class LinearExpression:
         if isinstance(dim, str):
             # Make sure, single mentioned dimensions is handled correctly.
             dim = [dim]
-        dim_dict = {dim_name: self.data.dims[dim_name] for dim_name in dim}
+        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     @classmethod
@@ -1370,7 +1381,7 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
 
     if cls in linopy_types and dim in HELPER_DIMS:
         coord_dims = [
-            {k: v for k, v in e.dims.items() if k not in HELPER_DIMS} for e in exprs
+            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
         override = check_common_keys_values(coord_dims)
     else:

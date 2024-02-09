@@ -9,11 +9,14 @@ Created on Tue Nov  2 22:38:48 2021.
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from xarray.testing import assert_equal
 
 import linopy
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, LinearExpression, Model
 from linopy.constants import (
+    HELPER_DIMS,
+    TERM_DIM,
     long_EQUAL,
     short_GREATER_EQUAL,
     short_LESS_EQUAL,
@@ -126,7 +129,7 @@ def test_anonymous_constraint_with_constant_on_lhs(x, y):
     expr = 10 * x + y + 10
     con = expr == 0
     assert isinstance(con.lhs, LinearExpression)
-    assert (con.lhs.const == 0).all()
+    assert (con.lhs.const == 0.0).all()
     assert (con.sign == EQUAL).all()
     assert (con.rhs == -10).all()
 
@@ -347,6 +350,21 @@ def test_constraint_assignment_with_args_invalid_sign(m, x, y):
     lhs = x + y
     with pytest.raises(ValueError):
         m.add_constraints(lhs, ",", 0)
+
+
+def test_constraint_with_helper_dims_as_coords(m):
+    coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
+    coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
+    sign = xr.DataArray("==", coords=[coords[0]])
+    rhs = xr.DataArray(np.array([0]), coords=[coords[0]])
+
+    data = xr.Dataset({"coeffs": coeffs, "vars": vars, "sign": sign, "rhs": rhs})
+    assert set(HELPER_DIMS).intersection(set(data.coords))
+    con = Constraint(data, m, "c")
+
+    expr = m.add_constraints(con)
+    assert not set(HELPER_DIMS).intersection(set(expr.data.coords))
 
 
 def test_constraint_matrix(m):

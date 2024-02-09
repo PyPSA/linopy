@@ -20,7 +20,7 @@ from xarray import DataArray, Dataset
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
-from linopy.constants import TERM_DIM, ModelStatus, TerminationCondition
+from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import (
     LinearExpression,
@@ -562,6 +562,11 @@ class Model:
                 f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
             )
 
+        # ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            # TODO: add a warning here, routines should be safe against this
+            data = data.drop_vars(drop_dims)
+
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
             # TODO: simplify
@@ -646,20 +651,37 @@ class Model:
 
     def remove_constraints(self, name):
         """
-        Remove all constraints stored under reference name `name` from the
+        Remove all constraints stored under reference name 'name' from the
         model.
 
         Parameters
         ----------
-        name : str
-            Reference name of the constraints which to remove, same as used in
-            `model.add_constraints`.
+        name : str or list of str
+            Reference name(s) of the constraints to remove. If a single name is
+            provided, only that constraint will be removed. If a list of names
+            is provided, all constraints with those names will be removed.
 
         Returns
         -------
         None.
         """
-        self.constraints.remove(name)
+        if isinstance(name, list):
+            for n in name:
+                logger.debug(f"Removed constraint: {n}")
+                self.constraints.remove(n)
+        else:
+            logger.debug(f"Removed constraint: {name}")
+            self.constraints.remove(name)
+
+    def remove_objective(self):
+        """
+        Remove the objective's linear expression from the model.
+
+        Returns
+        -------
+        None.
+        """
+        self.objective = Objective(LinearExpression(None, self), self)
 
     @property
     def continuous(self):
@@ -1032,14 +1054,14 @@ class Model:
             func = getattr(solvers, f"run_{solver_name}")
             result = func(
                 self,
-                io_api,
-                problem_fn,
-                solution_fn,
-                log_fn,
-                warmstart_fn,
-                basis_fn,
-                keep_files,
-                env,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                keep_files=keep_files,
+                env=env,
                 **solver_options,
             )
         finally:

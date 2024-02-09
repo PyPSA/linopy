@@ -1,8 +1,46 @@
 Release Notes
 =============
 
-Upcoming Release
-----------------
+
+Version 0.3.4
+-------------
+
+* Solver output of CBC and GLPK is sent to logging with level INFO instead of stdout
+* Added support for QP problems with MOSEK and COPT.
+* A warning was added when linopy is not able to add pass quadratic objective terms to the highs solver. This is the case when the "ipm" solver of highs is explicitly selected.
+
+
+Version 0.3.3
+-------------
+
+
+* New solver interface for `SCIP <https://www.scipopt.org/>`. This solver is now supported by `linopy` and can be used with the `solve` function if the `pyscipopt` package is installed. The solver is available for free for general use. See the `SCIP website <https://www.scipopt.org/>` for more information.
+* Linopy was refactored to use the new xarray API (>=2024.01) without the deprecation warnings.
+* The set "quadratic_solvers" now only contains quadratic solvers which are installed and available to the user.
+* The `solve` function now throws an error instead of a warning if the set value for ``io_api`` is not available for a solver.
+
+Version 0.3.2
+-------------
+
+* The IO with NetCDF files was made more secure and fixed for some cases. In particular, variables and constraints with a dash in the name are now supported (as used by PyPSA). The object sense and value are now properly stored and retrieved from the netcdf file.
+* The IO with NetCDF file now supports multiindexed coordinates.
+* The representation of single indexed expressions and constraints with non-empty dimensions/coordinates was fixed, e.g. `x.loc[["a"]] > 0` where `x` has only one dimension. Therefore the representation now shows the coordinates.
+* The creation of ``LinearExpression`` and ``Constraints`` was made robust against the case where the ``data`` argument is a ``xarray.DataArray`` with helper dimensions (like "_term" etc.) unintentionally assigned as coordinates.
+
+Version 0.3.1
+-------------
+
+
+**New Features**
+
+* Added solver interface for MOSEK.
+* Support for MindOpt solver was added.
+* Added solver interface for COPT by Cardinal Optimizer.
+* Type consistency with fill values for constant values was improved, this prevent dtype warnings put out by xarray/numpy.
+
+Version 0.3.0
+-------------
+
 
 **New Features**
 
@@ -18,12 +56,13 @@ Upcoming Release
 * The function ``to_anonymous_constraint`` was removed in favor of the ``to_constraint`` function.
 * The support for python 3.8 has been dropped.
 
-Version 0.2.5
+Version 0.2.6
 -------------
 
 * The memory-efficiency of the IO to LP/MPS file was further improved. In particular, the function `to_dataframe` is now avoiding unnecessary data copies.
 * The printout of time stamps was modified to be more readable, leaving out the display of seconds and below if not necessary.
 * The gurobi environment is now enclosed in a context manager to avoid any unwanted use of a token.
+
 
 Version 0.2.5
 -------------

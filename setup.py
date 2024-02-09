@@ -7,12 +7,26 @@ Created on Wed Mar 10 11:04:43 2021.
 """
 
 
+import sys
 from codecs import open
 
 from setuptools import find_packages, setup
 
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
+
+
+SOLVERS = [
+    "gurobipy",
+    "highspy",
+    "cplex",
+    "mosek",
+    "mindoptpy",
+    "coptpy",
+    "xpress; platform_system != 'Darwin' or python_version < '3.11'",
+    "pyscipopt; platform_system != 'Darwin'",
+]
+
 
 setup(
     name="linopy",
@@ -32,7 +46,7 @@ setup(
         "bottleneck",
         "toolz",
         "numexpr",
-        "xarray>=2023.1.0",
+        "xarray>=2023.9.0",
         "dask>=0.18.0",
         "tqdm",
         "deprecation",
@@ -53,17 +67,13 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
+            "netcdf4",
             "pre-commit",
             "paramiko",
             "gurobipy",
             "highspy",
         ],
-        "solvers": [
-            "gurobipy",
-            "highspy",
-            "cplex",
-            "xpress",
-        ],
+        "solvers": SOLVERS,
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

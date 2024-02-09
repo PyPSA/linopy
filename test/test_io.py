@@ -12,10 +12,11 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
+from linopy.testing import assert_model_equal
 
 
 @pytest.fixture
-def m():
+def model():
     m = Model()
 
     x = m.add_variables(4, pd.Series([8, 10]), name="x")
@@ -28,36 +29,88 @@ def m():
     return m
 
 
-def test_to_netcdf(m, tmp_path):
+@pytest.fixture
+def model_with_dash_names():
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]), name="x-var")
+    x = m.add_variables(4, pd.Series([8, 10]), name="x-var-2")
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y-var")
+
+    m.add_constraints(x + y, LESS_EQUAL, 10, name="constraint-1")
+
+    m.add_objective(2 * x + 3 * y)
+
+    return m
+
+
+@pytest.fixture
+def model_with_multiindex():
+    m = Model()
+
+    index = pd.MultiIndex.from_tuples(
+        [(1, "a"), (1, "b"), (2, "a"), (2, "b")], names=["first", "second"]
+    )
+    x = m.add_variables(4, pd.Series([8, 10, 12, 14], index=index), name="x-var")
+    y = m.add_variables(
+        0, pd.DataFrame([[1, 2], [3, 4], [5, 6], [7, 8]], index=index), name="y-var"
+    )
+
+    m.add_constraints(x + y, LESS_EQUAL, 10, name="constraint-1")
+
+    m.add_objective(2 * x + 3 * y)
+
+    return m
+
+
+def test_model_to_netcdf(model, tmp_path):
+    m = model
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    for k in m.scalar_attrs:
-        if k != "objective.value":
-            assert getattr(m, k) == getattr(p, k)
+    assert_model_equal(m, p)
 
-    for k in m.dataset_attrs:
-        assert_equal(getattr(m, k), getattr(p, k))
 
-    assert set(m.variables) == set(p.variables)
-    assert set(m.constraints) == set(p.constraints)
+def test_model_to_netcdf_with_sense(model, tmp_path):
+    m = model
+    m.objective.sense = "max"
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
 
-    for v in m.variables:
-        assert_equal(m.variables[v].data, p.variables[v].data)
+    assert_model_equal(m, p)
 
-    for c in m.constraints:
-        assert_equal(m.constraints[c].data, p.constraints[c].data)
 
-    assert_equal(m.objective.data, p.objective.data)
+def test_model_to_netcdf_with_dash_names(model_with_dash_names, tmp_path):
+    m = model_with_dash_names
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+
+
+# skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
+@pytest.mark.skipif(
+    xr.__version__ in ["2024.1.0", "2024.1.1"],
+    reason="xarray version 2024.1.0 has a bug with MultiIndex deserialize",
+)
+def test_model_to_netcdf_with_multiindex(model_with_multiindex, tmp_path):
+    m = model_with_multiindex
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_lp(m, tmp_path):
+def test_to_file_lp(model, tmp_path):
     import gurobipy
 
     fn = tmp_path / "test.lp"
-    m.to_file(fn)
+    model.to_file(fn)
 
     gurobipy.read(str(fn))
 
@@ -66,30 +119,30 @@ def test_to_file_lp(m, tmp_path):
     not {"gurobi", "highs"}.issubset(available_solvers),
     reason="Gurobipy of highspy not installed",
 )
-def test_to_file_mps(m, tmp_path):
+def test_to_file_mps(model, tmp_path):
     import gurobipy
 
     fn = tmp_path / "test.mps"
-    m.to_file(fn)
+    model.to_file(fn)
 
     gurobipy.read(str(fn))
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_invalid(m, tmp_path):
+def test_to_file_invalid(model, tmp_path):
     with pytest.raises(ValueError):
         fn = tmp_path / "test.failedtype"
-        m.to_file(fn)
+        model.to_file(fn)
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_gurobipy(m):
-    m.to_gurobipy()
+def test_to_gurobipy(model):
+    model.to_gurobipy()
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_to_highspy(m):
-    m.to_highspy()
+def test_to_highspy(model):
+    model.to_highspy()
 
 
 def test_to_blocks(tmp_path):

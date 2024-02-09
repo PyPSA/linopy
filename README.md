@@ -9,7 +9,7 @@
 
 **linopy** is heavily based on [xarray](https://github.com/pydata/xarray) which allows for many flexible data-handling features:
 
-* Define (arrays of) contnuous or binary variables with **coordinates**, e.g. time, consumers, etc.
+* Define (arrays of) continuous or binary variables with **coordinates**, e.g. time, consumers, etc.
 * Apply **arithmetic operations** on the variables like adding, substracting, multiplying with all the  **broadcasting** potentials of xarray
 * Apply **arithmetic operations** on the **linear expressions** (combination of variables)
 * **Group terms** of a linear expression by coordinates
@@ -127,6 +127,8 @@ Fri    0          4
 * [Gurobi](https://www.gurobi.com/)
 * [Xpress](https://www.fico.com/en/products/fico-xpress-solver)
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
+* [MOSEK](https://www.mosek.com/)
+* [COPT](https://www.shanshu.ai/copt)
 
 Note that these do have to be installed by the user separately.
 

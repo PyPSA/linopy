@@ -110,7 +110,7 @@ class Objective:
         if len(expr.coord_dims):
             expr = expr.sum()
 
-        if expr.const != 0:
+        if (expr.const != 0.0) and not np.isnan(expr.const):
             raise ValueError("Constant values in objective function not supported.")
 
         self._expression = expr

@@ -153,7 +153,7 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k: self.data.dims[k] for k in self.dims if k not in HELPER_DIMS}
+        return {k for k in self.dims if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):
@@ -165,6 +165,7 @@ class Constraint:
         """
         max_lines = options["display_max_rows"]
         dims = list(self.dims)
+        ndim = len(self.coord_dims)
         dim_sizes = list(self.sizes.values())[:-1]
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
@@ -172,7 +173,7 @@ class Constraint:
 
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
 
-        if size > 1:
+        if size > 1 or ndim > 0:
             for indices in generate_indices_for_printout(dim_sizes, max_lines):
                 if indices is None:
                     lines.append("\t\t...")

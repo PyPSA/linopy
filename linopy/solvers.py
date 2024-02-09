@@ -24,7 +24,16 @@ from linopy.constants import (
     TerminationCondition,
 )
 
-quadratic_solvers = ["gurobi", "xpress", "cplex", "highs"]
+QUADRATIC_SOLVERS = [
+    "gurobi",
+    "xpress",
+    "cplex",
+    "highs",
+    "scip",
+    "mosek",
+    "copt",
+    "mindopt",
+]
 
 available_solvers = []
 
@@ -47,6 +56,10 @@ if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 
     available_solvers.append("cbc")
 
 with contextlib.suppress(ImportError):
+    import pyscipopt as scip
+
+    available_solvers.append("scip")
+with contextlib.suppress(ImportError):
     import cplex
 
     available_solvers.append("cplex")
@@ -54,11 +67,35 @@ with contextlib.suppress(ImportError):
     import xpress
 
     available_solvers.append("xpress")
+with contextlib.suppress(ImportError):
+    import mosek
+
+    with contextlib.suppress(mosek.Error):
+        with mosek.Env() as m:
+            t = m.Task()
+            t.optimize()
+            m.checkinall()
+
+        available_solvers.append("mosek")
+with contextlib.suppress(ImportError):
+    import mindoptpy
+
+    available_solvers.append("mindopt")
+with contextlib.suppress(ImportError):
+    import coptpy
+
+    with contextlib.suppress(coptpy.CoptError):
+        coptpy.Envr()
+
+        available_solvers.append("copt")
+
+quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex"}, blocks={"pips"}
+    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek", "mindopt"},
+    blocks={"pips"},
 )
 
 
@@ -75,7 +112,7 @@ def safe_get_solution(status, func):
     return Solution()
 
 
-def maybe_adjust_objective_sign(solution, sense, io_api, solver_name):
+def maybe_adjust_objective_sign(solution, sense, io_api):
     if sense == "min":
         return
 
@@ -125,9 +162,8 @@ def run_cbc(
     options, run 'cbc' in your shell
     """
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cbc solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -148,15 +184,16 @@ def run_cbc(
     if basis_fn:
         command += f"-basisO {basis_fn} "
 
-    if not os.path.exists(solution_fn):
-        os.mknod(solution_fn)
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     command = command.strip()
 
     if log_fn is None:
         p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
+        output = ""
         for line in iter(p.stdout.readline, b""):
-            print(line.decode(), end="")
+            output += line.decode()
+        logger.info(output)
         p.stdout.close()
         p.wait()
     else:
@@ -196,7 +233,7 @@ def run_cbc(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cbc")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -232,13 +269,14 @@ def run_glpk(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for glpk solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
     suffix = problem_fn.suffix[1:]
+
+    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
 
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
@@ -257,8 +295,10 @@ def run_glpk(
 
     p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
     if log_fn is None:
+        output = ""
         for line in iter(p.stdout.readline, b""):
-            print(line.decode(), end="")
+            output += line.decode()
+        logger.info(output)
         p.stdout.close()
         p.wait()
     else:
@@ -308,7 +348,7 @@ def run_glpk(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "glpk")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution)
 
@@ -356,6 +396,12 @@ def run_highs(
     if warmstart_fn:
         logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
 
+    if solver_options.get("solver") in ["simplex", "ipm"] and model.type == "QP":
+        logger.warning(
+            "The HiGHS solver ignores quadratic terms if the solver is set to 'simplex' or 'ipm'. "
+            "Drop the solver option or use 'choose' to enable quadratic terms."
+        )
+
     if io_api is None or io_api in ["lp", "mps"]:
         model.to_file(problem_fn)
         h = highspy.Highs()
@@ -400,7 +446,7 @@ def run_highs(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "highs")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, h)
 
@@ -434,9 +480,8 @@ def run_cplex(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for cplex solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     model.to_file(problem_fn)
@@ -506,7 +551,7 @@ def run_cplex(
         return Solution(solution, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "cplex")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -579,34 +624,130 @@ def run_gurobi(
             m.read(warmstart_fn)
         m.optimize()
 
-    if basis_fn:
-        try:
-            m.write(basis_fn)
-        except gurobipy.GurobiError as err:
-            logger.info("No model basis stored. Raised error: ", err)
+        if basis_fn:
+            try:
+                m.write(basis_fn)
+            except gurobipy.GurobiError as err:
+                logger.info("No model basis stored. Raised error: %s", err)
 
-    condition = m.status
+        condition = m.status
+        termination_condition = CONDITION_MAP.get(condition, condition)
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = condition
+
+        def get_solver_solution() -> Solution:
+            objective = m.ObjVal
+
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+            sol = set_int_index(sol)
+
+            try:
+                dual = pd.Series(
+                    {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
+                )
+                dual = set_int_index(dual)
+            except AttributeError:
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = pd.Series(dtype=float)
+
+            return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    return Result(status, solution, m)
+
+
+def run_scip(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the scip solver.
+
+    This function communicates with scip using the pyscipopt package.
+    """
+    CONDITION_MAP = {}
+
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if io_api is None or io_api in ["lp", "mps"]:
+        problem_fn = model.to_file(problem_fn)
+        problem_fn = maybe_convert_path(problem_fn)
+        m = scip.Model()
+        m.readProblem(problem_fn)
+    elif io_api == "direct":
+        raise NotImplementedError("Direct API not implemented for SCIP")
+    else:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+        )
+
+    if solver_options is not None:
+        emphasis = solver_options.pop("setEmphasis", None)
+        if emphasis is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMEMPHASIS, emphasis.upper()))
+
+        heuristics = solver_options.pop("setHeuristics", None)
+        if heuristics is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, heuristics.upper()))
+
+        presolve = solver_options.pop("setPresolve", None)
+        if presolve is not None:
+            m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, presolve.upper()))
+
+        m.setParams(solver_options)
+
+    if log_fn is not None:
+        m.setLogfile(log_fn)
+
+    if warmstart_fn:
+        logger.warning("Warmstart not implemented for SCIP")
+
+    # In order to retrieve the dual values, we need to turn off presolve
+    m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
+
+    m.optimize()
+
+    if basis_fn:
+        logger.warning("Basis not implemented for SCIP")
+
+    condition = m.getStatus()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
 
     def get_solver_solution() -> Solution:
-        objective = m.ObjVal
+        objective = m.getObjVal()
 
-        sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+        s = m.getSols()[0]
+        sol = pd.Series({v.name: s[v] for v in m.getVars()})
+        sol.drop(["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0)
         sol = set_int_index(sol)
 
-        try:
-            dual = pd.Series({c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float)
+        cons = m.getConss()
+        if len(cons) != 0:
+            dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
+            dual = dual[dual.index.str.startswith("c")]
             dual = set_int_index(dual)
-        except AttributeError:
+        else:
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "gurobi")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
@@ -645,9 +786,8 @@ def run_xpress(
     }
 
     if io_api is not None and io_api not in ["lp", "mps"]:
-        logger.warning(
-            f"IO setting '{io_api}' not available for xpress solver. "
-            "Falling back to `lp`."
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -674,7 +814,7 @@ def run_xpress(
         try:
             m.writebasis(basis_fn)
         except Exception as err:
-            logger.info("No model basis stored. Raised error: ", err)
+            logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.getProbStatusString()
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -700,7 +840,312 @@ def run_xpress(
         return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api, "xpress")
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    return Result(status, solution, m)
+
+
+def run_mosek(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the MOSEK solver.
+
+    https://www.mosek.com/
+
+    For more information on solver options, see
+    https://docs.mosek.com/latest/pythonapi/parameters.html#doc-all-parameter-list
+    """
+    CONDITION_MAP = {
+        "solsta.unknown": "unknown",
+        "solsta.optimal": "optimal",
+        "solsta.integer_optimal": "optimal",
+        "solsta.prim_infeas_cer": "infeasible",
+        "solsta.dual_infeas_cer": "infeasible_or_unbounded",
+    }
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    with contextlib.ExitStack() as stack:
+        if env is None:
+            env = stack.enter_context(mosek.Env())
+
+        with env.Task() as m:
+            m.readdata(problem_fn)
+
+            for k, v in solver_options.items():
+                m.putparam(k, str(v))
+
+            if log_fn is not None:
+                m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
+
+            if warmstart_fn:
+                m.readdata(warmstart_fn)
+
+            m.optimize()
+
+            m.solutionsummary(mosek.streamtype.log)
+
+            if basis_fn:
+                try:
+                    m.writedata(basis_fn)
+                except mosek.Error as err:
+                    logger.info("No model basis stored. Raised error: %s", err)
+
+            soltype = None
+            possible_soltypes = [
+                mosek.soltype.bas,
+                mosek.soltype.itr,
+                mosek.soltype.itg,
+            ]
+            for possible_soltype in possible_soltypes:
+                try:
+                    if m.solutiondef(possible_soltype):
+                        soltype = possible_soltype
+                except mosek.Error:
+                    pass
+
+            condition = str(m.getsolsta(soltype))
+            termination_condition = CONDITION_MAP.get(condition, condition)
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = condition
+
+            def get_solver_solution() -> Solution:
+                objective = m.getprimalobj(soltype)
+
+                sol = m.getxx(soltype)
+                sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
+                sol = pd.Series(sol, dtype=float)
+                sol = set_int_index(sol)
+
+                try:
+                    dual = m.gety(soltype)
+                    dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
+                    dual = pd.Series(dual, dtype=float)
+                    dual = set_int_index(dual)
+                except (mosek.Error, AttributeError):
+                    logger.warning("Dual values of MILP couldn't be parsed")
+                    dual = pd.Series(dtype=float)
+
+                return Solution(sol, dual, objective)
+
+            solution = safe_get_solution(status, get_solver_solution)
+            maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    return Result(status, solution)
+
+
+def run_copt(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the COPT solver.
+
+    https://guide.coap.online/copt/en-doc/index.html
+
+    For more information on solver options, see
+    https://guide.coap.online/copt/en-doc/parameter.html
+    """
+    # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
+    CONDITION_MAP = {
+        0: "unstarted",
+        1: "optimal",
+        2: "infeasible",
+        3: "unbounded",
+        4: "infeasible_or_unbounded",
+        5: "numerical",
+        6: "node_limit",
+        7: "imprecise",
+        8: "time_limit",
+        9: "unfinished",
+        10: "interrupted",
+    }
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if env is None:
+        env = coptpy.Envr()
+
+    m = env.createModel()
+
+    m.read(str(problem_fn))
+
+    if log_fn:
+        m.setLogFile(log_fn)
+
+    for k, v in solver_options.items():
+        m.setParam(k, v)
+
+    if warmstart_fn:
+        m.readBasis(warmstart_fn)
+
+    m.solve()
+
+    if basis_fn and m.HasBasis:
+        try:
+            m.write(basis_fn)
+        except coptpy.CoptError as err:
+            logger.info("No model basis stored. Raised error: %s", err)
+
+    condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.LpObjval if model.type in ["LP", "QP"] else m.BestObj
+
+        sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
+        sol = set_int_index(sol)
+
+        try:
+            dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
+            dual = set_int_index(dual)
+        except (coptpy.CoptError, AttributeError):
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    env.close()
+
+    return Result(status, solution, m)
+
+
+def run_mindopt(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    Solve a linear problem using the MindOpt solver.
+
+    https://solver.damo.alibaba.com/doc/en/html/index.html
+
+    For more information on solver options, see
+    https://solver.damo.alibaba.com/doc/en/html/API2/param/index.html
+    """
+    CONDITION_MAP = {
+        -1: "error",
+        0: "unknown",
+        1: "optimal",
+        2: "infeasible",
+        3: "unbounded",
+        4: "infeasible_or_unbounded",
+        5: "suboptimal",
+    }
+
+    if io_api is not None and io_api not in ["lp", "mps"]:
+        raise ValueError(
+            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+        )
+    if (io_api == "lp" or str(problem_fn).endswith(".lp")) and model.type == "QP":
+        raise ValueError(
+            "MindOpt does not support QP problems in LP format. Use `io_api='mps'` instead."
+        )
+
+    problem_fn = model.to_file(problem_fn)
+
+    problem_fn = maybe_convert_path(problem_fn)
+    log_fn = "" if not log_fn else maybe_convert_path(log_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
+
+    if env is None:
+        env = mindoptpy.Env(log_fn)
+    env.start()
+
+    m = mindoptpy.read(problem_fn, env)
+
+    for k, v in solver_options.items():
+        m.setParam(k, v)
+
+    if warmstart_fn:
+        try:
+            m.read(warmstart_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("Model basis could not be read. Raised error: %s", err)
+
+    m.optimize()
+
+    if basis_fn:
+        try:
+            m.write(basis_fn)
+        except mindoptpy.MindoptError as err:
+            logger.info("No model basis stored. Raised error: %s", err)
+
+    condition = m.status
+    termination_condition = CONDITION_MAP.get(condition, condition)
+    status = Status.from_termination_condition(termination_condition)
+    status.legacy_status = condition
+
+    def get_solver_solution() -> Solution:
+        objective = m.objval
+
+        sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
+        sol = set_int_index(sol)
+
+        try:
+            dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
+            dual = set_int_index(dual)
+        except (mindoptpy.MindoptError, AttributeError):
+            logger.warning("Dual values of MILP couldn't be parsed")
+            dual = pd.Series(dtype=float)
+
+        return Solution(sol, dual, objective)
+
+    solution = safe_get_solution(status, get_solver_solution)
+    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+
+    env.dispose()
 
     return Result(status, solution, m)
 
