@@ -1,13 +1,14 @@
 Release Notes
 =============
 
-.. Upcoming Release
-.. ----------------
 
 Version 0.3.4
 -------------
 
 * Solver output of CBC and GLPK is sent to logging with level INFO instead of stdout
+* Added support for QP problems with MOSEK and COPT.
+* A warning was added when linopy is not able to add pass quadratic objective terms to the highs solver. This is the case when the "ipm" solver of highs is explicitly selected.
+
 
 Version 0.3.3
 -------------
