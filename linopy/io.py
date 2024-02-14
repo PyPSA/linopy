@@ -339,12 +339,14 @@ def to_mosekpy(model, task=None):
 
     bkx = [
         (
-            (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
-            if u < np.inf
-            else mosek.boundkey.lo
+            (
+                (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
+                if u < np.inf
+                else mosek.boundkey.lo
+            )
+            if (l > -np.inf)
+            else (mosek.boundkey.up if (u < np.inf) else mosek.boundkey.fr)
         )
-        if (l > -np.inf)
-        else (mosek.boundkey.up if (u < np.inf) else mosek.boundkey.fr)
         for (l, u) in zip(M.lb, M.ub)
     ]
     blx = [b if b > -np.inf else 0.0 for b in M.lb]
@@ -358,9 +360,11 @@ def to_mosekpy(model, task=None):
         for i, n in enumerate(names):
             task.putconname(i, n)
         bkc = [
-            mosek.boundkey.up
-            if s == "<"
-            else (mosek.boundkey.lo if s == ">" else mosek.boundkey.fx)
+            (
+                mosek.boundkey.up
+                if s == "<"
+                else (mosek.boundkey.lo if s == ">" else mosek.boundkey.fx)
+            )
             for s in M.sense
         ]
         blc = M.b

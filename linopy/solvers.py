@@ -926,9 +926,9 @@ def run_mosek(
                             if o.group(1) is not None:
                                 key = o.group(1)
                                 try:
-                                    skx[
-                                        m.getvarnameindex(o.group(2))
-                                    ] = mosek.stakey.basis
+                                    skx[m.getvarnameindex(o.group(2))] = (
+                                        mosek.stakey.basis
+                                    )
                                 except:
                                     pass
                                 try:
