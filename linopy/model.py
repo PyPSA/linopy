@@ -841,6 +841,7 @@ class Model:
         --------
 
         For creating an expression from tuples:
+
         >>> from linopy import Model
         >>> import pandas as pd
         >>> m = Model()
@@ -849,6 +850,7 @@ class Model:
         >>> expr = m.linexpr((10, "x"), (1, "y"))
 
         For creating an expression from a rule:
+
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
