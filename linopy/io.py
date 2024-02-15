@@ -361,14 +361,20 @@ def to_mosekpy(model, task=None):
             task.putconname(i, n)
         bkc = [
             (
-                mosek.boundkey.up
+                (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
                 if s == "<"
-                else (mosek.boundkey.lo if s == ">" else mosek.boundkey.fx)
+                else (
+                    (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
+                    if s == ">"
+                    else mosek.boundkey.fx
+                )
             )
-            for s in M.sense
+            for s, b in zip(M.sense, M.b)
         ]
-        blc = M.b
-        buc = M.b
+        blc = [b if b > -np.inf else 0.0 for b in M.b]
+        buc = [b if b < np.inf else 0.0 for b in M.b]
+        # blc = M.b
+        # buc = M.b
         A = M.A.tocsr()
         task.putarowslice(
             0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
