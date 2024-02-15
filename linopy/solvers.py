@@ -31,6 +31,7 @@ QUADRATIC_SOLVERS = [
     "highs",
     "scip",
     "mosek",
+    "mosek_remote",
     "copt",
     "mindopt",
 ]
@@ -78,6 +79,15 @@ with contextlib.suppress(ImportError):
 
         available_solvers.append("mosek")
 with contextlib.suppress(ImportError):
+    import mosek
+
+    with contextlib.suppress(mosek.Error):
+        with mosek.Task() as t:
+            t.putoptserverhost("http://solve.mosek.com:30080")
+            t.optimize()
+        available_solvers.append("mosek_remote")
+
+with contextlib.suppress(ImportError):
     import mindoptpy
 
     available_solvers.append("mindopt")
@@ -94,7 +104,15 @@ logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek", "mindopt"},
+    lp_file={
+        "gurobi",
+        "xpress",
+        "cbc",
+        "glpk",
+        "cplex",
+        "mosek",
+        "mosek_remote" "mindopt",
+    },
     blocks={"pips"},
 )
 
@@ -846,6 +864,42 @@ def run_xpress(
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
+
+
+def run_mosek_remote(
+    model,
+    io_api=None,
+    problem_fn=None,
+    solution_fn=None,
+    log_fn=None,
+    warmstart_fn=None,
+    basis_fn=None,
+    keep_files=False,
+    env=None,
+    **solver_options,
+):
+    """
+    This is a wrapper around run_mosek() that sets the
+    MSK_SPAR_REMOTE_OPTSERVER_HOST, if not already present, to the public MOSEK
+    solver server. This can be used to solve small-ish problems without a
+    license.
+    """
+    if "MSK_SPAR_REMOTE_OPTSERVER_HOST" not in solver_options:
+        solver_options["MSK_SPAR_REMOTE_OPTSERVER_HOST"] = (
+            "http://solve.mosek.com:30080"
+        )
+    return run_mosek(
+        model,
+        io_api=io_api,
+        problem_fn=problem_fn,
+        solution_fn=solution_fn,
+        log_fn=log_fn,
+        warmstart_fn=warmstart_fn,
+        basis_fn=basis_fn,
+        keep_files=keep_files,
+        env=env,
+        **solver_options,
+    )
 
 
 def run_mosek(

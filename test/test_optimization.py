@@ -30,6 +30,9 @@ if "highs" in available_solvers:
 if "mosek" in available_solvers:
     params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
+elif "mosek_remote" in available_solvers:
+    params.append(("mosek_remote", "direct"))
+    params.append(("mosek_remote", "lp"))
 
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
@@ -375,6 +378,10 @@ def test_solver_options(model, solver, io_api):
         "highs": {"time_limit": 1},
         "scip": {"limits/time": 1},
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
+        "mosek_remote": {
+            "MSK_DPAR_OPTIMIZER_MAX_TIME": 1,
+            "MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080",
+        },
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }
