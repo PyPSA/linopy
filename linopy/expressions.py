@@ -333,7 +333,7 @@ class LinearExpression:
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_dims)
+        dims = list(self.coord_sizes.keys())
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
@@ -515,7 +515,7 @@ class LinearExpression:
 
     @property
     def coord_dims(self):
-        return {k for k in self.dims if k not in HELPER_DIMS}
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self):
