@@ -153,7 +153,11 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k for k in self.dims if k not in HELPER_DIMS}
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
+
+    @property
+    def coord_sizes(self):
+        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):
@@ -164,9 +168,9 @@ class Constraint:
         Print the constraint arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.dims)
-        ndim = len(self.coord_dims)
-        dim_sizes = list(self.sizes.values())[:-1]
+        dims = list(self.coord_sizes.keys())
+        ndim = len(dims)
+        dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = self.mask.sum().values if self.mask is not None else 0
         lines = []

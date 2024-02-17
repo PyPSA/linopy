@@ -121,14 +121,14 @@ class Model:
         self.matrices = MatrixAccessor(self)
 
     @property
-    def variables(self):
+    def variables(self) -> Variables:
         """
         Variables assigned to the model.
         """
         return self._variables
 
     @property
-    def constraints(self):
+    def constraints(self) -> Constraints:
         """
         Constraints assigned to the model.
         """

@@ -65,6 +65,7 @@ def _var_unwrap(var):
         "attrs",
         "coords",
         "indexes",
+        "sizes",
     ],
     labels=[
         "shape",
@@ -219,8 +220,8 @@ class Variable:
         Print the variable arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.dims)
-        dim_sizes = list(self.data.sizes.values())
+        dims = list(self.sizes.keys())
+        dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
         lines = []
 
