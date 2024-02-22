@@ -30,9 +30,10 @@ if "highs" in available_solvers:
 if "mosek" in available_solvers:
     params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
-elif "mosek_remote" in available_solvers:
-    params.append(("mosek_remote", "direct"))
-    params.append(("mosek_remote", "lp"))
+
+# elif "mosek_remote" in available_solvers:
+#    params.append(("mosek_remote", "direct"))
+#    params.append(("mosek_remote", "lp"))
 
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
