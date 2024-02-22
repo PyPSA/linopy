@@ -332,11 +332,22 @@ def to_mosekpy(model, task=None):
     task.appendcons(model.ncons)
 
     M = model.matrices
-    for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
-        task.putvarname(j, n)
+    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
+    #    task.putvarname(j, n)
+
+    labels = M.vlabels.astype(str).astype(object)
+    task.generatevarnames(
+        np.arange(0, len(labels)), "x%0", [len(labels)], None, [0], list(labels)
+    )
 
     ## Variables
 
+    # MOSEK uses bound keys (free, bounded below or above, ranged and fixed)
+    # plus bound values (lower and upper), and it is considered an error to
+    # input an infinite value for a finite bound.
+    # bkx and bkc define the boundkeys based on upper and lower bound, and blx,
+    # bux, blc and buc define the finite bounds. The numerical value of a bound
+    # indicated to be infinite by the bound key is ignored by MOSEK.
     bkx = [
         (
             (

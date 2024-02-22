@@ -942,8 +942,8 @@ def run_mosek(
     if io_api != "direct" and io_api is not None:
         problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
-    # warmstart_fn = maybe_convert_path(warmstart_fn)
-    # basis_fn = maybe_convert_path(basis_fn)
+    warmstart_fn = maybe_convert_path(warmstart_fn)
+    basis_fn = maybe_convert_path(basis_fn)
 
     with contextlib.ExitStack() as stack:
         if env is None:
