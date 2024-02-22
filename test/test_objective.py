@@ -9,16 +9,16 @@ from linopy.objective import Objective
 @pytest.fixture
 def linear_objective():
     m = Model()
-    linear_expr = LinearExpression(None, m)
-    m.objective = Objective(linear_expr, m, sense="min")
+    v = m.add_variables(coords=[[1, 2, 3]])
+    m.objective = Objective(1 * v, m, sense="min")
     return m.objective
 
 
 @pytest.fixture
 def quadratic_objective():
     m = Model()
-    quadratic_expr = QuadraticExpression(None, m)
-    m.objective = Objective(quadratic_expr, m, sense="max")
+    v = m.add_variables(coords=[[1, 2, 3]])
+    m.objective = Objective(v * v, m, sense="max")
     return m.objective
 
 
@@ -62,6 +62,11 @@ def test_sense_setter_error(linear_objective):
 def test_expression(linear_objective, quadratic_objective):
     assert isinstance(linear_objective.expression, LinearExpression)
     assert isinstance(quadratic_objective.expression, QuadraticExpression)
+
+
+def test_multi_objective(linear_objective):
+    expression = v + v
+    multi_expression = LinearExpression(None, linear_objective.model)
 
 
 def test_value(linear_objective, quadratic_objective):

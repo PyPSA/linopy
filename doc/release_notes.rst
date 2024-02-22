@@ -6,7 +6,7 @@ Upcoming Version
 
 * The return type of ``coord_dims`` for expressions and constraints was changed from set to tuple to align with the xarray convention.
 * The printout of transposed expressions and constraints was fixed.
-
+* Variables and LinearExpressions now have support for the power operator. For example, `x**2` is now supported.
 
 Version 0.3.4
 -------------

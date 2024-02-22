@@ -448,6 +448,14 @@ class LinearExpression:
             const = self.const * multiplier
             return self.assign(coeffs=coeffs, const=const)
 
+    def __pow__(self, other):
+        """
+        Power of the expression with a coefficient. The only coefficient allowed is 2.
+        """
+        if not other == 2:
+            raise ValueError("Power must be 2.")
+        return self * self
+
     def __rmul__(self, other):
         """
         Right-multiply the expr by a factor.
