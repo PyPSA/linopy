@@ -187,12 +187,12 @@ def test_linear_expression_with_subtraction(m, x, y):
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((1, "x"), (-1, "y")))
 
+    expr2 = x.sub(y)
+    assert_linequal(expr, expr2)
+
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
-
-    expr2 = x.sub(y)
-    assert_linequal(expr, expr2)
 
 
 def test_linear_expression_with_constant(m, x, y):
