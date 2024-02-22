@@ -495,6 +495,30 @@ class LinearExpression:
             "Inequalities only ever defined for >= rather than >."
         )
 
+    def add(self, other):
+        """
+        Add an expression to others.
+        """
+        return self.__add__(other)
+
+    def sub(self, other):
+        """
+        Subtract others from expression.
+        """
+        return self.__sub__(other)
+
+    def mul(self, other):
+        """
+        Multiply the expr by a factor.
+        """
+        return self.__mul__(other)
+
+    def div(self, other):
+        """
+        Divide the expr by a factor.
+        """
+        return self.__div__(other)
+
     @property
     def loc(self):
         return LocIndexer(self)
