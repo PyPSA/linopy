@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+Version 0.3.5
+-------------
 
 * The return type of ``coord_dims`` for expressions and constraints was changed from set to tuple to align with the xarray convention.
 * The printout of transposed expressions and constraints was fixed.
