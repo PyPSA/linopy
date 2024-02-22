@@ -285,6 +285,14 @@ class Variable:
         else:
             return self.to_linexpr(other)
 
+    def __pow__(self, other):
+        """
+        Power of the variables with a coefficient. The only coefficient allowed is 2.
+        """
+        if not other == 2:
+            raise ValueError("Power must be 2.")
+        return self * self
+
     def __rmul__(self, other):
         """
         Right-multiply variables with a coefficient.
