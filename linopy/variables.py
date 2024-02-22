@@ -379,12 +379,6 @@ class Variable:
         """
         return self.__div__(other)
 
-    def dot(self, other):
-        """
-        Matrix multiplication of variables with a coefficient.
-        """
-        return self.__matmul__(other)
-
     def groupby(
         self,
         group,

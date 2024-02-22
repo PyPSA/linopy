@@ -519,12 +519,6 @@ class LinearExpression:
         """
         return self.__div__(other)
 
-    def dot(self, other):
-        """
-        Matrix multiplication with other, similar to xarray dot.
-        """
-        return self.__matmul__(other)
-
     @property
     def loc(self):
         return LocIndexer(self)
