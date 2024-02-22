@@ -454,6 +454,16 @@ class LinearExpression:
         """
         return self.__mul__(other)
 
+    def __matmul__(self, other):
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        if isinstance(other, (variables.Variable, variables.ScalarVariable)):
+            other = other.to_linexpr()
+
+        common_dims = list(set(self.coord_dims).intersection(other.coord_dims))
+        return (self * other).sum(dims=common_dims)
+
     def __div__(self, other):
         if isinstance(
             other, (LinearExpression, variables.Variable, variables.ScalarVariable)

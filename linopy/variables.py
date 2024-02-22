@@ -291,6 +291,12 @@ class Variable:
         """
         return self.to_linexpr(other)
 
+    def __matmul__(self, other):
+        """
+        Matrix multiplication of variables with a coefficient.
+        """
+        return self.to_linexpr() @ other
+
     def __div__(self, other):
         """
         Divide variables with a coefficient.

@@ -369,6 +369,12 @@ def test_linear_expression_multiplication(x, y, z):
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
 
 
+def test_matmul(x, y, z):
+    expr = 10 * x + y + z
+    with pytest.raises(TypeError):
+        expr @ expr
+
+
 def test_linear_expression_multiplication_invalid(x, y, z):
     expr = 10 * x + y + z
 
