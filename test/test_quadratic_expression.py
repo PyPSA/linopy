@@ -38,11 +38,24 @@ def test_quadratic_expression_from_variables_multiplication(x, y):
     assert expr.data.sizes[FACTOR_DIM] == 2
 
 
+def test_quadratic_expression_from_variables_power(x):
+    expr = x**2
+    assert isinstance(expr, QuadraticExpression)
+    assert expr.data.sizes[FACTOR_DIM] == 2
+
+
 def test_quadratic_expression_from_linexpr_multiplication(x, y):
     expr = (10 * x + y) * y
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 2
+
+
+def test_quadratic_expression_from_linexpr_power(x):
+    expr = (10 * x) ** 2
+    assert isinstance(expr, QuadraticExpression)
+    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.nterm == 1
 
 
 def test_quadratic_expression_wrong_assignment(x, y):
