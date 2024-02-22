@@ -111,7 +111,8 @@ io_structure = dict(
         "glpk",
         "cplex",
         "mosek",
-        "mosek_remote" "mindopt",
+        "mosek_remote",
+        "mindopt",
     },
     blocks={"pips"},
 )
