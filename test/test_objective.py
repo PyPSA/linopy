@@ -64,11 +64,6 @@ def test_expression(linear_objective, quadratic_objective):
     assert isinstance(quadratic_objective.expression, QuadraticExpression)
 
 
-def test_multi_objective(linear_objective):
-    expression = v + v
-    multi_expression = LinearExpression(None, linear_objective.model)
-
-
 def test_value(linear_objective, quadratic_objective):
     assert linear_objective.value is None
     assert quadratic_objective.value is None
