@@ -49,7 +49,9 @@ def varwrap(method, *default_args, **new_default_kwargs):
             method(var.data, *default_args, *args, **kwargs), var.model, var.name
         )
 
-    _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    _varwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
+    )
     if new_default_kwargs:
         _varwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
