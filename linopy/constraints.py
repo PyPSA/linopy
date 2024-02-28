@@ -271,7 +271,8 @@ class Constraint:
         -------
         xr.DataArray
         """
-        return (self.labels != self._fill_value["labels"]).astype(bool)
+        if self.is_assigned:
+            return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def coeffs(self):
