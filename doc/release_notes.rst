@@ -1,8 +1,13 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* The handling of `pandas` objects was improved. As `pandas` objects are fully aware of coordinates, their index and columns are now strictly taken into account. For example, when multiplying a `pandas.DataFrame` with variables, linopy will now check the alignment of indexes and re-index accordingly. Before, if the shapes of the axes were the same, the indexes of the Variable were forced in and the `pandas` indexes were effectively ignored. A warning was added for cases where users should expect changes of results with this version.
+
+
+
 
 Version 0.3.5
 -------------
