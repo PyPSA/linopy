@@ -506,8 +506,8 @@ class Model:
             The coords of the constraint array. This is only used when lhs is
             a function. The default is None.
         mask : array_like, optional
-            Boolean mask with False values for variables which are skipped.
-            The shape of the mask has to match the shape the added variables.
+            Boolean mask with False values for constraints which are skipped.
+            The shape of the mask has to match the shape the added constraints.
             Default is None.
 
 
