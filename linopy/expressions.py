@@ -58,7 +58,9 @@ def exprwrap(method, *default_args, **new_default_kwargs):
             method(_expr_unwrap(expr), *default_args, *args, **kwargs), expr.model
         )
 
-    _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    _exprwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
+    )
     if new_default_kwargs:
         _exprwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 

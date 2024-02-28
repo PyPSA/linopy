@@ -56,7 +56,9 @@ def conwrap(method, *default_args, **new_default_kwargs):
             method(con.data, *default_args, *args, **kwargs), con.model, con.name
         )
 
-    _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
+    _conwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Constraint"
+    )
     if new_default_kwargs:
         _conwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
