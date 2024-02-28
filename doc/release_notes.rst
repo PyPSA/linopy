@@ -5,10 +5,8 @@ Upcoming Version
 ----------------
 
 * The handling of `pandas` objects was improved. As `pandas` objects are fully aware of coordinates, their index and columns are now strictly taken into account. For example, when multiplying a `pandas.DataFrame` with a variable, linopy now checks the alignment of indexes and reindexes accordingly. Previously, if the axis shapes were the same, the indexes of the variable were inserted and the `pandas` indexes were effectively ignored. A warning has been added for cases where users should expect changes to the results with this version. **Important**: This does not apply to overwriting the coordinates when one expression is added to another, e.g. "x + df" still overwrites the index of "df" when the dimensional shapes are aligned.
-
-
-
-
+* The `.mask` attribute of the `Constraint` class was fixed to return a proper boolean `xarray.DataArray` object.
+* The printout of masked constraints was fixed.
 
 
 Version 0.3.5

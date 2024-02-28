@@ -91,6 +91,8 @@ class Constraint:
 
     __slots__ = ("_data", "_model", "_assigned")
 
+    _fill_value = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
+
     def __init__(self, data: Dataset, model: Any, name: str = ""):
         """
         Initialize the Constraint.
@@ -269,7 +271,7 @@ class Constraint:
         -------
         xr.DataArray
         """
-        return self.data.get("mask")
+        return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def coeffs(self):
