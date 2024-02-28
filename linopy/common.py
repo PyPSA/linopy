@@ -6,15 +6,14 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-import hashlib
-from functools import partialmethod, update_wrapper, wraps
+from functools import wraps
 from typing import Any, Dict, List, Optional, Union
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 from numpy import arange, hstack
-from xarray import DataArray, Dataset, align, apply_ufunc, broadcast, merge
+from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
 
 from linopy.config import options
@@ -29,6 +28,18 @@ from linopy.constants import (
 
 
 def maybe_replace_sign(sign):
+    """
+    Replace the sign with an alternative sign if available.
+
+    Parameters:
+        sign (str): The sign to be replaced.
+
+    Returns:
+        str: The replaced sign.
+
+    Raises:
+        ValueError: If the sign is not in the available signs.
+    """
     if sign in SIGNS_alternative:
         return sign_replace_dict[sign]
     elif sign in SIGNS:
@@ -38,8 +49,119 @@ def maybe_replace_sign(sign):
 
 
 def maybe_replace_signs(sign):
+    """
+    Replace signs with alternative signs if available.
+
+    Parameters:
+        sign (np.ndarray): The signs to be replaced.
+
+    Returns:
+        np.ndarray: The replaced signs.
+    """
     func = np.vectorize(maybe_replace_sign)
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
+
+
+def get_from_list(lst: Optional[list], index: int):
+    """
+    Returns the element at the specified index of the list, or None if the index
+    is out of bounds.
+    """
+    if lst is None:
+        return None
+    if not isinstance(lst, list):
+        lst = list(lst)
+    return lst[index] if 0 <= index < len(lst) else None
+
+
+def pandas_to_dataarray(
+    arr: Union[pd.DataFrame, pd.Series],
+    coords: Optional[Union[dict, list]] = None,
+    dims: Optional[list] = None,
+    **kwargs,
+) -> DataArray:
+    """
+    Convert a pandas DataFrame or Series to a DataArray.
+
+    As pandas objects already have a concept of coordinates, the
+    coordinates (index, columns) will be used as coordinates for the DataArray.
+    Solely the dimension names can be specified.
+
+    Parameters:
+        arr (Union[pd.DataFrame, pd.Series]):
+            The input pandas DataFrame or Series.
+        coords (Optional[Union[dict, list]]):
+            The coordinates for the DataArray. If None, default coordinates will be used.
+        dims (Optional[list]):
+            The dimensions for the DataArray. If None, the column names of the DataFrame or the index names of the Series will be used.
+        **kwargs:
+            Additional keyword arguments to be passed to the DataArray constructor.
+
+    Returns:
+        DataArray:
+            The converted DataArray.
+    """
+    dims = [
+        axis.name or get_from_list(dims, i) or f"dim_{i}"
+        for i, axis in enumerate(arr.axes)
+    ]
+    if coords is not None:
+        pandas_coords = dict(zip(dims, arr.axes))
+        if isinstance(coords, (list, tuple)):
+            coords = dict(zip(dims, coords))
+        shared_dims = set(pandas_coords.keys()) & set(coords.keys())
+        non_aligned = []
+        for dim in shared_dims:
+            coord = coords[dim]
+            if not isinstance(coord, pd.Index):
+                coord = pd.Index(coord)
+            if not pandas_coords[dim].equals(coord):
+                non_aligned.append(dim)
+        if any(non_aligned):
+            warn(
+                f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
+                "Previously, the indexes of the pandas were ignored and overwritten in "
+                "these cases. Now, the pandas object's coordinates are taken considered"
+                " for alignment."
+            )
+
+    return DataArray(arr, coords=None, dims=dims, **kwargs)
+
+
+def numpy_to_dataarray(
+    arr: np.ndarray,
+    coords: Optional[Union[dict, list]] = None,
+    dims: Optional[list] = None,
+    **kwargs,
+) -> DataArray:
+    """
+    Convert a numpy array to a DataArray.
+
+    Parameters:
+        arr (np.ndarray):
+            The input numpy array.
+        coords (Optional[Union[dict, list]]):
+            The coordinates for the DataArray. If None, default coordinates will be used.
+        dims (Optional[list]):
+            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+        **kwargs:
+            Additional keyword arguments to be passed to the DataArray constructor.
+
+    Returns:
+        DataArray:
+            The converted DataArray.
+    """
+    ndim = max(arr.ndim, 0 if coords is None else len(coords))
+
+    dims_given = dims is not None and len(dims)
+    if dims_given:
+        # fill up dims with default names to match the number of dimensions
+        dims = [get_from_list(dims, i) or f"dim_{i}" for i in range(ndim)]
+
+    if isinstance(coords, list) and dims_given:
+        coords = dict(zip(dims, coords))
+
+    return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
 def as_dataarray(
@@ -48,26 +170,27 @@ def as_dataarray(
     dims: Optional[list] = None,
     **kwargs,
 ) -> DataArray:
+    """
+    Convert an object to a DataArray.
+
+    Parameters:
+        arr:
+            The input object.
+        coords (Optional[Union[dict, list]]):
+            The coordinates for the DataArray. If None, default coordinates will be used.
+        dims (Optional[list]):
+            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+        **kwargs:
+            Additional keyword arguments to be passed to the DataArray constructor.
+
+    Returns:
+        DataArray:
+            The converted DataArray.
+    """
     if isinstance(arr, (pd.Series, pd.DataFrame)):
-        if dims is not None:
-            dims = [axis.name or list(dims)[i] for i, axis in enumerate(arr.axes)]
-        if coords is not None and not isinstance(coords, list):
-            coords = {dim: coords[dim] for dim in dims}
-        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
+        arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
-        ndim = max(arr.ndim, 0 if coords is None else len(coords))
-
-        if dims is not None and len(dims):
-            # ensure dims is defined for ndim
-            dims = list(dims)[:ndim] if dims else []
-            dims = dims + [f"dim_{i}" for i in range(len(dims), ndim)]
-
-        if isinstance(coords, list) and dims is not None and len(dims):
-            coords = dict(zip(dims, coords))
-
-        arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
+        arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, (np.number, int, float, str, bool, list)):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
