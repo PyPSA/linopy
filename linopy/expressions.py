@@ -339,7 +339,7 @@ class LinearExpression:
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
         lines = []
 
         header_string = self.type
