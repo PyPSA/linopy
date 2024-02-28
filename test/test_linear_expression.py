@@ -146,11 +146,17 @@ def test_linear_expression_with_multiplication(x):
     expr = x * 1
     assert isinstance(expr, LinearExpression)
 
+    expr2 = x.mul(1)
+    assert_linequal(expr, expr2)
+
     expr = x / 1
     assert isinstance(expr, LinearExpression)
 
     expr = x / 1.0
     assert isinstance(expr, LinearExpression)
+
+    expr2 = x.div(1)
+    assert_linequal(expr, expr2)
 
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
@@ -172,11 +178,17 @@ def test_linear_expression_with_addition(m, x, y):
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((1, "x"), (1, "y")))
 
+    expr2 = x.add(y)
+    assert_linequal(expr, expr2)
+
 
 def test_linear_expression_with_subtraction(m, x, y):
     expr = x - y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((1, "x"), (-1, "y")))
+
+    expr2 = x.sub(y)
+    assert_linequal(expr, expr2)
 
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)

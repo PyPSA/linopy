@@ -58,7 +58,9 @@ def exprwrap(method, *default_args, **new_default_kwargs):
             method(_expr_unwrap(expr), *default_args, *args, **kwargs), expr.model
         )
 
-    _exprwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    _exprwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
+    )
     if new_default_kwargs:
         _exprwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
@@ -333,7 +335,7 @@ class LinearExpression:
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_dims)
+        dims = list(self.coord_sizes.keys())
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
@@ -397,10 +399,14 @@ class LinearExpression:
     def __add__(self, other):
         """
         Add an expression to others.
+
+        Note: If other is a numpy array or pandas object without axes names,
+        dimension names of self will be filled in other
         """
-        other = as_expression(
-            other, model=self.model, coords=self.coords, dims=self.coord_dims
-        )
+        if np.isscalar(other):
+            return self.assign(const=self.const + other)
+
+        other = as_expression(other, model=self.model, dims=self.coord_dims)
         return merge(self, other, cls=self.__class__)
 
     def __radd__(self, other):
@@ -410,10 +416,14 @@ class LinearExpression:
     def __sub__(self, other):
         """
         Subtract others from expression.
+
+        Note: If other is a numpy array or pandas object without axes names,
+        dimension names of self will be filled in other
         """
-        other = as_expression(
-            other, model=self.model, coords=self.coords, dims=self.coord_dims
-        )
+        if np.isscalar(other):
+            return self.assign(const=self.const - other)
+
+        other = as_expression(other, model=self.model, dims=self.coord_dims)
         return merge(self, -other, cls=self.__class__)
 
     def __neg__(self):
@@ -447,6 +457,14 @@ class LinearExpression:
             assert set(coeffs.shape) == set(self.coeffs.shape)
             const = self.const * multiplier
             return self.assign(coeffs=coeffs, const=const)
+
+    def __pow__(self, other):
+        """
+        Power of the expression with a coefficient. The only coefficient allowed is 2.
+        """
+        if not other == 2:
+            raise ValueError("Power must be 2.")
+        return self * self
 
     def __rmul__(self, other):
         """
@@ -487,6 +505,30 @@ class LinearExpression:
             "Inequalities only ever defined for >= rather than >."
         )
 
+    def add(self, other):
+        """
+        Add an expression to others.
+        """
+        return self.__add__(other)
+
+    def sub(self, other):
+        """
+        Subtract others from expression.
+        """
+        return self.__sub__(other)
+
+    def mul(self, other):
+        """
+        Multiply the expr by a factor.
+        """
+        return self.__mul__(other)
+
+    def div(self, other):
+        """
+        Divide the expr by a factor.
+        """
+        return self.__div__(other)
+
     @property
     def loc(self):
         return LocIndexer(self)
@@ -515,7 +557,7 @@ class LinearExpression:
 
     @property
     def coord_dims(self):
-        return {k for k in self.dims if k not in HELPER_DIMS}
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self):
@@ -1193,10 +1235,14 @@ class QuadraticExpression(LinearExpression):
     def __add__(self, other):
         """
         Add an expression to others.
+
+        Note: If other is a numpy array or pandas object without axes names,
+        dimension names of self will be filled in other
         """
-        other = as_expression(
-            other, model=self.model, coords=self.coords, dims=self.coord_dims
-        )
+        if np.isscalar(other):
+            return self.assign(const=self.const + other)
+
+        other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge(self, other, cls=self.__class__)
@@ -1216,10 +1262,14 @@ class QuadraticExpression(LinearExpression):
     def __sub__(self, other):
         """
         Subtract others from expression.
+
+        Note: If other is a numpy array or pandas object without axes names,
+        dimension names of self will be filled in other
         """
-        other = as_expression(
-            other, model=self.model, coords=self.coords, dims=self.coord_dims
-        )
+        if np.isscalar(other):
+            return self.assign(const=self.const - other)
+
+        other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge(self, -other, cls=self.__class__)
