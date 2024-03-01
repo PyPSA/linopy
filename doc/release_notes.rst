@@ -6,6 +6,10 @@ Upcoming Version
 
 * It is now possible to create LinearExpression from a `pandas.DataFrame`, `pandas.Series`, a `numpy.array` or constant scalar values, e.g. `linopy.LinearExpression(df)`. This will create a LinearExpression with constants only and the coordinates of the DataFrame, Series or array as dimensions.
 
+**Bugfixes**
+
+* When grouping an expression or a variable by a `pandas.DataFrame` or a `xarray.DataArray`, the coordinates of the `groupby` object were not properly aligned. So in cases, when the `groupby` object was not indexed in the same way as the variable/expression, the `groupby` operation led to wrong results. This is fixed now.
+
 
 Version 0.3.6
 -------------

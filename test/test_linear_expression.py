@@ -567,15 +567,7 @@ def test_linear_expression_groupby_with_series_false(v):
     groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
     groups.name = "dim_2"
     with pytest.raises(ValueError):
-        grouped = expr.groupby(groups).sum()
-
-
-def test_linear_expression_groupby_with_series_false(v):
-    expr = 1 * v
-    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
-    groups.name = "dim_2"
-    with pytest.raises(ValueError):
-        grouped = expr.groupby(groups).sum()
+        expr.groupby(groups).sum()
 
 
 def test_linear_expression_groupby_with_dataframe(v):
@@ -583,11 +575,36 @@ def test_linear_expression_groupby_with_dataframe(v):
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    grouped = expr.groupby(xr.DataArray(groups)).sum()
+    grouped = expr.groupby(groups).sum()
     index = pd.MultiIndex.from_frame(groups)
     assert "group" in grouped.dims
     assert set(grouped.data.group.values) == set(index.values)
     assert grouped.nterm == 3
+
+
+def test_linear_expression_groupby_with_dataarray(v):
+    expr = 1 * v
+    df = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    groups = xr.DataArray(df)
+    grouped = expr.groupby(groups).sum()
+    index = pd.MultiIndex.from_frame(df)
+    assert "group" in grouped.dims
+    assert set(grouped.data.group.values) == set(index.values)
+    assert grouped.nterm == 3
+
+
+def test_linear_expression_groupby_with_dataframe_non_aligned(v):
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    target = expr.groupby(groups).sum()
+
+    groups_non_aligned = groups[::-1]
+    grouped = expr.groupby(groups_non_aligned).sum()
+    assert_linequal(grouped, target)
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
