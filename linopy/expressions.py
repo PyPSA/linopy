@@ -48,6 +48,16 @@ from linopy.constants import (
     TERM_DIM,
 )
 
+SUPPORTED_CONSTANT_TYPES = (
+    np.number,
+    int,
+    float,
+    DataArray,
+    pd.Series,
+    pd.DataFrame,
+    np.ndarray,
+)
+
 
 def exprwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
@@ -281,14 +291,16 @@ class LinearExpression:
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, DataArray):
-            # assume only constant are passed
-            const = fill_missing_coords(data)
+        elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
+            const = as_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
+            supported_types = ", ".join(
+                map(lambda s: s.__qualname__, (*SUPPORTED_CONSTANT_TYPES, Dataset))
+            )
             raise ValueError(
-                f"data must be an instance of xarray.Dataset or xarray.DataArray, got {type(data)}"
+                f"data must be an instance of {supported_types}, got {type(data)}"
             )
 
         if not set(data).issuperset({"coeffs", "vars"}):

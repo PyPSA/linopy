@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* It is now possible to create LinearExpression from a `pandas.DataFrame`, `pandas.Series`, a `numpy.array` or constant scalar values, e.g. `linopy.LinearExpression(df)`. This will create a LinearExpression with constants only and the coordinates of the DataFrame, Series or array as dimensions.
 
 
 Version 0.3.6

@@ -62,8 +62,6 @@ def test_empty_linexpr(m):
 
 
 def test_linexpr_with_wrong_data(m):
-    with pytest.raises(ValueError):
-        LinearExpression(1, m)
 
     with pytest.raises(ValueError):
         LinearExpression(xr.Dataset({"a": [1]}), m)
@@ -101,6 +99,41 @@ def test_linexpr_with_data_without_coords(m):
     data = xr.Dataset({"vars": vars, "coeffs": coeffs})
     expr = LinearExpression(data, m)
     assert_linequal(expr, lhs)
+
+
+def test_linexpr_from_constant_dataarray(m):
+    const = xr.DataArray([1, 2], dims=["dim_0"])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_pandas_series(m):
+    const = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0"))
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_pandas_dataframe(m):
+    const = pd.DataFrame([[1, 2], [3, 4]], columns=["a", "b"])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_numpy_array(m):
+    const = np.array([1, 2])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_scalar(m):
+    const = 1
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
 
 
 def test_repr(m):
