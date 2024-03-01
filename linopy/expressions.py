@@ -171,6 +171,7 @@ class LinearExpressionGroupby:
 
             int_map = None
             if isinstance(group, pd.DataFrame):
+                group = group.reindex(self.data.indexes[group.index.name])
                 int_map = get_index_map(*group.values.T)
                 orig_group = group
                 group = group.apply(tuple, axis=1).map(int_map)
