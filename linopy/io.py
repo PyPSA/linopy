@@ -307,7 +307,7 @@ def to_file(m, fn, integer_label="general"):
     return fn
 
 
-def to_mosekpy(model, task=None):
+def to_mosek(model, task=None):
     """
     Export model to MOSEK.
 

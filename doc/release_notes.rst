@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+**New Features**
+
+* A direct interface to the `Mosek` solver was added. With this change, a new conversion function `model.to_mosek` was added to convert a linopy model to a `mosek` model. The `solve` function now supports the `mosek` solver with `io_api="direct"`.
+
 * It is now possible to create LinearExpression from a `pandas.DataFrame`, `pandas.Series`, a `numpy.array` or constant scalar values, e.g. `linopy.LinearExpression(df)`. This will create a LinearExpression with constants only and the coordinates of the DataFrame, Series or array as dimensions.
 
 **Bugfixes**

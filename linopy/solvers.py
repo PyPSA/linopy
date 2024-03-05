@@ -912,7 +912,7 @@ def run_mosek(
 
         with env.Task() as m:
             if io_api is None or io_api == "direct":
-                model.to_mosekpy(m)
+                model.to_mosek(m)
             else:
                 m.readdata(problem_fn)
 

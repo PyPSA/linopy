@@ -32,7 +32,7 @@ from linopy.io import (
     to_file,
     to_gurobipy,
     to_highspy,
-    to_mosekpy,
+    to_mosek,
     to_netcdf,
 )
 from linopy.matrices import MatrixAccessor
@@ -1192,7 +1192,7 @@ class Model:
 
     to_gurobipy = to_gurobipy
 
-    to_mosekpy = to_mosekpy
+    to_mosek = to_mosek
 
     to_highspy = to_highspy
 
