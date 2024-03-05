@@ -379,10 +379,6 @@ def test_solver_options(model, solver, io_api):
         "highs": {"time_limit": 1},
         "scip": {"limits/time": 1},
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
-        "mosek_remote": {
-            "MSK_DPAR_OPTIMIZER_MAX_TIME": 1,
-            "MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080",
-        },
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }

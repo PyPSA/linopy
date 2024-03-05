@@ -878,6 +878,12 @@ def run_mosek(
 
     For more information on solver options, see
     https://docs.mosek.com/latest/pythonapi/parameters.html#doc-all-parameter-list
+
+
+    For remote optimization of smaller problems, which do not require a license,
+    set the following solver_options:
+    {"MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080"}
+
     """
     CONDITION_MAP = {
         "solsta.unknown": "unknown",
@@ -889,7 +895,7 @@ def run_mosek(
 
     if io_api is not None and io_api not in ["lp", "mps", "direct"]:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
