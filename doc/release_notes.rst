@@ -4,6 +4,16 @@ Release Notes
 Upcoming Version
 ----------------
 
+* It is now possible to create LinearExpression from a `pandas.DataFrame`, `pandas.Series`, a `numpy.array` or constant scalar values, e.g. `linopy.LinearExpression(df)`. This will create a LinearExpression with constants only and the coordinates of the DataFrame, Series or array as dimensions.
+
+**Bugfixes**
+
+* When grouping an expression or a variable by a `pandas.DataFrame` or a `xarray.DataArray`, the coordinates of the `groupby` object were not properly aligned. So in cases, when the `groupby` object was not indexed in the same way as the variable/expression, the `groupby` operation led to wrong results. This is fixed now.
+
+
+Version 0.3.6
+-------------
+
 * The handling of `pandas` objects was improved. As `pandas` objects are fully aware of coordinates, their index and columns are now strictly taken into account. For example, when multiplying a `pandas.DataFrame` with a variable, linopy now checks the alignment of indexes and reindexes accordingly. Previously, if the axis shapes were the same, the indexes of the variable were inserted and the `pandas` indexes were effectively ignored. A warning has been added for cases where users should expect changes to the results with this version. **Important**: This does not apply to overwriting the coordinates when one expression is added to another, e.g. "x + df" still overwrites the index of "df" when the dimensional shapes are aligned.
 * The `.mask` attribute of the `Constraint` class was fixed to return a proper boolean `xarray.DataArray` object.
 * The printout of masked constraints was fixed.

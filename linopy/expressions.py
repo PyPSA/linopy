@@ -48,6 +48,16 @@ from linopy.constants import (
     TERM_DIM,
 )
 
+SUPPORTED_CONSTANT_TYPES = (
+    np.number,
+    int,
+    float,
+    DataArray,
+    pd.Series,
+    pd.DataFrame,
+    np.ndarray,
+)
+
 
 def exprwrap(method, *default_args, **new_default_kwargs):
     @functools.wraps(method)
@@ -161,6 +171,7 @@ class LinearExpressionGroupby:
 
             int_map = None
             if isinstance(group, pd.DataFrame):
+                group = group.reindex(self.data.indexes[group.index.name])
                 int_map = get_index_map(*group.values.T)
                 orig_group = group
                 group = group.apply(tuple, axis=1).map(int_map)
@@ -281,14 +292,16 @@ class LinearExpression:
         if data is None:
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
-        elif isinstance(data, DataArray):
-            # assume only constant are passed
-            const = fill_missing_coords(data)
+        elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
+            const = as_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
+            supported_types = ", ".join(
+                map(lambda s: s.__qualname__, (*SUPPORTED_CONSTANT_TYPES, Dataset))
+            )
             raise ValueError(
-                f"data must be an instance of xarray.Dataset or xarray.DataArray, got {type(data)}"
+                f"data must be an instance of {supported_types}, got {type(data)}"
             )
 
         if not set(data).issuperset({"coeffs", "vars"}):
@@ -339,7 +352,7 @@ class LinearExpression:
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
         lines = []
 
         header_string = self.type
