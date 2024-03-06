@@ -8,10 +8,10 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
-import warnings
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import Any, Mapping, Optional, Union
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -276,7 +276,7 @@ class LinearExpression:
 
     Summation over dimensions
 
-    >>> type(expr.sum(dims="dim_0"))
+    >>> type(expr.sum(dim="dim_0"))
     <class 'linopy.expressions.LinearExpression'>
     """
 
@@ -626,7 +626,7 @@ class LinearExpression:
 
         return ds
 
-    def sum(self, dims=None, drop_zeros=False) -> "LinearExpression":
+    def sum(self, dim=None, drop_zeros=False, **kwargs) -> "LinearExpression":
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -634,16 +634,27 @@ class LinearExpression:
 
         Parameters
         ----------
-        dims : str/list, optional
+        dim : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
+        dims : str/list, optional
+            Deprecated. Use ``dim`` instead.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        res = self.__class__(self._sum(self, dims=dims), self.model)
+        if dim is None and "dims" in kwargs:
+            dim = kwargs.pop("dims")
+            warn(
+                "The `dims` argument is deprecated. Use `dim` instead.",
+                DeprecationWarning,
+            )
+        if kwargs:
+            raise ValueError(f"Unknown keyword argument(s): {kwargs}")
+
+        res = self.__class__(self._sum(self, dims=dim), self.model)
 
         if drop_zeros:
             res = res.densify_terms()

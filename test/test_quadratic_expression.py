@@ -100,7 +100,7 @@ def test_quadratic_expression_rsubtraction(x, y):
 def test_quadratic_expression_sum(x, y):
     expr = x * y + x + 5
 
-    summed_expr = expr.sum(dims="dim_0")
+    summed_expr = expr.sum(dim="dim_0")
     assert isinstance(summed_expr, QuadraticExpression)
     assert not summed_expr.coord_dims
 

@@ -399,6 +399,11 @@ def test_linear_expression_sum_drop_zeros(z):
     assert res.nterm == 2
 
 
+def test_linear_expression_sum_warn_using_dims(z):
+    with pytest.warns(DeprecationWarning):
+        z.sum(dims="dim_0")
+
+
 def test_linear_expression_multiplication(x, y, z):
     expr = 10 * x + y + z
     mexpr = expr * 10
