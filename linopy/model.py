@@ -67,6 +67,8 @@ class Model:
         "_parameters",
         "_solution",
         "_dual",
+        "_SAObjUp",
+        "_SAObjLow",
         # hidden attributes
         "_status",
         "_termination_condition",
@@ -194,6 +196,20 @@ class Model:
         Dual values calculated by the optimization.
         """
         return self.constraints.dual
+
+    @property
+    def SAObjUp(self):
+        """
+        Sensitivity analysis of the objective function.
+        """
+        return self.variables.SAObjUp
+
+    @property
+    def SAObjLow(self):
+        """
+        Sensitivity analysis of the objective function.
+        """
+        return self.variables.SAObjLow
 
     @property
     def status(self):
@@ -1111,6 +1127,30 @@ class Model:
                 except KeyError:
                     vals = dual.reindex(idx).values.reshape(con.labels.shape)
                 con.dual = xr.DataArray(vals, con.labels.coords)
+
+        if not result.solution.SAObjUp.empty:
+            SAObjUp = result.solution.SAObjUp.copy()
+            SAObjUp.loc[-1] = nan
+
+            for name, var in self.variables.items():
+                idx = np.ravel(var.labels)
+                try:
+                    vals = SAObjUp[idx].values.reshape(var.labels.shape)
+                except KeyError:
+                    vals = SAObjUp.reindex(idx).values.reshape(var.labels.shape)
+                var.SAObjUp = xr.DataArray(vals, var.coords)
+
+        if not result.solution.SAObjLow.empty:
+            SAObjLow = result.solution.SAObjLow.copy()
+            SAObjLow.loc[-1] = nan
+
+            for name, var in self.variables.items():
+                idx = np.ravel(var.labels)
+                try:
+                    vals = SAObjLow[idx].values.reshape(var.labels.shape)
+                except KeyError:
+                    vals = SAObjLow.reindex(idx).values.reshape(var.labels.shape)
+                var.SAObjLow = xr.DataArray(vals, var.coords)
 
         return result.status.status.value, result.status.termination_condition.value
 
