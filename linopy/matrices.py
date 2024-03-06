@@ -72,6 +72,16 @@ class MatrixAccessor:
         df = self.flat_vars
         return create_vector(df.key, df.lower)
 
+    @cached_property
+    def sol(self):
+        "Vector of solution values of all non-missing variables."
+        if not self._parent.status == "ok":
+            raise ValueError("Model is not optimized.")
+        if "solution" not in self.flat_vars:
+            del self.flat_vars  # clear cache
+        df = self.flat_vars
+        return create_vector(df.key, df.solution, fill_value=np.nan)
+
     @property
     def ub(self):
         "Vector of upper bounds of all non-missing variables."
