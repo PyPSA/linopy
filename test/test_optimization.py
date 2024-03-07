@@ -592,7 +592,6 @@ def test_masked_variable_model(masked_variable_model, solver, io_api):
     assert (x.solution[-2:] == 10).all()
     # Squeeze in solution getter for expressions with masked variables
     assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
-    breakpoint()
 
 
 @pytest.mark.parametrize("solver,io_api", params)
