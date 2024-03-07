@@ -401,7 +401,7 @@ def test_linear_expression_sum_drop_zeros(z):
 
 def test_linear_expression_sum_warn_using_dims(z):
     with pytest.warns(DeprecationWarning):
-        z.sum(dims="dim_0")
+        (1 * z).sum(dims="dim_0")
 
 
 def test_linear_expression_multiplication(x, y, z):

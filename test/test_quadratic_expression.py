@@ -109,6 +109,11 @@ def test_quadratic_expression_sum(x, y):
     assert not summed_expr_all.coord_dims
 
 
+def test_quadratic_expression_sum_warn_using_dims(x):
+    with pytest.warns(DeprecationWarning):
+        (x**2).sum(dims="dim_0")
+
+
 def test_quadratic_expression_wrong_multiplication(x, y):
     with pytest.raises(TypeError):
         x * x * y
