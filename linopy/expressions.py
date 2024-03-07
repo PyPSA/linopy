@@ -187,7 +187,7 @@ class LinearExpressionGroupby:
             coords = Coordinates.from_pandas_multiindex(idx, group_dim)
             ds = self.data.assign_coords(coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
-            ds = LinearExpression._sum(ds, dims=GROUPED_TERM_DIM)
+            ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
 
             if int_map is not None:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
@@ -606,23 +606,23 @@ class LinearExpression:
         return None
 
     @classmethod
-    def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:
+    def _sum(cls, expr: Union["LinearExpression", Dataset], dim=None) -> Dataset:
         data = _expr_unwrap(expr)
 
-        if dims is None:
+        if dim is None:
             vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
             coeffs = DataArray(data.coeffs.data.ravel(), dims=TERM_DIM)
             const = data.const.sum()
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
         else:
-            dims = [d for d in np.atleast_1d(dims) if d != TERM_DIM]
+            dim = [d for d in np.atleast_1d(dim) if d != TERM_DIM]
             ds = (
                 data[["coeffs", "vars"]]
-                .reset_index(dims, drop=True)
+                .reset_index(dim, drop=True)
                 .rename({TERM_DIM: STACKED_TERM_DIM})
-                .stack({TERM_DIM: [STACKED_TERM_DIM] + dims}, create_index=False)
+                .stack({TERM_DIM: [STACKED_TERM_DIM] + dim}, create_index=False)
             )
-            ds["const"] = data.const.sum(dims)
+            ds["const"] = data.const.sum(dim)
 
         return ds
 
@@ -654,7 +654,7 @@ class LinearExpression:
         if kwargs:
             raise ValueError(f"Unknown keyword argument(s): {kwargs}")
 
-        res = self.__class__(self._sum(self, dims=dim), self.model)
+        res = self.__class__(self._sum(self, dim=dim), self.model)
 
         if drop_zeros:
             res = res.densify_terms()
@@ -1309,10 +1309,10 @@ class QuadraticExpression(LinearExpression):
             NotImplemented
 
     @classmethod
-    def _sum(cls, expr: "QuadraticExpression", dims=None) -> Dataset:
+    def _sum(cls, expr: "QuadraticExpression", dim=None) -> Dataset:
         data = _expr_unwrap(expr)
-        dims = dims or list(set(data.dims) - set(HELPER_DIMS))
-        return LinearExpression._sum(expr, dims)
+        dim = dim or list(set(data.dims) - set(HELPER_DIMS))
+        return LinearExpression._sum(expr, dim)
 
     def to_constraint(self, sign, rhs):
         raise NotImplementedError(
