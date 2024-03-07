@@ -33,6 +33,7 @@ from linopy.common import (
     forward_as_properties,
     generate_indices_for_printout,
     get_index_map,
+    has_optimized_model,
     print_single_expression,
     to_dataframe,
 )
@@ -604,6 +605,30 @@ class LinearExpression:
     @property
     def mask(self):
         return None
+
+    @has_optimized_model
+    def _map_solution(self):
+        """
+        Replace variable labels by solution values.
+        """
+        m = self.model
+        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        sol.loc[-1] = np.nan
+        idx = np.ravel(self.vars)
+        values = sol[idx].values.reshape(self.vars.shape)
+        return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
+
+    @property
+    def solution(self):
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        vals = self._map_solution()
+        sol = (self.coeffs * vals).sum(TERM_DIM) + self.const
+        return sol.rename("solution")
 
     @classmethod
     def _sum(cls, expr: Union["LinearExpression", Dataset], dim=None) -> Dataset:
@@ -1307,6 +1332,18 @@ class QuadraticExpression(LinearExpression):
             return other.__sub__(self)
         else:
             NotImplemented
+
+    @property
+    def solution(self):
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        vals = self._map_solution()
+        sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
+        return sol.rename("solution")
 
     @classmethod
     def _sum(cls, expr: "QuadraticExpression", dim=None) -> Dataset:

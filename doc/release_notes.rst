@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+**New Features**
+
+* The LinearExpression and QuadraticExpression class have a new attribute `solution` which returns the optimal values of the expression if the underlying model was optimized.
 
 
 Version 0.3.6

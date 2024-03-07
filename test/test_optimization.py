@@ -341,6 +341,23 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting_expression_sol_accessor(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    x = model["x"]
+    y = model["y"]
+
+    expr = 4 * x
+    assert_equal(expr.solution, 4 * x.solution)
+
+    qexpr = 4 * x**2
+    assert_equal(qexpr.solution, 4 * x.solution**2)
+
+    qexpr = 4 * x * y
+    assert_equal(qexpr.solution, 4 * x.solution * y.solution)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api):
     status, condition = model_anonymous_constraint.solve(solver, io_api=io_api)
     assert status == "ok"
@@ -567,10 +584,14 @@ def test_modified_model(modified_model, solver, io_api):
 @pytest.mark.parametrize("solver,io_api", params)
 def test_masked_variable_model(masked_variable_model, solver, io_api):
     masked_variable_model.solve(solver, io_api=io_api)
-    assert masked_variable_model.solution.y[-2:].isnull().all()
-    assert masked_variable_model.solution.y[:-2].notnull().all()
-    assert masked_variable_model.solution.x.notnull().all()
-    assert (masked_variable_model.solution.x[-2:] == 10).all()
+    x = masked_variable_model.variables.x
+    y = masked_variable_model.variables.y
+    assert y.solution[-2:].isnull().all()
+    assert y.solution[:-2].notnull().all()
+    assert x.solution.notnull().all()
+    assert (x.solution[-2:] == 10).all()
+    # Squeeze in solution getter for expressions with masked variables
+    assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
 
 @pytest.mark.parametrize("solver,io_api", params)
