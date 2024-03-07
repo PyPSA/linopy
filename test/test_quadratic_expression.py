@@ -114,6 +114,11 @@ def test_quadratic_expression_sum_warn_using_dims(x):
         (x**2).sum(dims="dim_0")
 
 
+def test_quadratic_expression_sum_warn_unknown_kwargs(x):
+    with pytest.raises(ValueError):
+        (x**2).sum(unknown_kwarg="dim_0")
+
+
 def test_quadratic_expression_wrong_multiplication(x, y):
     with pytest.raises(TypeError):
         x * x * y

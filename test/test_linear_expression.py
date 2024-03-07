@@ -404,6 +404,11 @@ def test_linear_expression_sum_warn_using_dims(z):
         (1 * z).sum(dims="dim_0")
 
 
+def test_linear_expression_sum_warn_unknown_kwargs(z):
+    with pytest.raises(ValueError):
+        (1 * z).sum(unknown_kwarg="dim_0")
+
+
 def test_linear_expression_multiplication(x, y, z):
     expr = 10 * x + y + z
     mexpr = expr * 10

@@ -148,6 +148,11 @@ def test_variable_sum_warn_using_dims(x):
         x.sum(dims="first")
 
 
+def test_variable_sum_warn_unknown_kwargs(x):
+    with pytest.raises(ValueError):
+        x.sum(unknown_kwarg="first")
+
+
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
