@@ -673,7 +673,7 @@ class LinearExpression:
         if dim is None and "dims" in kwargs:
             dim = kwargs.pop("dims")
             warn(
-                "The `dims` argument is deprecated. Use `dim` instead.",
+                "The `dims` argument in `.sum` is deprecated. Use `dim` instead.",
                 DeprecationWarning,
             )
         if kwargs:
