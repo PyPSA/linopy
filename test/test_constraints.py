@@ -40,6 +40,13 @@ def test_constraint_assignment():
     assert_conequal(m.constraints.con0, con0)
 
 
+def test_constraints_getattr_formatted():
+    m = Model()
+    x = m.add_variables(0, 10, name="x")
+    m.add_constraints(1 * x == 0, name="con-0")
+    assert_conequal(m.constraints.con_0, m.constraints["con-0"])
+
+
 def test_anonymous_constraint_assignment():
     m = Model()
 

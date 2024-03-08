@@ -23,6 +23,7 @@ from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
+    format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
@@ -519,6 +520,14 @@ class Constraints:
         "Right-hand-side constants",
     ]
 
+    def _formatted_names(self):
+        """
+        Get a dictionary of formatted names to the proper constraint names.
+        This map enables a attribute like accession of variable names which
+        are not valid python variable names.
+        """
+        return {format_string_as_variable_name(n): n for n in self}
+
     def __repr__(self):
         """
         Return a string representation of the linopy model.
@@ -547,9 +556,18 @@ class Constraints:
         if name in self.data:
             return self.data[name]
         else:
-            raise AttributeError(
-                f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
-            )
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
+        )
+
+    def __dir__(self):
+        base_attributes = super().__dir__()
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
 
     def __len__(self):
         return self.data.__len__()
