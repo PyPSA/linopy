@@ -49,7 +49,9 @@ def varwrap(method, *default_args, **new_default_kwargs):
             method(var.data, *default_args, *args, **kwargs), var.model, var.name
         )
 
-    _varwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Variable"
+    _varwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Variable"
+    )
     if new_default_kwargs:
         _varwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
@@ -285,6 +287,14 @@ class Variable:
         else:
             return self.to_linexpr(other)
 
+    def __pow__(self, other):
+        """
+        Power of the variables with a coefficient. The only coefficient allowed is 2.
+        """
+        if not other == 2:
+            raise ValueError("Power must be 2.")
+        return self * self
+
     def __rmul__(self, other):
         """
         Right-multiply variables with a coefficient.
@@ -352,6 +362,30 @@ class Variable:
 
     def __contains__(self, value):
         return self.data.__contains__(value)
+
+    def add(self, other):
+        """
+        Add variables to linear expressions or other variables.
+        """
+        return self.__add__(other)
+
+    def sub(self, other):
+        """
+        Subtract linear expressions or other variables from the variables.
+        """
+        return self.__sub__(other)
+
+    def mul(self, other):
+        """
+        Multiply variables with a coefficient.
+        """
+        return self.__mul__(other)
+
+    def div(self, other):
+        """
+        Divide variables with a coefficient.
+        """
+        return self.__div__(other)
 
     def groupby(
         self,

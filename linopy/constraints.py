@@ -56,7 +56,9 @@ def conwrap(method, *default_args, **new_default_kwargs):
             method(con.data, *default_args, *args, **kwargs), con.model, con.name
         )
 
-    _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
+    _conwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Constraint"
+    )
     if new_default_kwargs:
         _conwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
@@ -88,6 +90,8 @@ class Constraint:
     """
 
     __slots__ = ("_data", "_model", "_assigned")
+
+    _fill_value = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
 
     def __init__(self, data: Dataset, model: Any, name: str = ""):
         """
@@ -172,7 +176,7 @@ class Constraint:
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
         lines = []
 
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
@@ -267,7 +271,8 @@ class Constraint:
         -------
         xr.DataArray
         """
-        return self.data.get("mask")
+        if self.is_assigned:
+            return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def coeffs(self):

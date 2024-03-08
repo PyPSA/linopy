@@ -27,7 +27,14 @@ from linopy.expressions import (
     QuadraticExpression,
     ScalarLinearExpression,
 )
-from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
+from linopy.io import (
+    to_block_files,
+    to_file,
+    to_gurobipy,
+    to_highspy,
+    to_mosek,
+    to_netcdf,
+)
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers
@@ -506,8 +513,8 @@ class Model:
             The coords of the constraint array. This is only used when lhs is
             a function. The default is None.
         mask : array_like, optional
-            Boolean mask with False values for variables which are skipped.
-            The shape of the mask has to match the shape the added variables.
+            Boolean mask with False values for constraints which are skipped.
+            The shape of the mask has to match the shape the added constraints.
             Default is None.
 
 
@@ -1184,6 +1191,8 @@ class Model:
     to_file = to_file
 
     to_gurobipy = to_gurobipy
+
+    to_mosek = to_mosek
 
     to_highspy = to_highspy
 

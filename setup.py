@@ -23,7 +23,7 @@ SOLVERS = [
     "mosek",
     "mindoptpy",
     "coptpy",
-    "xpress; platform_system != 'Darwin' or python_version < '3.11'",
+    "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
 
