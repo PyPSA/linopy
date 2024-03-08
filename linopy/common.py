@@ -62,6 +62,19 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
+def format_string_as_variable_name(name):
+    """
+    Format a string to a valid python variable name.
+
+    Parameters:
+        name (str): The name to be converted.
+
+    Returns:
+        str: The formatted name.
+    """
+    return name.replace(" ", "_").replace("-", "_")
+
+
 def get_from_list(lst: Optional[list], index: int):
     """
     Returns the element at the specified index of the list, or None if the index
