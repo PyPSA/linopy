@@ -8,6 +8,7 @@ Upcoming Version
 
 * The LinearExpression and QuadraticExpression class have a new attribute `solution` which returns the optimal values of the expression if the underlying model was optimized.
 
+* It is now possible to access variables and constraints, that don't have python variable name format, as attributes from the corresponding containers. Therefore, a new formatting scheme was introduced which converts dashes and white spaces into underscores. For example, a variable was added to the model with the label "my-variable". This variable can now be accessed with `model.variables.my_variable`. In particular, the autocompletion function of the IPython console is aware of this new formatting scheme. This allows easy access to variables and constraints with long labels.
 
 Version 0.3.6
 -------------
