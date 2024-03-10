@@ -462,9 +462,22 @@ class LinearExpression:
         if type(other) is LinearExpression:
             if other.nterm > 1:
                 raise TypeError("Multiplication of multiple terms is not supported.")
-            ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
-            ds = ds.assign(const=other.const)
-            return merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+            # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
+            # with v being the variables and c the constants
+            # merge on factor dimension only returns v1 * v2 + c1 * c2
+            ds = (
+                other.data[["coeffs", "vars"]]
+                .sel(_term=0)
+                .broadcast_like(self.data)
+                .assign(const=other.const)
+            )
+            res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+            # deal with cross terms c1 * v2 + c2 * v1
+            if self.has_constant:
+                res = res + self.const * other.reset_const()
+            if other.has_constant:
+                res = res + self.reset_const() * other.const
+            return res
         else:
             multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
             coeffs = self.coeffs * multiplier
@@ -485,6 +498,18 @@ class LinearExpression:
         Right-multiply the expr by a factor.
         """
         return self.__mul__(other)
+
+    def __matmul__(self, other):
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        if not isinstance(
+            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
+        ):
+            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+
+        common_dims = list(set(self.coord_dims).intersection(other.dims))
+        return (self * other).sum(dims=common_dims)
 
     def __div__(self, other):
         if isinstance(
@@ -543,6 +568,18 @@ class LinearExpression:
         """
         return self.__div__(other)
 
+    def pow(self, other):
+        """
+        Power of the expression with a coefficient.
+        """
+        return self.__pow__(other)
+
+    def dot(self, other):
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        return self.__matmul__(other)
+
     @property
     def loc(self):
         return LocIndexer(self)
@@ -600,6 +637,10 @@ class LinearExpression:
     @const.setter
     def const(self, value):
         self.data["const"] = value
+
+    @property
+    def has_constant(self):
+        return self.const.any()
 
     # create a dummy for a mask, which can be implemented later
     @property

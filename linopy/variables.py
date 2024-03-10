@@ -302,6 +302,12 @@ class Variable:
         """
         return self.to_linexpr(other)
 
+    def __matmul__(self, other):
+        """
+        Matrix multiplication of variables with a coefficient.
+        """
+        return self.to_linexpr() @ other
+
     def __div__(self, other):
         """
         Divide variables with a coefficient.
@@ -381,6 +387,19 @@ class Variable:
         Divide variables with a coefficient.
         """
         return self.__div__(other)
+
+    def pow(self, other):
+        """
+        Power of the variables with a coefficient. The only coefficient allowed is 2.
+        """
+        return self.__pow__(other)
+
+    def dot(self, other):
+        """
+        Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
+        multiplaction of the two objects with a subsequent summation over common dimensions.
+        """
+        return self.__matmul__(other)
 
     def groupby(
         self,
