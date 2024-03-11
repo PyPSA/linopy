@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+Version 0.3.8
+-------------
 
 **New Features**
 
@@ -19,7 +22,7 @@ Upcoming Version
 * The multiplication of two linear expression with non-zero constants led to wrong results of the cross terms. Given the multiplication `(v1 + c1)  * (v2 + c2)` with `v` being a variable and `c` a constant, the operation did not calculate the cross terms `v1 * c2 + v2 * c1`. This is fixed now.
 
 
-Version 0.3.6
+Version 0.3.7
 -------------
 
 **New Features**
