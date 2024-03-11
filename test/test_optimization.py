@@ -45,8 +45,8 @@ if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
 def test_print_solvers(capsys):
     with capsys.disabled():
         print(
-            f"\nTesting solvers: {', '.join(available_solvers)}\n"
-            f"Testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
+            f"\ntesting solvers: {', '.join(available_solvers)}\n"
+            f"testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
         )
 
 
