@@ -11,11 +11,10 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, Dict, Sequence, Union
 
-import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import arange, array
+from numpy import array
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 
@@ -38,14 +37,7 @@ from linopy.common import (
     to_dataframe,
 )
 from linopy.config import options
-from linopy.constants import (
-    EQUAL,
-    GREATER_EQUAL,
-    HELPER_DIMS,
-    LESS_EQUAL,
-    TERM_DIM,
-    SIGNS_pretty,
-)
+from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
 
 
 def conwrap(method, *default_args, **new_default_kwargs):

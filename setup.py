@@ -7,7 +7,6 @@ Created on Wed Mar 10 11:04:43 2021.
 """
 
 
-import sys
 from codecs import open
 
 from setuptools import find_packages, setup

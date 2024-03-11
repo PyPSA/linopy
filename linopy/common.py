@@ -12,7 +12,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-from numpy import arange, hstack
+from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
 
@@ -20,7 +20,6 @@ from linopy.config import options
 from linopy.constants import (
     HELPER_DIMS,
     SIGNS,
-    TERM_DIM,
     SIGNS_alternative,
     SIGNS_pretty,
     sign_replace_dict,
