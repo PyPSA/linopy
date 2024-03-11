@@ -6,6 +6,7 @@ Created on Thu Mar 18 08:49:08 2021.
 @author: fabian
 """
 
+import logging
 import platform
 
 import numpy as np
@@ -16,6 +17,8 @@ from xarray.testing import assert_equal
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
 from linopy.constants import SolverStatus, Status, TerminationCondition
 from linopy.solvers import available_solvers, quadratic_solvers
+
+logger = logging.getLogger(__name__)
 
 params = [(name, "lp") for name in available_solvers]
 # mps io is only supported via highspy
@@ -31,15 +34,20 @@ if "mosek" in available_solvers:
     params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
 
-# elif "mosek_remote" in available_solvers:
-#    params.append(("mosek_remote", "direct"))
-#    params.append(("mosek_remote", "lp"))
 
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
 if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
+
+
+def test_print_solvers(capsys):
+    with capsys.disabled():
+        print(
+            f"\ntesting solvers: {', '.join(available_solvers)}\n"
+            f"testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
+        )
 
 
 @pytest.fixture
