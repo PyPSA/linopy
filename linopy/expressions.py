@@ -8,7 +8,6 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
-import warnings
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import Any, Mapping, Optional, Union
@@ -18,13 +17,13 @@ import pandas as pd
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from numpy import arange, array, nan
+from numpy import array, nan
 from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 from xarray.core.types import Dims
 
-from linopy import constraints, expressions, variables
+from linopy import constraints, variables
 from linopy.common import (
     LocIndexer,
     as_dataarray,

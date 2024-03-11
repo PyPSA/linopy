@@ -7,23 +7,20 @@ This module contains variable related definitions of the package.
 
 import functools
 import logging
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 from warnings import warn
 
-import dask
 import numpy as np
 import pandas as pd
-from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, broadcast, zeros_like
+from numpy import floating, issubdtype
+from xarray import DataArray, Dataset, broadcast
 from xarray.core.types import Dims
 
 import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
-    fill_missing_coords,
     format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,

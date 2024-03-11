@@ -1023,7 +1023,7 @@ def run_mosek(
                                 f.write(f" LL {namex}\n")
                             elif kx == mosek.stakey.upr:
                                 f.write(f" UL {namex}\n")
-                        f.write(f"ENDATA\n")
+                        f.write("ENDATA\n")
 
             soltype = None
             possible_soltypes = [

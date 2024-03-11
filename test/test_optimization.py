@@ -15,7 +15,6 @@ import pytest
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
-from linopy.constants import SolverStatus, Status, TerminationCondition
 from linopy.solvers import available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)

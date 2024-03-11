@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from xarray import DataArray
 
-from linopy.common import as_dataarray, pandas_to_dataarray
+from linopy.common import as_dataarray
 
 
 def test_as_dataarray_with_series_dims_default():
