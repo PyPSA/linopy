@@ -195,6 +195,7 @@ class Variable:
         coefficient: Union[
             np.number, pd.Series, pd.DataFrame, np.ndarray, DataArray
         ] = 1,
+        use_coefficient_coords: bool = False,
     ) -> "expressions.LinearExpression":
         """
         Create a linear expression from the variables.
@@ -210,9 +211,10 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
-        ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
-            TERM_DIM, -1
-        )
+        coords = coefficient.coords if use_coefficient_coords else self.coords
+        ds = Dataset(
+            {"coeffs": coefficient, "vars": self.labels}, coords=coords
+        ).expand_dims(TERM_DIM, -1)
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self):
@@ -297,7 +299,7 @@ class Variable:
         """
         Right-multiply variables with a coefficient.
         """
-        return self.to_linexpr(other)
+        return self.to_linexpr(other, use_coefficient_coords=True)
 
     def __matmul__(self, other):
         """
