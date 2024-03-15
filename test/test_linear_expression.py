@@ -198,6 +198,27 @@ def test_linear_expression_with_multiplication(x):
     assert isinstance(expr, LinearExpression)
 
 
+def test_linear_expression_with_multiplication_alignment(x, z):
+    new_index = pd.Index([1, 0], name="dim_0")
+
+    coeffs = xr.DataArray([1, 2], coords=x.coords)
+
+    expr = x.loc[new_index] * coeffs
+    assert expr.indexes["dim_0"].equals(new_index)
+
+    expr = coeffs * x.loc[new_index]
+    assert expr.indexes["dim_0"].equals(x.indexes["dim_0"])
+
+    coeffs = pd.Series(coeffs)
+
+    expr = x.loc[new_index] * coeffs
+    assert expr.indexes["dim_0"].equals(new_index)
+
+    with pytest.raises(ValueError):
+        # pandas series is not supported to be at first position
+        expr = coeffs * x.loc[new_index]
+
+
 def test_linear_expression_with_addition(m, x, y):
     expr = 10 * x + y
     assert isinstance(expr, LinearExpression)

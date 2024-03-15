@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* The multiplication of a variable and a coefficient now returns an expression that is aligned with the first object in the multiplication. For example, if `x` is a variable and `c` a coefficient, the multiplication `x * c` returns a linear expression with the same coordinates as `x`, and vice versa. Note that this does not mean that the indexes of the second object are overwritten as it is done in the summation of different linear expressions of the same size.
+
 
 Version 0.3.8
 -------------
