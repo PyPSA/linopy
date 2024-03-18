@@ -82,6 +82,20 @@ class MatrixAccessor:
         df = self.flat_vars
         return create_vector(df.key, df.solution, fill_value=np.nan)
 
+    @cached_property
+    def dual(self):
+        "Vector of dual values of all non-missing constraints."
+        if not self._parent.status == "ok":
+            raise ValueError("Model is not optimized.")
+        if "dual" not in self.flat_cons:
+            del self.flat_cons  # clear cache
+        df = self.flat_cons
+        if "dual" not in df:
+            raise AttributeError(
+                "Underlying is optimized but does not have dual values stored."
+            )
+        return create_vector(df.key, df.dual, fill_value=np.nan)
+
     @property
     def ub(self):
         "Vector of upper bounds of all non-missing variables."

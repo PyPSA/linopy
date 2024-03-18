@@ -345,6 +345,9 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
     assert_equal(x.solution, model.solution["x"])
     c = model.constraints["con1"]
     assert_equal(c.dual, model.dual["con1"])
+    # squeeze in dual getter in matrix
+    assert len(model.matrices.dual) == model.ncons
+    assert model.matrices.dual[0] == model.dual["con0"]
 
 
 @pytest.mark.parametrize("solver,io_api", params)
