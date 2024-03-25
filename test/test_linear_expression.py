@@ -197,6 +197,9 @@ def test_linear_expression_with_multiplication(x):
     expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
     assert isinstance(expr, LinearExpression)
 
+    with pytest.raises(ValueError):
+        np.array([1, 2, 3]) * x
+
 
 def test_linear_expression_with_addition(m, x, y):
     expr = 10 * x + y

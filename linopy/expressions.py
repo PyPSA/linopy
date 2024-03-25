@@ -480,7 +480,10 @@ class LinearExpression:
         else:
             multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
             coeffs = self.coeffs * multiplier
-            assert set(coeffs.shape) == set(self.coeffs.shape)
+            if coeffs.shape != self.coeffs.shape:
+                raise ValueError(
+                    f"Dimension mismatch between coefficients: {coeffs.shape} and {self.coeffs.shape}."
+                )
             const = self.const * multiplier
             return self.assign(coeffs=coeffs, const=const)
 
