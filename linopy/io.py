@@ -512,7 +512,7 @@ def to_highspy(m):
 
     # change objective sense
     if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.highs_bindings.ObjSense.kMaximize)
+        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
     return h
 
