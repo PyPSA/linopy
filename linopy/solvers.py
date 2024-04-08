@@ -405,7 +405,10 @@ def run_highs(
     if warmstart_fn:
         logger.warning("Warmstart not implemented. Ignoring argument.")
 
-    if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in ["QP", "MILP"]:
+    if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
+        "QP",
+        "MILP",
+    ]:
         logger.warning(
             "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
             "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
