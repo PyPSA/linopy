@@ -11,11 +11,10 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, Dict, Sequence, Union
 
-import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import arange, array
+from numpy import array
 from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 
@@ -23,6 +22,7 @@ from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
+    format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
@@ -37,14 +37,7 @@ from linopy.common import (
     to_dataframe,
 )
 from linopy.config import options
-from linopy.constants import (
-    EQUAL,
-    GREATER_EQUAL,
-    HELPER_DIMS,
-    LESS_EQUAL,
-    TERM_DIM,
-    SIGNS_pretty,
-)
+from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
 
 
 def conwrap(method, *default_args, **new_default_kwargs):
@@ -56,7 +49,9 @@ def conwrap(method, *default_args, **new_default_kwargs):
             method(con.data, *default_args, *args, **kwargs), con.model, con.name
         )
 
-    _conwrap.__doc__ = f"Wrapper for the xarray {method} function for linopy.Constraint"
+    _conwrap.__doc__ = (
+        f"Wrapper for the xarray {method.__qualname__} function for linopy.Constraint"
+    )
     if new_default_kwargs:
         _conwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
@@ -88,6 +83,8 @@ class Constraint:
     """
 
     __slots__ = ("_data", "_model", "_assigned")
+
+    _fill_value = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
 
     def __init__(self, data: Dataset, model: Any, name: str = ""):
         """
@@ -153,7 +150,11 @@ class Constraint:
 
     @property
     def coord_dims(self):
-        return {k for k in self.dims if k not in HELPER_DIMS}
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
+
+    @property
+    def coord_sizes(self):
+        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
     def is_assigned(self):
@@ -164,11 +165,11 @@ class Constraint:
         Print the constraint arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.dims)
-        ndim = len(self.coord_dims)
-        dim_sizes = list(self.sizes.values())[:-1]
+        dims = list(self.coord_sizes.keys())
+        ndim = len(dims)
+        dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = self.mask.sum().values if self.mask is not None else 0
+        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
         lines = []
 
         header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
@@ -263,7 +264,8 @@ class Constraint:
         -------
         xr.DataArray
         """
-        return self.data.get("mask")
+        if self.is_assigned:
+            return (self.labels != self._fill_value["labels"]).astype(bool)
 
     @property
     def coeffs(self):
@@ -510,6 +512,14 @@ class Constraints:
         "Right-hand-side constants",
     ]
 
+    def _formatted_names(self):
+        """
+        Get a dictionary of formatted names to the proper constraint names.
+        This map enables a attribute like accession of variable names which
+        are not valid python variable names.
+        """
+        return {format_string_as_variable_name(n): n for n in self}
+
     def __repr__(self):
         """
         Return a string representation of the linopy model.
@@ -538,9 +548,18 @@ class Constraints:
         if name in self.data:
             return self.data[name]
         else:
-            raise AttributeError(
-                f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
-            )
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
+        )
+
+    def __dir__(self):
+        base_attributes = super().__dir__()
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
 
     def __len__(self):
         return self.data.__len__()

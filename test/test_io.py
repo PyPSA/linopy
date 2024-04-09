@@ -9,7 +9,6 @@ Created on Thu Mar 18 09:03:35 2021.
 import pandas as pd
 import pytest
 import xarray as xr
-from xarray.testing import assert_equal
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.testing import assert_model_equal

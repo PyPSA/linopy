@@ -1,6 +1,59 @@
 Release Notes
 =============
 
+Upcoming Version
+----------------
+
+* The matrices accessor of the `Model` class now has a new function `dual` which returns the dual values of the constraints if the underlying model was optimized and dual values are existent.
+
+
+Version 0.3.8
+-------------
+
+**New Features**
+
+* The LinearExpression and QuadraticExpression class have a new attribute `solution` which returns the optimal values of the expression if the underlying model was optimized.
+
+* It is now possible to access variables and constraints, that don't have python variable name format, as attributes from the corresponding containers. Therefore, a new formatting scheme was introduced which converts dashes and white spaces into underscores. For example, a variable was added to the model with the label "my-variable". This variable can now be accessed with `model.variables.my_variable`. In particular, the autocompletion function of the IPython console is aware of this new formatting scheme. This allows easy access to variables and constraints with long labels.
+
+* Variables and LinearExpressions now have a new method `dot`, which allows computing the dot product of two objects. This multiplies objects and sums over common dimensions.
+
+* The matmul operator `@`, which runs the `dot` operation, is now supported for Variables and LinearExpression.
+
+**Bugfixes**
+
+* The multiplication of two linear expression with non-zero constants led to wrong results of the cross terms. Given the multiplication `(v1 + c1)  * (v2 + c2)` with `v` being a variable and `c` a constant, the operation did not calculate the cross terms `v1 * c2 + v2 * c1`. This is fixed now.
+
+
+Version 0.3.7
+-------------
+
+**New Features**
+
+* A direct interface to the `Mosek` solver was added. With this change, a new conversion function `model.to_mosek` was added to convert a linopy model to a `mosek` model. The `solve` function now supports the `mosek` solver with `io_api="direct"`.
+
+* It is now possible to create LinearExpression from a `pandas.DataFrame`, `pandas.Series`, a `numpy.array` or constant scalar values, e.g. `linopy.LinearExpression(df)`. This will create a LinearExpression with constants only and the coordinates of the DataFrame, Series or array as dimensions.
+
+**Bugfixes**
+
+* When grouping an expression or a variable by a `pandas.DataFrame` or a `xarray.DataArray`, the coordinates of the `groupby` object were not properly aligned. So in cases, when the `groupby` object was not indexed in the same way as the variable/expression, the `groupby` operation led to wrong results. This is fixed now.
+
+
+Version 0.3.6
+-------------
+
+* The handling of `pandas` objects was improved. As `pandas` objects are fully aware of coordinates, their index and columns are now strictly taken into account. For example, when multiplying a `pandas.DataFrame` with a variable, linopy now checks the alignment of indexes and reindexes accordingly. Previously, if the axis shapes were the same, the indexes of the variable were inserted and the `pandas` indexes were effectively ignored. A warning has been added for cases where users should expect changes to the results with this version. **Important**: This does not apply to overwriting the coordinates when one expression is added to another, e.g. "x + df" still overwrites the index of "df" when the dimensional shapes are aligned.
+* The `.mask` attribute of the `Constraint` class was fixed to return a proper boolean `xarray.DataArray` object.
+* The printout of masked constraints was fixed.
+
+
+Version 0.3.5
+-------------
+
+* The return type of ``coord_dims`` for expressions and constraints was changed from set to tuple to align with the xarray convention.
+* The printout of transposed expressions and constraints was fixed.
+* Variables and LinearExpressions now support the chaining operations `.add`, `.sub`, `.mul`, `.div`.
+* Variables and LinearExpressions now have support for the power operator. For example, `x**2` is now supported.
 
 Version 0.3.4
 -------------

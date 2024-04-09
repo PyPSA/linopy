@@ -22,12 +22,15 @@ from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import (
-    LinearExpression,
-    QuadraticExpression,
-    ScalarLinearExpression,
+from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.io import (
+    to_block_files,
+    to_file,
+    to_gurobipy,
+    to_highspy,
+    to_mosek,
+    to_netcdf,
 )
-from linopy.io import to_block_files, to_file, to_gurobipy, to_highspy, to_netcdf
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers
@@ -121,14 +124,14 @@ class Model:
         self.matrices = MatrixAccessor(self)
 
     @property
-    def variables(self):
+    def variables(self) -> Variables:
         """
         Variables assigned to the model.
         """
         return self._variables
 
     @property
-    def constraints(self):
+    def constraints(self) -> Constraints:
         """
         Constraints assigned to the model.
         """
@@ -506,8 +509,8 @@ class Model:
             The coords of the constraint array. This is only used when lhs is
             a function. The default is None.
         mask : array_like, optional
-            Boolean mask with False values for variables which are skipped.
-            The shape of the mask has to match the shape the added variables.
+            Boolean mask with False values for constraints which are skipped.
+            The shape of the mask has to match the shape the added constraints.
             Default is None.
 
 
@@ -834,6 +837,7 @@ class Model:
         --------
 
         For creating an expression from tuples:
+
         >>> from linopy import Model
         >>> import pandas as pd
         >>> m = Model()
@@ -842,6 +846,7 @@ class Model:
         >>> expr = m.linexpr((10, "x"), (1, "y"))
 
         For creating an expression from a rule:
+
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
@@ -1182,6 +1187,8 @@ class Model:
     to_file = to_file
 
     to_gurobipy = to_gurobipy
+
+    to_mosek = to_mosek
 
     to_highspy = to_highspy
 

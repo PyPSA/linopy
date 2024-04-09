@@ -26,6 +26,12 @@ def test_variables_repr(m):
     m.variables.__repr__()
 
 
+def test_variables_getattr_formatted():
+    m = Model()
+    m.add_variables(name="y-0")
+    assert_varequal(m.variables.y_0, m.variables["y-0"])
+
+
 def test_variables_assignment_with_merge():
     """
     Test the merger of a variables with same dimension name but with different

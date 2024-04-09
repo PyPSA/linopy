@@ -241,9 +241,11 @@ def test_constraint_lhs_setter_with_variable(c, x):
 
 
 def test_constraint_lhs_setter_with_constant(c):
+    sizes = c.sizes
     c.lhs = 10
     assert (c.rhs == -10).all()
     assert c.lhs.nterm == 0
+    assert c.sizes["first"] == sizes["first"]
 
 
 def test_constraint_sign_setter(c):
@@ -263,8 +265,10 @@ def test_constraint_sign_setter_invalid(c):
 
 
 def test_constraint_rhs_setter(c):
+    sizes = c.sizes
     c.rhs = 2
     assert (c.rhs == 2).all()
+    assert c.sizes == sizes
 
 
 def test_constraint_rhs_setter_with_variable(c, x):

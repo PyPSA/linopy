@@ -77,6 +77,7 @@ with contextlib.suppress(ImportError):
             m.checkinall()
 
         available_solvers.append("mosek")
+
 with contextlib.suppress(ImportError):
     import mindoptpy
 
@@ -94,7 +95,15 @@ logger = logging.getLogger(__name__)
 
 
 io_structure = dict(
-    lp_file={"gurobi", "xpress", "cbc", "glpk", "cplex", "mosek", "mindopt"},
+    lp_file={
+        "gurobi",
+        "xpress",
+        "cbc",
+        "glpk",
+        "cplex",
+        "mosek",
+        "mindopt",
+    },
     blocks={"pips"},
 )
 
@@ -845,6 +854,9 @@ def run_xpress(
     return Result(status, solution, m)
 
 
+mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
+
+
 def run_mosek(
     model,
     io_api=None,
@@ -858,12 +870,20 @@ def run_mosek(
     **solver_options,
 ):
     """
-    Solve a linear problem using the MOSEK solver.
+    Solve a linear problem using the MOSEK solver. Both 'direct' mode, mps and
+    lp mode are supported; None is interpret as 'direct' mode. MPS mode does
+    not support quadratic terms.
 
     https://www.mosek.com/
 
     For more information on solver options, see
     https://docs.mosek.com/latest/pythonapi/parameters.html#doc-all-parameter-list
+
+
+    For remote optimization of smaller problems, which do not require a license,
+    set the following solver_options:
+    {"MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080"}
+
     """
     CONDITION_MAP = {
         "solsta.unknown": "unknown",
@@ -873,14 +893,15 @@ def run_mosek(
         "solsta.dual_infeas_cer": "infeasible_or_unbounded",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in ["lp", "mps", "direct"]:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     problem_fn = model.to_file(problem_fn)
 
-    problem_fn = maybe_convert_path(problem_fn)
+    if io_api != "direct" and io_api is not None:
+        problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
@@ -890,7 +911,10 @@ def run_mosek(
             env = stack.enter_context(mosek.Env())
 
         with env.Task() as m:
-            m.readdata(problem_fn)
+            if io_api is None or io_api == "direct":
+                model.to_mosek(m)
+            else:
+                m.readdata(problem_fn)
 
             for k, v in solver_options.items():
                 m.putparam(k, str(v))
@@ -899,17 +923,107 @@ def run_mosek(
                 m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
 
             if warmstart_fn:
-                m.readdata(warmstart_fn)
+                m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+                skx = [mosek.stakey.low] * m.getnumvar()
+                skc = [mosek.stakey.bas] * m.getnumcon()
 
+                with open(warmstart_fn, "rt") as f:
+                    for line in f:
+                        if line.startswith("NAME "):
+                            break
+
+                    for line in f:
+                        if line.startswith("ENDATA"):
+                            break
+
+                        o = mosek_bas_re.match(line)
+                        if o is not None:
+                            if o.group(1) is not None:
+                                key = o.group(1)
+                                try:
+                                    skx[m.getvarnameindex(o.group(2))] = (
+                                        mosek.stakey.basis
+                                    )
+                                except:
+                                    pass
+                                try:
+                                    skc[m.getvarnameindex(o.group(3))] = (
+                                        mosek.stakey.low if key == "XL" else "XU"
+                                    )
+                                except:
+                                    pass
+                            else:
+                                key = o.group(4)
+                                name = o.group(5)
+                                stakey = (
+                                    mosek.stakey.low
+                                    if key == "LL"
+                                    else (
+                                        mosek.stakey.upr
+                                        if key == "UL"
+                                        else mosek.stakey.bas
+                                    )
+                                )
+
+                                try:
+                                    skx[m.getvarnameindex(name)] = stakey
+                                except:
+                                    try:
+                                        skc[m.getvarnameindex(name)] = stakey
+                                    except:
+                                        pass
+                m.putskc(mosek.soltype.bas, skc)
+                m.putskx(mosek.soltype.bas, skx)
             m.optimize()
 
             m.solutionsummary(mosek.streamtype.log)
 
             if basis_fn:
-                try:
-                    m.writedata(basis_fn)
-                except mosek.Error as err:
-                    logger.info("No model basis stored. Raised error: %s", err)
+                if m.solutiondef(mosek.soltype.bas):
+                    with open(basis_fn, "wt") as f:
+                        f.write(f"NAME {basis_fn}\n")
+
+                        skc = [
+                            (0 if sk != mosek.stakey.bas else 1, i, sk)
+                            for (i, sk) in enumerate(m.getskc(mosek.soltype.bas))
+                        ]
+                        skx = [
+                            (0 if sk == mosek.stakey.bas else 1, j, sk)
+                            for (j, sk) in enumerate(m.getskx(mosek.soltype.bas))
+                        ]
+                        skc.sort()
+                        skc.reverse()
+                        skx.sort()
+                        skx.reverse()
+                        numcon = m.getnumcon()
+                        while skx and skc and skx[-1][0] == 0 and skc[-1][0] == 0:
+                            (_, i, kc) = skc.pop()
+                            (_, j, kx) = skx.pop()
+
+                            namex = m.getvarname(j)
+                            namec = m.getconname(i)
+
+                            if kc in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" XL {namex} {namec}\n")
+                            else:
+                                f.write(f" XU {namex} {namec}\n")
+                        while skc and skc[-1][0] == 0:
+                            (_, i, kc) = skc.pop()
+                            namec = m.getconname(i)
+                            if kc in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" LL {namex}\n")
+                            else:
+                                f.write(f" UL {namex}\n")
+                        while skx:
+                            (_, j, kx) = skx.pop()
+                            namex = m.getvarname(j)
+                            if kx == mosek.stakey.bas:
+                                f.write(f" BS {namex}\n")
+                            elif kx in [mosek.stakey.low, mosek.stakey.fix]:
+                                f.write(f" LL {namex}\n")
+                            elif kx == mosek.stakey.upr:
+                                f.write(f" UL {namex}\n")
+                        f.write("ENDATA\n")
 
             soltype = None
             possible_soltypes = [

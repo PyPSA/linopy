@@ -7,7 +7,6 @@ Created on Wed Mar 10 11:04:43 2021.
 """
 
 
-import sys
 from codecs import open
 
 from setuptools import find_packages, setup
@@ -23,7 +22,7 @@ SOLVERS = [
     "mosek",
     "mindoptpy",
     "coptpy",
-    "xpress; platform_system != 'Darwin' or python_version < '3.11'",
+    "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
 

@@ -12,12 +12,12 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import asarray, concatenate, ones_like, zeros_like
-from scipy.sparse import csc_matrix, triu
+from numpy import ones_like, zeros_like
+from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.constants import CONCAT_DIM, EQUAL, GREATER_EQUAL
+from linopy.constants import CONCAT_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +307,104 @@ def to_file(m, fn, integer_label="general"):
     return fn
 
 
+def to_mosek(model, task=None):
+    """
+    Export model to MOSEK.
+
+    Export the model directly to MOSEK without writing files.
+
+    Parameters
+    ----------
+    m : linopy.Model
+    task : empty MOSEK task
+
+    Returns
+    -------
+    task : MOSEK Task object
+    """
+
+    import mosek
+
+    if task is None:
+        task = mosek.Task()
+
+    task.appendvars(model.nvars)
+    task.appendcons(model.ncons)
+
+    M = model.matrices
+    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
+    #    task.putvarname(j, n)
+
+    labels = M.vlabels.astype(str).astype(object)
+    task.generatevarnames(
+        np.arange(0, len(labels)), "x%0", [len(labels)], None, [0], list(labels)
+    )
+
+    ## Variables
+
+    # MOSEK uses bound keys (free, bounded below or above, ranged and fixed)
+    # plus bound values (lower and upper), and it is considered an error to
+    # input an infinite value for a finite bound.
+    # bkx and bkc define the boundkeys based on upper and lower bound, and blx,
+    # bux, blc and buc define the finite bounds. The numerical value of a bound
+    # indicated to be infinite by the bound key is ignored by MOSEK.
+    bkx = [
+        (
+            (
+                (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
+                if u < np.inf
+                else mosek.boundkey.lo
+            )
+            if (l > -np.inf)
+            else (mosek.boundkey.up if (u < np.inf) else mosek.boundkey.fr)
+        )
+        for (l, u) in zip(M.lb, M.ub)
+    ]
+    blx = [b if b > -np.inf else 0.0 for b in M.lb]
+    bux = [b if b < np.inf else 0.0 for b in M.ub]
+    task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+
+    ## Constraints
+
+    if len(model.constraints) > 0:
+        names = "c" + M.clabels.astype(str).astype(object)
+        for i, n in enumerate(names):
+            task.putconname(i, n)
+        bkc = [
+            (
+                (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
+                if s == "<"
+                else (
+                    (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
+                    if s == ">"
+                    else mosek.boundkey.fx
+                )
+            )
+            for s, b in zip(M.sense, M.b)
+        ]
+        blc = [b if b > -np.inf else 0.0 for b in M.b]
+        buc = [b if b < np.inf else 0.0 for b in M.b]
+        # blc = M.b
+        # buc = M.b
+        A = M.A.tocsr()
+        task.putarowslice(
+            0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+        )
+        task.putconboundslice(0, model.ncons, bkc, blc, buc)
+
+    ## Objective
+    if model.is_quadratic:
+        Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
+        task.putqobj(Q.row, Q.col, Q.data)
+    task.putclist(np.arange(model.nvars), M.c)
+
+    if model.objective.sense == "max":
+        task.putobjsense(mosek.objsense.maximize)
+    else:
+        task.putobjsense(mosek.objsense.minimize)
+    return task
+
+
 def to_gurobipy(m, env=None):
     """
     Export the model to gurobipy.
@@ -414,7 +512,7 @@ def to_highspy(m):
 
     # change objective sense
     if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.highs_bindings.ObjSense.kMaximize)
+        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
     return h
 

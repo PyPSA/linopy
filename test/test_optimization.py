@@ -6,6 +6,7 @@ Created on Thu Mar 18 08:49:08 2021.
 @author: fabian
 """
 
+import logging
 import platform
 
 import numpy as np
@@ -14,8 +15,9 @@ import pytest
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
-from linopy.constants import SolverStatus, Status, TerminationCondition
 from linopy.solvers import available_solvers, quadratic_solvers
+
+logger = logging.getLogger(__name__)
 
 params = [(name, "lp") for name in available_solvers]
 # mps io is only supported via highspy
@@ -27,11 +29,24 @@ if "gurobi" in available_solvers:
 if "highs" in available_solvers:
     params.append(("highs", "direct"))
 
+if "mosek" in available_solvers:
+    params.append(("mosek", "direct"))
+    params.append(("mosek", "lp"))
+
+
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
 if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
+
+
+def test_print_solvers(capsys):
+    with capsys.disabled():
+        print(
+            f"\ntesting solvers: {', '.join(available_solvers)}\n"
+            f"testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
+        )
 
 
 @pytest.fixture
@@ -330,6 +345,26 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
     assert_equal(x.solution, model.solution["x"])
     c = model.constraints["con1"]
     assert_equal(c.dual, model.dual["con1"])
+    # squeeze in dual getter in matrix
+    assert len(model.matrices.dual) == model.ncons
+    assert model.matrices.dual[0] == model.dual["con0"]
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting_expression_sol_accessor(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    x = model["x"]
+    y = model["y"]
+
+    expr = 4 * x
+    assert_equal(expr.solution, 4 * x.solution)
+
+    qexpr = 4 * x**2
+    assert_equal(qexpr.solution, 4 * x.solution**2)
+
+    qexpr = 4 * x * y
+    assert_equal(qexpr.solution, 4 * x.solution * y.solution)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -559,10 +594,14 @@ def test_modified_model(modified_model, solver, io_api):
 @pytest.mark.parametrize("solver,io_api", params)
 def test_masked_variable_model(masked_variable_model, solver, io_api):
     masked_variable_model.solve(solver, io_api=io_api)
-    assert masked_variable_model.solution.y[-2:].isnull().all()
-    assert masked_variable_model.solution.y[:-2].notnull().all()
-    assert masked_variable_model.solution.x.notnull().all()
-    assert (masked_variable_model.solution.x[-2:] == 10).all()
+    x = masked_variable_model.variables.x
+    y = masked_variable_model.variables.y
+    assert y.solution[-2:].isnull().all()
+    assert y.solution[:-2].notnull().all()
+    assert x.solution.notnull().all()
+    assert (x.solution[-2:] == 10).all()
+    # Squeeze in solution getter for expressions with masked variables
+    assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
 
 @pytest.mark.parametrize("solver,io_api", params)

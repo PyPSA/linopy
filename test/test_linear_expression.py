@@ -62,8 +62,6 @@ def test_empty_linexpr(m):
 
 
 def test_linexpr_with_wrong_data(m):
-    with pytest.raises(ValueError):
-        LinearExpression(1, m)
 
     with pytest.raises(ValueError):
         LinearExpression(xr.Dataset({"a": [1]}), m)
@@ -101,6 +99,41 @@ def test_linexpr_with_data_without_coords(m):
     data = xr.Dataset({"vars": vars, "coeffs": coeffs})
     expr = LinearExpression(data, m)
     assert_linequal(expr, lhs)
+
+
+def test_linexpr_from_constant_dataarray(m):
+    const = xr.DataArray([1, 2], dims=["dim_0"])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_pandas_series(m):
+    const = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0"))
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_pandas_dataframe(m):
+    const = pd.DataFrame([[1, 2], [3, 4]], columns=["a", "b"])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_numpy_array(m):
+    const = np.array([1, 2])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
+
+
+def test_linexpr_from_constant_scalar(m):
+    const = 1
+    expr = LinearExpression(const, m)
+    assert (expr.const == const).all()
+    assert expr.nterm == 0
 
 
 def test_repr(m):
@@ -146,11 +179,17 @@ def test_linear_expression_with_multiplication(x):
     expr = x * 1
     assert isinstance(expr, LinearExpression)
 
+    expr2 = x.mul(1)
+    assert_linequal(expr, expr2)
+
     expr = x / 1
     assert isinstance(expr, LinearExpression)
 
     expr = x / 1.0
     assert isinstance(expr, LinearExpression)
+
+    expr2 = x.div(1)
+    assert_linequal(expr, expr2)
 
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
@@ -172,11 +211,17 @@ def test_linear_expression_with_addition(m, x, y):
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((1, "x"), (1, "y")))
 
+    expr2 = x.add(y)
+    assert_linequal(expr, expr2)
+
 
 def test_linear_expression_with_subtraction(m, x, y):
     expr = x - y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((1, "x"), (-1, "y")))
+
+    expr2 = x.sub(y)
+    assert_linequal(expr, expr2)
 
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
@@ -369,6 +414,34 @@ def test_linear_expression_multiplication(x, y, z):
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
 
 
+def test_matmul_variable_and_const(x, y):
+    const = np.array([1, 2])
+    expr = x @ const
+    assert expr.nterm == 2
+    assert_linequal(expr, (x * const).sum())
+
+    assert_linequal(x @ const, (x * const).sum())
+
+    assert_linequal(x.dot(const), x @ const)
+
+
+def test_matmul_expr_and_const(x, y):
+    expr = 10 * x + y
+    const = np.array([1, 2])
+    res = expr @ const
+    target = (10 * x) @ const + y @ const
+    assert res.nterm == 4
+    assert_linequal(res, target)
+
+    assert_linequal(expr.dot(const), target)
+
+
+def test_matmul_wrong_input(x, y, z):
+    expr = 10 * x + y + z
+    with pytest.raises(TypeError):
+        expr @ expr
+
+
 def test_linear_expression_multiplication_invalid(x, y, z):
     expr = 10 * x + y + z
 
@@ -522,15 +595,7 @@ def test_linear_expression_groupby_with_series_false(v):
     groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
     groups.name = "dim_2"
     with pytest.raises(ValueError):
-        grouped = expr.groupby(groups).sum()
-
-
-def test_linear_expression_groupby_with_series_false(v):
-    expr = 1 * v
-    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
-    groups.name = "dim_2"
-    with pytest.raises(ValueError):
-        grouped = expr.groupby(groups).sum()
+        expr.groupby(groups).sum()
 
 
 def test_linear_expression_groupby_with_dataframe(v):
@@ -538,11 +603,36 @@ def test_linear_expression_groupby_with_dataframe(v):
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    grouped = expr.groupby(xr.DataArray(groups)).sum()
+    grouped = expr.groupby(groups).sum()
     index = pd.MultiIndex.from_frame(groups)
     assert "group" in grouped.dims
     assert set(grouped.data.group.values) == set(index.values)
     assert grouped.nterm == 3
+
+
+def test_linear_expression_groupby_with_dataarray(v):
+    expr = 1 * v
+    df = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    groups = xr.DataArray(df)
+    grouped = expr.groupby(groups).sum()
+    index = pd.MultiIndex.from_frame(df)
+    assert "group" in grouped.dims
+    assert set(grouped.data.group.values) == set(index.values)
+    assert grouped.nterm == 3
+
+
+def test_linear_expression_groupby_with_dataframe_non_aligned(v):
+    expr = 1 * v
+    groups = pd.DataFrame(
+        {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
+    )
+    target = expr.groupby(groups).sum()
+
+    groups_non_aligned = groups[::-1]
+    grouped = expr.groupby(groups_non_aligned).sum()
+    assert_linequal(grouped, target)
 
 
 @pytest.mark.parametrize("use_fallback", [True, False])
