@@ -34,6 +34,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
+from linopy.solvers import set_int_index
 
 logger = logging.getLogger(__name__)
 
@@ -688,6 +689,7 @@ class Variable:
         vals = pd.Series(
             {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
         )
+        vals = set_int_index(vals)
 
         idx = np.ravel(self.labels)
         try:
