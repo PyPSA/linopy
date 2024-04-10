@@ -34,6 +34,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
+from linopy.solvers import set_int_index
 
 logger = logging.getLogger(__name__)
 
@@ -665,6 +666,39 @@ class Variable:
         )
         return self.solution
 
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
+        """
+        Get an attribute from the solver model.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        solver_model = self.model.solver_model
+        if self.model.solver_name != "gurobi":
+            raise NotImplementedError(
+                "Solver attribute getter only supports the Gurobi solver for now."
+            )
+
+        vals = pd.Series(
+            {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
+        )
+        vals = set_int_index(vals)
+
+        idx = np.ravel(self.labels)
+        try:
+            vals = vals[idx].values.reshape(self.labels.shape)
+        except KeyError:
+            vals = vals.reindex(idx).values.reshape(self.labels.shape)
+
+        return DataArray(vals, self.coords)
+
     @property
     def flat(self):
         """
@@ -1052,6 +1086,24 @@ class Variables:
         Get the solution of variables.
         """
         return save_join(*[v.solution.rename(k) for k, v in self.items()])
+
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
+        """
+        Get an attribute from the solver model.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        return save_join(
+            *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
+        )
 
     def get_name_by_label(self, label):
         """

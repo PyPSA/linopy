@@ -12,6 +12,7 @@ import platform
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
@@ -332,6 +333,7 @@ def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model.objective.value, 3.3)
+    assert model.solver_name == solver
 
     with pytest.warns(DeprecationWarning):
         assert np.isclose(model.objective_value, 3.3)
@@ -629,6 +631,18 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
 def test_non_supported_solver_io(model, solver):
     with pytest.raises(ValueError):
         model.solve(solver, io_api="non_supported")
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solver_attribute_getter(model, solver, io_api):
+    model.solve(solver)
+    if solver != "gurobi":
+        with pytest.raises(NotImplementedError):
+            model.variables.get_solver_attribute("RC")
+    else:
+        rc = model.variables.get_solver_attribute("RC")
+        assert isinstance(rc, xr.Dataset)
+        assert set(rc) == set(model.variables)
 
 
 # def init_model_large():
