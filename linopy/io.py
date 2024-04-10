@@ -12,12 +12,12 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numpy import asarray, concatenate, ones_like, zeros_like
-from scipy.sparse import csc_matrix, tril, triu
+from numpy import ones_like, zeros_like
+from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.constants import CONCAT_DIM, EQUAL, GREATER_EQUAL
+from linopy.constants import CONCAT_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -512,7 +512,7 @@ def to_highspy(m):
 
     # change objective sense
     if m.objective.sense == "max":
-        h.changeObjectiveSense(highspy.highs_bindings.ObjSense.kMaximize)
+        h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
     return h
 

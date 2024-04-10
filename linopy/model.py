@@ -22,11 +22,7 @@ from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import (
-    LinearExpression,
-    QuadraticExpression,
-    ScalarLinearExpression,
-)
+from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import (
     to_block_files,
     to_file,

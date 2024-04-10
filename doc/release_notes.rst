@@ -1,11 +1,31 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* The matrices accessor of the `Model` class now has a new function `dual` which returns the dual values of the constraints if the underlying model was optimized and dual values are existent.
 
 
-Version 0.3.6
+Version 0.3.8
+-------------
+
+**New Features**
+
+* The LinearExpression and QuadraticExpression class have a new attribute `solution` which returns the optimal values of the expression if the underlying model was optimized.
+
+* It is now possible to access variables and constraints, that don't have python variable name format, as attributes from the corresponding containers. Therefore, a new formatting scheme was introduced which converts dashes and white spaces into underscores. For example, a variable was added to the model with the label "my-variable". This variable can now be accessed with `model.variables.my_variable`. In particular, the autocompletion function of the IPython console is aware of this new formatting scheme. This allows easy access to variables and constraints with long labels.
+
+* Variables and LinearExpressions now have a new method `dot`, which allows computing the dot product of two objects. This multiplies objects and sums over common dimensions.
+
+* The matmul operator `@`, which runs the `dot` operation, is now supported for Variables and LinearExpression.
+
+**Bugfixes**
+
+* The multiplication of two linear expression with non-zero constants led to wrong results of the cross terms. Given the multiplication `(v1 + c1)  * (v2 + c2)` with `v` being a variable and `c` a constant, the operation did not calculate the cross terms `v1 * c2 + v2 * c1`. This is fixed now.
+
+
+Version 0.3.7
 -------------
 
 **New Features**

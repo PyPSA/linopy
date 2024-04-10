@@ -8,7 +8,6 @@ This module contains definition related to affine expressions.
 
 import functools
 import logging
-import warnings
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import Any, Mapping, Optional, Union
@@ -18,13 +17,13 @@ import pandas as pd
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from numpy import arange, array, nan
+from numpy import array, nan
 from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset
 from xarray.core.dataarray import DataArrayCoordinates
 from xarray.core.types import Dims
 
-from linopy import constraints, expressions, variables
+from linopy import constraints, variables
 from linopy.common import (
     LocIndexer,
     as_dataarray,
@@ -33,6 +32,7 @@ from linopy.common import (
     forward_as_properties,
     generate_indices_for_printout,
     get_index_map,
+    has_optimized_model,
     print_single_expression,
     to_dataframe,
 )
@@ -461,9 +461,22 @@ class LinearExpression:
         if type(other) is LinearExpression:
             if other.nterm > 1:
                 raise TypeError("Multiplication of multiple terms is not supported.")
-            ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
-            ds = ds.assign(const=other.const)
-            return merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+            # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
+            # with v being the variables and c the constants
+            # merge on factor dimension only returns v1 * v2 + c1 * c2
+            ds = (
+                other.data[["coeffs", "vars"]]
+                .sel(_term=0)
+                .broadcast_like(self.data)
+                .assign(const=other.const)
+            )
+            res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+            # deal with cross terms c1 * v2 + c2 * v1
+            if self.has_constant:
+                res = res + self.const * other.reset_const()
+            if other.has_constant:
+                res = res + self.reset_const() * other.const
+            return res
         else:
             multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
             coeffs = self.coeffs * multiplier
@@ -484,6 +497,18 @@ class LinearExpression:
         Right-multiply the expr by a factor.
         """
         return self.__mul__(other)
+
+    def __matmul__(self, other):
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        if not isinstance(
+            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
+        ):
+            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+
+        common_dims = list(set(self.coord_dims).intersection(other.dims))
+        return (self * other).sum(dims=common_dims)
 
     def __div__(self, other):
         if isinstance(
@@ -541,6 +566,18 @@ class LinearExpression:
         Divide the expr by a factor.
         """
         return self.__div__(other)
+
+    def pow(self, other):
+        """
+        Power of the expression with a coefficient.
+        """
+        return self.__pow__(other)
+
+    def dot(self, other):
+        """
+        Matrix multiplication with other, similar to xarray dot.
+        """
+        return self.__matmul__(other)
 
     @property
     def loc(self):
@@ -600,10 +637,38 @@ class LinearExpression:
     def const(self, value):
         self.data["const"] = value
 
+    @property
+    def has_constant(self):
+        return self.const.any()
+
     # create a dummy for a mask, which can be implemented later
     @property
     def mask(self):
         return None
+
+    @has_optimized_model
+    def _map_solution(self):
+        """
+        Replace variable labels by solution values.
+        """
+        m = self.model
+        sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
+        sol.loc[-1] = np.nan
+        idx = np.ravel(self.vars)
+        values = sol[idx].values.reshape(self.vars.shape)
+        return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
+
+    @property
+    def solution(self):
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        vals = self._map_solution()
+        sol = (self.coeffs * vals).sum(TERM_DIM) + self.const
+        return sol.rename("solution")
 
     @classmethod
     def _sum(cls, expr: Union["LinearExpression", Dataset], dims=None) -> Dataset:
@@ -1296,6 +1361,18 @@ class QuadraticExpression(LinearExpression):
             return other.__sub__(self)
         else:
             NotImplemented
+
+    @property
+    def solution(self):
+        """
+        Get the optimal values of the expression.
+
+        The function raises an error in case no model is set as a
+        reference or the model is not optimized.
+        """
+        vals = self._map_solution()
+        sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
+        return sol.rename("solution")
 
     @classmethod
     def _sum(cls, expr: "QuadraticExpression", dims=None) -> Dataset:

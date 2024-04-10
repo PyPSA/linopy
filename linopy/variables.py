@@ -7,23 +7,21 @@ This module contains variable related definitions of the package.
 
 import functools
 import logging
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 from warnings import warn
 
-import dask
 import numpy as np
 import pandas as pd
-from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, broadcast, zeros_like
+from numpy import floating, issubdtype
+from xarray import DataArray, Dataset, broadcast
 from xarray.core.types import Dims
 
 import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
-    fill_missing_coords,
+    format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
@@ -301,6 +299,12 @@ class Variable:
         """
         return self.to_linexpr(other)
 
+    def __matmul__(self, other):
+        """
+        Matrix multiplication of variables with a coefficient.
+        """
+        return self.to_linexpr() @ other
+
     def __div__(self, other):
         """
         Divide variables with a coefficient.
@@ -380,6 +384,19 @@ class Variable:
         Divide variables with a coefficient.
         """
         return self.__div__(other)
+
+    def pow(self, other):
+        """
+        Power of the variables with a coefficient. The only coefficient allowed is 2.
+        """
+        return self.__pow__(other)
+
+    def dot(self, other):
+        """
+        Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
+        multiplaction of the two objects with a subsequent summation over common dimensions.
+        """
+        return self.__matmul__(other)
 
     def groupby(
         self,
@@ -923,6 +940,14 @@ class Variables:
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
+    def _formatted_names(self):
+        """
+        Get a dictionary of formatted names to the proper variable names.
+        This map enables a attribute like accession of variable names which
+        are not valid python variable names.
+        """
+        return {format_string_as_variable_name(n): n for n in self}
+
     def __getitem__(
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
@@ -936,9 +961,18 @@ class Variables:
         if name in self.data:
             return self.data[name]
         else:
-            raise AttributeError(
-                f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
-            )
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
+        )
+
+    def __dir__(self):
+        base_attributes = super().__dir__()
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
 
     def __repr__(self):
         """
