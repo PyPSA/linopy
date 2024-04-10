@@ -652,40 +652,6 @@ class Variable:
 
     @property
     @has_optimized_model
-    def SAObjUp(self):
-        """
-        Get the objective coefficient sensitivity information:
-        largest objective coefficient value at which the current optimal basis would remain optimal
-        """
-        return self.data["SAObjUp"]
-
-    @SAObjUp.setter
-    def SAObjUp(self, value):
-        """
-        Set the objective coefficient sensitivity information: upper value
-        """
-        value = DataArray(value).broadcast_like(self.labels)
-        self.data["SAObjUp"] = value
-
-    @property
-    @has_optimized_model
-    def SAObjLow(self):
-        """
-        Get the objective coefficient sensitivity information:
-        smallest objective coefficient value at which the current optimal basis would remain optimal.
-        """
-        return self.data["SAObjLow"]
-
-    @SAObjLow.setter
-    def SAObjLow(self, value):
-        """
-        Set the objective sensitivity information: lower value
-        """
-        value = DataArray(value).broadcast_like(self.labels)
-        self.data["SAObjLow"] = value
-
-    @property
-    @has_optimized_model
     def sol(self):
         """
         Get the optimal values of the variable.
@@ -698,6 +664,38 @@ class Variable:
             DeprecationWarning,
         )
         return self.solution
+
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
+        """
+        Get an attribute from the solver model.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        solver_model = self.model.solver_model
+        if self.model.solver_name != "gurobi":
+            raise NotImplementedError(
+                "Solver attribute getter only supports the Gurobi solver for now."
+            )
+
+        vals = pd.Series(
+            {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
+        )
+
+        idx = np.ravel(self.labels)
+        try:
+            vals = vals[idx].values.reshape(self.labels.shape)
+        except KeyError:
+            vals = vals.reindex(idx).values.reshape(self.labels.shape)
+
+        return DataArray(vals, self.coords)
 
     @property
     def flat(self):
@@ -1087,19 +1085,23 @@ class Variables:
         """
         return save_join(*[v.solution.rename(k) for k, v in self.items()])
 
-    @property
-    def SAObjUp(self):
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
         """
-        Get the objective coefficient sensitivity information: upper value
-        """
-        return save_join(*[v.SAObjUp.rename(k) for k, v in self.items()])
+        Get an attribute from the solver model.
 
-    @property
-    def SAObjLow(self):
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
         """
-        Get the objective coefficient sensitivity information: lower value
-        """
-        return save_join(*[v.SAObjLow.rename(k) for k, v in self.items()])
+        return save_join(
+            *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
+        )
 
     def get_name_by_label(self, label):
         """

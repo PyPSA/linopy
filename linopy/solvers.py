@@ -662,24 +662,7 @@ def run_gurobi(
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
 
-            try:
-                SAObjUp = pd.Series(
-                    {v.VarName: v.SAObjUp for v in m.getVars()}, dtype=float
-                )
-                SAObjLow = pd.Series(
-                    {v.VarName: v.SAObjLow for v in m.getVars()}, dtype=float
-                )
-                SAObjUp = set_int_index(SAObjUp)
-                SAObjLow = set_int_index(SAObjLow)
-
-            except AttributeError:
-                logger.warning(
-                    "No Objective coefficient sensitivity information available."
-                )
-                SAObjUp = pd.Series(dtype=float)
-                SAObjLow = pd.Series(dtype=float)
-
-            return Solution(sol, dual, objective, SAObjUp, SAObjLow)
+            return Solution(sol, dual, objective)
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)

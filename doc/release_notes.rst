@@ -6,6 +6,7 @@ Upcoming Version
 
 * The matrices accessor of the `Model` class now has a new function `dual` which returns the dual values of the constraints if the underlying model was optimized and dual values are existent.
 
+* The Variables class now has a new function `get_solver_attribute` which parses solver-specific attributes of the variables. For now, this function only works for Gurobi `solver_model`s. For example, the function allows retrieving the variable fields `SAObjUp` or `RC`.
 
 Version 0.3.8
 -------------
