@@ -25,9 +25,9 @@ In ``JuMP`` the formulation translates to the following code:
         m = Model()
         @variable(m, x[1:N, 1:N])
         @variable(m, y[1:N, 1:N])
-        @constraint(m, [i=1:N, j=1:N], x[i, j] - y[i, j] >= i)
-        @constraint(m, [i=1:N, j=1:N], x[i, j] + y[i, j] >= 0)
-        @objective(m, Min, sum(2 * x[i, j] + y[i, j] for i in 1:N, j in 1:N))
+        @constraint(m, x - y .>= 0:(N-1))
+        @constraint(m, x + y .>= 0)
+        @objective(m, Min, 2 * sum(x) + sum(y))
         return m
     end
 
@@ -48,7 +48,7 @@ The same model in ``linopy`` is initialized by
          m.add_objective((2 * x).sum() + y.sum())
          return m
 
-Note that the syntax is quiet similar. An important difference lays in the fact that ``linopy`` operates all arithmetic operations on **variable arrays**, while the JuMP syntax uses control variables `i` and `j`.
+Note that the syntax is quite similar.
 
 In ``Pyomo`` the code would look like
 
