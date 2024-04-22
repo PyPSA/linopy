@@ -386,7 +386,7 @@ def run_highs(
     Some exemplary options are:
 
         * presolve : "choose" by default - "on"/"off" are alternatives.
-        * solver :"choose" by default - "simplex"/"ipm" are alternatives.
+        * solver :"choose" by default - "simplex"/"ipm"/"pdlp" are alternatives. Only "choose" solves MIP / QP!
         * parallel : "choose" by default - "on"/"off" are alternatives.
         * time_limit : inf by default.
 
@@ -403,12 +403,15 @@ def run_highs(
     CONDITION_MAP = {}
 
     if warmstart_fn:
-        logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
+        logger.warning("Warmstart not implemented. Ignoring argument.")
 
-    if solver_options.get("solver") in ["simplex", "ipm"] and model.type == "QP":
+    if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
+        "QP",
+        "MILP",
+    ]:
         logger.warning(
-            "The HiGHS solver ignores quadratic terms if the solver is set to 'simplex' or 'ipm'. "
-            "Drop the solver option or use 'choose' to enable quadratic terms."
+            "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
+            "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
         )
 
     if io_api is None or io_api in ["lp", "mps"]:

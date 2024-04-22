@@ -77,6 +77,7 @@ class Model:
         "_force_dim_names",
         "_solver_dir",
         "solver_model",
+        "solver_name",
         "matrices",
     )
 
@@ -1080,6 +1081,7 @@ class Model:
         self.status = result.status.status.value
         self.termination_condition = result.status.termination_condition.value
         self.solver_model = result.solver_model
+        self.solver_name = solver_name
 
         if not result.status.is_ok:
             return result.status.status.value, result.status.termination_condition.value
