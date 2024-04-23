@@ -543,7 +543,7 @@ class Model:
 
         if isinstance(lhs, LinearExpression):
             assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.data.assign(sign=sign, rhs=rhs)
+            data = lhs.to_constraint(sign, rhs).data
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
@@ -984,7 +984,7 @@ class Model:
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
         sanitize_zeros : bool, optional
-            Whether to set terms with zero coeffficient as missing.
+            Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
         remote : linopy.remote.RemoteHandler
