@@ -8,6 +8,8 @@ Upcoming Version
 
 * The Variables class now has a new function `get_solver_attribute` which parses solver-specific attributes of the variables. For now, this function only works for Gurobi `solver_model`s. For example, the function allows retrieving the variable fields `SAObjUp` or `RC`.
 
+* The constraint assignment with a `LinearExpression` and a constant value when using the pattern `model.add_constraints(lhs_with_constant, sign, rhs)` was fixed. Before, the constant value was not added to the right-hand-side properly which led to the wrong constraint behavior. This is fixed now.
+
 Version 0.3.8
 -------------
 

@@ -543,7 +543,7 @@ class Model:
 
         if isinstance(lhs, LinearExpression):
             assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.data.assign(sign=sign, rhs=rhs)
+            data = lhs.to_constraint(sign, rhs).data
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
