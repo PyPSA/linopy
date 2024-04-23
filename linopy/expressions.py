@@ -1541,7 +1541,8 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).sum(TERM_DIM)
+        subkwargs = {**kwargs, "fill_value": 0}
+        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
         ds["const"] = const
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)

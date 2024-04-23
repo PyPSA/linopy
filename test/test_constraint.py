@@ -329,6 +329,15 @@ def test_constraint_assignment_with_args(m, x, y):
     assert (m.constraints["c2"].rhs == 0).all()
 
 
+def test_constraint_assignment_with_args_and_constant(m, x, y):
+    lhs = x + y + 10
+    m.add_constraints(lhs, EQUAL, 0, name="c2")
+    assert m.constraints["c2"].vars.notnull().all()
+    assert m.constraints["c2"].coeffs.notnull().all()
+    assert (m.constraints["c2"].sign == EQUAL).all()
+    assert (m.constraints["c2"].rhs == -10).all()
+
+
 def test_constraint_assignment_with_args_valid_sign(m, x, y):
     lhs = x + y
     for i, sign in enumerate([EQUAL, GREATER_EQUAL, LESS_EQUAL]):
