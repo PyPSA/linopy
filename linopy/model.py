@@ -984,7 +984,7 @@ class Model:
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
         sanitize_zeros : bool, optional
-            Whether to set terms with zero coeffficient as missing.
+            Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
         remote : linopy.remote.RemoteHandler

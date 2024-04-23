@@ -10,6 +10,8 @@ Upcoming Version
 
 * The constraint assignment with a `LinearExpression` and a constant value when using the pattern `model.add_constraints(lhs_with_constant, sign, rhs)` was fixed. Before, the constant value was not added to the right-hand-side properly which led to the wrong constraint behavior. This is fixed now.
 
+* `nan`s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of `nan`s with tools like numpy/pandas/xarray.
+
 Version 0.3.8
 -------------
 
