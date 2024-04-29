@@ -6,16 +6,19 @@ Created on Thu Mar 18 08:49:08 2021.
 @author: fabian
 """
 
+import logging
 import platform
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
-from linopy.constants import SolverStatus, Status, TerminationCondition
 from linopy.solvers import available_solvers, quadratic_solvers
+
+logger = logging.getLogger(__name__)
 
 params = [(name, "lp") for name in available_solvers]
 # mps io is only supported via highspy
@@ -31,15 +34,20 @@ if "mosek" in available_solvers:
     params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
 
-# elif "mosek_remote" in available_solvers:
-#    params.append(("mosek_remote", "direct"))
-#    params.append(("mosek_remote", "lp"))
 
 feasible_quadratic_solvers = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
 if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
+
+
+def test_print_solvers(capsys):
+    with capsys.disabled():
+        print(
+            f"\ntesting solvers: {', '.join(available_solvers)}\n"
+            f"testing quadratic solvers: {', '.join(feasible_quadratic_solvers)}"
+        )
 
 
 @pytest.fixture
@@ -325,6 +333,7 @@ def test_default_setting(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     assert np.isclose(model.objective.value, 3.3)
+    assert model.solver_name == solver
 
     with pytest.warns(DeprecationWarning):
         assert np.isclose(model.objective_value, 3.3)
@@ -338,6 +347,26 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
     assert_equal(x.solution, model.solution["x"])
     c = model.constraints["con1"]
     assert_equal(c.dual, model.dual["con1"])
+    # squeeze in dual getter in matrix
+    assert len(model.matrices.dual) == model.ncons
+    assert model.matrices.dual[0] == model.dual["con0"]
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_default_setting_expression_sol_accessor(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    x = model["x"]
+    y = model["y"]
+
+    expr = 4 * x
+    assert_equal(expr.solution, 4 * x.solution)
+
+    qexpr = 4 * x**2
+    assert_equal(qexpr.solution, 4 * x.solution**2)
+
+    qexpr = 4 * x * y
+    assert_equal(qexpr.solution, 4 * x.solution * y.solution)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -379,10 +408,6 @@ def test_solver_options(model, solver, io_api):
         "highs": {"time_limit": 1},
         "scip": {"limits/time": 1},
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
-        "mosek_remote": {
-            "MSK_DPAR_OPTIMIZER_MAX_TIME": 1,
-            "MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080",
-        },
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }
@@ -571,10 +596,14 @@ def test_modified_model(modified_model, solver, io_api):
 @pytest.mark.parametrize("solver,io_api", params)
 def test_masked_variable_model(masked_variable_model, solver, io_api):
     masked_variable_model.solve(solver, io_api=io_api)
-    assert masked_variable_model.solution.y[-2:].isnull().all()
-    assert masked_variable_model.solution.y[:-2].notnull().all()
-    assert masked_variable_model.solution.x.notnull().all()
-    assert (masked_variable_model.solution.x[-2:] == 10).all()
+    x = masked_variable_model.variables.x
+    y = masked_variable_model.variables.y
+    assert y.solution[-2:].isnull().all()
+    assert y.solution[:-2].notnull().all()
+    assert x.solution.notnull().all()
+    assert (x.solution[-2:] == 10).all()
+    # Squeeze in solution getter for expressions with masked variables
+    assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -602,6 +631,18 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
 def test_non_supported_solver_io(model, solver):
     with pytest.raises(ValueError):
         model.solve(solver, io_api="non_supported")
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solver_attribute_getter(model, solver, io_api):
+    model.solve(solver)
+    if solver != "gurobi":
+        with pytest.raises(NotImplementedError):
+            model.variables.get_solver_attribute("RC")
+    else:
+        rc = model.variables.get_solver_attribute("RC")
+        assert isinstance(rc, xr.Dataset)
+        assert set(rc) == set(model.variables)
 
 
 # def init_model_large():

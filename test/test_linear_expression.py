@@ -414,6 +414,34 @@ def test_linear_expression_multiplication(x, y, z):
     assert (mexpr.coeffs.sel(dim_1=0, dim_0=0, _term=0) == 1 / 10).item()
 
 
+def test_matmul_variable_and_const(x, y):
+    const = np.array([1, 2])
+    expr = x @ const
+    assert expr.nterm == 2
+    assert_linequal(expr, (x * const).sum())
+
+    assert_linequal(x @ const, (x * const).sum())
+
+    assert_linequal(x.dot(const), x @ const)
+
+
+def test_matmul_expr_and_const(x, y):
+    expr = 10 * x + y
+    const = np.array([1, 2])
+    res = expr @ const
+    target = (10 * x) @ const + y @ const
+    assert res.nterm == 4
+    assert_linequal(res, target)
+
+    assert_linequal(expr.dot(const), target)
+
+
+def test_matmul_wrong_input(x, y, z):
+    expr = 10 * x + y + z
+    with pytest.raises(TypeError):
+        expr @ expr
+
+
 def test_linear_expression_multiplication_invalid(x, y, z):
     expr = 10 * x + y + z
 

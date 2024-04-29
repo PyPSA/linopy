@@ -10,6 +10,7 @@ from xarray import DataArray
 from linopy import Model, merge
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import QuadraticExpression
+from linopy.testing import assert_quadequal
 
 
 @pytest.fixture
@@ -40,15 +41,20 @@ def test_quadratic_expression_from_variables_multiplication(x, y):
 
 def test_quadratic_expression_from_variables_power(x):
     expr = x**2
+    target = x * x
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
+    assert_quadequal(expr, target)
+    assert_quadequal(x.pow(2), target)
 
 
 def test_quadratic_expression_from_linexpr_multiplication(x, y):
     expr = (10 * x + y) * y
+    target = 10 * x * y + y * y
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 2
+    assert_quadequal(expr, target)
 
 
 def test_quadratic_expression_from_linexpr_power(x):
@@ -56,6 +62,49 @@ def test_quadratic_expression_from_linexpr_power(x):
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 1
+
+
+def test_quadratic_expression_from_linexpr_with_constant_power(x):
+    expr = (10 * x + 5) ** 2
+    target = 100 * x * x + 50 * x + 50 * x + 25
+    assert isinstance(expr, QuadraticExpression)
+    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.nterm == 3
+    assert_quadequal(expr, target)
+
+
+def test_quadratic_expression_from_linexpr_with_constant_multiplation(x, y):
+    expr = (10 * x + 5) * (y + 5)
+    target = 10 * x * y + 5 * y + 50 * x + 25
+    assert isinstance(expr, QuadraticExpression)
+    assert expr.data.sizes[FACTOR_DIM] == 2
+    assert expr.nterm == 3
+    assert_quadequal(expr, target)
+
+
+def test_quadratic_expression_from_linexpr_with_constant_dot(x, y):
+    expr = 10 * x @ y
+    assert expr.nterm == 2
+    assert_quadequal(expr, (10 * x * y).sum())
+
+    expr = y @ (10 * x)
+    assert expr.nterm == 2
+    assert_quadequal(expr, (y * 10 * x).sum())
+
+    assert_quadequal(x.dot(y), x @ y)
+
+
+def test_matmul_expr_and_expr(x, y, z):
+    expr = (2 * x + 5) @ (3 * y + 10)
+    target = 2 * 3 * x @ y + 5 * 3 * y.sum() + 2 * 10 * x.sum() + 5 * 10 * 2
+    assert expr.nterm == 6
+    assert_quadequal(expr, target)
+
+
+def test_quadratic_expression_dot_and_matmul(x, y):
+    expr1 = 10 * x @ y
+    expr2 = 10 * x.dot(y)
+    assert_quadequal(expr1, expr2)
 
 
 def test_quadratic_expression_wrong_assignment(x, y):

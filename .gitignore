@@ -22,3 +22,4 @@ benchmark/gurobi.log
 benchmark/notebooks/.ipynb_checkpoints
 benchmark/scripts/__pycache__
 benchmark/scripts/benchmarks-pypsa-eur/__pycache__
+benchmark/scripts/leftovers/

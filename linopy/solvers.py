@@ -386,7 +386,7 @@ def run_highs(
     Some exemplary options are:
 
         * presolve : "choose" by default - "on"/"off" are alternatives.
-        * solver :"choose" by default - "simplex"/"ipm" are alternatives.
+        * solver :"choose" by default - "simplex"/"ipm"/"pdlp" are alternatives. Only "choose" solves MIP / QP!
         * parallel : "choose" by default - "on"/"off" are alternatives.
         * time_limit : inf by default.
 
@@ -403,12 +403,15 @@ def run_highs(
     CONDITION_MAP = {}
 
     if warmstart_fn:
-        logger.warning("Warmstart not available with HiGHS solver. Ignore argument.")
+        logger.warning("Warmstart not implemented. Ignoring argument.")
 
-    if solver_options.get("solver") in ["simplex", "ipm"] and model.type == "QP":
+    if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
+        "QP",
+        "MILP",
+    ]:
         logger.warning(
-            "The HiGHS solver ignores quadratic terms if the solver is set to 'simplex' or 'ipm'. "
-            "Drop the solver option or use 'choose' to enable quadratic terms."
+            "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
+            "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
         )
 
     if io_api is None or io_api in ["lp", "mps"]:
@@ -878,6 +881,12 @@ def run_mosek(
 
     For more information on solver options, see
     https://docs.mosek.com/latest/pythonapi/parameters.html#doc-all-parameter-list
+
+
+    For remote optimization of smaller problems, which do not require a license,
+    set the following solver_options:
+    {"MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080"}
+
     """
     CONDITION_MAP = {
         "solsta.unknown": "unknown",
@@ -889,7 +898,7 @@ def run_mosek(
 
     if io_api is not None and io_api not in ["lp", "mps", "direct"]:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
+            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
     if io_api != "direct" and io_api is not None:
@@ -905,7 +914,7 @@ def run_mosek(
 
         with env.Task() as m:
             if io_api is None or io_api == "direct":
-                model.to_mosekpy(m)
+                model.to_mosek(m)
             else:
                 m.readdata(problem_fn)
 
@@ -1016,7 +1025,7 @@ def run_mosek(
                                 f.write(f" LL {namex}\n")
                             elif kx == mosek.stakey.upr:
                                 f.write(f" UL {namex}\n")
-                        f.write(f"ENDATA\n")
+                        f.write("ENDATA\n")
 
             soltype = None
             possible_soltypes = [

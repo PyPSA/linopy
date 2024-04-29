@@ -65,7 +65,6 @@ class Objective:
         model,
         sense="min",
     ):
-        from linopy.model import Model
 
         self._model = model
         self._value = None
