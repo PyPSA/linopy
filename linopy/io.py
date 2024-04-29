@@ -364,6 +364,17 @@ def to_mosekpy(model, task=None):
     bux = [b if b < np.inf else 0.0 for b in M.ub]
     task.putvarboundslice(0, model.nvars, bkx, blx, bux)
 
+    if len(model.binaries.labels) + len(model.integers.labels) > 0:
+        j = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+        task.putvartypelist(j, [mosek.variabletype.type_int] * len(j))
+        if len(model.binaries.labels) > 0:
+            task.putvarboundlistconst(
+                [i for (i, v) in enumerate(M.vtypes) if v == "B"],
+                mosek.boundkey.ra,
+                0.0,
+                1.0,
+            )
+
     ## Constraints
 
     if len(model.constraints) > 0:
@@ -396,7 +407,7 @@ def to_mosekpy(model, task=None):
     if model.is_quadratic:
         Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
         task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(np.arange(model.nvars), M.c)
+    task.putclist(list(np.arange(model.nvars)), M.c)
 
     if model.objective.sense == "max":
         task.putobjsense(mosek.objsense.maximize)
