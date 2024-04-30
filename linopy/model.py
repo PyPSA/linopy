@@ -538,8 +538,6 @@ class Model:
             self._connameCounter += 1
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
-        if rhs is not None:
-            rhs = as_dataarray(rhs)
 
         if isinstance(lhs, LinearExpression):
             assert_sign_rhs_not_None(lhs, sign, rhs)
