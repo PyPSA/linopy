@@ -204,9 +204,16 @@ def test_variable_ffill(x):
     assert x.labels[3] != x.labels[2]
 
 
-def test_variable_fillna(x):
-    result = x.fillna(x[0])
+def test_variable_expand_dims(x):
+    result = x.expand_dims("new_dim")
     assert isinstance(result, linopy.variables.Variable)
+    assert result.dims == ("new_dim", "first")
+
+
+def test_variable_stack(x):
+    result = x.expand_dims("new_dim").stack(new=("new_dim", "first"))
+    assert isinstance(result, linopy.variables.Variable)
+    assert result.dims == ("new",)
 
 
 def test_variable_sanitize(x):
