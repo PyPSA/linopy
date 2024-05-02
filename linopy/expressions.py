@@ -1237,6 +1237,8 @@ class LinearExpression:
 
     drop_isel = exprwrap(Dataset.drop_isel)
 
+    expand_dims = exprwrap(Dataset.expand_dims)
+
     ffill = exprwrap(Dataset.ffill)
 
     sel = exprwrap(Dataset.sel)
@@ -1254,6 +1256,8 @@ class LinearExpression:
     rename_dims = exprwrap(Dataset.rename_dims)
 
     roll = exprwrap(Dataset.roll)
+
+    stack = exprwrap(Dataset.stack)
 
 
 @forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
