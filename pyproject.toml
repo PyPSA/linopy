@@ -67,6 +67,3 @@ solvers = [
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
-
-[tool.setuptools_scm]
-write_to = "linopy/version.py"
