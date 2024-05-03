@@ -63,8 +63,14 @@ solvers = [
     "highspy>=1.7.1.dev1; python_version >= '3.12'",
     "cplex; platform_system != 'Darwin' and python_version < '3.12'",
     "mosek",
-    "mindoptpy",
+    "mindoptpy; python_version < '3.12'",
     "coptpy",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
+
+[tool.setuptools.packages.find]
+include = ["linopy"]
+
+[tool.setuptools_scm]
+write_to = "linopy/version.py"
