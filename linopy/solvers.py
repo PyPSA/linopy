@@ -568,6 +568,25 @@ def run_cplex(
     return Result(status, solution, m)
 
 
+def start_gurobi_env(wait=60):
+    """
+    Try (forever!) to create an environment. Return the environment once started. Waiting time is in seconds.
+    """
+    # see https://support.gurobi.com/hc/en-us/articles/360029879251-How-do-I-check-the-availability-of-floating-license-tokens
+    import time
+
+    while True:
+        try:
+            # Attempt to construct a Gurobi environment
+            env = gurobipy.Env()
+            logging.debug("Gurobi: Token retrieved!")
+            return env
+        except gurobipy.GurobiError:
+            logging.debug("Gurobi: No tokens available...")
+            # Wait x seconds
+            time.sleep(wait)
+
+
 def run_gurobi(
     model,
     io_api=None,
@@ -612,7 +631,10 @@ def run_gurobi(
 
     with contextlib.ExitStack() as stack:
         if env is None:
-            env = stack.enter_context(gurobipy.Env())
+            if solver_options.get("WaitTime"):
+                env = stack.enter_context(start_gurobi_env(solver_options["WaitTime"]))
+            else:
+                env = stack.enter_context(gurobipy.Env())
 
         if io_api is None or io_api in ["lp", "mps"]:
             problem_fn = model.to_file(problem_fn)
@@ -628,7 +650,8 @@ def run_gurobi(
 
         if solver_options is not None:
             for key, value in solver_options.items():
-                m.setParam(key, value)
+                if key != "WaitTime":
+                    m.setParam(key, value)
         if log_fn is not None:
             m.setParam("logfile", log_fn)
 

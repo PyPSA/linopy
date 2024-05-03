@@ -14,6 +14,8 @@ Upcoming Version
 
 * Up to now the `rhs` argument in the `add_constraints` function was not supporting an expression as an input type. This is now added.
 
+* Improve `run_gurobi` to optionally wait for an available token.
+
 Version 0.3.8
 -------------
 
