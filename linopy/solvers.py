@@ -913,9 +913,8 @@ def run_mosek(
             "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
-    problem_fn = model.to_file(problem_fn)
-
     if io_api != "direct" and io_api is not None:
+        problem_fn = model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
