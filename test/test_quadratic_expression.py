@@ -149,13 +149,23 @@ def test_quadratic_expression_rsubtraction(x, y):
 def test_quadratic_expression_sum(x, y):
     expr = x * y + x + 5
 
-    summed_expr = expr.sum(dims="dim_0")
+    summed_expr = expr.sum(dim="dim_0")
     assert isinstance(summed_expr, QuadraticExpression)
     assert not summed_expr.coord_dims
 
     summed_expr_all = expr.sum()
     assert isinstance(summed_expr_all, QuadraticExpression)
     assert not summed_expr_all.coord_dims
+
+
+def test_quadratic_expression_sum_warn_using_dims(x):
+    with pytest.warns(DeprecationWarning):
+        (x**2).sum(dims="dim_0")
+
+
+def test_quadratic_expression_sum_warn_unknown_kwargs(x):
+    with pytest.raises(ValueError):
+        (x**2).sum(unknown_kwarg="dim_0")
 
 
 def test_quadratic_expression_wrong_multiplication(x, y):

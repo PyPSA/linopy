@@ -994,8 +994,9 @@ class Model:
 
         Returns
         -------
-        linopy.Model
-            Optimized model.
+        status : tuple
+            Tuple containing the status and termination condition of the
+            optimization process.
         """
         if remote:
             solved = remote.solve_on_remote(

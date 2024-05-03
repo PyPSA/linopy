@@ -1,5 +1,76 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2<8"]
+requires = ["setuptools>=60", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linopy"
+dynamic = ["version"]
+description = "Linear optimization with N-D labeled arrays in Python"
+readme = "README.md"
+authors = [{ name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+]
+
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "bottleneck",
+    "toolz",
+    "numexpr",
+    "xarray>=2023.9.0",
+    "dask>=0.18.0",
+    "tqdm",
+    "deprecation",
+]
+
+[project.urls]
+Homepage = "https://github.com/PyPSA/linopy"
+Source = "https://github.com/PyPSA/linopy"
+
+[project.optional-dependencies]
+docs = [
+    "ipython",
+    "numpydoc",
+    "sphinx",
+    "sphinx_rtd_theme",
+    "sphinx_book_theme",
+    "nbsphinx",
+    "nbsphinx-link",
+    "gurobipy",
+    "ipykernel",
+    "matplotlib",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "netcdf4",
+    "pre-commit",
+    "paramiko",
+    "gurobipy",
+    "highspy",
+]
+solvers = [
+    "gurobipy",
+    "highspy>=1.5.0; python_version < '3.12'",
+    "highspy>=1.7.1.dev1; python_version >= '3.12'",
+    "cplex; platform_system != 'Darwin' and python_version < '3.12'",
+    "mosek",
+    "mindoptpy; python_version < '3.12'",
+    "coptpy",
+    "xpress; platform_system != 'Darwin' and python_version < '3.11'",
+    "pyscipopt; platform_system != 'Darwin'",
+]
+
+[tool.setuptools.packages.find]
+include = ["linopy"]
 
 [tool.setuptools_scm]
 write_to = "linopy/version.py"

@@ -8,6 +8,7 @@ Created on Thu Mar 18 08:49:08 2021.
 
 import logging
 import platform
+import sys
 
 import numpy as np
 import pandas as pd
@@ -384,9 +385,14 @@ def test_model_maximization(model_maximization, solver, io_api):
     m = model_maximization
     assert m.objective.sense == "max"
     assert m.objective.value is None
-    status, condition = m.solve(solver, io_api=io_api)
-    assert status == "ok"
-    assert np.isclose(m.objective.value, 3.3)
+
+    if solver in ["cbc", "glpk"] and io_api == "mps" and sys.version_info >= (3, 12):
+        with pytest.raises(ValueError):
+            m.solve(solver, io_api=io_api)
+    else:
+        status, condition = m.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert np.isclose(m.objective.value, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

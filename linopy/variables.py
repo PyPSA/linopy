@@ -726,7 +726,7 @@ class Variable:
             )
         return df
 
-    def sum(self, dims=None):
+    def sum(self, dim=None, **kwargs):
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -735,16 +735,27 @@ class Variable:
 
         Parameters
         ----------
-        dims : str/list, optional
+        dim : str/list, optional
             Dimension(s) to sum over. The default is None which results in all
             dimensions.
+        dims : str/list, optional
+            Deprecated. Use ``dim`` instead.
 
         Returns
         -------
         linopy.LinearExpression
             Summed expression.
         """
-        return self.to_linexpr().sum(dims)
+        if dim is None and "dims" in kwargs:
+            dim = kwargs.pop("dims")
+            warn(
+                "The `dims` argument is deprecated. Use `dim` instead.",
+                DeprecationWarning,
+            )
+        if kwargs:
+            raise ValueError(f"Unknown keyword argument(s): {kwargs}")
+
+        return self.to_linexpr().sum(dim)
 
     def diff(self, dim, n=1):
         """

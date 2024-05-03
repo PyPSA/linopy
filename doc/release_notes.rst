@@ -16,6 +16,12 @@ Upcoming Version
 
 * Improve `run_gurobi` to optionally wait for an available token.
 
+* Linopy now supports python 3.12.
+
+**Deprecations**
+
+* The argument `dims` in the `.sum` function of variables and expressions was deprecated in favor of the `dim` argument. This aligns the argument name with the xarray convention.
+
 Version 0.3.8
 -------------
 
