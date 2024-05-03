@@ -762,7 +762,9 @@ def run_scip(
         cons = m.getConss()
         if len(cons) != 0:
             dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
-            dual = dual[dual.index.str.startswith("c")]
+            dual = dual[
+                dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
+            ]
             dual = set_int_index(dual)
         else:
             logger.warning("Dual values of MILP couldn't be parsed")
