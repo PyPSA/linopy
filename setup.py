@@ -19,7 +19,7 @@ SOLVERS = [
     "gurobipy",
     "highspy>=1.5.0; python_version < '3.12'",
     "highspy>=1.7.1.dev1; python_version >= '3.12'",
-    "cplex; python_version < '3.12'",
+    "cplex; platform_system != 'Darwin' and python_version < '3.12'",
     "mosek",
     "mindoptpy; python_version < '3.12'",
     "coptpy",

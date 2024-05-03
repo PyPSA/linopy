@@ -909,6 +909,8 @@ class Variable:
 
     drop_isel = varwrap(Dataset.drop_isel)
 
+    expand_dims = varwrap(Dataset.expand_dims)
+
     sel = varwrap(Dataset.sel)
 
     isel = varwrap(Dataset.isel)
@@ -918,6 +920,8 @@ class Variable:
     rename = varwrap(Dataset.rename)
 
     roll = varwrap(Dataset.roll)
+
+    stack = varwrap(Dataset.stack)
 
 
 @dataclass(repr=False)

@@ -12,6 +12,8 @@ Upcoming Version
 
 * `nan`s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of `nan`s with tools like numpy/pandas/xarray.
 
+* Up to now the `rhs` argument in the `add_constraints` function was not supporting an expression as an input type. This is now added.
+
 Version 0.3.8
 -------------
 

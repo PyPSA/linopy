@@ -556,6 +556,18 @@ def test_linear_expression_fillna(v):
     assert filled.coeffs.isnull().sum() == 10
 
 
+def test_variable_expand_dims(v):
+    result = v.to_linexpr().expand_dims("new_dim")
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new_dim", "dim_2")
+
+
+def test_variable_stack(v):
+    result = v.to_linexpr().expand_dims("new_dim").stack(new=("new_dim", "dim_2"))
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new",)
+
+
 def test_linear_expression_diff(v):
     diff = v.to_linexpr().diff("dim_2")
     assert diff.nterm == 2
