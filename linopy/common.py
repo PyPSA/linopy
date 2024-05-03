@@ -12,7 +12,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-from numpy import arange, hstack
+from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
 
@@ -20,7 +20,6 @@ from linopy.config import options
 from linopy.constants import (
     HELPER_DIMS,
     SIGNS,
-    TERM_DIM,
     SIGNS_alternative,
     SIGNS_pretty,
     sign_replace_dict,
@@ -60,6 +59,19 @@ def maybe_replace_signs(sign):
     """
     func = np.vectorize(maybe_replace_sign)
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
+
+
+def format_string_as_variable_name(name):
+    """
+    Format a string to a valid python variable name.
+
+    Parameters:
+        name (str): The name to be converted.
+
+    Returns:
+        str: The formatted name.
+    """
+    return name.replace(" ", "_").replace("-", "_")
 
 
 def get_from_list(lst: Optional[list], index: int):

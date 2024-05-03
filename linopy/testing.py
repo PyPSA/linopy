@@ -15,6 +15,11 @@ def assert_linequal(a, b):
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
+def assert_quadequal(a, b):
+    """Assert that two linear expressions are equal."""
+    return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
+
+
 def assert_conequal(a, b):
     """Assert that two constraints are equal."""
     return assert_equal(_con_unwrap(a), _con_unwrap(b))

@@ -22,11 +22,7 @@ from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import (
-    LinearExpression,
-    QuadraticExpression,
-    ScalarLinearExpression,
-)
+from linopy.expressions import LinearExpression, ScalarLinearExpression
 from linopy.io import (
     to_block_files,
     to_file,
@@ -81,6 +77,7 @@ class Model:
         "_force_dim_names",
         "_solver_dir",
         "solver_model",
+        "solver_name",
         "matrices",
     )
 
@@ -541,12 +538,10 @@ class Model:
             self._connameCounter += 1
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
-        if rhs is not None:
-            rhs = as_dataarray(rhs)
 
         if isinstance(lhs, LinearExpression):
             assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.data.assign(sign=sign, rhs=rhs)
+            data = lhs.to_constraint(sign, rhs).data
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
@@ -987,7 +982,7 @@ class Model:
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
         sanitize_zeros : bool, optional
-            Whether to set terms with zero coeffficient as missing.
+            Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
         remote : linopy.remote.RemoteHandler
@@ -1084,6 +1079,7 @@ class Model:
         self.status = result.status.status.value
         self.termination_condition = result.status.termination_condition.value
         self.solver_model = result.solver_model
+        self.solver_name = solver_name
 
         if not result.status.is_ok:
             return result.status.status.value, result.status.termination_condition.value

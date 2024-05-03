@@ -7,23 +7,21 @@ This module contains variable related definitions of the package.
 
 import functools
 import logging
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 from warnings import warn
 
-import dask
 import numpy as np
 import pandas as pd
-from numpy import floating, inf, issubdtype
-from xarray import DataArray, Dataset, align, broadcast, zeros_like
+from numpy import floating, issubdtype
+from xarray import DataArray, Dataset, broadcast
 from xarray.core.types import Dims
 
 import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
-    fill_missing_coords,
+    format_string_as_variable_name,
     forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
@@ -36,6 +34,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
+from linopy.solvers import set_int_index
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +300,12 @@ class Variable:
         """
         return self.to_linexpr(other)
 
+    def __matmul__(self, other):
+        """
+        Matrix multiplication of variables with a coefficient.
+        """
+        return self.to_linexpr() @ other
+
     def __div__(self, other):
         """
         Divide variables with a coefficient.
@@ -380,6 +385,19 @@ class Variable:
         Divide variables with a coefficient.
         """
         return self.__div__(other)
+
+    def pow(self, other):
+        """
+        Power of the variables with a coefficient. The only coefficient allowed is 2.
+        """
+        return self.__pow__(other)
+
+    def dot(self, other):
+        """
+        Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
+        multiplaction of the two objects with a subsequent summation over common dimensions.
+        """
+        return self.__matmul__(other)
 
     def groupby(
         self,
@@ -648,6 +666,39 @@ class Variable:
         )
         return self.solution
 
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
+        """
+        Get an attribute from the solver model.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        solver_model = self.model.solver_model
+        if self.model.solver_name != "gurobi":
+            raise NotImplementedError(
+                "Solver attribute getter only supports the Gurobi solver for now."
+            )
+
+        vals = pd.Series(
+            {v.VarName: getattr(v, attr) for v in solver_model.getVars()}, dtype=float
+        )
+        vals = set_int_index(vals)
+
+        idx = np.ravel(self.labels)
+        try:
+            vals = vals[idx].values.reshape(self.labels.shape)
+        except KeyError:
+            vals = vals.reindex(idx).values.reshape(self.labels.shape)
+
+        return DataArray(vals, self.coords)
+
     @property
     def flat(self):
         """
@@ -869,6 +920,8 @@ class Variable:
 
     drop_isel = varwrap(Dataset.drop_isel)
 
+    expand_dims = varwrap(Dataset.expand_dims)
+
     sel = varwrap(Dataset.sel)
 
     isel = varwrap(Dataset.isel)
@@ -878,6 +931,8 @@ class Variable:
     rename = varwrap(Dataset.rename)
 
     roll = varwrap(Dataset.roll)
+
+    stack = varwrap(Dataset.stack)
 
 
 @dataclass(repr=False)
@@ -900,6 +955,14 @@ class Variables:
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
+    def _formatted_names(self):
+        """
+        Get a dictionary of formatted names to the proper variable names.
+        This map enables a attribute like accession of variable names which
+        are not valid python variable names.
+        """
+        return {format_string_as_variable_name(n): n for n in self}
+
     def __getitem__(
         self, names: Union[str, Sequence[str]]
     ) -> Union[Variable, "Variables"]:
@@ -913,9 +976,18 @@ class Variables:
         if name in self.data:
             return self.data[name]
         else:
-            raise AttributeError(
-                f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
-            )
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
+        )
+
+    def __dir__(self):
+        base_attributes = super().__dir__()
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
 
     def __repr__(self):
         """
@@ -1029,6 +1101,24 @@ class Variables:
         Get the solution of variables.
         """
         return save_join(*[v.solution.rename(k) for k, v in self.items()])
+
+    @has_optimized_model
+    def get_solver_attribute(self, attr):
+        """
+        Get an attribute from the solver model.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to get.
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        return save_join(
+            *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
+        )
 
     def get_name_by_label(self, label):
         """
