@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=60", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "linopy"
-version = "0.3.9"
+dynamic = ["version"]
 description = "Linear optimization with N-D labeled arrays in Python"
 readme = "README.md"
 authors = [{ name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" }]
