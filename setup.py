@@ -17,10 +17,11 @@ with open("README.md", encoding="utf-8") as f:
 
 SOLVERS = [
     "gurobipy",
-    "highspy",
-    "cplex; platform_system != 'Darwin' and python_version <= '3.11'",
+    "highspy>=1.5.0; python_version < '3.12'",
+    "highspy>=1.7.1.dev1; python_version >= '3.12'",
+    "cplex; platform_system != 'Darwin' and python_version < '3.12'",
     "mosek",
-    "mindoptpy",
+    "mindoptpy; python_version < '3.12'",
     "coptpy",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
