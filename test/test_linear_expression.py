@@ -399,6 +399,16 @@ def test_linear_expression_sum_drop_zeros(z):
     assert res.nterm == 2
 
 
+def test_linear_expression_sum_warn_using_dims(z):
+    with pytest.warns(DeprecationWarning):
+        (1 * z).sum(dims="dim_0")
+
+
+def test_linear_expression_sum_warn_unknown_kwargs(z):
+    with pytest.raises(ValueError):
+        (1 * z).sum(unknown_kwarg="dim_0")
+
+
 def test_linear_expression_multiplication(x, y, z):
     expr = 10 * x + y + z
     mexpr = expr * 10
@@ -554,6 +564,18 @@ def test_linear_expression_fillna(v):
     assert isinstance(filled, LinearExpression)
     assert filled.const.sum() == 200
     assert filled.coeffs.isnull().sum() == 10
+
+
+def test_variable_expand_dims(v):
+    result = v.to_linexpr().expand_dims("new_dim")
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new_dim", "dim_2")
+
+
+def test_variable_stack(v):
+    result = v.to_linexpr().expand_dims("new_dim").stack(new=("new_dim", "dim_2"))
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new",)
 
 
 def test_linear_expression_diff(v):

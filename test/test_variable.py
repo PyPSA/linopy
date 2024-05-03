@@ -143,6 +143,16 @@ def test_variable_sum(x):
     assert res.nterm == 10
 
 
+def test_variable_sum_warn_using_dims(x):
+    with pytest.warns(DeprecationWarning):
+        x.sum(dims="first")
+
+
+def test_variable_sum_warn_unknown_kwargs(x):
+    with pytest.raises(ValueError):
+        x.sum(unknown_kwarg="first")
+
+
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
@@ -204,9 +214,16 @@ def test_variable_ffill(x):
     assert x.labels[3] != x.labels[2]
 
 
-def test_variable_fillna(x):
-    result = x.fillna(x[0])
+def test_variable_expand_dims(x):
+    result = x.expand_dims("new_dim")
     assert isinstance(result, linopy.variables.Variable)
+    assert result.dims == ("new_dim", "first")
+
+
+def test_variable_stack(x):
+    result = x.expand_dims("new_dim").stack(new=("new_dim", "first"))
+    assert isinstance(result, linopy.variables.Variable)
+    assert result.dims == ("new",)
 
 
 def test_variable_sanitize(x):
