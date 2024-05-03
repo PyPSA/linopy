@@ -18,7 +18,7 @@ with open("README.md", encoding="utf-8") as f:
 SOLVERS = [
     "gurobipy",
     "highspy",
-    "cplex",
+    "cplex; platform_system != 'Darwin' and python_version <= '3.11'",
     "mosek",
     "mindoptpy",
     "coptpy",
