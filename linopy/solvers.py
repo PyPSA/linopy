@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess as sub
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -128,7 +129,7 @@ def maybe_adjust_objective_sign(solution, sense, io_api):
     if np.isnan(solution.objective):
         return
 
-    if io_api == "mps":
+    if io_api == "mps" and sys.version_info < (3, 12):
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
         )
@@ -173,6 +174,12 @@ def run_cbc(
     if io_api is not None and io_api not in ["lp", "mps"]:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
+        )
+
+    # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
+    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+        raise ValueError(
+            "GLPK does not support maximization in MPS format for Python 3.12+"
         )
 
     problem_fn = model.to_file(problem_fn)
@@ -282,6 +289,12 @@ def run_glpk(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
+    # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
+    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+        raise ValueError(
+            "GLPK does not support maximization in MPS format for Python 3.12+"
+        )
+
     problem_fn = model.to_file(problem_fn)
     suffix = problem_fn.suffix[1:]
 
@@ -358,7 +371,6 @@ def run_glpk(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
-
     return Result(status, solution)
 
 
@@ -901,9 +913,8 @@ def run_mosek(
             "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
 
-    problem_fn = model.to_file(problem_fn)
-
     if io_api != "direct" and io_api is not None:
+        problem_fn = model.to_file(problem_fn)
         problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
