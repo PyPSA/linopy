@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess as sub
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -128,7 +129,7 @@ def maybe_adjust_objective_sign(solution, sense, io_api):
     if np.isnan(solution.objective):
         return
 
-    if io_api == "mps":
+    if io_api == "mps" and sys.version_info < (3, 12):
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
         )
