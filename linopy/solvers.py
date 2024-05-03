@@ -176,6 +176,12 @@ def run_cbc(
             "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
         )
 
+    # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
+    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+        raise ValueError(
+            "GLPK does not support maximization in MPS format for Python 3.12+"
+        )
+
     problem_fn = model.to_file(problem_fn)
 
     # printingOptions is about what goes in solution file
@@ -283,6 +289,12 @@ def run_glpk(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
+    # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
+    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+        raise ValueError(
+            "GLPK does not support maximization in MPS format for Python 3.12+"
+        )
+
     problem_fn = model.to_file(problem_fn)
     suffix = problem_fn.suffix[1:]
 
@@ -359,7 +371,6 @@ def run_glpk(
 
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
-
     return Result(status, solution)
 
 
