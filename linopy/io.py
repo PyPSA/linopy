@@ -365,15 +365,11 @@ def to_mosek(model, task=None):
     task.putvarboundslice(0, model.nvars, bkx, blx, bux)
 
     if len(model.binaries.labels) + len(model.integers.labels) > 0:
-        j = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
-        task.putvartypelist(j, [mosek.variabletype.type_int] * len(j))
+        idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+        task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
         if len(model.binaries.labels) > 0:
-            task.putvarboundlistconst(
-                [i for (i, v) in enumerate(M.vtypes) if v == "B"],
-                mosek.boundkey.ra,
-                0.0,
-                1.0,
-            )
+            bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
+            task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
 
     ## Constraints
 
