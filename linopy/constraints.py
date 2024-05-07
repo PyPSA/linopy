@@ -120,6 +120,19 @@ class Constraint:
         self._data = data
         self._model = model
 
+    def __getitem__(self, selector) -> "Constraints":
+        """
+        Get selection from the constraint.
+        This is a wrapper around the xarray __getitem__ method. It returns a
+        new object with the selected data.
+        """
+        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
+        return self.__class__(data, self.model, self.name)
+
+    @property
+    def loc(self):
+        return LocIndexer(self)
+
     @property
     def data(self):
         """
@@ -591,10 +604,6 @@ class Constraints:
         Remove constraint `name` from the constraints.
         """
         self.data.pop(name)
-
-    @property
-    def loc(self):
-        return LocIndexer(self)
 
     @property
     def labels(self):

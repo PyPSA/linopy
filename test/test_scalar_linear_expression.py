@@ -31,22 +31,22 @@ def z(m):
 
 
 def test_scalar_expression_initialization(x, y, z):
-    expr = 10 * x[0]
+    expr = 10 * x.at[0]
     assert isinstance(expr, ScalarLinearExpression)
 
-    expr = 10 * x[0] + y[1] + z[1, 1]
+    expr = 10 * x.at[0] + y.at[1] + z.at[1, 1]
     assert isinstance(expr, ScalarLinearExpression)
 
 
 def test_scalar_expression_multiplication(x):
-    expr = 10 * x[0]
+    expr = 10 * x.at[0]
     expr2 = 2 * expr
     assert isinstance(expr2, ScalarLinearExpression)
     assert expr2.coeffs == (20,)
 
 
 def test_scalar_expression_division(x):
-    expr = 10 * x[0]
+    expr = 10 * x.at[0]
     expr2 = expr / 2
     assert isinstance(expr2, ScalarLinearExpression)
     assert expr2.coeffs == (5,)
@@ -57,7 +57,7 @@ def test_scalar_expression_division(x):
 
 
 def test_scalar_expression_negation(x):
-    expr = 10 * x[0]
+    expr = 10 * x.at[0]
     expr3 = -expr
     assert isinstance(expr3, ScalarLinearExpression)
     assert expr3.coeffs == (-10,)
@@ -65,25 +65,25 @@ def test_scalar_expression_negation(x):
 
 def test_scalar_expression_multiplication_raises_type_error(x):
     with pytest.raises(TypeError):
-        x[1] * x[1]
+        x.at[1] * x.at[1]
 
 
 def test_scalar_expression_division_raises_type_error(x):
     with pytest.raises(TypeError):
-        x[1] / x[1]
+        x.at[1] / x.at[1]
 
 
 def test_scalar_expression_sum(x, y, z):
-    target = 10 * x[0] + y[1] + z[1, 1]
-    expr = sum((10 * x[0], y[1], z[1, 1]))
+    target = 10 * x.at[0] + y.at[1] + z.at[1, 1]
+    expr = sum((10 * x.at[0], y.at[1], z.at[1, 1]))
     assert isinstance(expr, ScalarLinearExpression)
     assert expr.vars == target.vars
     assert expr.coeffs == target.coeffs
 
 
 def test_scalar_expression_sum_from_variables(x, y):
-    target = x[0] + y[0]
-    expr = sum((x[0], y[0]))
+    target = x.at[0] + y.at[0]
+    expr = sum((x.at[0], y.at[0]))
     assert isinstance(expr, ScalarLinearExpression)
     assert expr.vars == target.vars
     assert expr.coeffs == target.coeffs

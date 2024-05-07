@@ -264,7 +264,11 @@ def test_linear_expression_with_errors(m, x):
 
 def test_linear_expression_from_rule(m, x, y):
     def bound(m, i):
-        return (i - 1) * x[i - 1] + y[i] + 1 * x[i] if i == 1 else i * x[i] - y[i]
+        return (
+            (i - 1) * x.at[i - 1] + y.at[i] + 1 * x.at[i]
+            if i == 1
+            else i * x.at[i] - y.at[i]
+        )
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
@@ -276,7 +280,7 @@ def test_linear_expression_from_rule_with_return_none(m, x, y):
     # with return type None
     def bound(m, i):
         if i == 1:
-            return (i - 1) * x[i - 1] + y[i]
+            return (i - 1) * x.at[i - 1] + y.at[i]
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
@@ -462,6 +466,34 @@ def test_linear_expression_multiplication_invalid(x, y, z):
     with pytest.raises(TypeError):
         expr = 10 * x + y + z
         expr / x
+
+
+def test_linear_expression_getitem_single(x, y):
+    expr = 10 * x + y + 3
+    sel = expr[0]
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # one expression with two terms (constant is not counted)
+    assert sel.size == 2
+
+
+def test_linear_expression_getitem_slice(x, y):
+    expr = 10 * x + y + 3
+    sel = expr[:1]
+
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # one expression with two terms (constant is not counted)
+    assert sel.size == 2
+
+
+def test_linear_expression_getitem_list(x, y, z):
+    expr = 10 * x + z + 10
+    sel = expr[:, [0, 2]]
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # four expressions with two terms (constant is not counted)
+    assert sel.size == 8
 
 
 def test_linear_expression_loc(x, y):

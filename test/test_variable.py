@@ -13,6 +13,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 import linopy
+import linopy.variables
 from linopy import Model
 
 
@@ -62,18 +63,35 @@ def test_wrong_variable_init(m, x):
 
 
 def test_variable_getter(x, z):
-    assert isinstance(x[0], linopy.variables.ScalarVariable)
 
-    assert isinstance(z[0], linopy.variables.ScalarVariable)
+    with pytest.warns(FutureWarning):
+        assert isinstance(x[0], linopy.variables.ScalarVariable)
+        assert isinstance(z[0], linopy.variables.ScalarVariable)
 
+    assert isinstance(x.at[0], linopy.variables.ScalarVariable)
+
+
+def test_variable_getter_slice(x):
+    res = x[:5]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 5
+
+
+def test_variable_getter_slice_with_step(x):
+    res = x[::2]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 5
+
+
+def test_variables_getter_list(x):
+    res = x[[1, 2, 3]]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 3
+
+
+def test_variable_getter_invalid_shape(x):
     with pytest.raises(AssertionError):
-        x[0, 0]
-
-    with pytest.raises(AssertionError):
-        x[:5]
-
-    with pytest.raises(AssertionError):
-        x[[1, 2, 3]]
+        x.at[0, 0]
 
 
 def test_variable_loc(x):
@@ -158,13 +176,13 @@ def test_variable_where(x):
     assert isinstance(x, linopy.variables.Variable)
     assert x.labels[9] == x._fill_value["labels"]
 
-    x = x.where([True] * 4 + [False] * 6, x[0])
+    x = x.where([True] * 4 + [False] * 6, x.at[0])
     assert isinstance(x, linopy.variables.Variable)
-    assert x.labels[9] == x[0].label
+    assert x.labels[9] == x.at[0].label
 
     x = x.where([True] * 4 + [False] * 6, x.loc[0])
     assert isinstance(x, linopy.variables.Variable)
-    assert x.labels[9] == x[0].label
+    assert x.labels[9] == x.at[0].label
 
 
 def test_variable_where_deprecation_warning(x):
@@ -190,7 +208,7 @@ def test_variable_fillna(x):
     with pytest.warns(FutureWarning):
         x.fillna(0)
 
-    isinstance(x.fillna(x[0]), linopy.variables.Variable)
+    isinstance(x.fillna(x.at[0]), linopy.variables.Variable)
 
 
 def test_variable_bfill(x):

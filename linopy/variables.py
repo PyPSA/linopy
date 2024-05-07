@@ -168,21 +168,43 @@ class Variable:
         self._data = data
         self._model = model
 
-    def __getitem__(self, keys) -> "ScalarVariable":
-        keys = keys if isinstance(keys, tuple) else (keys,)
-        assert all(map(pd.api.types.is_scalar, keys)), (
-            "The get function of Variable is different as of xarray.DataArray. "
-            "Set single values for each dimension in order to obtain a "
-            "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
-        )
-        if not self.labels.ndim:
-            return ScalarVariable(self.labels.item(), self.model)
-        assert self.labels.ndim == len(
-            keys
-        ), f"expected {self.labels.ndim} keys, got {len(keys)}."
-        key = dict(zip(self.labels.dims, keys))
-        selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.labels.data[tuple(selector)], self.model)
+    def __getitem__(self, selector) -> Union["Variable", "ScalarVariable"]:
+
+        keys = selector if isinstance(selector, tuple) else (selector,)
+        if all(map(pd.api.types.is_scalar, keys)):
+            warn(
+                "Accessing a single value with `Variable[...]` and return type "
+                "ScalarVariable is deprecated. In future, this will return a Variable."
+                "To get a ScalarVariable use `Variable.at[...]` instead.",
+                FutureWarning,
+            )
+            return self.at[keys]
+
+        else:
+            # return selected Variable
+            data = Dataset(
+                {k: self.data[k][selector] for k in self.data}, attrs=self.attrs
+            )
+            return self.__class__(data, self.model, self.name)
+
+    @property
+    def at(self):
+        """
+        Access a single value of the variable.
+
+        This method is a wrapper around the `__getitem__` method and allows
+        to access a single value of the variable.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
+        >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+        >>> x.at[0]
+        ScalarVariable: x[0]
+        """
+        return AtIndexer(self)
 
     @property
     def loc(self):
@@ -933,6 +955,30 @@ class Variable:
     roll = varwrap(Dataset.roll)
 
     stack = varwrap(Dataset.stack)
+
+
+class AtIndexer:
+    __slots__ = ("object",)
+
+    def __init__(self, obj):
+        self.object = obj
+
+    def __getitem__(self, keys) -> "ScalarVariable":
+
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        object = self.object
+
+        if not all(map(pd.api.types.is_scalar, keys)):
+            raise ValueError("Only scalar keys are allowed.")
+        # return single scalar
+        if not object.labels.ndim:
+            return ScalarVariable(object.labels.item(), object.model)
+        assert object.labels.ndim == len(
+            keys
+        ), f"expected {object.labels.ndim} keys, got {len(keys)}."
+        key = dict(zip(object.labels.dims, keys))
+        keys = [object.labels.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(object.labels.data[tuple(keys)], object.model)
 
 
 @dataclass(repr=False)
