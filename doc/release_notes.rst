@@ -5,6 +5,13 @@ Upcoming Version
 ----------------
 
 
+Version 0.3.10
+--------------
+
+* The classes `Variable`, `LinearExpression` and `Constraint` now have a new `getitem` method that allows selecting a subset of the object in the same way as `xarray` objects, i.e. by labels or boolean index. Example usage: `x[['a', 'b']]` or `x[x.indexes["some_index"] > 5]`.
+
+
+
 Version 0.3.9
 -------------
 
