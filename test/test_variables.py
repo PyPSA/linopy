@@ -7,6 +7,7 @@ This module aims at testing the correct behavior of the Variables class.
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 import linopy
 from linopy import Model
@@ -24,6 +25,13 @@ def m():
 
 def test_variables_repr(m):
     m.variables.__repr__()
+
+
+def test_variable_inherited_properties(m):
+    assert isinstance(m.variables.attrs, dict)
+    assert isinstance(m.variables.coords, xr.Coordinates)
+    assert isinstance(m.variables.indexes, xr.core.indexes.Indexes)
+    assert isinstance(m.variables.sizes, xr.core.utils.Frozen)
 
 
 def test_variables_getattr_formatted():

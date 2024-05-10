@@ -40,6 +40,17 @@ def test_variable_repr(x):
     x.__repr__()
 
 
+def test_variable_inherited_properties(x):
+    assert isinstance(x.attrs, dict)
+    assert isinstance(x.coords, xr.Coordinates)
+    assert isinstance(x.indexes, xr.core.indexes.Indexes)
+    assert isinstance(x.sizes, xr.core.utils.Frozen)
+    assert isinstance(x.shape, tuple)
+    assert isinstance(x.size, int)
+    assert isinstance(x.dims, tuple)
+    assert isinstance(x.ndim, int)
+
+
 def test_variable_labels(x):
     isinstance(x.labels, xr.DataArray)
 
