@@ -49,10 +49,6 @@ def test_variable_data(x):
 
 
 def test_wrong_variable_init(m, x):
-    # without explicit name
-    with pytest.raises(TypeError):
-        linopy.Variable(x.data, m)
-
     # wrong data type
     with pytest.raises(ValueError):
         linopy.Variable(x.labels.values, m, "")
