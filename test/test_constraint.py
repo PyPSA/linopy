@@ -153,9 +153,9 @@ def test_anonymous_constraint_with_expression_on_both_sides(x, y):
 
 
 def test_anonymous_scalar_constraint_with_scalar_variable_on_rhs(x, y):
-    expr = 10 * x[0] + y[1]
+    expr = 10 * x.at[0] + y.at[1]
     with pytest.raises(TypeError):
-        con = expr == x[0]
+        con = expr == x.at[0]
         # assert isinstance(con.lhs, LinearExpression)
         # assert (con.sign == EQUAL).all()
         # assert (con.rhs == 0).all()
@@ -167,9 +167,21 @@ def test_anonymous_constraint_sel(x, y):
     assert isinstance(con.sel(first=[1, 2]), Constraint)
 
 
+def test_anonymous_constraint_loc(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    assert isinstance(con.loc[[1, 2]], Constraint)
+
+
+def test_anonymous_constraint_getitem(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    assert isinstance(con[1], Constraint)
+
+
 def test_constraint_from_rule(m, x, y):
     def bound(m, i, j):
-        return (i - 1) * x[i - 1] + y[j] >= 0 if i % 2 else i * x[i] >= 0
+        return (i - 1) * x.at[i - 1] + y.at[j] >= 0 if i % 2 else i * x.at[i] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
@@ -181,7 +193,7 @@ def test_constraint_from_rule(m, x, y):
 def test_constraint_from_rule_with_none_return(m, x, y):
     def bound(m, i, j):
         if i % 2:
-            return i * x[i] + y[j] >= 0
+            return i * x.at[i] + y.at[j] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
