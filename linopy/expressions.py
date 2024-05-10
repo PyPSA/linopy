@@ -344,15 +344,6 @@ class LinearExpression:
         self._model = model
         self._data = data
 
-    def __getitem__(self, selector) -> Union["LinearExpression", "QuadraticExpression"]:
-        """
-        Get selection from the expression.
-        This is a wrapper around the xarray __getitem__ method. It returns a
-        new LinearExpression object with the selected data.
-        """
-        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
-        return self.__class__(data, self.model)
-
     def __repr__(self):
         """
         Print the expression arrays.
@@ -588,6 +579,15 @@ class LinearExpression:
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
+
+    def __getitem__(self, selector) -> Union["LinearExpression", "QuadraticExpression"]:
+        """
+        Get selection from the expression.
+        This is a wrapper around the xarray __getitem__ method. It returns a
+        new LinearExpression object with the selected data.
+        """
+        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
+        return self.__class__(data, self.model)
 
     @property
     def loc(self):
