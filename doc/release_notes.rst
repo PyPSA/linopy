@@ -14,6 +14,7 @@ Version 0.3.10
 
 * Selecting a single variable with the `getitem` (`[]`) method now raises a `FutureWarning` that the return type will change to `Variable` instead of a `ScalarVariable` in the future. To get a `ScalarVariable` in the future, use the `at[]` method.
 
+* A new module `examples` was added which contains example models. For example, you can call `m = linopy.examples.benchmark_model()`.
 
 Version 0.3.9
 -------------
