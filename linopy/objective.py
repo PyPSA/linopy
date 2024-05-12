@@ -12,7 +12,6 @@ from typing import Union
 import numpy as np
 
 from linopy import expressions
-from linopy.common import forward_as_properties
 
 
 def objwrap(method, *default_args, **new_default_kwargs):
@@ -33,19 +32,6 @@ def objwrap(method, *default_args, **new_default_kwargs):
     return _objwrap
 
 
-@forward_as_properties(
-    expression=[
-        "attrs",
-        "coords",
-        "indexes",
-        "sizes",
-        "flat",
-        "coeffs",
-        "vars",
-        "data",
-        "nterm",
-    ]
-)
 class Objective:
     """
     An objective expression containing all relevant information.
@@ -82,6 +68,69 @@ class Objective:
         value_string = f"Value: {self.value}"
 
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
+
+    @property
+    def attrs(self):
+        """
+        Returns the attributes of the objective.
+        """
+        return self.expression.attrs
+
+    @property
+    def coords(self):
+        """
+        Returns the coordinates of the objective.
+        """
+        return self.expression.coords
+
+    @property
+    def indexes(self):
+        """
+        Returns the indexes of the objective.
+        """
+        return self.expression.indexes
+
+    @property
+    def sizes(self):
+        """
+        Returns the sizes of the objective.
+        """
+        return self.expression.sizes
+
+    @property
+    def flat(self):
+        """
+        Returns the flattened objective.
+        """
+        return self.expression.flat
+
+    @property
+    def coeffs(self):
+        """
+        Returns the coefficients of the objective.
+        """
+        return self.expression.coeffs
+
+    @property
+    def vars(self):
+        """
+        Returns the variables of the objective.
+        """
+        return self.expression.vars
+
+    @property
+    def data(self):
+        """
+        Returns the data of the objective.
+        """
+        return self.expression.data
+
+    @property
+    def nterm(self):
+        """
+        Returns the number of terms in the objective.
+        """
+        return self.expression.nterm
 
     @property
     def expression(self):

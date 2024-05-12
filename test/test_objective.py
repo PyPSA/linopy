@@ -1,4 +1,6 @@
+import pandas as pd
 import pytest
+import xarray as xr
 from scipy.sparse import csc_matrix
 
 from linopy import Model
@@ -57,6 +59,18 @@ def test_set_sense_via_model(linear_objective, quadratic_objective):
 def test_sense_setter_error(linear_objective):
     with pytest.raises(ValueError):
         linear_objective.sense = "not min or max"
+
+
+def test_variables_inherited_properties(linear_objective):
+    assert isinstance(linear_objective.attrs, dict)
+    assert isinstance(linear_objective.coords, xr.Coordinates)
+    assert isinstance(linear_objective.indexes, xr.core.indexes.Indexes)
+    assert isinstance(linear_objective.sizes, xr.core.utils.Frozen)
+
+    assert isinstance(linear_objective.flat, pd.DataFrame)
+    assert isinstance(linear_objective.vars, xr.DataArray)
+    assert isinstance(linear_objective.coeffs, xr.DataArray)
+    assert isinstance(linear_objective.nterm, int)
 
 
 def test_expression(linear_objective, quadratic_objective):

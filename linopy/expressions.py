@@ -242,7 +242,6 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"], const=["ndim"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -588,6 +587,41 @@ class LinearExpression:
         """
         data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
         return self.__class__(data, self.model)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of the expression
+        """
+        return self.data.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of the expression
+        """
+        return self.data.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of the expression
+        """
+        return self.data.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of the expression
+        """
+        return self.data.sizes
+
+    @property
+    def ndim(self):
+        """
+        Get the number of dimensions.
+        """
+        return self.const.ndim
 
     @property
     def loc(self):
@@ -1281,7 +1315,6 @@ class LinearExpression:
     stack = exprwrap(Dataset.stack)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
 class QuadraticExpression(LinearExpression):
     """
     A quadratic expression consisting of terms of coefficients and variables.

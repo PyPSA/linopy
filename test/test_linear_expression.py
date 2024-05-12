@@ -468,6 +468,14 @@ def test_linear_expression_multiplication_invalid(x, y, z):
         expr / x
 
 
+def test_expression_inherited_properties(x, y):
+    expr = 10 * x + y
+    assert isinstance(expr.attrs, dict)
+    assert isinstance(expr.coords, xr.Coordinates)
+    assert isinstance(expr.indexes, xr.core.indexes.Indexes)
+    assert isinstance(expr.sizes, xr.core.utils.Frozen)
+
+
 def test_linear_expression_getitem_single(x, y):
     expr = 10 * x + y + 3
     sel = expr[0]

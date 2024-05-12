@@ -22,7 +22,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     format_string_as_variable_name,
-    forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
     has_optimized_model,
@@ -61,20 +60,6 @@ def _var_unwrap(var):
     return var.data if isinstance(var, Variable) else var
 
 
-@forward_as_properties(
-    data=[
-        "attrs",
-        "coords",
-        "indexes",
-        "sizes",
-    ],
-    labels=[
-        "shape",
-        "size",
-        "dims",
-        "ndim",
-    ],
-)
 class Variable:
     """
     Variable container for storing variable labels.
@@ -186,6 +171,62 @@ class Variable:
                 {k: self.data[k][selector] for k in self.data}, attrs=self.attrs
             )
             return self.__class__(data, self.model, self.name)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of the variable.
+        """
+        return self.data.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of the variable.
+        """
+        return self.data.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of the variable.
+        """
+        return self.data.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of the variable.
+        """
+        return self.data.sizes
+
+    @property
+    def shape(self):
+        """
+        Get the shape of the variable.
+        """
+        return self.labels.shape
+
+    @property
+    def size(self):
+        """
+        Get the size of the variable.
+        """
+        return self.labels.size
+
+    @property
+    def dims(self):
+        """
+        Get the dimensions of the variable.
+        """
+        return self.labels.dims
+
+    @property
+    def ndim(self):
+        """
+        Get the number of dimensions of the variable.
+        """
+        return self.labels.ndim
 
     @property
     def at(self):
@@ -982,14 +1023,6 @@ class AtIndexer:
 
 
 @dataclass(repr=False)
-@forward_as_properties(
-    labels=[
-        "attrs",
-        "coords",
-        "indexes",
-        "dims",
-    ]
-)
 class Variables:
     """
     A variables container used for storing multiple variable arrays.
@@ -1080,6 +1113,34 @@ class Variables:
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of all variables.
+        """
+        return self.labels.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of all variables.
+        """
+        return self.labels.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of all variables.
+        """
+        return self.labels.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of all variables.
+        """
+        return self.labels.sizes
 
     @property
     def labels(self):
