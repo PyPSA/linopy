@@ -5,16 +5,29 @@ Linopy objective module.
 
 This module contains definition related to objective expressions.
 """
+from __future__ import annotations
 
 import functools
-from typing import Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 import numpy as np
+from numpy import float64
+from pandas.core.frame import DataFrame
+from scipy.sparse._csc import csc_matrix
+from xarray.core.coordinates import DatasetCoordinates
+from xarray.core.dataarray import DataArray
+from xarray.core.dataset import Dataset
+from xarray.core.indexes import Indexes
+from xarray.core.utils import Frozen
 
 from linopy import expressions
 
+if TYPE_CHECKING:
+    from linopy.expressions import LinearExpression, QuadraticExpression
+    from linopy.model import Model
 
-def objwrap(method, *default_args, **new_default_kwargs):
+
+def objwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     @functools.wraps(method)
     def _objwrap(obj, *args, **kwargs):
         for k, v in new_default_kwargs.items():
@@ -48,9 +61,9 @@ class Objective:
         expression: Union[
             expressions.LinearExpression, expressions.QuadraticExpression
         ],
-        model,
-        sense="min",
-    ):
+        model: Model,
+        sense: str = "min",
+    ) -> None:
 
         self._model = model
         self._value = None
@@ -70,35 +83,35 @@ class Objective:
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
 
     @property
-    def attrs(self):
+    def attrs(self) -> Dict[Any, Any]:
         """
         Returns the attributes of the objective.
         """
         return self.expression.attrs
 
     @property
-    def coords(self):
+    def coords(self) -> DatasetCoordinates:
         """
         Returns the coordinates of the objective.
         """
         return self.expression.coords
 
     @property
-    def indexes(self):
+    def indexes(self) -> Indexes:
         """
         Returns the indexes of the objective.
         """
         return self.expression.indexes
 
     @property
-    def sizes(self):
+    def sizes(self) -> Frozen:
         """
         Returns the sizes of the objective.
         """
         return self.expression.sizes
 
     @property
-    def flat(self):
+    def flat(self) -> DataFrame:
         """
         Returns the flattened objective.
         """
@@ -111,28 +124,28 @@ class Objective:
         return self.expression.to_polars(**kwargs)
 
     @property
-    def coeffs(self):
+    def coeffs(self) -> DataArray:
         """
         Returns the coefficients of the objective.
         """
         return self.expression.coeffs
 
     @property
-    def vars(self):
+    def vars(self) -> DataArray:
         """
         Returns the variables of the objective.
         """
         return self.expression.vars
 
     @property
-    def data(self):
+    def data(self) -> Dataset:
         """
         Returns the data of the objective.
         """
         return self.expression.data
 
     @property
-    def nterm(self):
+    def nterm(self) -> int:
         """
         Returns the number of terms in the objective.
         """
@@ -170,7 +183,7 @@ class Objective:
         self._expression = expr
 
     @property
-    def model(self):
+    def model(self) -> Model:
         """
         Returns the model of the objective.
         """
@@ -193,27 +206,27 @@ class Objective:
         self._sense = sense
 
     @property
-    def value(self):
+    def value(self) -> Optional[Union[float64, float]]:
         """
         Returns the value of the objective.
         """
         return self._value
 
-    def set_value(self, value: float):
+    def set_value(self, value: float) -> None:
         """
         Sets the value of the objective.
         """
         self._value = float(value)
 
     @property
-    def is_linear(self):
+    def is_linear(self) -> bool:
         return type(self.expression) is expressions.LinearExpression
 
     @property
-    def is_quadratic(self):
+    def is_quadratic(self) -> bool:
         return type(self.expression) is expressions.QuadraticExpression
 
-    def to_matrix(self, *args, **kwargs):
+    def to_matrix(self, *args, **kwargs) -> csc_matrix:
         "Wrapper for expression.to_matrix"
         if self.is_linear:
             raise ValueError("Cannot convert linear objective to matrix.")
@@ -223,26 +236,26 @@ class Objective:
 
     sel = objwrap(expressions.LinearExpression.sel)
 
-    def __add__(self, expr):
+    def __add__(self, expr: Union[int, QuadraticExpression, Objective]) -> "Objective":
         if not isinstance(expr, Objective):
             expr = Objective(expr, self.model, self.sense)
         return Objective(self.expression + expr.expression, self.model, self.sense)
 
-    def __sub__(self, expr):
+    def __sub__(self, expr: Union[LinearExpression, Objective]) -> "Objective":
         if not isinstance(expr, Objective):
             expr = Objective(expr, self.model)
         return Objective(self.expression - expr.expression, self.model, self.sense)
 
-    def __mul__(self, expr):
+    def __mul__(self, expr: int) -> "Objective":
         # only allow scalar multiplication
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for multiplication.")
         return Objective(self.expression * expr, self.model, self.sense)
 
-    def __neg__(self):
+    def __neg__(self) -> "Objective":
         return Objective(-self.expression, self.model, self.sense)
 
-    def __truediv__(self, expr):
+    def __truediv__(self, expr: Union[int, Objective]) -> "Objective":
         # only allow scalar division
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for division.")

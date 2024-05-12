@@ -4,19 +4,37 @@ Linopy variables module.
 
 This module contains variable related definitions of the package.
 """
+from __future__ import annotations
 
 import functools
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Sequence, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import floating, issubdtype
+from numpy import floating, int64, issubdtype, ndarray, str_
+from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
+from xarray.core.coordinates import DatasetCoordinates
+from xarray.core.dataarray import DataArray
+from xarray.core.dataset import Dataset
+from xarray.core.indexes import Indexes
 from xarray.core.types import Dims
+from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
@@ -40,10 +58,20 @@ from linopy.config import options
 from linopy.constants import TERM_DIM
 from linopy.solvers import set_int_index
 
+if TYPE_CHECKING:
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.expressions import (
+        LinearExpression,
+        LinearExpressionGroupby,
+        QuadraticExpression,
+        ScalarLinearExpression,
+    )
+    from linopy.model import Model
+
 logger = logging.getLogger(__name__)
 
 
-def varwrap(method, *default_args, **new_default_kwargs):
+def varwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     @functools.wraps(method)
     def _varwrap(var, *args, **kwargs):
         for k, v in new_default_kwargs.items():
@@ -61,7 +89,7 @@ def varwrap(method, *default_args, **new_default_kwargs):
     return _varwrap
 
 
-def _var_unwrap(var):
+def _var_unwrap(var: "Variable") -> xarray.core.dataset.Dataset:
     return var.data if isinstance(var, Variable) else var
 
 
@@ -119,7 +147,7 @@ class Variable:
 
     _fill_value = {"labels": -1, "lower": np.nan, "upper": np.nan}
 
-    def __init__(self, data: Dataset, model: Any, name: str):
+    def __init__(self, data: Dataset, model: Any, name: str) -> None:
         """
         Initialize the Variable.
 
@@ -158,7 +186,9 @@ class Variable:
         self._data = data
         self._model = model
 
-    def __getitem__(self, selector) -> Union["Variable", "ScalarVariable"]:
+    def __getitem__(
+        self, selector: Union[List[int], int, slice, Tuple[int64, str_]]
+    ) -> Union["Variable", "ScalarVariable"]:
 
         keys = selector if isinstance(selector, tuple) else (selector,)
         if all(map(pd.api.types.is_scalar, keys)):
@@ -178,63 +208,63 @@ class Variable:
             return self.__class__(data, self.model, self.name)
 
     @property
-    def attrs(self):
+    def attrs(self) -> Dict[str, Union[ndarray, str, int64, Tuple[int, int], bool]]:
         """
         Get the attributes of the variable.
         """
         return self.data.attrs
 
     @property
-    def coords(self):
+    def coords(self) -> DatasetCoordinates:
         """
         Get the coordinates of the variable.
         """
         return self.data.coords
 
     @property
-    def indexes(self):
+    def indexes(self) -> Indexes:
         """
         Get the indexes of the variable.
         """
         return self.data.indexes
 
     @property
-    def sizes(self):
+    def sizes(self) -> Frozen:
         """
         Get the sizes of the variable.
         """
         return self.data.sizes
 
     @property
-    def shape(self):
+    def shape(self) -> Union[Tuple[int], Tuple[int, int]]:
         """
         Get the shape of the variable.
         """
         return self.labels.shape
 
     @property
-    def size(self):
+    def size(self) -> int:
         """
         Get the size of the variable.
         """
         return self.labels.size
 
     @property
-    def dims(self):
+    def dims(self) -> Union[Tuple[str, str], Tuple[str], Tuple[()]]:
         """
         Get the dimensions of the variable.
         """
         return self.labels.dims
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         """
         Get the number of dimensions of the variable.
         """
         return self.labels.ndim
 
     @property
-    def at(self):
+    def at(self) -> "AtIndexer":
         """
         Access a single value of the variable.
 
@@ -253,7 +283,7 @@ class Variable:
         return AtIndexer(self)
 
     @property
-    def loc(self):
+    def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
     def to_pandas(self):
@@ -284,7 +314,7 @@ class Variable:
         )
         return expressions.LinearExpression(ds, self.model)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Print the variable arrays.
         """
@@ -324,7 +354,7 @@ class Variable:
 
         return "\n".join(lines)
 
-    def print(self, display_max_rows=20):
+    def print(self, display_max_rows: int = 20) -> None:
         """
         Print the linear expression.
 
@@ -339,13 +369,15 @@ class Variable:
             opts.set_value(display_max_rows=display_max_rows)
             print(self)
 
-    def __neg__(self):
+    def __neg__(self) -> LinearExpression:
         """
         Calculate the negative of the variables (converts coefficients only).
         """
         return self.to_linexpr(-1)
 
-    def __mul__(self, other):
+    def __mul__(
+        self, other: Union[float, int, ndarray, Variable]
+    ) -> Union[QuadraticExpression, LinearExpression]:
         """
         Multiply variables with a coefficient.
         """
@@ -354,7 +386,7 @@ class Variable:
         else:
             return self.to_linexpr(other)
 
-    def __pow__(self, other):
+    def __pow__(self, other: int) -> QuadraticExpression:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
@@ -362,19 +394,25 @@ class Variable:
             raise ValueError("Power must be 2.")
         return self * self
 
-    def __rmul__(self, other):
+    def __rmul__(
+        self, other: Union[float, xarray.core.dataarray.DataArray, int, ndarray]
+    ) -> LinearExpression:
         """
         Right-multiply variables with a coefficient.
         """
         return self.to_linexpr(other)
 
-    def __matmul__(self, other):
+    def __matmul__(
+        self, other: Union[LinearExpression, ndarray, Variable]
+    ) -> Union[QuadraticExpression, LinearExpression]:
         """
         Matrix multiplication of variables with a coefficient.
         """
         return self.to_linexpr() @ other
 
-    def __div__(self, other):
+    def __div__(
+        self, other: Union[float, int, LinearExpression, Variable]
+    ) -> LinearExpression:
         """
         Divide variables with a coefficient.
         """
@@ -386,35 +424,41 @@ class Variable:
             )
         return self.to_linexpr(1 / other)
 
-    def __truediv__(self, coefficient):
+    def __truediv__(
+        self, coefficient: Union[float, int, LinearExpression, Variable]
+    ) -> LinearExpression:
         """
         True divide variables with a coefficient.
         """
         return self.__div__(coefficient)
 
-    def __add__(self, other):
+    def __add__(
+        self, other: Union[int, QuadraticExpression, LinearExpression, Variable]
+    ) -> Union[QuadraticExpression, LinearExpression]:
         """
         Add variables to linear expressions or other variables.
         """
         return self.to_linexpr() + other
 
-    def __radd__(self, other):
+    def __radd__(self, other: int) -> "Variable":
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
-    def __sub__(self, other):
+    def __sub__(
+        self, other: Union[QuadraticExpression, LinearExpression, Variable]
+    ) -> Union[QuadraticExpression, LinearExpression]:
         """
         Subtract linear expressions or other variables from the variables.
         """
         return self.to_linexpr() - other
 
-    def __le__(self, other):
+    def __le__(self, other: int) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other):
+    def __ge__(self, other: int) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Union[float, int]) -> Constraint:
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other):
@@ -427,40 +471,42 @@ class Variable:
             "Inequalities only ever defined for >= rather than >."
         )
 
-    def __contains__(self, value):
+    def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other):
+    def add(self, other: "Variable") -> LinearExpression:
         """
         Add variables to linear expressions or other variables.
         """
         return self.__add__(other)
 
-    def sub(self, other):
+    def sub(self, other: "Variable") -> LinearExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """
         return self.__sub__(other)
 
-    def mul(self, other):
+    def mul(self, other: int) -> LinearExpression:
         """
         Multiply variables with a coefficient.
         """
         return self.__mul__(other)
 
-    def div(self, other):
+    def div(self, other: int) -> LinearExpression:
         """
         Divide variables with a coefficient.
         """
         return self.__div__(other)
 
-    def pow(self, other):
+    def pow(self, other: int) -> QuadraticExpression:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
         return self.__pow__(other)
 
-    def dot(self, other):
+    def dot(
+        self, other: Union[ndarray, Variable]
+    ) -> Union[QuadraticExpression, LinearExpression]:
         """
         Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
         multiplaction of the two objects with a subsequent summation over common dimensions.
@@ -469,10 +515,10 @@ class Variable:
 
     def groupby(
         self,
-        group,
+        group: xarray.core.dataarray.DataArray,
         squeeze: "bool" = True,
         restore_coord_dims: "bool" = None,
-    ):
+    ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
         operations.
@@ -578,21 +624,21 @@ class Variable:
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         """
         Return the name of the variable.
         """
         return self.attrs["name"]
 
     @property
-    def labels(self):
+    def labels(self) -> xarray.core.dataarray.DataArray:
         """
         Return the labels of the variable.
         """
         return self.data.labels
 
     @property
-    def data(self):
+    def data(self) -> xarray.core.dataset.Dataset:
         """
         Get the data of the variable.
         """
@@ -600,7 +646,7 @@ class Variable:
         return self._data
 
     @property
-    def model(self):
+    def model(self) -> Model:
         """
         Return the model of the variable.
         """
@@ -624,7 +670,7 @@ class Variable:
             return "Continuous Variable"
 
     @property
-    def range(self):
+    def range(self) -> Tuple[int, int]:
         """
         Return the range of the variable.
         """
@@ -639,7 +685,7 @@ class Variable:
         return cls._fill_value
 
     @property
-    def mask(self):
+    def mask(self) -> xarray.core.dataarray.DataArray:
         """
         Get the mask of the variable.
 
@@ -735,7 +781,7 @@ class Variable:
         return self.solution
 
     @has_optimized_model
-    def get_solver_attribute(self, attr):
+    def get_solver_attribute(self, attr: str) -> xarray.core.dataarray.DataArray:
         """
         Get an attribute from the solver model.
 
@@ -768,7 +814,7 @@ class Variable:
         return DataArray(vals, self.coords)
 
     @property
-    def flat(self):
+    def flat(self) -> DataFrame:
         """
         Convert the variable to a pandas DataFrame.
 
@@ -804,7 +850,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim=None, **kwargs):
+    def sum(self, dim: Optional[str] = None, **kwargs) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -855,13 +901,18 @@ class Variable:
         """
         return self.to_linexpr().diff(dim, n)
 
-    def isnull(self):
+    def isnull(self) -> xarray.core.dataarray.DataArray:
         """
         Get a boolean mask with true values where there is missing values.
         """
         return self.labels == -1
 
-    def where(self, cond, other=None, **kwargs):
+    def where(
+        self,
+        cond: Union[xarray.core.dataarray.DataArray, List[bool]],
+        other: Optional[Union[ScalarVariable, Dict[str, float], int, Variable]] = None,
+        **kwargs,
+    ) -> "Variable":
         """
         Filter variables based on a condition.
 
@@ -899,7 +950,7 @@ class Variable:
             self.data.where(cond, other, **kwargs), self.model, self.name
         )
 
-    def fillna(self, fill_value):
+    def fillna(self, fill_value: Union[ScalarVariable, int]) -> "Variable":
         """
         Fill missing values with a variable.
 
@@ -913,7 +964,7 @@ class Variable:
         """
         return self.where(~self.isnull(), fill_value)
 
-    def ffill(self, dim, limit=None):
+    def ffill(self, dim: str, limit: None = None) -> "Variable":
         """
         Forward fill the variable along a dimension.
 
@@ -940,7 +991,7 @@ class Variable:
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
 
-    def bfill(self, dim, limit=None):
+    def bfill(self, dim: str, limit: None = None) -> "Variable":
         """
         Backward fill the variable along a dimension.
 
@@ -967,7 +1018,7 @@ class Variable:
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
 
-    def sanitize(self):
+    def sanitize(self) -> "Variable":
         """
         Sanitize variable by ensuring int dtype with fill value of -1.
 
@@ -1020,10 +1071,10 @@ class Variable:
 class AtIndexer:
     __slots__ = ("object",)
 
-    def __init__(self, obj):
+    def __init__(self, obj: Variable) -> None:
         self.object = obj
 
-    def __getitem__(self, keys) -> "ScalarVariable":
+    def __getitem__(self, keys: Any) -> "ScalarVariable":
 
         keys = keys if isinstance(keys, tuple) else (keys,)
         object = self.object
@@ -1053,7 +1104,7 @@ class Variables:
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
-    def _formatted_names(self):
+    def _formatted_names(self) -> Dict[str, str]:
         """
         Get a dictionary of formatted names to the proper variable names.
         This map enables a attribute like accession of variable names which
@@ -1069,7 +1120,7 @@ class Variables:
 
         return self.__class__({name: self.data[name] for name in names}, self.model)
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Variable:
         # If name is an attribute of self (including methods and properties), return that
         if name in self.data:
             return self.data[name]
@@ -1087,7 +1138,7 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Return a string representation of the linopy model.
         """
@@ -1102,7 +1153,7 @@ class Variables:
             r += "<empty>\n"
         return r
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.data.__len__()
 
     def __iter__(self):
@@ -1121,48 +1172,48 @@ class Variables:
         """
         return list(self)
 
-    def add(self, variable):
+    def add(self, variable: Variable) -> None:
         """
         Add a variable to the variables container.
         """
         self.data[variable.name] = variable
 
-    def remove(self, name):
+    def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
 
     @property
-    def attrs(self):
+    def attrs(self) -> Dict[Any, Any]:
         """
         Get the attributes of all variables.
         """
         return self.labels.attrs
 
     @property
-    def coords(self):
+    def coords(self) -> DatasetCoordinates:
         """
         Get the coordinates of all variables.
         """
         return self.labels.coords
 
     @property
-    def indexes(self):
+    def indexes(self) -> Indexes:
         """
         Get the indexes of all variables.
         """
         return self.labels.indexes
 
     @property
-    def sizes(self):
+    def sizes(self) -> Frozen:
         """
         Get the sizes of all variables.
         """
         return self.labels.sizes
 
     @property
-    def labels(self):
+    def labels(self) -> xarray.core.dataset.Dataset:
         """
         Get the labels of all variables.
         """
@@ -1171,21 +1222,21 @@ class Variables:
         )
 
     @property
-    def lower(self):
+    def lower(self) -> xarray.core.dataset.Dataset:
         """
         Get the lower bounds of all variables.
         """
         return save_join(*[v.lower.rename(k) for k, v in self.items()])
 
     @property
-    def upper(self):
+    def upper(self) -> xarray.core.dataset.Dataset:
         """
         Get the upper bounds of all variables.
         """
         return save_join(*[v.upper.rename(k) for k, v in self.items()])
 
     @property
-    def nvars(self):
+    def nvars(self) -> int:
         """
         Get the number all variables effectively used by the model.
 
@@ -1194,7 +1245,7 @@ class Variables:
         return len(self.flat.labels.unique())
 
     @property
-    def binaries(self):
+    def binaries(self) -> "Variables":
         """
         Get all binary variables.
         """
@@ -1202,7 +1253,7 @@ class Variables:
         return self[keys]
 
     @property
-    def integers(self):
+    def integers(self) -> "Variables":
         """
         Get all integers variables.
         """
@@ -1210,7 +1261,7 @@ class Variables:
         return self[keys]
 
     @property
-    def continuous(self):
+    def continuous(self) -> "Variables":
         """
         Get all continuous variables.
         """
@@ -1222,14 +1273,14 @@ class Variables:
         return self[keys]
 
     @property
-    def solution(self):
+    def solution(self) -> xarray.core.dataset.Dataset:
         """
         Get the solution of variables.
         """
         return save_join(*[v.solution.rename(k) for k, v in self.items()])
 
     @has_optimized_model
-    def get_solver_attribute(self, attr):
+    def get_solver_attribute(self, attr: str) -> xarray.core.dataset.Dataset:
         """
         Get an attribute from the solver model.
 
@@ -1246,7 +1297,7 @@ class Variables:
             *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
         )
 
-    def get_name_by_label(self, label):
+    def get_name_by_label(self, label: Union[str, int]) -> str:
         """
         Get the variable name of the variable containing the passed label.
 
@@ -1279,13 +1330,13 @@ class Variables:
         """
         return self[name].range
 
-    def get_label_position(self, values):
+    def get_label_position(self, values: Union[int64, int, ndarray]) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
         """
         return get_label_position(self, values)
 
-    def print_labels(self, values):
+    def print_labels(self, values: List[int]) -> None:
         """
         Print a selection of labels of the variables.
 
@@ -1315,7 +1366,7 @@ class Variables:
         df["key"] = df.labels.map(map_labels)
         return df
 
-    def reset_solution(self):
+    def reset_solution(self) -> None:
         """
         Reset the stored solution of variables.
         """
@@ -1323,7 +1374,7 @@ class Variables:
             if "solution" in v:
                 v._data = v.data.drop_vars("solution")
 
-    def set_blocks(self, blocks: DataArray):
+    def set_blocks(self, blocks: DataArray) -> None:
         """
         Get a dataset of same shape as variables.labels indicating the blocks.
         """
@@ -1355,7 +1406,7 @@ class ScalarVariable:
 
     __slots__ = ("_label", "_model")
 
-    def __init__(self, label: int, model: Any):
+    def __init__(self, label: int, model: Any) -> None:
         self._label = label
         self._model = model
 
@@ -1367,14 +1418,14 @@ class ScalarVariable:
         return f"ScalarVariable: {name}{coord_string}"
 
     @property
-    def label(self):
+    def label(self) -> Union[int64, int]:
         """
         Get the label of the variable.
         """
         return self._label
 
     @property
-    def lower(self):
+    def lower(self) -> float:
         """
         Get the lower bound of the variable.
         """
@@ -1382,7 +1433,7 @@ class ScalarVariable:
         return self.model.variables[name].lower.sel(position).item()
 
     @property
-    def upper(self):
+    def upper(self) -> float:
         """
         Get the upper bound of the variable.
         """
@@ -1390,49 +1441,51 @@ class ScalarVariable:
         return self.model.variables[name].upper.sel(position).item()
 
     @property
-    def model(self):
+    def model(self) -> Model:
         """
         Get the model to which the variable belongs.
         """
         return self._model
 
-    def to_scalar_linexpr(self, coeff=1):
+    def to_scalar_linexpr(
+        self, coeff: Union[ScalarVariable, int] = 1
+    ) -> ScalarLinearExpression:
         if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
-    def to_linexpr(self, coeff=1):
+    def to_linexpr(self, coeff: int = 1) -> LinearExpression:
         return self.to_scalar_linexpr(coeff).to_linexpr()
 
     def __neg__(self):
         return self.to_scalar_linexpr(-1)
 
-    def __add__(self, other):
+    def __add__(self, other: "ScalarVariable") -> ScalarLinearExpression:
         return self.to_scalar_linexpr(1) + other
 
-    def __radd__(self, other):
+    def __radd__(self, other: int) -> "ScalarVariable":
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other
 
-    def __mul__(self, coeff):
+    def __mul__(self, coeff: "ScalarVariable"):
         return self.to_scalar_linexpr(coeff)
 
-    def __rmul__(self, coeff):
+    def __rmul__(self, coeff: int) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(coeff)
 
-    def __div__(self, coeff):
+    def __div__(self, coeff: "ScalarVariable"):
         return self.to_scalar_linexpr(1 / coeff)
 
-    def __truediv__(self, coeff):
+    def __truediv__(self, coeff: "ScalarVariable"):
         return self.__div__(coeff)
 
     def __le__(self, other):
         return self.to_scalar_linexpr(1).__le__(other)
 
-    def __ge__(self, other):
+    def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
     def __eq__(self, other):

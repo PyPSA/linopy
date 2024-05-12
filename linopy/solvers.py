@@ -3,7 +3,7 @@
 """
 Linopy module for solving lp files with different solvers.
 """
-
+from __future__ import annotations
 
 import contextlib
 import io
@@ -12,10 +12,12 @@ import os
 import re
 import subprocess as sub
 import sys
-from pathlib import Path
+from pathlib import Path, PosixPath
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
+from pandas.core.series import Series
 
 from linopy.constants import (
     Result,
@@ -24,6 +26,9 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+
+if TYPE_CHECKING:
+    from linopy.model import Model
 
 QUADRATIC_SOLVERS = [
     "gurobi",
@@ -120,7 +125,7 @@ io_structure = dict(
 )
 
 
-def safe_get_solution(status, func):
+def safe_get_solution(status: Status, func: Callable) -> Solution:
     """
     Get solution from function call, if status is unknown still try to run it.
     """
@@ -133,7 +138,9 @@ def safe_get_solution(status, func):
     return Solution()
 
 
-def maybe_adjust_objective_sign(solution, sense, io_api):
+def maybe_adjust_objective_sign(
+    solution: Solution, sense: str, io_api: Optional[str]
+) -> None:
     if sense == "min":
         return
 
@@ -147,7 +154,7 @@ def maybe_adjust_objective_sign(solution, sense, io_api):
         solution.objective *= -1
 
 
-def set_int_index(series):
+def set_int_index(series: Series) -> Series:
     """
     Convert string index to int index.
     """
@@ -155,7 +162,7 @@ def set_int_index(series):
     return series
 
 
-def maybe_convert_path(path):
+def maybe_convert_path(path: Optional[Union[str, PosixPath]]) -> Optional[str]:
     """
     Convert a pathlib.Path to a string.
     """
@@ -163,17 +170,17 @@ def maybe_convert_path(path):
 
 
 def run_cbc(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the cbc solver.
 
@@ -266,17 +273,17 @@ def run_cbc(
 
 
 def run_glpk(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the glpk solver.
 
@@ -386,17 +393,17 @@ def run_glpk(
 
 
 def run_highs(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Highs solver function. Reads a linear problem file and passes it to the
     highs solver. If the solution is feasible the function returns the
@@ -592,17 +599,17 @@ def run_cplex(
 
 
 def run_gurobi(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the gurobi solver.
 
@@ -694,17 +701,17 @@ def run_gurobi(
 
 
 def run_scip(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the scip solver.
 
@@ -886,17 +893,17 @@ mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \
 
 
 def run_mosek(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the MOSEK solver. Both 'direct' mode, mps and
     lp mode are supported; None is interpret as 'direct' mode. MPS mode does
@@ -1194,17 +1201,17 @@ def run_copt(
 
 
 def run_mindopt(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Optional[str] = None,
+    problem_fn: Optional[Union[str, PosixPath]] = None,
+    solution_fn: Optional[Union[str, PosixPath]] = None,
+    log_fn: Optional[PosixPath] = None,
+    warmstart_fn: Optional[PosixPath] = None,
+    basis_fn: Optional[PosixPath] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the MindOpt solver.
 

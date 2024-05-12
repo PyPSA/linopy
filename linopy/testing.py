@@ -1,31 +1,34 @@
+from __future__ import annotations
+
 from xarray.testing import assert_equal
 
-from linopy.constraints import _con_unwrap
-from linopy.expressions import _expr_unwrap
-from linopy.variables import _var_unwrap
+from linopy.constraints import Constraint, _con_unwrap
+from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
+from linopy.model import Model
+from linopy.variables import Variable, _var_unwrap
 
 
-def assert_varequal(a, b):
+def assert_varequal(a: Variable, b: Variable) -> None:
     """Assert that two variables are equal."""
     return assert_equal(_var_unwrap(a), _var_unwrap(b))
 
 
-def assert_linequal(a, b):
+def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
     """Assert that two linear expressions are equal."""
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
-def assert_quadequal(a, b):
+def assert_quadequal(a: QuadraticExpression, b: QuadraticExpression) -> None:
     """Assert that two linear expressions are equal."""
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
-def assert_conequal(a, b):
+def assert_conequal(a: Constraint, b: Constraint) -> None:
     """Assert that two constraints are equal."""
     return assert_equal(_con_unwrap(a), _con_unwrap(b))
 
 
-def assert_model_equal(a, b):
+def assert_model_equal(a: Model, b: Model) -> None:
     """Assert that two models are equal."""
     for k in a.dataset_attrs:
         assert_equal(getattr(a, k), getattr(b, k))

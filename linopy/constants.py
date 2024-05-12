@@ -224,8 +224,8 @@ class Result:
 
         if status.is_ok:
             if status.termination_condition == TerminationCondition.suboptimal:
-                logger.warning(f"Optimization solution is sub-optimal: \n{self}\n")
+                logger.warning("Optimization solution is sub-optimal: \n%s\n", self)
             else:
-                logger.info(f" Optimization successful: \n{self}\n")
+                logger.info(" Optimization successful: \n%s\n", self)
         else:
-            logger.warning(f"Optimization failed: \n{self}\n")
+            logger.warning("Optimization failed: \n%s\n", self)

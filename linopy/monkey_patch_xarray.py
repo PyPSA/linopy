@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 from functools import partialmethod, update_wrapper
+from typing import Callable, Type
 
 from xarray import DataArray
+from xarray.core.dataarray import DataArray
 
 from linopy import expressions, variables
 
 
-def monkey_patch(cls, pass_unpatched_method=False):
+def monkey_patch(cls: Type[DataArray], pass_unpatched_method: bool = False) -> Callable:
     def deco(func):
         func_name = func.__name__
         wrapped = getattr(cls, func_name)

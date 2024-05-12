@@ -3,11 +3,14 @@
 """
 Module containing all import/export functionalities.
 """
+from __future__ import annotations
+
 import logging
 import shutil
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -20,6 +23,18 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
 
+if TYPE_CHECKING:
+    from io import TextIOWrapper
+    from pathlib import PosixPath
+
+    from gurobipy import Env
+    from highspy.highs import Highs
+    from mosek import Task
+    from pandas.core.frame import DataFrame
+
+    from linopy.model import Model
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +44,7 @@ concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def handle_batch(batch, f, batch_size):
+def handle_batch(batch: List[str], f: TextIOWrapper, batch_size: int) -> List[str]:
     """
     Write out a batch to a file and reset the batch.
     """
@@ -39,7 +54,9 @@ def handle_batch(batch, f, batch_size):
     return batch
 
 
-def objective_write_linear_terms(df, f, batch, batch_size):
+def objective_write_linear_terms(
+    df: DataFrame, f: TextIOWrapper, batch: List[Any], batch_size: int
+) -> List[Union[str, Any]]:
     """
     Write the linear terms of the objective to a file.
     """
@@ -53,7 +70,9 @@ def objective_write_linear_terms(df, f, batch, batch_size):
     return batch
 
 
-def objective_write_quad_terms(quadratic, f, batch, batch_size):
+def objective_write_quad_terms(
+    quadratic: DataFrame, f: TextIOWrapper, batch: List[str], batch_size: int
+) -> List[str]:
     """
     Write the cross terms of the objective to a file.
     """
@@ -69,7 +88,9 @@ def objective_write_quad_terms(quadratic, f, batch, batch_size):
     return batch
 
 
-def objective_to_file(m, f, log=False, batch_size=10000):
+def objective_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+) -> None:
     """
     Write out the objective of a model to a lp file.
     """
@@ -107,7 +128,9 @@ def objective_to_file(m, f, log=False, batch_size=10000):
         f.writelines(batch)
 
 
-def constraints_to_file(m, f, log=False, batch_size=50000):
+def constraints_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 50000
+) -> None:
     if not len(m.constraints):
         return
 
@@ -168,7 +191,9 @@ def constraints_to_file(m, f, log=False, batch_size=50000):
         f.writelines(batch)
 
 
-def bounds_to_file(m, f, log=False, batch_size=10000):
+def bounds_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+) -> None:
     """
     Write out variables of a model to a lp file.
     """
@@ -203,7 +228,9 @@ def bounds_to_file(m, f, log=False, batch_size=10000):
         f.writelines(batch)
 
 
-def binaries_to_file(m, f, log=False, batch_size=1000):
+def binaries_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 1000
+) -> None:
     """
     Write out binaries of a model to a lp file.
     """
@@ -231,7 +258,13 @@ def binaries_to_file(m, f, log=False, batch_size=1000):
         f.writelines(batch)
 
 
-def integers_to_file(m, f, log=False, batch_size=1000, integer_label="general"):
+def integers_to_file(
+    m: Model,
+    f: TextIOWrapper,
+    log: bool = False,
+    batch_size: int = 1000,
+    integer_label: str = "general",
+) -> None:
     """
     Write out integers of a model to a lp file.
     """
@@ -259,6 +292,7 @@ def integers_to_file(m, f, log=False, batch_size=1000, integer_label="general"):
         f.writelines(batch)
 
 
+<<<<<<< HEAD
 def to_lp_file(m, fn, integer_label):
     log = m._xCounter > 10_000
 
@@ -504,6 +538,11 @@ def to_lp_file_polars(m, fn, integer_label="general"):
 
 
 def to_file(m, fn, io_api=None, integer_label="general"):
+=======
+def to_file(
+    m: Model, fn: Union[str, PosixPath], integer_label: str = "general"
+) -> PosixPath:
+>>>>>>> d8cc2c0 (add type annotations through monkeytype)
     """
     Write out a model to a lp or mps file.
     """
@@ -537,7 +576,7 @@ def to_file(m, fn, io_api=None, integer_label="general"):
     return fn
 
 
-def to_mosek(model, task=None):
+def to_mosek(m: Model, task: Optional[mosek.Task] = None) -> mosek.Task:
     """
     Export model to MOSEK.
 
@@ -558,10 +597,10 @@ def to_mosek(model, task=None):
     if task is None:
         task = mosek.Task()
 
-    task.appendvars(model.nvars)
-    task.appendcons(model.ncons)
+    task.appendvars(m.nvars)
+    task.appendcons(m.ncons)
 
-    M = model.matrices
+    M = m.matrices
     # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
     #    task.putvarname(j, n)
 
@@ -592,18 +631,18 @@ def to_mosek(model, task=None):
     ]
     blx = [b if b > -np.inf else 0.0 for b in M.lb]
     bux = [b if b < np.inf else 0.0 for b in M.ub]
-    task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+    task.putvarboundslice(0, m.nvars, bkx, blx, bux)
 
-    if len(model.binaries.labels) + len(model.integers.labels) > 0:
+    if len(m.binaries.labels) + len(m.integers.labels) > 0:
         idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
         task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-        if len(model.binaries.labels) > 0:
+        if len(m.binaries.labels) > 0:
             bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
             task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
 
     ## Constraints
 
-    if len(model.constraints) > 0:
+    if len(m.constraints) > 0:
         names = "c" + M.clabels.astype(str).astype(object)
         for i, n in enumerate(names):
             task.putconname(i, n)
@@ -624,25 +663,23 @@ def to_mosek(model, task=None):
         # blc = M.b
         # buc = M.b
         A = M.A.tocsr()
-        task.putarowslice(
-            0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
-        )
-        task.putconboundslice(0, model.ncons, bkc, blc, buc)
+        task.putarowslice(0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data)
+        task.putconboundslice(0, m.ncons, bkc, blc, buc)
 
     ## Objective
-    if model.is_quadratic:
+    if m.is_quadratic:
         Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
         task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(list(np.arange(model.nvars)), M.c)
+    task.putclist(list(np.arange(m.nvars)), M.c)
 
-    if model.objective.sense == "max":
+    if m.objective.sense == "max":
         task.putobjsense(mosek.objsense.maximize)
     else:
         task.putobjsense(mosek.objsense.minimize)
     return task
 
 
-def to_gurobipy(m, env=None):
+def to_gurobipy(m: Model, env: Optional[gurobipy.Env] = None) -> "gurobipy.Model":
     """
     Export the model to gurobipy.
 
@@ -689,7 +726,7 @@ def to_gurobipy(m, env=None):
     return model
 
 
-def to_highspy(m):
+def to_highspy(m: Model) -> Highs:
     """
     Export the model to highspy.
 
@@ -754,7 +791,7 @@ def to_highspy(m):
     return h
 
 
-def to_block_files(m, fn):
+def to_block_files(m: Model, fn: PosixPath):
     """
     Write out the linopy model to a block structured output.
 
@@ -870,14 +907,16 @@ def to_block_files(m, fn):
     #             )
 
 
-def non_bool_dict(d):
+def non_bool_dict(
+    d: Dict[str, Union[Tuple[int, int], str, bool, List[str], int]]
+) -> Dict[str, Union[Tuple[int, int], str, int, List[str]]]:
     """
     Convert bool to int for netCDF4 storing.
     """
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m, *args, **kwargs):
+def to_netcdf(m: Model, *args, **kwargs) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -931,7 +970,7 @@ def to_netcdf(m, *args, **kwargs):
     ds.to_netcdf(*args, **kwargs)
 
 
-def read_netcdf(path, **kwargs):
+def read_netcdf(path: PosixPath, **kwargs) -> Model:
     """
     Read in a model from a netcdf file.
 

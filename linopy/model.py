@@ -4,25 +4,36 @@ Linopy model module.
 
 This module contains frontend implementations of the package.
 """
+from __future__ import annotations
 
 import logging
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PosixPath
 from tempfile import NamedTemporaryFile, gettempdir
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import xarray
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, nan
+from numpy import inf, nan, ndarray
+from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from xarray import DataArray, Dataset
+from xarray.core.dataarray import DataArray
+from xarray.core.dataset import Dataset
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.expressions import (
+    LinearExpression,
+    QuadraticExpression,
+    ScalarLinearExpression,
+)
 from linopy.io import (
     to_block_files,
     to_file,
@@ -81,7 +92,12 @@ class Model:
         "matrices",
     )
 
-    def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
+    def __init__(
+        self,
+        solver_dir: Optional[str] = None,
+        chunk: Optional[Union[str, int]] = None,
+        force_dim_names: bool = False,
+    ) -> None:
         """
         Initialize the linopy model.
 
@@ -179,14 +195,14 @@ class Model:
         self._parameters = Dataset(value)
 
     @property
-    def solution(self):
+    def solution(self) -> xarray.core.dataset.Dataset:
         """
         Solution calculated by the optimization.
         """
         return self.variables.solution
 
     @property
-    def dual(self):
+    def dual(self) -> xarray.core.dataset.Dataset:
         """
         Dual values calculated by the optimization.
         """
@@ -240,17 +256,6 @@ class Model:
         self._chunk = value
 
     @property
-    def blocks(self):
-        """
-        Blocks of the model.
-        """
-        return self._blocks
-
-    @blocks.setter
-    def blocks(self, value):
-        self._blocks = DataArray(value)
-
-    @property
     def force_dim_names(self):
         """
         Whether assigned variables, constraints and data should always have
@@ -281,11 +286,11 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def dataset_attrs(self):
+    def dataset_attrs(self) -> List[str]:
         return ["parameters"]
 
     @property
-    def scalar_attrs(self):
+    def scalar_attrs(self) -> List[str]:
         return [
             "status",
             "_xCounter",
@@ -295,7 +300,7 @@ class Model:
             "force_dim_names",
         ]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Return a string representation of the linopy model.
         """
@@ -310,13 +315,13 @@ class Model:
             f"Status:\n-------\n{self.status}"
         )
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Variable:
         """
         Get a model variable by the name.
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds):
+    def check_force_dim_names(self, ds: xarray.core.dataarray.DataArray) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -348,15 +353,15 @@ class Model:
 
     def add_variables(
         self,
-        lower=-inf,
-        upper=inf,
-        coords=None,
-        name=None,
-        mask=None,
-        binary=False,
-        integer=False,
+        lower: Any = -inf,
+        upper: Any = inf,
+        coords: Optional[Any] = None,
+        name: Optional[str] = None,
+        mask: Optional[Union[xarray.core.dataarray.DataArray, ndarray, Series]] = None,
+        binary: bool = False,
+        integer: bool = False,
         **kwargs,
-    ):
+    ) -> Variable:
         """
         Assign a new, possibly multi-dimensional array of variables to the
         model.
@@ -478,8 +483,14 @@ class Model:
         return variable
 
     def add_constraints(
-        self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None
-    ):
+        self,
+        lhs: Any,
+        sign: Optional[Union[str, float]] = None,
+        rhs: Optional[Union[float, int]] = None,
+        name: Optional[str] = None,
+        coords: None = None,
+        mask: Optional[Union[xarray.core.dataarray.DataArray, Series]] = None,
+    ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -599,7 +610,12 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
-    def add_objective(self, expr, overwrite=False, sense="min"):
+    def add_objective(
+        self,
+        expr: Union[List[Tuple[int, Variable]], LinearExpression, QuadraticExpression],
+        overwrite: bool = False,
+        sense: str = "min",
+    ) -> None:
         """
         Add an objective function to the model.
 
@@ -623,7 +639,7 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
 
-    def remove_variables(self, name):
+    def remove_variables(self, name: str) -> None:
         """
         Remove all variables stored under reference name `name` from the model.
 
@@ -651,7 +667,7 @@ class Model:
             {TERM_DIM: ~self.objective.vars.isin(labels)}
         )
 
-    def remove_constraints(self, name):
+    def remove_constraints(self, name: Union[str, List[str]]) -> None:
         """
         Remove all constraints stored under reference name 'name' from the
         model.
@@ -675,7 +691,7 @@ class Model:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
 
-    def remove_objective(self):
+    def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
 
@@ -686,36 +702,36 @@ class Model:
         self.objective = Objective(LinearExpression(None, self), self)
 
     @property
-    def continuous(self):
+    def continuous(self) -> Variables:
         """
         Get all continuous variables.
         """
         return self.variables.continuous
 
     @property
-    def binaries(self):
+    def binaries(self) -> Variables:
         """
         Get all binary variables.
         """
         return self.variables.binaries
 
     @property
-    def integers(self):
+    def integers(self) -> Variables:
         """
         Get all integer variables.
         """
         return self.variables.integers
 
     @property
-    def is_linear(self):
+    def is_linear(self) -> bool:
         return self.objective.is_linear
 
     @property
-    def is_quadratic(self):
+    def is_quadratic(self) -> bool:
         return self.objective.is_quadratic
 
     @property
-    def type(self):
+    def type(self) -> str:
         if (len(self.binaries) or len(self.integers)) and len(self.continuous):
             variable_type = "MI"
         elif len(self.binaries) or len(self.integers):
@@ -728,7 +744,7 @@ class Model:
         return f"{variable_type}{objective_type}P"
 
     @property
-    def nvars(self):
+    def nvars(self) -> int:
         """
         Get the total number of variables.
 
@@ -737,7 +753,7 @@ class Model:
         return self.variables.nvars
 
     @property
-    def ncons(self):
+    def ncons(self) -> int:
         """
         Get the total number of constraints.
 
@@ -746,7 +762,7 @@ class Model:
         return self.constraints.ncons
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[int, int]:
         """
         Get the shape of the non-filtered constraint matrix.
 
@@ -775,7 +791,7 @@ class Model:
 
         self._blocks = blocks
 
-    def calculate_block_maps(self):
+    def calculate_block_maps(self) -> None:
         """
         Calculate the matrix block mappings based on dimensional blocks.
         """
@@ -789,7 +805,7 @@ class Model:
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
-    def linexpr(self, *args):
+    def linexpr(self, *args) -> LinearExpression:
         """
         Create a linopy.LinearExpression from argument list.
 
@@ -873,14 +889,14 @@ class Model:
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
     @property
-    def coefficientrange(self):
+    def coefficientrange(self) -> DataFrame:
         """
         Coefficient range of the constraints in the model.
         """
         return self.constraints.coefficientrange
 
     @property
-    def objectiverange(self):
+    def objectiverange(self) -> Series:
         """
         Objective range of the objective in the model.
         """
@@ -889,7 +905,9 @@ class Model:
             index=["min", "max"],
         )
 
-    def get_solution_file(self, solution_fn=None):
+    def get_solution_file(
+        self, solution_fn: Optional[PosixPath] = None
+    ) -> Union[str, PosixPath]:
         """
         Get a fresh created solution file if solution file is None.
         """
@@ -906,7 +924,11 @@ class Model:
         with NamedTemporaryFile(**kwargs) as f:
             return f.name
 
-    def get_problem_file(self, problem_fn=None, io_api=None):
+    def get_problem_file(
+        self,
+        problem_fn: Optional[Union[str, PosixPath]] = None,
+        io_api: Optional[str] = None,
+    ) -> Union[str, PosixPath]:
         """
         Get a fresh created problem file if problem file is None.
         """
@@ -926,19 +948,19 @@ class Model:
 
     def solve(
         self,
-        solver_name=None,
-        io_api=None,
-        problem_fn=None,
-        solution_fn=None,
-        log_fn=None,
-        basis_fn=None,
-        warmstart_fn=None,
-        keep_files=False,
-        env=None,
-        sanitize_zeros=True,
-        remote=None,
+        solver_name: Optional[str] = None,
+        io_api: Optional[str] = None,
+        problem_fn: Optional[PosixPath] = None,
+        solution_fn: Optional[PosixPath] = None,
+        log_fn: Optional[PosixPath] = None,
+        basis_fn: Optional[PosixPath] = None,
+        warmstart_fn: Optional[PosixPath] = None,
+        keep_files: bool = False,
+        env: None = None,
+        sanitize_zeros: bool = True,
+        remote: None = None,
         **solver_options,
-    ):
+    ) -> Tuple[str, str]:
         """
         Solve the model with possibly different solvers.
 
@@ -1114,7 +1136,7 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_infeasibilities(self):
+    def compute_infeasibilities(self) -> List[int]:
         """
         Compute a set of infeasible constraints.
 
@@ -1146,7 +1168,7 @@ class Model:
                 labels.append(int(line.split(":")[0][2:]))
         return labels
 
-    def print_infeasibilities(self, display_max_terms=None):
+    def print_infeasibilities(self, display_max_terms: None = None) -> None:
         """
         Print a list of infeasible constraints.
 
@@ -1159,7 +1181,7 @@ class Model:
     @deprecated(
         details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
     )
-    def compute_set_of_infeasible_constraints(self):
+    def compute_set_of_infeasible_constraints(self) -> xarray.core.dataset.Dataset:
         """
         Compute a set of infeasible constraints.
 
@@ -1179,7 +1201,7 @@ class Model:
         )
         return subset
 
-    def reset_solution(self):
+    def reset_solution(self) -> None:
         """
         Reset the solution and dual values if available of the model.
         """
