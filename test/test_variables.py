@@ -27,7 +27,7 @@ def test_variables_repr(m):
     m.variables.__repr__()
 
 
-def test_variable_inherited_properties(m):
+def test_variables_inherited_properties(m):
     assert isinstance(m.variables.attrs, dict)
     assert isinstance(m.variables.coords, xr.Coordinates)
     assert isinstance(m.variables.indexes, xr.core.indexes.Indexes)

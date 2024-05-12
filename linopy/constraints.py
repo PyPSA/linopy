@@ -23,7 +23,6 @@ from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
     format_string_as_variable_name,
-    forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
     has_optimized_model,
@@ -62,18 +61,6 @@ def _con_unwrap(con):
     return con.data if isinstance(con, Constraint) else con
 
 
-@forward_as_properties(
-    data=[
-        "attrs",
-        "coords",
-        "indexes",
-        "dims",
-        "sizes",
-    ],
-    labels=["values"],
-    lhs=["nterm"],
-    rhs=["ndim", "shape", "size"],
-)
 class Constraint:
     """
     Projection to a single constraint in a model.
@@ -128,6 +115,76 @@ class Constraint:
         """
         data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
         return self.__class__(data, self.model, self.name)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of the constraint.
+        """
+        return self.data.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of the constraint.
+        """
+        return self.data.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of the constraint.
+        """
+        return self.data.indexes
+
+    @property
+    def dims(self):
+        """
+        Get the dimensions of the constraint.
+        """
+        return self.data.dims
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of the constraint.
+        """
+        return self.data.sizes
+
+    @property
+    def values(self):
+        """
+        Get the label values of the constraint.
+        """
+        return self.labels.values if self.is_assigned else None
+
+    @property
+    def nterm(self):
+        """
+        Get the number of terms in the constraint.
+        """
+        return self.lhs.nterm
+
+    @property
+    def ndim(self):
+        """
+        Get the number of dimensions of the constraint.
+        """
+        return self.rhs.ndim
+
+    @property
+    def shape(self):
+        """
+        Get the shape of the constraint.
+        """
+        return self.rhs.shape
+
+    @property
+    def size(self):
+        """
+        Get the size of the constraint.
+        """
+        return self.rhs.size
 
     @property
     def loc(self):
@@ -391,10 +448,6 @@ class Constraint:
         """
         value = DataArray(value).broadcast_like(self.labels)
         self.data["dual"] = value
-
-    @property
-    def shape(self):
-        return self.labels.shape
 
     @classmethod
     def from_rule(cls, model, rule, coords):

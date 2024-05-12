@@ -161,6 +161,20 @@ def test_anonymous_scalar_constraint_with_scalar_variable_on_rhs(x, y):
         # assert (con.rhs == 0).all()
 
 
+def test_constraint_inherited_properties(x, y):
+    con = 10 * x + y <= 10
+    assert isinstance(con.attrs, dict)
+    assert isinstance(con.coords, xr.Coordinates)
+    assert isinstance(con.indexes, xr.core.indexes.Indexes)
+    assert isinstance(con.sizes, xr.core.utils.Frozen)
+    assert isinstance(con.ndim, int)
+    assert isinstance(con.nterm, int)
+    assert isinstance(con.shape, tuple)
+    assert isinstance(con.size, int)
+    assert isinstance(con.dims, xr.core.utils.Frozen)
+    assert con.values is None
+
+
 def test_anonymous_constraint_sel(x, y):
     expr = 10 * x + y
     con = expr <= 10
