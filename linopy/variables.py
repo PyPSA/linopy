@@ -30,8 +30,6 @@ from numpy import floating, int64, issubdtype, ndarray, str_
 from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
-from xarray.core.dataarray import DataArray
-from xarray.core.dataset import Dataset
 from xarray.core.indexes import Indexes
 from xarray.core.types import Dims
 from xarray.core.utils import Frozen
@@ -89,7 +87,7 @@ def varwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     return _varwrap
 
 
-def _var_unwrap(var: "Variable") -> xarray.core.dataset.Dataset:
+def _var_unwrap(var: "Variable") -> Dataset:
     return var.data if isinstance(var, Variable) else var
 
 
@@ -395,7 +393,7 @@ class Variable:
         return self * self
 
     def __rmul__(
-        self, other: Union[float, xarray.core.dataarray.DataArray, int, ndarray]
+        self, other: Union[float, DataArray, int, ndarray]
     ) -> LinearExpression:
         """
         Right-multiply variables with a coefficient.
@@ -515,7 +513,7 @@ class Variable:
 
     def groupby(
         self,
-        group: xarray.core.dataarray.DataArray,
+        group: DataArray,
         squeeze: "bool" = True,
         restore_coord_dims: "bool" = None,
     ) -> LinearExpressionGroupby:
@@ -631,14 +629,14 @@ class Variable:
         return self.attrs["name"]
 
     @property
-    def labels(self) -> xarray.core.dataarray.DataArray:
+    def labels(self) -> DataArray:
         """
         Return the labels of the variable.
         """
         return self.data.labels
 
     @property
-    def data(self) -> xarray.core.dataset.Dataset:
+    def data(self) -> Dataset:
         """
         Get the data of the variable.
         """
@@ -685,7 +683,7 @@ class Variable:
         return cls._fill_value
 
     @property
-    def mask(self) -> xarray.core.dataarray.DataArray:
+    def mask(self) -> DataArray:
         """
         Get the mask of the variable.
 
@@ -781,7 +779,7 @@ class Variable:
         return self.solution
 
     @has_optimized_model
-    def get_solver_attribute(self, attr: str) -> xarray.core.dataarray.DataArray:
+    def get_solver_attribute(self, attr: str) -> DataArray:
         """
         Get an attribute from the solver model.
 
@@ -901,7 +899,7 @@ class Variable:
         """
         return self.to_linexpr().diff(dim, n)
 
-    def isnull(self) -> xarray.core.dataarray.DataArray:
+    def isnull(self) -> DataArray:
         """
         Get a boolean mask with true values where there is missing values.
         """
@@ -909,7 +907,7 @@ class Variable:
 
     def where(
         self,
-        cond: Union[xarray.core.dataarray.DataArray, List[bool]],
+        cond: Union[DataArray, List[bool]],
         other: Optional[Union[ScalarVariable, Dict[str, float], int, Variable]] = None,
         **kwargs,
     ) -> "Variable":
@@ -1213,7 +1211,7 @@ class Variables:
         return self.labels.sizes
 
     @property
-    def labels(self) -> xarray.core.dataset.Dataset:
+    def labels(self) -> Dataset:
         """
         Get the labels of all variables.
         """
@@ -1222,14 +1220,14 @@ class Variables:
         )
 
     @property
-    def lower(self) -> xarray.core.dataset.Dataset:
+    def lower(self) -> Dataset:
         """
         Get the lower bounds of all variables.
         """
         return save_join(*[v.lower.rename(k) for k, v in self.items()])
 
     @property
-    def upper(self) -> xarray.core.dataset.Dataset:
+    def upper(self) -> Dataset:
         """
         Get the upper bounds of all variables.
         """
@@ -1273,14 +1271,14 @@ class Variables:
         return self[keys]
 
     @property
-    def solution(self) -> xarray.core.dataset.Dataset:
+    def solution(self) -> Dataset:
         """
         Get the solution of variables.
         """
         return save_join(*[v.solution.rename(k) for k, v in self.items()])
 
     @has_optimized_model
-    def get_solver_attribute(self, attr: str) -> xarray.core.dataset.Dataset:
+    def get_solver_attribute(self, attr: str) -> Dataset:
         """
         Get an attribute from the solver model.
 

@@ -8,7 +8,8 @@ from __future__ import annotations
 import logging
 import shutil
 import time
-from pathlib import Path
+from io import TextIOWrapper
+from pathlib import Path, PosixPath
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -16,7 +17,9 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
+from highspy.highs import Highs
 from numpy import ones_like, zeros_like
+from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
 from tqdm import tqdm
 
@@ -24,13 +27,6 @@ from linopy import solvers
 from linopy.constants import CONCAT_DIM
 
 if TYPE_CHECKING:
-    from io import TextIOWrapper
-    from pathlib import PosixPath
-
-    from gurobipy import Env
-    from highspy.highs import Highs
-    from mosek import Task
-    from pandas.core.frame import DataFrame
 
     from linopy.model import Model
 
@@ -576,7 +572,7 @@ def to_file(
     return fn
 
 
-def to_mosek(m: Model, task: Optional[mosek.Task] = None) -> mosek.Task:
+def to_mosek(m: Model, task: Optional[Any] = None) -> Any:
     """
     Export model to MOSEK.
 
@@ -620,14 +616,14 @@ def to_mosek(m: Model, task: Optional[mosek.Task] = None) -> mosek.Task:
     bkx = [
         (
             (
-                (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
-                if u < np.inf
+                (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
+                if ub < np.inf
                 else mosek.boundkey.lo
             )
-            if (l > -np.inf)
-            else (mosek.boundkey.up if (u < np.inf) else mosek.boundkey.fr)
+            if (lb > -np.inf)
+            else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
         )
-        for (l, u) in zip(M.lb, M.ub)
+        for (lb, ub) in zip(M.lb, M.ub)
     ]
     blx = [b if b > -np.inf else 0.0 for b in M.lb]
     bux = [b if b < np.inf else 0.0 for b in M.ub]
@@ -679,7 +675,7 @@ def to_mosek(m: Model, task: Optional[mosek.Task] = None) -> mosek.Task:
     return task
 
 
-def to_gurobipy(m: Model, env: Optional[gurobipy.Env] = None) -> "gurobipy.Model":
+def to_gurobipy(m: Model, env: Optional[Any] = None) -> Any:
     """
     Export the model to gurobipy.
 
@@ -811,9 +807,6 @@ def to_block_files(m: Model, fn: PosixPath):
     N = int(m.blocks.max())
     for n in range(N + 2):
         (path / f"block{n}").mkdir()
-
-    vars = m.variables
-    cons = m.constraints
 
     raise NotImplementedError("This function is not yet implemented fully.")
 

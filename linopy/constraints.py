@@ -754,7 +754,10 @@ class Constraints:
         """
         Get the variables of all constraints.
         """
-        rename_term_dim = lambda ds: ds.rename({TERM_DIM: ds.name + TERM_DIM})
+
+        def rename_term_dim(ds):
+            return ds.rename({TERM_DIM: ds.name + TERM_DIM})
+
         return save_join(
             *[rename_term_dim(v.vars.rename(k)) for k, v in self.items()],
             integer_dtype=True,

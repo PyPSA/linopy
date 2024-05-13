@@ -4,7 +4,6 @@ from functools import partialmethod, update_wrapper
 from typing import Callable, Type
 
 from xarray import DataArray
-from xarray.core.dataarray import DataArray
 
 from linopy import expressions, variables
 

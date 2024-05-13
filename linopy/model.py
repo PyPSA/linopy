@@ -15,15 +15,12 @@ from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import xarray
 import xarray as xr
 from deprecation import deprecated
 from numpy import inf, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
-from xarray.core.dataarray import DataArray
-from xarray.core.dataset import Dataset
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
@@ -195,14 +192,14 @@ class Model:
         self._parameters = Dataset(value)
 
     @property
-    def solution(self) -> xarray.core.dataset.Dataset:
+    def solution(self) -> Dataset:
         """
         Solution calculated by the optimization.
         """
         return self.variables.solution
 
     @property
-    def dual(self) -> xarray.core.dataset.Dataset:
+    def dual(self) -> Dataset:
         """
         Dual values calculated by the optimization.
         """
@@ -321,7 +318,7 @@ class Model:
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds: xarray.core.dataarray.DataArray) -> None:
+    def check_force_dim_names(self, ds: DataArray) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -357,7 +354,7 @@ class Model:
         upper: Any = inf,
         coords: Optional[Any] = None,
         name: Optional[str] = None,
-        mask: Optional[Union[xarray.core.dataarray.DataArray, ndarray, Series]] = None,
+        mask: Optional[Union[DataArray, ndarray, Series]] = None,
         binary: bool = False,
         integer: bool = False,
         **kwargs,
@@ -489,7 +486,7 @@ class Model:
         rhs: Optional[Union[float, int]] = None,
         name: Optional[str] = None,
         coords: None = None,
-        mask: Optional[Union[xarray.core.dataarray.DataArray, Series]] = None,
+        mask: Optional[Union[DataArray, Series]] = None,
     ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1181,7 +1178,7 @@ class Model:
     @deprecated(
         details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
     )
-    def compute_set_of_infeasible_constraints(self) -> xarray.core.dataset.Dataset:
+    def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
         Compute a set of infeasible constraints.
 
