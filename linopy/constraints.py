@@ -13,6 +13,7 @@ from typing import Any, Dict, Sequence, Union
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 from numpy import array
 from scipy.sparse import csc_matrix
@@ -26,6 +27,7 @@ from linopy.common import (
     generate_indices_for_printout,
     get_label_position,
     has_optimized_model,
+    infer_polar_schema,
     is_constant,
     maybe_replace_signs,
     print_coord,
@@ -34,6 +36,7 @@ from linopy.common import (
     replace_by_map,
     save_join,
     to_dataframe,
+    to_polars_dataframe,
 )
 from linopy.config import options
 from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
@@ -554,6 +557,58 @@ class Constraint:
                 f"Constraint `{self.name}` contains nan's in field(s) {fields}"
             )
         return df
+
+    @property
+    def flatp(self):
+        """
+        Convert the constraint to a polars DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked constraints with non-zero coefficients. It contains the
+        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        ds = self.data
+
+        long_keys = ds[[k for k in ds if ("_term" in ds[k].dims) or (k == "labels")]]
+        long_broadcasted = xr.broadcast(long_keys)[0]
+        long = pl.DataFrame(
+            {k: long_broadcasted[k].values.reshape(-1) for k in long_keys}
+        )
+
+        conditions = pl.col("vars").ne(-1) & pl.col("coeffs").ne(0)
+        if "labels" in long.columns:
+            conditions = conditions & pl.col("labels").ne(-1)
+
+        long = long.filter(conditions)
+        # Group repeated variables in the same constraint
+        agg_list = [pl.col("coeffs").sum().alias("coeffs")]
+        for col in set(long.columns) - set(["coeffs", "vars", "labels"]):
+            agg_list.append(pl.col(col).first().alias(col))
+        long = long.group_by(["labels", "vars"], maintain_order=True).agg(agg_list)
+
+        short = ds[[k for k in ds if "_term" not in ds[k].dims]]
+        schema = infer_polar_schema(short)
+        schema["sign"] = pl.Enum(["=", "<=", ">="])
+        short = pl.DataFrame(
+            {k: short[k].values.reshape(-1) for k in short}, schema=schema
+        )
+
+        for df in short, long:
+            # filter columns in polars dataframe with nan
+            has_nulls = df.select(pl.col("*").is_null().any())
+            null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
+            if null_columns:
+                raise ValueError(
+                    f"Constraint `{self.name}` contains nan's in field(s) {null_columns}"
+                )
+
+        df = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
+
+        return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     sel = conwrap(Dataset.sel)
 

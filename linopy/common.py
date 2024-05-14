@@ -12,6 +12,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
@@ -226,6 +227,7 @@ def as_dataarray(
     return arr
 
 
+# TODO: rename to to_pandas_dataframe
 def to_dataframe(ds, mask_func=None):
     """
     Convert an xarray Dataset to a pandas DataFrame.
@@ -247,6 +249,38 @@ def to_dataframe(ds, mask_func=None):
             data[k] = v[mask]
 
     return pd.DataFrame(data, copy=False)
+
+
+def infer_polar_schema(ds):
+    schema = {}
+    for col_name, array in ds.items():
+        if np.issubdtype(array.dtype, np.integer):
+            schema[col_name] = pl.Int64
+        elif np.issubdtype(array.dtype, np.floating):
+            schema[col_name] = pl.Float64
+        elif np.issubdtype(array.dtype, np.bool_):
+            schema[col_name] = pl.Boolean
+        elif np.issubdtype(array.dtype, np.object_):
+            schema[col_name] = pl.Object
+        else:
+            schema[col_name] = pl.Utf8
+    return schema
+
+
+def to_polars_dataframe(ds):
+    """
+    Convert an xarray Dataset to a polars DataFrame.
+
+    This is an memory efficient alternative implementation
+    of `to_dataframe`.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset to convert to a DataFrame.
+    """
+    data = broadcast(ds)[0]
+    return pl.DataFrame({k: v.values.reshape(-1) for k, v in data.items()})
 
 
 def save_join(*dataarrays, integer_dtype=False):

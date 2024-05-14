@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 from numpy import ones_like, zeros_like
 from scipy.sparse import tril, triu
@@ -104,6 +105,44 @@ def objective_to_file(m, f, log=False, batch_size=10000):
 
     if batch:  # write the remaining lines
         f.writelines(batch)
+
+
+def constraints_to_file_polars(m, f, log=False):
+    if not len(m.constraints):
+        return
+
+    f.write(b"\n\ns.t.\n\n")
+    names = m.constraints
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        df = m.constraints[name].flatp
+        # filter out repeated label values
+        df = df.with_columns(
+            pl.when(pl.col("labels").is_first_distinct())
+            .then(pl.col("labels"))
+            .otherwise(pl.lit(None))
+            .alias("labels")
+        )
+
+        formatted = df.with_columns(
+            [
+                pl.col("labels")
+                .apply(lambda x: f"c{x}:\n", return_dtype=str)
+                .alias("labels"),
+                pl.col("coeffs")
+                .apply(lambda x: f"{x:+.12g}", return_dtype=str)
+                .alias("coeffs"),
+                pl.col("vars").apply(lambda x: f"x{x}", return_dtype=str).alias("vars"),
+            ]
+        )
+
+        formatted.write_csv(f, include_header=False, separator=" ", null_value="")
 
 
 def constraints_to_file(m, f, log=False, batch_size=50000):
