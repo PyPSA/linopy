@@ -998,6 +998,12 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        # clear cached matrix properties from potentially present from previous solve commands
+        for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
+            # check existence of cached_prop without creating it
+            if cached_prop in self.matrices.__dict__:
+                delattr(self.matrices, cached_prop)
+
         if remote:
             solved = remote.solve_on_remote(
                 self,
