@@ -104,6 +104,12 @@ class Objective:
         """
         return self.expression.flat
 
+    def to_polars(self, **kwargs):
+        """
+        Returns the objective as a polars DataFrame.
+        """
+        return self.expression.to_polars(**kwargs)
+
     @property
     def coeffs(self):
         """

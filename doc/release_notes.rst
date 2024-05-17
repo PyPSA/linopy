@@ -16,6 +16,9 @@ Version 0.3.10
 
 * A new module `examples` was added which contains example models. For example, you can call `m = linopy.examples.benchmark_model()`.
 
+* A new memory-efficient and super fast LP file writing method was added which uses the `Polars package <https://github.com/pola-rs/polars>`_. It is still in experimental mode but seems to be very promising. Activate it with the `io_api="lp-polars"` argument in the `solve` function.
+
+
 Version 0.3.9
 -------------
 

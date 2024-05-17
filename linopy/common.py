@@ -6,12 +6,15 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from functools import wraps
+import operator
+import os
+from functools import reduce, wraps
 from typing import Any, Dict, List, Optional, Union
 from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
@@ -226,6 +229,7 @@ def as_dataarray(
     return arr
 
 
+# TODO: rename to to_pandas_dataframe
 def to_dataframe(ds, mask_func=None):
     """
     Convert an xarray Dataset to a pandas DataFrame.
@@ -247,6 +251,119 @@ def to_dataframe(ds, mask_func=None):
             data[k] = v[mask]
 
     return pd.DataFrame(data, copy=False)
+
+
+def check_has_nulls(df: pd.DataFrame, name: str):
+    any_nan = df.isna().any()
+    if any_nan.any():
+        fields = ", ".join("`" + df.columns[any_nan] + "`")
+        raise ValueError(f"{name} contains nan's in field(s) {fields}")
+
+
+def infer_schema_polars(ds: pl.DataFrame) -> dict:
+    """
+    Infer the schema for a Polars DataFrame based on the data types of its columns.
+
+    Args:
+        ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
+
+    Returns:
+        dict: A dictionary mapping column names to their corresponding Polars data types.
+    """
+    schema = {}
+    for col_name, array in ds.items():
+        if np.issubdtype(array.dtype, np.integer):
+            schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
+        elif np.issubdtype(array.dtype, np.floating):
+            schema[col_name] = pl.Float64
+        elif np.issubdtype(array.dtype, np.bool_):
+            schema[col_name] = pl.Boolean
+        elif np.issubdtype(array.dtype, np.object_):
+            schema[col_name] = pl.Object
+        else:
+            schema[col_name] = pl.Utf8
+    return schema
+
+
+def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
+    """
+    Convert an xarray Dataset to a polars DataFrame.
+
+    This is an memory efficient alternative implementation
+    of `to_dataframe`.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset to convert to a DataFrame.
+    kwargs : dict
+        Additional keyword arguments to be passed to the
+        DataFrame constructor.
+    """
+    data = broadcast(ds)[0]
+    return pl.DataFrame({k: v.values.reshape(-1) for k, v in data.items()}, **kwargs)
+
+
+def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
+    """
+    Checks if the given DataFrame contains any null values and raises a ValueError if it does.
+
+    Args:
+        df (pl.DataFrame): The DataFrame to check for null values.
+        name (str): The name of the data container being checked.
+
+    Raises:
+        ValueError: If the DataFrame contains null values,
+        a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
+    """
+    has_nulls = df.select(pl.col("*").is_null().any())
+    null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
+    if null_columns:
+        raise ValueError(f"{name} contains nan's in field(s) {null_columns}")
+
+
+def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Filter out rows containing "empty" values from a polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): The DataFrame to filter.
+
+    Returns:
+        pl.DataFrame: The filtered DataFrame.
+    """
+    cond = []
+    varcols = [c for c in df.columns if c.startswith("vars")]
+    if varcols:
+        cond.append(reduce(operator.or_, [pl.col(c).ne(-1) for c in varcols]))
+    if "coeffs" in df.columns:
+        cond.append(pl.col("coeffs").ne(0))
+    if "labels" in df.columns:
+        cond.append(pl.col("labels").ne(-1))
+
+    cond = reduce(operator.and_, cond)
+    return df.filter(cond)
+
+
+def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Groups terms in a polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): The input DataFrame containing the terms.
+
+    Returns:
+        pl.DataFrame: The DataFrame with grouped terms.
+
+    """
+    varcols = [c for c in df.columns if c.startswith("vars")]
+    agg_list = [pl.col("coeffs").sum().alias("coeffs")]
+    for col in set(df.columns) - set(["coeffs", "labels", *varcols]):
+        agg_list.append(pl.col(col).first().alias(col))
+
+    by = [c for c in ["labels"] + varcols if c in df.columns]
+    df = df.group_by(by, maintain_order=True).agg(agg_list)
+    return df
 
 
 def save_join(*dataarrays, integer_dtype=False):
