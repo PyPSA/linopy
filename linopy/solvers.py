@@ -36,6 +36,9 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
+FILE_IO_APIS = ["lp", "lp-polars", "mps"]
+IO_APIS = FILE_IO_APIS + ["direct"]
+
 available_solvers = []
 
 which = "where" if os.name == "nt" else "which"
@@ -171,7 +174,7 @@ def run_cbc(
     and constraint dual values. For more information on the solver
     options, run 'cbc' in your shell
     """
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps' or None"
         )
@@ -182,7 +185,7 @@ def run_cbc(
             "GLPK does not support maximization in MPS format for Python 3.12+"
         )
 
-    problem_fn = model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn, io_api)
 
     # printingOptions is about what goes in solution file
     command = f"cbc -printingOptions all -import {problem_fn} "
@@ -284,7 +287,7 @@ def run_glpk(
         "undefined": "infeasible_or_unbounded",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
@@ -295,7 +298,7 @@ def run_glpk(
             "GLPK does not support maximization in MPS format for Python 3.12+"
         )
 
-    problem_fn = model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn, io_api)
     suffix = problem_fn.suffix[1:]
 
     os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
@@ -426,8 +429,8 @@ def run_highs(
             "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
         )
 
-    if io_api is None or io_api in ["lp", "mps"]:
-        model.to_file(problem_fn)
+    if io_api is None or io_api in FILE_IO_APIS:
+        model.to_file(problem_fn, io_api)
         h = highspy.Highs()
         h.readModel(maybe_convert_path(problem_fn))
     elif io_api == "direct":
@@ -503,12 +506,12 @@ def run_cplex(
         "integer optimal, tolerance": "optimal",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
-    model.to_file(problem_fn)
+    model.to_file(problem_fn, io_api)
 
     m = cplex.Cplex()
 
@@ -626,8 +629,8 @@ def run_gurobi(
         if env is None:
             env = stack.enter_context(gurobipy.Env())
 
-        if io_api is None or io_api in ["lp", "mps"]:
-            problem_fn = model.to_file(problem_fn)
+        if io_api is None or io_api in FILE_IO_APIS:
+            problem_fn = model.to_file(problem_fn, io_api=io_api)
             problem_fn = maybe_convert_path(problem_fn)
             m = gurobipy.read(problem_fn, env=env)
         elif io_api == "direct":
@@ -705,8 +708,8 @@ def run_scip(
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
 
-    if io_api is None or io_api in ["lp", "mps"]:
-        problem_fn = model.to_file(problem_fn)
+    if io_api is None or io_api in FILE_IO_APIS:
+        problem_fn = model.to_file(problem_fn, io_api)
         problem_fn = maybe_convert_path(problem_fn)
         m = scip.Model()
         m.readProblem(problem_fn)
@@ -714,7 +717,7 @@ def run_scip(
         raise NotImplementedError("Direct API not implemented for SCIP")
     else:
         raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `direct` or None"
+            f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
         )
 
     if solver_options is not None:
@@ -811,12 +814,12 @@ def run_xpress(
         "mip_unbounded": "unbounded",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
-    problem_fn = model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn, io_api)
 
     m = xpress.problem()
 
@@ -910,14 +913,13 @@ def run_mosek(
         "solsta.dual_infeas_cer": "infeasible_or_unbounded",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps", "direct"]:
+    if io_api is None or io_api in FILE_IO_APIS:
+        problem_fn = model.to_file(problem_fn, io_api)
+        problem_fn = maybe_convert_path(problem_fn)
+    elif io_api != "direct":
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
         )
-
-    if io_api != "direct" and io_api is not None:
-        problem_fn = model.to_file(problem_fn)
-        problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
     warmstart_fn = maybe_convert_path(warmstart_fn)
     basis_fn = maybe_convert_path(basis_fn)
@@ -1119,12 +1121,12 @@ def run_copt(
         10: "interrupted",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
-    problem_fn = model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn, io_api)
 
     problem_fn = maybe_convert_path(problem_fn)
     log_fn = maybe_convert_path(log_fn)
@@ -1213,7 +1215,7 @@ def run_mindopt(
         5: "suboptimal",
     }
 
-    if io_api is not None and io_api not in ["lp", "mps"]:
+    if io_api is not None and io_api not in FILE_IO_APIS:
         raise ValueError(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
@@ -1222,7 +1224,7 @@ def run_mindopt(
             "MindOpt does not support QP problems in LP format. Use `io_api='mps'` instead."
         )
 
-    problem_fn = model.to_file(problem_fn)
+    problem_fn = model.to_file(problem_fn, io_api)
 
     problem_fn = maybe_convert_path(problem_fn)
     log_fn = "" if not log_fn else maybe_convert_path(log_fn)

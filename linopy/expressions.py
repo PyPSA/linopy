@@ -1480,7 +1480,7 @@ class QuadraticExpression(LinearExpression):
         check_has_nulls_pandas(df, name=self.type)
         return df
 
-    def to_polars(self):
+    def to_polars(self, **kwargs):
         """
         Convert the expression to a polars DataFrame.
 
@@ -1496,7 +1496,7 @@ class QuadraticExpression(LinearExpression):
             {FACTOR_DIM: ["vars1", "vars2"]}
         ).to_dataset(FACTOR_DIM)
         ds = self.data.drop_vars("vars").assign(vars)
-        df = to_polars(ds)
+        df = to_polars(ds, **kwargs)
         df = filter_nulls_polars(df)
         df = group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
