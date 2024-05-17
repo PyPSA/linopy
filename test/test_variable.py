@@ -8,6 +8,7 @@ Created on Tue Nov  2 22:36:38 2021.
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from xarray.testing import assert_equal
@@ -249,6 +250,18 @@ def test_variable_stack(x):
     result = x.expand_dims("new_dim").stack(new=("new_dim", "first"))
     assert isinstance(result, linopy.variables.Variable)
     assert result.dims == ("new",)
+
+
+def test_variable_flat(x):
+    result = x.flat
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == x.size
+
+
+def test_variable_polars(x):
+    result = x.to_polars()
+    assert isinstance(result, pl.DataFrame)
+    assert len(result) == x.size
 
 
 def test_variable_sanitize(x):

@@ -24,6 +24,7 @@ from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
     check_has_nulls_polars,
+    filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_label_position,
@@ -565,8 +566,8 @@ class Constraint:
         Convert the constraint to a polars DataFrame.
 
         The resulting DataFrame represents a long table format of the all
-        non-masked constraints with non-zero coefficients. It contains the
-        columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+        non-masked constraints with non-zero coefficients. It typically
+        contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
 
         Returns
         -------
@@ -574,17 +575,18 @@ class Constraint:
         """
         ds = self.data
 
-        long_ds = ds[[k for k in ds if ("_term" in ds[k].dims) or (k == "labels")]]
-        long = to_polars(long_ds)
+        keys = [k for k in ds if ("_term" in ds[k].dims) or (k == "labels")]
+        long = to_polars(ds[keys])
 
+        long = filter_nulls_polars(long)
         long = group_terms_polars(long)
-        check_has_nulls_polars(long, self.name)
+        check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
         short = ds[[k for k in ds if "_term" not in ds[k].dims]]
         schema = infer_schema_polars(short)
         schema["sign"] = pl.Enum(["=", "<=", ">="])
         short = to_polars(short, schema=schema)
-        check_has_nulls_polars(short, self.name)
+        check_has_nulls_polars(short, name=f"{self.type} {self.name}")
 
         df = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]

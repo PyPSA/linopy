@@ -15,6 +15,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
@@ -29,13 +30,17 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     check_common_keys_values,
+    check_has_nulls_polars,
     fill_missing_coords,
+    filter_nulls_polars,
     forward_as_properties,
     generate_indices_for_printout,
     get_index_map,
+    group_terms_polars,
     has_optimized_model,
     print_single_expression,
     to_dataframe,
+    to_polars,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -1265,10 +1270,26 @@ class LinearExpression:
         any_nan = df.isna().any()
         if any_nan.any():
             fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Expression `{self.name}` contains nan's in field(s) {fields}"
-            )
+            raise ValueError(f"Expression contains nan's in field(s) {fields}")
 
+        return df
+
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert the expression to a polars DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked expressions with non-zero coefficients. It contains the
+        columns `coeffs`, `vars`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        df = to_polars(self.data)
+        df = filter_nulls_polars(df)
+        df = group_terms_polars(df)
+        check_has_nulls_polars(df, name=self.type)
         return df
 
     # Wrapped function which would convert variable to dataarray
@@ -1466,10 +1487,30 @@ class QuadraticExpression(LinearExpression):
         any_nan = df.isna().any()
         if any_nan.any():
             fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Expression `{self.name}` contains nan's in field(s) {fields}"
-            )
+            raise ValueError(f"Expression contains nan's in field(s) {fields}")
 
+        return df
+
+    def to_polars(self):
+        """
+        Convert the expression to a polars DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked expressions with non-zero coefficients. It contains the
+        columns `coeffs`, `vars`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        vars = self.data.vars.assign_coords(
+            {FACTOR_DIM: ["vars1", "vars2"]}
+        ).to_dataset(FACTOR_DIM)
+        ds = self.data.drop_vars("vars").assign(vars)
+        df = to_polars(ds)
+        df = filter_nulls_polars(df)
+        df = group_terms_polars(df)
+        check_has_nulls_polars(df, name=self.type)
         return df
 
     def to_matrix(self):

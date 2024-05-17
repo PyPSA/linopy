@@ -6,7 +6,8 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
-from functools import wraps
+import operator
+from functools import reduce, wraps
 from typing import Any, Dict, List, Optional, Union
 from warnings import warn
 
@@ -295,7 +296,7 @@ def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
     return pl.DataFrame({k: v.values.reshape(-1) for k, v in data.items()}, **kwargs)
 
 
-def check_has_nulls_polars(df: pl.DataFrame, name: str) -> None:
+def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
     """
     Checks if the given DataFrame contains any null values and raises a ValueError if it does.
 
@@ -310,7 +311,30 @@ def check_has_nulls_polars(df: pl.DataFrame, name: str) -> None:
     has_nulls = df.select(pl.col("*").is_null().any())
     null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
     if null_columns:
-        raise ValueError(f"Data in `{name}` contains nan's in field(s) {null_columns}")
+        raise ValueError(f"Data in {name} contains nan's in field(s) {null_columns}")
+
+
+def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Filter out rows containing "empty" values from a polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): The DataFrame to filter.
+
+    Returns:
+        pl.DataFrame: The filtered DataFrame.
+    """
+    cond = []
+    varcols = [c for c in df.columns if c.startswith("vars")]
+    if varcols:
+        cond.append(reduce(operator.or_, [pl.col(c).ne(-1) for c in varcols]))
+    if "coeffs" in df.columns:
+        cond.append(pl.col("coeffs").ne(0))
+    if "labels" in df.columns:
+        cond.append(pl.col("labels").ne(-1))
+
+    cond = reduce(operator.and_, cond)
+    return df.filter(cond)
 
 
 def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
@@ -324,17 +348,12 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
         pl.DataFrame: The DataFrame with grouped terms.
 
     """
-    conditions = pl.col("vars").ne(-1) & pl.col("coeffs").ne(0)
-    if "labels" in df.columns:
-        conditions = conditions & pl.col("labels").ne(-1)
-
-    df = df.filter(conditions)
-    # Group repeated variables in the same constraint
+    varcols = [c for c in df.columns if c.startswith("vars")]
     agg_list = [pl.col("coeffs").sum().alias("coeffs")]
-    for col in set(df.columns) - set(["coeffs", "vars", "labels"]):
+    for col in set(df.columns) - set(["coeffs", "labels", *varcols]):
         agg_list.append(pl.col(col).first().alias(col))
 
-    by = [c for c in ["labels", "vars"] if c in df.columns]
+    by = [c for c in ["labels"] + varcols if c in df.columns]
     df = df.group_by(by, maintain_order=True).agg(agg_list)
     return df
 

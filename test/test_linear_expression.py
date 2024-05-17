@@ -8,6 +8,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from xarray.testing import assert_equal
@@ -514,6 +515,22 @@ def test_linear_expression_isnull(v):
     filter = (expr.coeffs >= 10).any(TERM_DIM)
     expr = expr.where(filter)
     assert expr.isnull().sum() == 10
+
+
+def test_linear_expression_flat(v):
+    coeff = np.arange(1, 21)  # use non-zero coefficients
+    expr = coeff * v
+    df = expr.flat
+    assert isinstance(df, pd.DataFrame)
+    assert (df.coeffs == coeff).all()
+
+
+def test_linear_expression_to_polars(v):
+    coeff = np.arange(1, 21)  # use non-zero coefficients
+    expr = coeff * v
+    df = expr.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert (df["coeffs"].to_numpy() == coeff).all()
 
 
 def test_linear_expression_where(v):
