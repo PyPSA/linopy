@@ -8,6 +8,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from xarray.testing import assert_equal
@@ -264,7 +265,11 @@ def test_linear_expression_with_errors(m, x):
 
 def test_linear_expression_from_rule(m, x, y):
     def bound(m, i):
-        return (i - 1) * x[i - 1] + y[i] + 1 * x[i] if i == 1 else i * x[i] - y[i]
+        return (
+            (i - 1) * x.at[i - 1] + y.at[i] + 1 * x.at[i]
+            if i == 1
+            else i * x.at[i] - y.at[i]
+        )
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
@@ -276,7 +281,7 @@ def test_linear_expression_from_rule_with_return_none(m, x, y):
     # with return type None
     def bound(m, i):
         if i == 1:
-            return (i - 1) * x[i - 1] + y[i]
+            return (i - 1) * x.at[i - 1] + y.at[i]
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)
@@ -464,6 +469,42 @@ def test_linear_expression_multiplication_invalid(x, y, z):
         expr / x
 
 
+def test_expression_inherited_properties(x, y):
+    expr = 10 * x + y
+    assert isinstance(expr.attrs, dict)
+    assert isinstance(expr.coords, xr.Coordinates)
+    assert isinstance(expr.indexes, xr.core.indexes.Indexes)
+    assert isinstance(expr.sizes, xr.core.utils.Frozen)
+
+
+def test_linear_expression_getitem_single(x, y):
+    expr = 10 * x + y + 3
+    sel = expr[0]
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # one expression with two terms (constant is not counted)
+    assert sel.size == 2
+
+
+def test_linear_expression_getitem_slice(x, y):
+    expr = 10 * x + y + 3
+    sel = expr[:1]
+
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # one expression with two terms (constant is not counted)
+    assert sel.size == 2
+
+
+def test_linear_expression_getitem_list(x, y, z):
+    expr = 10 * x + z + 10
+    sel = expr[:, [0, 2]]
+    assert isinstance(sel, LinearExpression)
+    assert sel.nterm == 2
+    # four expressions with two terms (constant is not counted)
+    assert sel.size == 8
+
+
 def test_linear_expression_loc(x, y):
     expr = x + y
     assert expr.loc[0].size < expr.loc[:5].size
@@ -474,6 +515,22 @@ def test_linear_expression_isnull(v):
     filter = (expr.coeffs >= 10).any(TERM_DIM)
     expr = expr.where(filter)
     assert expr.isnull().sum() == 10
+
+
+def test_linear_expression_flat(v):
+    coeff = np.arange(1, 21)  # use non-zero coefficients
+    expr = coeff * v
+    df = expr.flat
+    assert isinstance(df, pd.DataFrame)
+    assert (df.coeffs == coeff).all()
+
+
+def test_linear_expression_to_polars(v):
+    coeff = np.arange(1, 21)  # use non-zero coefficients
+    expr = coeff * v
+    df = expr.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert (df["coeffs"].to_numpy() == coeff).all()
 
 
 def test_linear_expression_where(v):

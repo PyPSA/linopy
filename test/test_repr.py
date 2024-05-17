@@ -90,7 +90,7 @@ def test_variable_repr(var):
 @pytest.mark.parametrize("var", variables)
 def test_scalar_variable_repr(var):
     coord = tuple(var.indexes[c][0] for c in var.dims)
-    repr(var[coord])
+    repr(var.at[coord])
 
 
 @pytest.mark.parametrize("var", variables)
@@ -111,7 +111,7 @@ def test_linear_expression_long():
 @pytest.mark.parametrize("var", variables)
 def test_scalar_linear_expression_repr(var):
     coord = tuple(var.indexes[c][0] for c in var.dims)
-    repr(1 * var[coord])
+    repr(1 * var.at[coord])
 
 
 @pytest.mark.parametrize("var", variables)
@@ -132,7 +132,7 @@ def test_anonymous_constraint_repr(con):
 
 
 def test_scalar_constraint_repr():
-    repr(u[0, 0] >= 0)
+    repr(u.at[0, 0] >= 0)
 
 
 @pytest.mark.parametrize("var", variables)

@@ -22,22 +22,22 @@ def x(m):
 
 
 def test_scalar_constraint_repr(x):
-    c = x[0] >= 0
+    c = x.at[0] >= 0
     c.__repr__()
 
 
 def test_scalar_constraint_initialization(m, x):
-    c = x[0] >= 0
+    c = x.at[0] >= 0
     assert isinstance(c, linopy.constraints.AnonymousScalarConstraint)
 
-    c = m.add_constraints(x[0] >= 0)
+    c = m.add_constraints(x.at[0] >= 0)
     assert isinstance(c, linopy.constraints.Constraint)
 
-    c = m.add_constraints(x[0] + x[1] >= 0)
+    c = m.add_constraints(x.at[0] + x.at[1] >= 0)
     assert isinstance(c, linopy.constraints.Constraint)
 
-    c = m.add_constraints(x[0], GREATER_EQUAL, 0)
+    c = m.add_constraints(x.at[0], GREATER_EQUAL, 0)
     assert isinstance(c, linopy.constraints.Constraint)
 
-    c = m.add_constraints(x[0] + x[1], GREATER_EQUAL, 0)
+    c = m.add_constraints(x.at[0] + x.at[1], GREATER_EQUAL, 0)
     assert isinstance(c, linopy.constraints.Constraint)

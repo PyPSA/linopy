@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 from numpy import ones_like, zeros_like
 from scipy.sparse import tril, triu
@@ -258,7 +259,251 @@ def integers_to_file(m, f, log=False, batch_size=1000, integer_label="general"):
         f.writelines(batch)
 
 
-def to_file(m, fn, integer_label="general"):
+def to_lp_file(m, fn, integer_label):
+    log = m._xCounter > 10_000
+
+    batch_size = 5000
+
+    with open(fn, mode="w") as f:
+        start = time.time()
+
+        kwargs = dict(f=f, log=log, batch_size=batch_size)
+        objective_to_file(m, f, log=log)
+        constraints_to_file(m, **kwargs)
+        bounds_to_file(m, **kwargs)
+        binaries_to_file(m, **kwargs)
+        integers_to_file(m, integer_label=integer_label, **kwargs)
+        f.write("end\n")
+
+        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+
+def objective_write_linear_terms_polars(f, df):
+    cols = [
+        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.col("coeffs").cast(pl.String),
+        pl.lit(" x"),
+        pl.col("vars").cast(pl.String),
+    ]
+    df = df.select(pl.concat_str(cols, ignore_nulls=True))
+    df.write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
+
+
+def objective_write_quadratic_terms_polars(f, df):
+    cols = [
+        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.col("coeffs").mul(2).cast(pl.String),
+        pl.lit(" x"),
+        pl.col("vars1").cast(pl.String),
+        pl.lit(" * x"),
+        pl.col("vars2").cast(pl.String),
+    ]
+    f.write(b"+ [\n")
+    df = df.select(pl.concat_str(cols, ignore_nulls=True))
+    df.write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
+    f.write(b"] / 2\n")
+
+
+def objective_to_file_polars(m, f, log=False):
+    """
+    Write out the objective of a model to a lp file.
+    """
+    if log:
+        logger.info("Writing objective.")
+
+    sense = m.objective.sense
+    f.write(f"{sense}\n\nobj:\n\n".encode("utf-8"))
+    df = m.objective.to_polars()
+
+    if m.is_linear:
+        objective_write_linear_terms_polars(f, df)
+
+    elif m.is_quadratic:
+        lins = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
+        lins = lins.with_columns(
+            pl.when(pl.col("vars1").eq(-1))
+            .then(pl.col("vars2"))
+            .otherwise(pl.col("vars1"))
+            .alias("vars")
+        )
+        objective_write_linear_terms_polars(f, lins)
+
+        quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
+        objective_write_quadratic_terms_polars(f, quads)
+
+
+def bounds_to_file_polars(m, f, log=False):
+    """
+    Write out variables of a model to a lp file.
+    """
+    names = list(m.variables.continuous) + list(m.variables.integers)
+    if not len(list(names)):
+        return
+
+    f.write(b"\n\nbounds\n\n")
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing continuous variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        df = m.variables[name].to_polars()
+
+        columns = [
+            pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+            pl.col("lower").cast(pl.String),
+            pl.lit(" <= x"),
+            pl.col("labels").cast(pl.String),
+            pl.lit(" <= "),
+            pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+            pl.col("upper").cast(pl.String),
+        ]
+
+        kwargs = dict(
+            separator=" ", null_value="", quote_style="never", include_header=False
+        )
+        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+        formatted.write_csv(f, **kwargs)
+
+
+def binaries_to_file_polars(m, f, log=False):
+    """
+    Write out binaries of a model to a lp file.
+    """
+    names = m.variables.binaries
+    if not len(list(names)):
+        return
+
+    f.write(b"\n\nbinary\n\n")
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        df = m.variables[name].to_polars()
+
+        columns = [
+            pl.lit("x"),
+            pl.col("labels").cast(pl.String),
+        ]
+
+        kwargs = dict(
+            separator=" ", null_value="", quote_style="never", include_header=False
+        )
+        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+        formatted.write_csv(f, **kwargs)
+
+
+def integers_to_file_polars(m, f, log=False, integer_label="general"):
+    """
+    Write out integers of a model to a lp file.
+    """
+    names = m.variables.integers
+    if not len(list(names)):
+        return
+
+    f.write(f"\n\n{integer_label}\n\n".encode("utf-8"))
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing integer variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        df = m.variables[name].to_polars()
+
+        columns = [
+            pl.lit("x"),
+            pl.col("labels").cast(pl.String),
+        ]
+
+        kwargs = dict(
+            separator=" ", null_value="", quote_style="never", include_header=False
+        )
+        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+        formatted.write_csv(f, **kwargs)
+
+
+def constraints_to_file_polars(m, f, log=False, lazy=False):
+    if not len(m.constraints):
+        return
+
+    f.write(b"\n\ns.t.\n\n")
+    names = m.constraints
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    # to make this even faster, we can use polars expression
+    # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
+    for name in names:
+        df = m.constraints[name].to_polars()
+
+        # df = df.lazy()
+        # filter out repeated label values
+        df = df.with_columns(
+            pl.when(pl.col("labels").is_first_distinct())
+            .then(pl.col("labels"))
+            .otherwise(pl.lit(None))
+            .alias("labels")
+        )
+
+        columns = [
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
+            pl.col("labels").cast(pl.String),
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+            pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
+            pl.col("coeffs").cast(pl.String),
+            pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
+            pl.col("vars").cast(pl.String),
+            "sign",
+            pl.lit(" "),
+            pl.col("rhs").cast(pl.String),
+        ]
+
+        kwargs = dict(
+            separator=" ", null_value="", quote_style="never", include_header=False
+        )
+        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+        formatted.write_csv(f, **kwargs)
+
+        # in the future, we could use lazy dataframes when they support appending
+        # tp existent files
+        # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
+        # formatted.sink_csv(f,  **kwargs)
+
+
+def to_lp_file_polars(m, fn, integer_label="general"):
+    log = m._xCounter > 10_000
+
+    with open(fn, mode="wb") as f:
+        start = time.time()
+
+        kwargs = dict(f=f, log=log)
+        objective_to_file_polars(m, f, log=log)
+        constraints_to_file_polars(m, **kwargs)
+        bounds_to_file_polars(m, **kwargs)
+        binaries_to_file_polars(m, **kwargs)
+        integers_to_file_polars(m, integer_label=integer_label, **kwargs)
+        f.write(b"end\n")
+
+        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+
+def to_file(m, fn, io_api=None, integer_label="general"):
     """
     Write out a model to a lp or mps file.
     """
@@ -266,42 +511,27 @@ def to_file(m, fn, integer_label="general"):
     if fn.exists():
         fn.unlink()
 
-    if fn.suffix == ".lp":
-        log = m._xCounter > 10_000
+    if io_api is None:
+        io_api = fn.suffix[1:]
 
-        batch_size = 5000
+    if io_api == "lp":
+        to_lp_file(m, fn, integer_label)
+    elif io_api == "lp-polars":
+        to_lp_file_polars(m, fn, integer_label)
 
-        with open(fn, mode="w") as f:
-            start = time.time()
-
-            objective_to_file(m, f, log=log)
-            constraints_to_file(m, f, log=log, batch_size=batch_size)
-            bounds_to_file(m, f, log=log, batch_size=batch_size)
-            binaries_to_file(m, f, log=log, batch_size=batch_size)
-            integers_to_file(
-                m,
-                f,
-                log=log,
-                batch_size=batch_size,
-                integer_label=integer_label,
-            )
-            f.write("end\n")
-
-            logger.info(f" Writing time: {round(time.time()-start, 2)}s")
-
-    elif fn.suffix == ".mps":
+    elif io_api == "mps":
         if "highs" not in solvers.available_solvers:
             raise RuntimeError(
                 "Package highspy not installed. This is required to exporting to MPS file."
             )
 
         # Use very fast highspy implementation
-        # Might be replaced by custom writer, however needs C bindings for performance
+        # Might be replaced by custom writer, however needs C/Rust bindings for performance
         h = m.to_highspy()
         h.writeModel(str(fn))
     else:
         raise ValueError(
-            f"Cannot write problem to {fn}, file format `{fn.suffix}` not supported."
+            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
         )
 
     return fn

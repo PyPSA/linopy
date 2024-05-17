@@ -27,6 +27,7 @@ dependencies = [
     "numexpr",
     "xarray>=2023.9.0",
     "dask>=0.18.0",
+    "polars",
     "tqdm",
     "deprecation",
 ]

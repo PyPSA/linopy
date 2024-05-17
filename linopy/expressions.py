@@ -15,6 +15,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
@@ -29,13 +30,18 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     check_common_keys_values,
+    check_has_nulls,
+    check_has_nulls_polars,
     fill_missing_coords,
+    filter_nulls_polars,
     forward_as_properties,
     generate_indices_for_printout,
     get_index_map,
+    group_terms_polars,
     has_optimized_model,
     print_single_expression,
     to_dataframe,
+    to_polars,
 )
 from linopy.config import options
 from linopy.constants import (
@@ -242,7 +248,6 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"], const=["ndim"])
 class LinearExpression:
     """
     A linear expression consisting of terms of coefficients and variables.
@@ -579,6 +584,50 @@ class LinearExpression:
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
+
+    def __getitem__(self, selector) -> Union["LinearExpression", "QuadraticExpression"]:
+        """
+        Get selection from the expression.
+        This is a wrapper around the xarray __getitem__ method. It returns a
+        new LinearExpression object with the selected data.
+        """
+        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
+        return self.__class__(data, self.model)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of the expression
+        """
+        return self.data.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of the expression
+        """
+        return self.data.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of the expression
+        """
+        return self.data.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of the expression
+        """
+        return self.data.sizes
+
+    @property
+    def ndim(self):
+        """
+        Get the number of dimensions.
+        """
+        return self.const.ndim
 
     @property
     def loc(self):
@@ -1215,17 +1264,26 @@ class LinearExpression:
             return mask
 
         df = to_dataframe(ds, mask_func=mask_func)
-
-        # Group repeated variables in the same constraint
         df = df.groupby("vars", as_index=False).sum()
+        check_has_nulls(df, name=self.type)
+        return df
 
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Expression `{self.name}` contains nan's in field(s) {fields}"
-            )
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert the expression to a polars DataFrame.
 
+        The resulting DataFrame represents a long table format of the all
+        non-masked expressions with non-zero coefficients. It contains the
+        columns `coeffs`, `vars`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        df = to_polars(self.data)
+        df = filter_nulls_polars(df)
+        df = group_terms_polars(df)
+        check_has_nulls_polars(df, name=self.type)
         return df
 
     # Wrapped function which would convert variable to dataarray
@@ -1272,7 +1330,6 @@ class LinearExpression:
     stack = exprwrap(Dataset.stack)
 
 
-@forward_as_properties(data=["attrs", "coords", "indexes", "sizes"])
 class QuadraticExpression(LinearExpression):
     """
     A quadratic expression consisting of terms of coefficients and variables.
@@ -1420,14 +1477,29 @@ class QuadraticExpression(LinearExpression):
         df = to_dataframe(ds, mask_func=mask_func)
         # Group repeated variables in the same constraint
         df = df.groupby(["vars1", "vars2"], as_index=False).sum()
+        check_has_nulls(df, name=self.type)
+        return df
 
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Expression `{self.name}` contains nan's in field(s) {fields}"
-            )
+    def to_polars(self, **kwargs):
+        """
+        Convert the expression to a polars DataFrame.
 
+        The resulting DataFrame represents a long table format of the all
+        non-masked expressions with non-zero coefficients. It contains the
+        columns `coeffs`, `vars`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        vars = self.data.vars.assign_coords(
+            {FACTOR_DIM: ["vars1", "vars2"]}
+        ).to_dataset(FACTOR_DIM)
+        ds = self.data.drop_vars("vars").assign(vars)
+        df = to_polars(ds, **kwargs)
+        df = filter_nulls_polars(df)
+        df = group_terms_polars(df)
+        check_has_nulls_polars(df, name=self.type)
         return df
 
     def to_matrix(self):

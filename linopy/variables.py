@@ -13,6 +13,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from numpy import floating, issubdtype
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.types import Dims
@@ -21,8 +22,10 @@ import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    check_has_nulls,
+    check_has_nulls_polars,
+    filter_nulls_polars,
     format_string_as_variable_name,
-    forward_as_properties,
     generate_indices_for_printout,
     get_label_position,
     has_optimized_model,
@@ -31,6 +34,7 @@ from linopy.common import (
     print_single_variable,
     save_join,
     to_dataframe,
+    to_polars,
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
@@ -61,20 +65,6 @@ def _var_unwrap(var):
     return var.data if isinstance(var, Variable) else var
 
 
-@forward_as_properties(
-    data=[
-        "attrs",
-        "coords",
-        "indexes",
-        "sizes",
-    ],
-    labels=[
-        "shape",
-        "size",
-        "dims",
-        "ndim",
-    ],
-)
 class Variable:
     """
     Variable container for storing variable labels.
@@ -168,21 +158,99 @@ class Variable:
         self._data = data
         self._model = model
 
-    def __getitem__(self, keys) -> "ScalarVariable":
-        keys = keys if isinstance(keys, tuple) else (keys,)
-        assert all(map(pd.api.types.is_scalar, keys)), (
-            "The get function of Variable is different as of xarray.DataArray. "
-            "Set single values for each dimension in order to obtain a "
-            "ScalarVariable. For all other purposes, use `.sel` and `.isel`."
-        )
-        if not self.labels.ndim:
-            return ScalarVariable(self.labels.item(), self.model)
-        assert self.labels.ndim == len(
-            keys
-        ), f"expected {self.labels.ndim} keys, got {len(keys)}."
-        key = dict(zip(self.labels.dims, keys))
-        selector = [self.labels.get_index(k).get_loc(v) for k, v in key.items()]
-        return ScalarVariable(self.labels.data[tuple(selector)], self.model)
+    def __getitem__(self, selector) -> Union["Variable", "ScalarVariable"]:
+
+        keys = selector if isinstance(selector, tuple) else (selector,)
+        if all(map(pd.api.types.is_scalar, keys)):
+            warn(
+                "Accessing a single value with `Variable[...]` and return type "
+                "ScalarVariable is deprecated. In future, this will return a Variable."
+                "To get a ScalarVariable use `Variable.at[...]` instead.",
+                FutureWarning,
+            )
+            return self.at[keys]
+
+        else:
+            # return selected Variable
+            data = Dataset(
+                {k: self.data[k][selector] for k in self.data}, attrs=self.attrs
+            )
+            return self.__class__(data, self.model, self.name)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of the variable.
+        """
+        return self.data.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of the variable.
+        """
+        return self.data.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of the variable.
+        """
+        return self.data.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of the variable.
+        """
+        return self.data.sizes
+
+    @property
+    def shape(self):
+        """
+        Get the shape of the variable.
+        """
+        return self.labels.shape
+
+    @property
+    def size(self):
+        """
+        Get the size of the variable.
+        """
+        return self.labels.size
+
+    @property
+    def dims(self):
+        """
+        Get the dimensions of the variable.
+        """
+        return self.labels.dims
+
+    @property
+    def ndim(self):
+        """
+        Get the number of dimensions of the variable.
+        """
+        return self.labels.ndim
+
+    @property
+    def at(self):
+        """
+        Access a single value of the variable.
+
+        This method is a wrapper around the `__getitem__` method and allows
+        to access a single value of the variable.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> import pandas as pd
+        >>> m = Model()
+        >>> x = m.add_variables(pd.Series([0, 0]), 1, name="x")
+        >>> x.at[0]
+        ScalarVariable: x[0]
+        """
+        return AtIndexer(self)
 
     @property
     def loc(self):
@@ -717,13 +785,23 @@ class Variable:
             return data["labels"] != -1
 
         df = to_dataframe(ds, mask_func=mask_func)
+        check_has_nulls(df, name=f"{self.type} {self.name}")
+        return df
 
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Variable `{self.name}` contains nan's in field(s) {fields}"
-            )
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert all variables to a single polars DataFrame.
+
+        The resulting dataframe is a long format of the variables
+        with columns `labels`, `lower`, 'upper` and `mask`.
+
+        Returns
+        -------
+        pl.DataFrame
+        """
+        df = to_polars(self.data)
+        df = filter_nulls_polars(df)
+        check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
     def sum(self, dim=None, **kwargs):
@@ -935,15 +1013,31 @@ class Variable:
     stack = varwrap(Dataset.stack)
 
 
+class AtIndexer:
+    __slots__ = ("object",)
+
+    def __init__(self, obj):
+        self.object = obj
+
+    def __getitem__(self, keys) -> "ScalarVariable":
+
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        object = self.object
+
+        if not all(map(pd.api.types.is_scalar, keys)):
+            raise ValueError("Only scalar keys are allowed.")
+        # return single scalar
+        if not object.labels.ndim:
+            return ScalarVariable(object.labels.item(), object.model)
+        assert object.labels.ndim == len(
+            keys
+        ), f"expected {object.labels.ndim} keys, got {len(keys)}."
+        key = dict(zip(object.labels.dims, keys))
+        keys = [object.labels.get_index(k).get_loc(v) for k, v in key.items()]
+        return ScalarVariable(object.labels.data[tuple(keys)], object.model)
+
+
 @dataclass(repr=False)
-@forward_as_properties(
-    labels=[
-        "attrs",
-        "coords",
-        "indexes",
-        "dims",
-    ]
-)
 class Variables:
     """
     A variables container used for storing multiple variable arrays.
@@ -1034,6 +1128,34 @@ class Variables:
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+
+    @property
+    def attrs(self):
+        """
+        Get the attributes of all variables.
+        """
+        return self.labels.attrs
+
+    @property
+    def coords(self):
+        """
+        Get the coordinates of all variables.
+        """
+        return self.labels.coords
+
+    @property
+    def indexes(self):
+        """
+        Get the indexes of all variables.
+        """
+        return self.labels.indexes
+
+    @property
+    def sizes(self):
+        """
+        Get the sizes of all variables.
+        """
+        return self.labels.sizes
 
     @property
     def labels(self):

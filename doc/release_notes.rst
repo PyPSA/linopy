@@ -5,7 +5,21 @@ Upcoming Version
 ----------------
 
 
-Version 0.3.8
+Version 0.3.10
+--------------
+
+* The classes `Variable`, `LinearExpression` and `Constraint` now have a new `getitem` method that allows selecting a subset of the object in the same way as `xarray` objects, i.e. by integer labels or boolean index. Example usage: `x[[1, 2]]` or `x[x.indexes["some_index"] > 5]`.
+
+* The class `Constraint` now has a new method `.loc` to select a subset of the constraint by labels.
+
+* Selecting a single variable with the `getitem` (`[]`) method now raises a `FutureWarning` that the return type will change to `Variable` instead of a `ScalarVariable` in the future. To get a `ScalarVariable` in the future, use the `at[]` method.
+
+* A new module `examples` was added which contains example models. For example, you can call `m = linopy.examples.benchmark_model()`.
+
+* A new memory-efficient and super fast LP file writing method was added which uses the `Polars package <https://github.com/pola-rs/polars>`_. It is still in experimental mode but seems to be very promising. Activate it with the `io_api="lp-polars"` argument in the `solve` function.
+
+
+Version 0.3.9
 -------------
 
 

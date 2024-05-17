@@ -21,10 +21,13 @@ from linopy.solvers import available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
 
-params = [(name, "lp") for name in available_solvers]
-# mps io is only supported via highspy
+io_apis = ["lp", "lp-polars"]
+
 if "highs" in available_solvers:
-    params += [(name, "mps") for name in available_solvers]
+    # mps io is only supported via highspy
+    io_apis.append("mps")
+
+params = [(name, io_api) for name in available_solvers for io_api in io_apis]
 
 if "gurobi" in available_solvers:
     params.append(("gurobi", "direct"))
@@ -540,7 +543,10 @@ def test_milp_model_r(milp_model_r, solver, io_api):
         assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
+@pytest.mark.parametrize(
+    "solver,io_api",
+    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+)
 def test_quadratic_model(quadratic_model, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
@@ -553,7 +559,10 @@ def test_quadratic_model(quadratic_model, solver, io_api):
             quadratic_model.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
+@pytest.mark.parametrize(
+    "solver,io_api",
+    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+)
 def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
@@ -566,7 +575,10 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
             quadratic_model_cross_terms.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
+@pytest.mark.parametrize(
+    "solver,io_api",
+    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+)
 def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
     quadratic_model.constraints.remove("con0")
     if solver in feasible_quadratic_solvers:
@@ -579,7 +591,10 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
             quadratic_model.solve(solver, io_api=io_api)
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if p != ("mindopt", "lp")])
+@pytest.mark.parametrize(
+    "solver,io_api",
+    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+)
 def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_unbounded.solve(solver, io_api=io_api)
