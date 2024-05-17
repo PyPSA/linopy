@@ -23,7 +23,7 @@ from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
-    check_has_nulls_pandas,
+    check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
     format_string_as_variable_name,
@@ -553,7 +553,7 @@ class Constraint:
         agg = dict(coeffs="sum", rhs="first", sign="first")
         agg.update({k: "first" for k in df.columns if k not in agg})
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
-        check_has_nulls_pandas(df, name=f"{self.type} {self.name}")
+        check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
     def to_polars(self):

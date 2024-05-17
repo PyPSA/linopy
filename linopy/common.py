@@ -252,7 +252,7 @@ def to_dataframe(ds, mask_func=None):
     return pd.DataFrame(data, copy=False)
 
 
-def check_has_nulls_pandas(df: pd.DataFrame, name: str):
+def check_has_nulls(df: pd.DataFrame, name: str):
     any_nan = df.isna().any()
     if any_nan.any():
         fields = ", ".join("`" + df.columns[any_nan] + "`")

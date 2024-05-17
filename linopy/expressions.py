@@ -30,7 +30,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     check_common_keys_values,
-    check_has_nulls_pandas,
+    check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
     filter_nulls_polars,
@@ -1265,7 +1265,7 @@ class LinearExpression:
 
         df = to_dataframe(ds, mask_func=mask_func)
         df = df.groupby("vars", as_index=False).sum()
-        check_has_nulls_pandas(df, name=self.type)
+        check_has_nulls(df, name=self.type)
         return df
 
     def to_polars(self) -> pl.DataFrame:
@@ -1477,7 +1477,7 @@ class QuadraticExpression(LinearExpression):
         df = to_dataframe(ds, mask_func=mask_func)
         # Group repeated variables in the same constraint
         df = df.groupby(["vars1", "vars2"], as_index=False).sum()
-        check_has_nulls_pandas(df, name=self.type)
+        check_has_nulls(df, name=self.type)
         return df
 
     def to_polars(self, **kwargs):
