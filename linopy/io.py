@@ -107,44 +107,6 @@ def objective_to_file(m, f, log=False, batch_size=10000):
         f.writelines(batch)
 
 
-def constraints_to_file_polars(m, f, log=False):
-    if not len(m.constraints):
-        return
-
-    f.write(b"\n\ns.t.\n\n")
-    names = m.constraints
-    if log:
-        names = tqdm(
-            list(names),
-            desc="Writing constraints.",
-            colour=TQDM_COLOR,
-        )
-
-    for name in names:
-        df = m.constraints[name].flatp
-        # filter out repeated label values
-        df = df.with_columns(
-            pl.when(pl.col("labels").is_first_distinct())
-            .then(pl.col("labels"))
-            .otherwise(pl.lit(None))
-            .alias("labels")
-        )
-
-        formatted = df.with_columns(
-            [
-                pl.col("labels")
-                .apply(lambda x: f"c{x}:\n", return_dtype=str)
-                .alias("labels"),
-                pl.col("coeffs")
-                .apply(lambda x: f"{x:+.12g}", return_dtype=str)
-                .alias("coeffs"),
-                pl.col("vars").apply(lambda x: f"x{x}", return_dtype=str).alias("vars"),
-            ]
-        )
-
-        formatted.write_csv(f, include_header=False, separator=" ", null_value="")
-
-
 def constraints_to_file(m, f, log=False, batch_size=50000):
     if not len(m.constraints):
         return
@@ -344,6 +306,57 @@ def to_file(m, fn, integer_label="general"):
         )
 
     return fn
+
+
+def constraints_to_file_polars(m, f, log=False, lazy=False):
+    if not len(m.constraints):
+        return
+
+    f.write(b"\n\ns.t.\n\n")
+    names = m.constraints
+    if log:
+        names = tqdm(
+            list(names),
+            desc="Writing constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    # to make this even faster, we can use polars expression
+    # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
+    for name in names:
+        df = m.constraints[name].to_polars()
+
+        # df = df.lazy()
+        # filter out repeated label values
+        df = df.with_columns(
+            pl.when(pl.col("labels").is_first_distinct())
+            .then(pl.col("labels"))
+            .otherwise(pl.lit(None))
+            .alias("labels")
+        )
+
+        columns = [
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
+            pl.col("labels").cast(pl.String),
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+            pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
+            pl.col("coeffs").cast(pl.String),
+            pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
+            pl.col("vars").cast(pl.String),
+            "sign",
+            pl.col("rhs").cast(pl.String),
+        ]
+
+        kwargs = dict(
+            separator=" ", null_value="", quote_style="never", include_header=False
+        )
+        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+        formatted.write_csv(f, **kwargs)
+
+        # in the future, we could use lazy dataframes when they support appending
+        # tp existent files
+        # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
+        # formatted.sink_csv(f,  **kwargs)
 
 
 def to_mosek(model, task=None):

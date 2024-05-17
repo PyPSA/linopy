@@ -251,7 +251,16 @@ def to_dataframe(ds, mask_func=None):
     return pd.DataFrame(data, copy=False)
 
 
-def infer_polar_schema(ds):
+def infer_schema_polars(ds: pl.DataFrame) -> dict:
+    """
+    Infer the schema for a Polars DataFrame based on the data types of its columns.
+
+    Args:
+        ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
+
+    Returns:
+        dict: A dictionary mapping column names to their corresponding Polars data types.
+    """
     schema = {}
     for col_name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
@@ -267,7 +276,7 @@ def infer_polar_schema(ds):
     return schema
 
 
-def to_polars_dataframe(ds):
+def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
     """
     Convert an xarray Dataset to a polars DataFrame.
 
@@ -278,9 +287,56 @@ def to_polars_dataframe(ds):
     ----------
     ds : xarray.Dataset
         Dataset to convert to a DataFrame.
+    kwargs : dict
+        Additional keyword arguments to be passed to the
+        DataFrame constructor.
     """
     data = broadcast(ds)[0]
-    return pl.DataFrame({k: v.values.reshape(-1) for k, v in data.items()})
+    return pl.DataFrame({k: v.values.reshape(-1) for k, v in data.items()}, **kwargs)
+
+
+def check_has_nulls_polars(df: pl.DataFrame, name: str) -> None:
+    """
+    Checks if the given DataFrame contains any null values and raises a ValueError if it does.
+
+    Args:
+        df (pl.DataFrame): The DataFrame to check for null values.
+        name (str): The name of the data container being checked.
+
+    Raises:
+        ValueError: If the DataFrame contains null values,
+        a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
+    """
+    has_nulls = df.select(pl.col("*").is_null().any())
+    null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
+    if null_columns:
+        raise ValueError(f"Data in `{name}` contains nan's in field(s) {null_columns}")
+
+
+def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Groups terms in a polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): The input DataFrame containing the terms.
+
+    Returns:
+        pl.DataFrame: The DataFrame with grouped terms.
+
+    """
+    conditions = pl.col("vars").ne(-1) & pl.col("coeffs").ne(0)
+    if "labels" in df.columns:
+        conditions = conditions & pl.col("labels").ne(-1)
+
+    df = df.filter(conditions)
+    # Group repeated variables in the same constraint
+    agg_list = [pl.col("coeffs").sum().alias("coeffs")]
+    for col in set(df.columns) - set(["coeffs", "vars", "labels"]):
+        agg_list.append(pl.col(col).first().alias(col))
+
+    by = [c for c in ["labels", "vars"] if c in df.columns]
+    df = df.group_by(by, maintain_order=True).agg(agg_list)
+    return df
 
 
 def save_join(*dataarrays, integer_dtype=False):
