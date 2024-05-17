@@ -252,6 +252,13 @@ def to_dataframe(ds, mask_func=None):
     return pd.DataFrame(data, copy=False)
 
 
+def check_has_nulls_pandas(df: pd.DataFrame, name: str):
+    any_nan = df.isna().any()
+    if any_nan.any():
+        fields = ", ".join("`" + df.columns[any_nan] + "`")
+        raise ValueError(f"{name} contains nan's in field(s) {fields}")
+
+
 def infer_schema_polars(ds: pl.DataFrame) -> dict:
     """
     Infer the schema for a Polars DataFrame based on the data types of its columns.
@@ -311,7 +318,7 @@ def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
     has_nulls = df.select(pl.col("*").is_null().any())
     null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
     if null_columns:
-        raise ValueError(f"Data in {name} contains nan's in field(s) {null_columns}")
+        raise ValueError(f"{name} contains nan's in field(s) {null_columns}")
 
 
 def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:

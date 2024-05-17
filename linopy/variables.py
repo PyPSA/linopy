@@ -22,6 +22,7 @@ import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    check_has_nulls_pandas,
     check_has_nulls_polars,
     filter_nulls_polars,
     format_string_as_variable_name,
@@ -784,13 +785,7 @@ class Variable:
             return data["labels"] != -1
 
         df = to_dataframe(ds, mask_func=mask_func)
-
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Variable `{self.name}` contains nan's in field(s) {fields}"
-            )
+        check_has_nulls_pandas(df, name=f"{self.type} {self.name}")
         return df
 
     def to_polars(self) -> pl.DataFrame:
