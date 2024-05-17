@@ -13,6 +13,7 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from numpy import floating, issubdtype
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.types import Dims
@@ -21,6 +22,9 @@ import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    check_has_nulls,
+    check_has_nulls_polars,
+    filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_label_position,
@@ -30,6 +34,7 @@ from linopy.common import (
     print_single_variable,
     save_join,
     to_dataframe,
+    to_polars,
 )
 from linopy.config import options
 from linopy.constants import TERM_DIM
@@ -780,13 +785,23 @@ class Variable:
             return data["labels"] != -1
 
         df = to_dataframe(ds, mask_func=mask_func)
+        check_has_nulls(df, name=f"{self.type} {self.name}")
+        return df
 
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Variable `{self.name}` contains nan's in field(s) {fields}"
-            )
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert all variables to a single polars DataFrame.
+
+        The resulting dataframe is a long format of the variables
+        with columns `labels`, `lower`, 'upper` and `mask`.
+
+        Returns
+        -------
+        pl.DataFrame
+        """
+        df = to_polars(self.data)
+        df = filter_nulls_polars(df)
+        check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
     def sum(self, dim=None, **kwargs):

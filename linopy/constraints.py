@@ -13,6 +13,7 @@ from typing import Any, Dict, Sequence, Union
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 from numpy import array
 from scipy.sparse import csc_matrix
@@ -22,10 +23,15 @@ from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
+    check_has_nulls,
+    check_has_nulls_polars,
+    filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_label_position,
+    group_terms_polars,
     has_optimized_model,
+    infer_schema_polars,
     is_constant,
     maybe_replace_signs,
     print_coord,
@@ -34,6 +40,7 @@ from linopy.common import (
     replace_by_map,
     save_join,
     to_dataframe,
+    to_polars,
 )
 from linopy.config import options
 from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
@@ -546,14 +553,43 @@ class Constraint:
         agg = dict(coeffs="sum", rhs="first", sign="first")
         agg.update({k: "first" for k in df.columns if k not in agg})
         df = df.groupby(["labels", "vars"], as_index=False).aggregate(agg)
-
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(
-                f"Constraint `{self.name}` contains nan's in field(s) {fields}"
-            )
+        check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
+
+    def to_polars(self):
+        """
+        Convert the constraint to a polars DataFrame.
+
+        The resulting DataFrame represents a long table format of the all
+        non-masked constraints with non-zero coefficients. It typically
+        contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Returns
+        -------
+        df : polars.DataFrame
+        """
+        ds = self.data
+
+        keys = [k for k in ds if ("_term" in ds[k].dims) or (k == "labels")]
+        long = to_polars(ds[keys])
+
+        long = filter_nulls_polars(long)
+        long = group_terms_polars(long)
+        check_has_nulls_polars(long, name=f"{self.type} {self.name}")
+
+        short = ds[[k for k in ds if "_term" not in ds[k].dims]]
+        schema = infer_schema_polars(short)
+        schema["sign"] = pl.Enum(["=", "<=", ">="])
+        short = to_polars(short, schema=schema)
+        short = filter_nulls_polars(short)
+        check_has_nulls_polars(short, name=f"{self.type} {self.name}")
+
+        df = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
+        # delete subsequent non-null rhs (happens is all vars per label are -1)
+        is_non_null = df["rhs"].is_not_null()
+        prev_non_is_null = is_non_null.shift(1).fill_null(False)
+        df = df.filter(is_non_null & ~prev_non_is_null | ~is_non_null)
+        return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     sel = conwrap(Dataset.sel)
 

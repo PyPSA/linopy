@@ -3,6 +3,7 @@
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 from scipy.sparse import csc_matrix
 from xarray import DataArray
@@ -215,6 +216,15 @@ def test_quadratic_expression_flat(x, y):
     assert expr.nterm == 2
     assert (expr.flat.coeffs == 2).all()
     assert len(expr.flat) == 2
+
+
+def test_linear_expression_to_polars(x, y):
+    expr = x * y + x + 5
+    df = expr.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert "vars1" in df.columns
+    assert "vars2" in df.columns
+    assert len(df) == expr.nterm * 2
 
 
 def test_quadratic_expression_to_matrix(model, x, y):

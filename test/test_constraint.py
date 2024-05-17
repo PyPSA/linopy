@@ -8,6 +8,7 @@ Created on Tue Nov  2 22:38:48 2021.
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from xarray.testing import assert_equal
@@ -331,6 +332,10 @@ def test_constraint_sel(c):
 
 def test_constraint_flat(c):
     assert isinstance(c.flat, pd.DataFrame)
+
+
+def test_constraint_to_polars(c):
+    assert isinstance(c.to_polars(), pl.DataFrame)
 
 
 def test_constraint_assignment_with_anonymous_constraints(m, x, y):
