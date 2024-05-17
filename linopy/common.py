@@ -7,6 +7,7 @@ This module contains commonly used functions.
 """
 
 import operator
+import os
 from functools import reduce, wraps
 from typing import Any, Dict, List, Optional, Union
 from warnings import warn
@@ -272,7 +273,7 @@ def infer_schema_polars(ds: pl.DataFrame) -> dict:
     schema = {}
     for col_name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
-            schema[col_name] = pl.Int64
+            schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[col_name] = pl.Float64
         elif np.issubdtype(array.dtype, np.bool_):
