@@ -300,11 +300,9 @@ def write_lazyframe(f, lf):
 
     def write_batch(batch):
         writer.write(batch.to_arrow())
-        return pl.DataFrame({"written": np.ones(batch.shape[0], dtype=int)})
+        return pl.DataFrame()
 
-    lf.map_batches(
-        write_batch, schema={"written": pl.Int64}, streamable=True
-    ).sum().collect()
+    lf.map_batches(write_batch, schema={}, streamable=True).collect()
 
 
 def objective_write_linear_terms_polars(f, lf):
