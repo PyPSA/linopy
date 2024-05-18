@@ -287,7 +287,7 @@ def write_lazyframe(f, lf):
     def to_pyarrow_schema(schema):
         return pa.schema(
             (k, pl.datatypes.py_type_to_arrow_type(pl.datatypes.dtype_to_py_type(v)))
-            for k, v in lf.schema.items()
+            for k, v in schema.items()
         )
 
     writer = pa.csv.CSVWriter(
