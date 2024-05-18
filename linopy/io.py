@@ -3,6 +3,7 @@
 """
 Module containing all import/export functionalities.
 """
+
 import logging
 import shutil
 import time
@@ -12,6 +13,8 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import pandas as pd
 import polars as pl
+import pyarrow as pa
+import pyarrow.csv
 import xarray as xr
 from numpy import ones_like, zeros_like
 from scipy.sparse import tril, triu
@@ -278,20 +281,43 @@ def to_lp_file(m, fn, integer_label):
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
-def objective_write_linear_terms_polars(f, df):
+def write_lazyframe(f, lf):
+    lf = lf.fill_null("")
+
+    def to_pyarrow_schema(schema):
+        return pa.schema(
+            (k, pl.datatypes.py_type_to_arrow_type(pl.datatypes.dtype_to_py_type(v)))
+            for k, v in lf.schema.items()
+        )
+
+    writer = pa.csv.CSVWriter(
+        f,
+        to_pyarrow_schema(lf.schema),
+        write_options=pa.csv.WriteOptions(
+            include_header=False, delimiter=" ", quoting_style="none"
+        ),
+    )
+
+    def write_batch(batch):
+        writer.write(batch.to_arrow())
+        return pl.DataFrame({"written": np.ones(batch.shape[0], dtype=int)})
+
+    lf.map_batches(
+        write_batch, schema={"written": pl.Int64}, streamable=True
+    ).sum().collect()
+
+
+def objective_write_linear_terms_polars(f, lf):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").cast(pl.String),
         pl.lit(" x"),
         pl.col("vars").cast(pl.String),
     ]
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    write_lazyframe(f, lf.select(pl.concat_str(cols, ignore_nulls=True)))
 
 
-def objective_write_quadratic_terms_polars(f, df):
+def objective_write_quadratic_terms_polars(f, lf):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").mul(2).cast(pl.String),
@@ -301,10 +327,7 @@ def objective_write_quadratic_terms_polars(f, df):
         pl.col("vars2").cast(pl.String),
     ]
     f.write(b"+ [\n")
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    write_lazyframe(lf.select(pl.concat_str(cols, ignore_nulls=True)))
     f.write(b"] / 2\n")
 
 
@@ -317,13 +340,13 @@ def objective_to_file_polars(m, f, log=False):
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode("utf-8"))
-    df = m.objective.to_polars()
+    lf = m.objective.to_polars()
 
     if m.is_linear:
-        objective_write_linear_terms_polars(f, df)
+        objective_write_linear_terms_polars(f, lf)
 
     elif m.is_quadratic:
-        lins = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
+        lins = lf.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
         lins = lins.with_columns(
             pl.when(pl.col("vars1").eq(-1))
             .then(pl.col("vars2"))
@@ -332,7 +355,7 @@ def objective_to_file_polars(m, f, log=False):
         )
         objective_write_linear_terms_polars(f, lins)
 
-        quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
+        quads = lf.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
         objective_write_quadratic_terms_polars(f, quads)
 
 
@@ -353,7 +376,7 @@ def bounds_to_file_polars(m, f, log=False):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        lf = m.variables[name].to_polars()
 
         columns = [
             pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
@@ -365,11 +388,7 @@ def bounds_to_file_polars(m, f, log=False):
             pl.col("upper").cast(pl.String),
         ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+        write_lazyframe(f, lf.select(pl.concat_str(columns, ignore_nulls=True)))
 
 
 def binaries_to_file_polars(m, f, log=False):
@@ -389,18 +408,14 @@ def binaries_to_file_polars(m, f, log=False):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        lf = m.variables[name].to_polars()
 
         columns = [
             pl.lit("x"),
             pl.col("labels").cast(pl.String),
         ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+        write_lazyframe(f, lf.select(pl.concat_str(columns, ignore_nulls=True)))
 
 
 def integers_to_file_polars(m, f, log=False, integer_label="general"):
@@ -420,18 +435,14 @@ def integers_to_file_polars(m, f, log=False, integer_label="general"):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        lf = m.variables[name].to_polars()
 
         columns = [
             pl.lit("x"),
             pl.col("labels").cast(pl.String),
         ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+        write_lazyframe(f, lf.select(pl.concat_str(columns, ignore_nulls=True)))
 
 
 def constraints_to_file_polars(m, f, log=False, lazy=False):
@@ -447,14 +458,14 @@ def constraints_to_file_polars(m, f, log=False, lazy=False):
             colour=TQDM_COLOR,
         )
 
-    # to make this even faster, we can use polars expression
+    # to make this even faster, we could create a custom polars expression plugin
     # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
-        df = m.constraints[name].to_polars()
+        lf = m.constraints[name].to_polars()
 
-        # df = df.lazy()
+        # lf = lf.lazy()
         # filter out repeated label values
-        df = df.with_columns(
+        lf = lf.with_columns(
             pl.when(pl.col("labels").is_first_distinct())
             .then(pl.col("labels"))
             .otherwise(pl.lit(None))
@@ -474,16 +485,7 @@ def constraints_to_file_polars(m, f, log=False, lazy=False):
             pl.col("rhs").cast(pl.String),
         ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
-
-        # in the future, we could use lazy dataframes when they support appending
-        # tp existent files
-        # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
-        # formatted.sink_csv(f,  **kwargs)
+        write_lazyframe(f, lf.select(pl.concat_str(columns, ignore_nulls=True)))
 
 
 def to_lp_file_polars(m, fn, integer_label="general"):

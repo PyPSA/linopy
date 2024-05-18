@@ -159,7 +159,6 @@ class Variable:
         self._model = model
 
     def __getitem__(self, selector) -> Union["Variable", "ScalarVariable"]:
-
         keys = selector if isinstance(selector, tuple) else (selector,)
         if all(map(pd.api.types.is_scalar, keys)):
             warn(
@@ -799,10 +798,10 @@ class Variable:
         -------
         pl.DataFrame
         """
-        df = to_polars(self.data)
-        df = filter_nulls_polars(df)
-        check_has_nulls_polars(df, name=f"{self.type} {self.name}")
-        return df
+        lf = to_polars(self.data)
+        lf = filter_nulls_polars(lf)
+        check_has_nulls_polars(lf, name=f"{self.type} {self.name}")
+        return lf
 
     def sum(self, dim=None, **kwargs):
         """
@@ -935,7 +934,8 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -962,7 +962,8 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1020,7 +1021,6 @@ class AtIndexer:
         self.object = obj
 
     def __getitem__(self, keys) -> "ScalarVariable":
-
         keys = keys if isinstance(keys, tuple) else (keys,)
         object = self.object
 

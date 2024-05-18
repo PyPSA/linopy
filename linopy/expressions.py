@@ -1268,9 +1268,9 @@ class LinearExpression:
         check_has_nulls(df, name=self.type)
         return df
 
-    def to_polars(self) -> pl.DataFrame:
+    def to_polars(self) -> pl.LazyFrame:
         """
-        Convert the expression to a polars DataFrame.
+        Convert the expression to a polars lazyFrame.
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
@@ -1278,13 +1278,13 @@ class LinearExpression:
 
         Returns
         -------
-        df : polars.DataFrame
+        lf : polars.LazyFrame
         """
-        df = to_polars(self.data)
-        df = filter_nulls_polars(df)
-        df = group_terms_polars(df)
-        check_has_nulls_polars(df, name=self.type)
-        return df
+        lf = to_polars(self.data)
+        lf = filter_nulls_polars(lf)
+        lf = group_terms_polars(lf)
+        check_has_nulls_polars(lf, name=self.type)
+        return lf
 
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)
@@ -1480,7 +1480,7 @@ class QuadraticExpression(LinearExpression):
         check_has_nulls(df, name=self.type)
         return df
 
-    def to_polars(self, **kwargs):
+    def to_polars(self, **kwargs) -> pl.LazyFrame:
         """
         Convert the expression to a polars DataFrame.
 
@@ -1490,17 +1490,17 @@ class QuadraticExpression(LinearExpression):
 
         Returns
         -------
-        df : polars.DataFrame
+        lf : polars.LazyFrame
         """
         vars = self.data.vars.assign_coords(
             {FACTOR_DIM: ["vars1", "vars2"]}
         ).to_dataset(FACTOR_DIM)
         ds = self.data.drop_vars("vars").assign(vars)
-        df = to_polars(ds, **kwargs)
-        df = filter_nulls_polars(df)
-        df = group_terms_polars(df)
-        check_has_nulls_polars(df, name=self.type)
-        return df
+        lf = to_polars(ds, **kwargs)
+        lf = filter_nulls_polars(lf)
+        lf = group_terms_polars(lf)
+        check_has_nulls_polars(lf, name=self.type)
+        return lf
 
     def to_matrix(self):
         """
