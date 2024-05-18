@@ -578,7 +578,9 @@ class Constraint:
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
         short = ds[[k for k in ds if "_term" not in ds[k].dims]]
-        schema = infer_schema_polars(short, overwrites={"sign": pl.Enum(["=", "<=", ">="])})
+        schema = infer_schema_polars(
+            short, overwrites={"sign": pl.Enum(["=", "<=", ">="])}
+        )
         short = to_polars(short, schema=schema)
         short = filter_nulls_polars(short)
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
