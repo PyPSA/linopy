@@ -260,7 +260,7 @@ def check_has_nulls(df: pd.DataFrame, name: str):
         raise ValueError(f"{name} contains nan's in field(s) {fields}")
 
 
-def infer_schema_polars(ds: pl.DataFrame) -> dict:
+def infer_schema_polars(ds: Dataset, overwrites: dict[str, pl.DataType]) -> dict:
     """
     Infer the schema for a Polars DataFrame based on the data types of its columns.
 
@@ -272,7 +272,9 @@ def infer_schema_polars(ds: pl.DataFrame) -> dict:
     """
     schema = {}
     for col_name, array in ds.items():
-        if np.issubdtype(array.dtype, np.integer):
+        if col_name in overwrites:
+            schema[col_name] = overwrites[col_name]
+        elif np.issubdtype(array.dtype, np.integer):
             schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[col_name] = pl.Float64
