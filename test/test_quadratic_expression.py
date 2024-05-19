@@ -221,10 +221,10 @@ def test_quadratic_expression_flat(x, y):
 def test_linear_expression_to_polars(x, y):
     expr = x * y + x + 5
     df = expr.to_polars()
-    assert isinstance(df, pl.DataFrame)
+    assert isinstance(df, pl.LazyFrame)
     assert "vars1" in df.columns
     assert "vars2" in df.columns
-    assert len(df) == expr.nterm * 2
+    assert len(df.collect()) == expr.nterm * 2
 
 
 def test_quadratic_expression_to_matrix(model, x, y):

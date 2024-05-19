@@ -529,8 +529,8 @@ def test_linear_expression_to_polars(v):
     coeff = np.arange(1, 21)  # use non-zero coefficients
     expr = coeff * v
     df = expr.to_polars()
-    assert isinstance(df, pl.DataFrame)
-    assert (df["coeffs"].to_numpy() == coeff).all()
+    assert isinstance(df, pl.LazyFrame)
+    assert (df.collect()["coeffs"].to_numpy() == coeff).all()
 
 
 def test_linear_expression_where(v):

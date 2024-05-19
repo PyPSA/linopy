@@ -587,10 +587,10 @@ class Constraint:
 
         lf = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
         # delete subsequent non-null rhs (happens is all vars per label are -1)
-        is_non_null = lf["rhs"].is_not_null()
+        is_non_null = pl.col("rhs").is_not_null()
         prev_non_is_null = is_non_null.shift(1).fill_null(False)
         lf = lf.filter(is_non_null & ~prev_non_is_null | ~is_non_null)
-        return lf[["labels", "coeffs", "vars", "sign", "rhs"]]
+        return lf.select(pl.col(["labels", "coeffs", "vars", "sign", "rhs"]))
 
     sel = conwrap(Dataset.sel)
 

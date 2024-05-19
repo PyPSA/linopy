@@ -260,8 +260,8 @@ def test_variable_flat(x):
 
 def test_variable_polars(x):
     result = x.to_polars()
-    assert isinstance(result, pl.DataFrame)
-    assert len(result) == x.size
+    assert isinstance(result, pl.LazyFrame)
+    assert len(result.collect()) == x.size
 
 
 def test_variable_sanitize(x):

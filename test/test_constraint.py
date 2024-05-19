@@ -335,7 +335,7 @@ def test_constraint_flat(c):
 
 
 def test_constraint_to_polars(c):
-    assert isinstance(c.to_polars(), pl.DataFrame)
+    assert isinstance(c.to_polars(), pl.LazyFrame)
 
 
 def test_constraint_assignment_with_anonymous_constraints(m, x, y):

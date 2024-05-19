@@ -294,7 +294,7 @@ def write_lazyframe(f, lf):
         f,
         to_pyarrow_schema(lf.schema),
         write_options=pa.csv.WriteOptions(
-            include_header=False, delimiter=" ", quoting_style="none"
+            include_header=False, delimiter=";", quoting_style="none"
         ),
     )
 
@@ -325,7 +325,7 @@ def objective_write_quadratic_terms_polars(f, lf):
         pl.col("vars2").cast(pl.String),
     ]
     f.write(b"+ [\n")
-    write_lazyframe(lf.select(pl.concat_str(cols, ignore_nulls=True)))
+    write_lazyframe(f, lf.select(pl.concat_str(cols, ignore_nulls=True)))
     f.write(b"] / 2\n")
 
 
@@ -471,14 +471,14 @@ def constraints_to_file_polars(m, f, log=False, lazy=False):
         )
 
         columns = [
-            pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")),
             pl.col("labels").cast(pl.String),
-            pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+            pl.when(pl.col("labels").is_not_null()).then(pl.lit(": ")),
             pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
             pl.col("coeffs").cast(pl.String),
-            pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
+            pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")),
             pl.col("vars").cast(pl.String),
-            "sign",
+            pl.col("sign"),
             pl.lit(" "),
             pl.col("rhs").cast(pl.String),
         ]
