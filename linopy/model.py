@@ -998,6 +998,9 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        # clear cached matrix properties potentially present from previous solve commands
+        self.matrices.clean_cached_properties()
+
         if remote:
             solved = remote.solve_on_remote(
                 self,

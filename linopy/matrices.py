@@ -31,6 +31,14 @@ class MatrixAccessor:
     def __init__(self, model):
         self._parent = model
 
+    def clean_cached_properties(self):
+        "Clear the cache for all cached properties of an object"
+
+        for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
+            # check existence of cached_prop without creating it
+            if cached_prop in self.__dict__:
+                delattr(self, cached_prop)
+
     @cached_property
     def flat_vars(self):
         m = self._parent
