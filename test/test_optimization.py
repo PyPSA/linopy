@@ -666,6 +666,22 @@ def test_solver_attribute_getter(model, solver, io_api):
         assert set(rc) == set(model.variables)
 
 
+@pytest.mark.parametrize("solver,io_api", params)
+def test_model_resolve(model, solver, io_api):
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    # x = -0.1, y = 1.7
+    assert np.isclose(model.objective.value, 3.3)
+
+    # add another constraint after solve
+    model.add_constraints(model.variables.y >= 3)
+
+    status, condition = model.solve(solver, io_api=io_api)
+    assert status == "ok"
+    # x = -0.75, y = 3.0
+    assert np.isclose(model.objective.value, 5.25)
+
+
 # def init_model_large():
 #     m = Model()
 #     time = pd.Index(range(10), name="time")
