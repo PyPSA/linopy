@@ -176,10 +176,57 @@ def test_constraint_inherited_properties(x, y):
     assert con.values is None
 
 
+def test_constraint_wrapped_methods(x, y):
+    con = 10 * x + y <= 10
+
+    # Test wrapped methods
+    con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
+    con.assign_attrs({"new_attr": "value"})
+    con.assign_coords(
+        {"new_coord": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])}
+    )
+    # con.bfill(dim="first")
+    con.broadcast_like(con.data)
+    con.chunk()
+    con.drop_sel({"first": 0})
+    con.drop_isel({"first": 0})
+    con.expand_dims("new_dim")
+    # con.ffill(dim="first")
+    con.shift({"first": 1})
+    con.reindex({"first": [0, 1]})
+    con.reindex_like(con.data)
+    con.rename({"first": "new_labels"})
+    con.rename_dims({"first": "new_labels"})
+    con.roll({"first": 1})
+    con.stack(new_dim=("first", "second"))
+
+
 def test_anonymous_constraint_sel(x, y):
     expr = 10 * x + y
     con = expr <= 10
     assert isinstance(con.sel(first=[1, 2]), Constraint)
+
+
+def test_anonymous_constraint_swap_dims(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
+    con = con.swap_dims({"second": "third"})
+    assert isinstance(con, Constraint)
+    assert con.coord_dims == ("first", "third")
+
+
+def test_anonymous_constraint_set_index(x, y):
+    expr = 10 * x + y
+    con = expr <= 10
+    con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
+    con = con.set_index({"multi": ["second", "third"]})
+    assert isinstance(con, Constraint)
+    assert con.coord_dims == (
+        "first",
+        "multi",
+    )
+    assert isinstance(con.indexes["multi"], pd.MultiIndex)
 
 
 def test_anonymous_constraint_loc(x, y):

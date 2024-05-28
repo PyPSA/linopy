@@ -19,6 +19,10 @@ Version 0.3.10
 * A new memory-efficient and super fast LP file writing method was added which uses the `Polars package <https://github.com/pola-rs/polars>`_. It is still in experimental mode but seems to be very promising. Activate it with the `io_api="lp-polars"` argument in the `solve` function.
 
 
+* The Constraint class now supports the methods `assign`, `assign_attrs`, `assign_coords`, `broadcast_like`, `chunk`, `drop_sel`, `drop_isel`, `expand_dims`, `sel`, `isel`, `shift`, `swap_dims`, `set_index`, `reindex`, `reindex_like`, `rename`, `rename_dims`, `roll`, `stack`. These methods allow to manipulation of a (anonymous) constraint more flexibly.
+
+* The Variable, expressions and Constraint classes now have new methods `swap_dims` and `set_index`. The `swap_dims` method allows to swap the dimensions of the object. The `set_index` method allows to set a new index for the object. Both methods are useful for reshaping the object more flexibly.
+
 Version 0.3.9
 -------------
 

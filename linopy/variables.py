@@ -1006,6 +1006,10 @@ class Variable:
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
+    swap_dims = varwrap(Dataset.swap_dims)
+
+    set_index = varwrap(Dataset.set_index)
+
     rename = varwrap(Dataset.rename)
 
     roll = varwrap(Dataset.roll)
