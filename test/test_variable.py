@@ -204,6 +204,21 @@ def test_variable_shift(x):
     assert x.labels[0] == -1
 
 
+def test_variable_swap_dims(x):
+    x = x.assign_coords({"second": ("first", x.indexes["first"] + 100)})
+    x = x.swap_dims({"first": "second"})
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.dims == ("second",)
+
+
+def test_variable_set_index(x):
+    x = x.assign_coords({"second": ("first", x.indexes["first"] + 100)})
+    x = x.set_index({"multi": ["first", "second"]})
+    assert isinstance(x, linopy.variables.Variable)
+    assert x.dims == ("multi",)
+    assert isinstance(x.indexes["multi"], pd.MultiIndex)
+
+
 def test_isnull(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x.isnull(), xr.DataArray)

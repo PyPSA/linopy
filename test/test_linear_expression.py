@@ -608,6 +608,23 @@ def test_linear_expression_shift(v):
     assert (shifted.vars.loc[:1] == -1).all()
 
 
+def test_linear_expression_swap_dims(v):
+    expr = v.to_linexpr()
+    expr = expr.assign_coords({"second": ("dim_2", expr.indexes["dim_2"] + 100)})
+    expr = expr.swap_dims({"dim_2": "second"})
+    assert isinstance(expr, LinearExpression)
+    assert expr.coord_dims == ("second",)
+
+
+def test_linear_expression_set_index(v):
+    expr = v.to_linexpr()
+    expr = expr.assign_coords({"second": ("dim_2", expr.indexes["dim_2"] + 100)})
+    expr = expr.set_index({"multi": ["dim_2", "second"]})
+    assert isinstance(expr, LinearExpression)
+    assert expr.coord_dims == ("multi",)
+    assert isinstance(expr.indexes["multi"], pd.MultiIndex)
+
+
 def test_linear_expression_fillna(v):
     expr = np.arange(20) * v + 10
     assert expr.const.sum() == 200

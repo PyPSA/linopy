@@ -591,9 +591,48 @@ class Constraint:
         df = df.filter(is_non_null & ~prev_non_is_null | ~is_non_null)
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
+    # Wrapped function which would convert variable to dataarray
+    assign = conwrap(Dataset.assign)
+
+    assign_attrs = conwrap(Dataset.assign_attrs)
+
+    assign_coords = conwrap(Dataset.assign_coords)
+
+    # bfill = conwrap(Dataset.bfill)
+
+    broadcast_like = conwrap(Dataset.broadcast_like)
+
+    chunk = conwrap(Dataset.chunk)
+
+    drop_sel = conwrap(Dataset.drop_sel)
+
+    drop_isel = conwrap(Dataset.drop_isel)
+
+    expand_dims = conwrap(Dataset.expand_dims)
+
+    # ffill = conwrap(Dataset.ffill)
+
     sel = conwrap(Dataset.sel)
 
     isel = conwrap(Dataset.isel)
+
+    shift = conwrap(Dataset.shift)
+
+    swap_dims = conwrap(Dataset.swap_dims)
+
+    set_index = conwrap(Dataset.set_index)
+
+    reindex = conwrap(Dataset.reindex, fill_value=_fill_value)
+
+    reindex_like = conwrap(Dataset.reindex_like, fill_value=_fill_value)
+
+    rename = conwrap(Dataset.rename)
+
+    rename_dims = conwrap(Dataset.rename_dims)
+
+    roll = conwrap(Dataset.roll)
+
+    stack = conwrap(Dataset.stack)
 
 
 @dataclass(repr=False)

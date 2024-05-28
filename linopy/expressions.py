@@ -1317,6 +1317,10 @@ class LinearExpression:
 
     shift = exprwrap(Dataset.shift)
 
+    swap_dims = exprwrap(Dataset.swap_dims)
+
+    set_index = exprwrap(Dataset.set_index)
+
     reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
 
     reindex_like = exprwrap(Dataset.reindex_like, fill_value=_fill_value)
