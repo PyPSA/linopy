@@ -918,7 +918,7 @@ def to_netcdf(m, *args, **kwargs):
     if m.objective.value is not None:
         objective = objective.assign_attrs(value=m.objective.value)
     obj = [with_prefix(objective, "objective")]
-    params = [with_prefix(m.parameters, "params")]
+    params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
@@ -1008,7 +1008,7 @@ def read_netcdf(path, **kwargs):
     m.objective.sense = objective.attrs.pop("sense")
     m.objective._value = objective.attrs.pop("value", None)
 
-    m.parameters = get_prefix(ds, "parameter")
+    m.parameters = get_prefix(ds, "parameters")
 
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))
