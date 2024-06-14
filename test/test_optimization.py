@@ -389,7 +389,7 @@ def test_model_maximization(model_maximization, solver, io_api):
     assert m.objective.sense == "max"
     assert m.objective.value is None
 
-    if solver == "cbc" and io_api == "mps" and _new_highspy_mps_layout:
+    if solver in ["cbc", "glpk"] and io_api == "mps" and _new_highspy_mps_layout:
         with pytest.raises(ValueError):
             m.solve(solver, io_api=io_api)
     else:

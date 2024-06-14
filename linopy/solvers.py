@@ -300,6 +300,12 @@ def run_glpk(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
+    # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
+    if io_api == "mps" and model.sense == "max" and _new_highspy_mps_layout:
+        raise ValueError(
+            "GLPK does not support maximization in MPS format highspy versions >=1.7.1"
+        )
+
     problem_fn = model.to_file(problem_fn, io_api)
     suffix = problem_fn.suffix[1:]
 
