@@ -49,9 +49,17 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("gurobi")
 with contextlib.suppress(ImportError):
+    _new_highspy_mps_layout = None
     import highspy
 
     available_solvers.append("highs")
+    from importlib.metadata import version
+
+    if version("highspy") < "1.7.1":
+        _new_highspy_mps_layout = False
+    else:
+        _new_highspy_mps_layout = True
+
 if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 
@@ -132,7 +140,7 @@ def maybe_adjust_objective_sign(solution, sense, io_api):
     if np.isnan(solution.objective):
         return
 
-    if io_api == "mps" and sys.version_info < (3, 12):
+    if io_api == "mps" and not _new_highspy_mps_layout:
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
         )
@@ -180,9 +188,9 @@ def run_cbc(
         )
 
     # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
-    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+    if io_api == "mps" and model.sense == "max" and _new_highspy_mps_layout:
         raise ValueError(
-            "GLPK does not support maximization in MPS format for Python 3.12+"
+            "CBC does not support maximization in MPS format highspy versions >=1.7.1"
         )
 
     problem_fn = model.to_file(problem_fn, io_api)
@@ -293,9 +301,9 @@ def run_glpk(
         )
 
     # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
-    if io_api == "mps" and model.sense == "max" and sys.version_info >= (3, 12):
+    if io_api == "mps" and model.sense == "max" and _new_highspy_mps_layout:
         raise ValueError(
-            "GLPK does not support maximization in MPS format for Python 3.12+"
+            "GLPK does not support maximization in MPS format highspy versions >=1.7.1"
         )
 
     problem_fn = model.to_file(problem_fn, io_api)
