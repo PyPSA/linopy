@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+Version 0.3.11
+--------------
+
 * The writing and reading from netcdf files was fixed to correctly handle the model `parameters` field.
 
 Version 0.3.10
