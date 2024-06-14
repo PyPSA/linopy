@@ -25,6 +25,8 @@ def model():
 
     m.add_objective(2 * x + 3 * y)
 
+    m.parameters["param"] = xr.DataArray([1, 2, 3, 4], dims=["x"])
+
     return m
 
 

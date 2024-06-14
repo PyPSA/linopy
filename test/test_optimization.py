@@ -17,7 +17,7 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model
-from linopy.solvers import available_solvers, quadratic_solvers
+from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
 
@@ -389,7 +389,7 @@ def test_model_maximization(model_maximization, solver, io_api):
     assert m.objective.sense == "max"
     assert m.objective.value is None
 
-    if solver in ["cbc", "glpk"] and io_api == "mps" and sys.version_info >= (3, 12):
+    if solver in ["cbc", "glpk"] and io_api == "mps" and _new_highspy_mps_layout:
         with pytest.raises(ValueError):
             m.solve(solver, io_api=io_api)
     else:
