@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
 
+from networkx import union
 import numpy as np
 import pandas as pd
 
@@ -203,8 +204,8 @@ class Result:
     """
 
     status: Status
-    solution: Optional[Solution] = None
-    solver_model: Optional[Any] = None
+    solution: Union[Solution, None] = None
+    solver_model: Union[Any, None] = None
 
     def __repr__(self) -> str:
         solver_model_string = (

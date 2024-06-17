@@ -18,6 +18,12 @@ import polars as pl
 from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing, utils
+<<<<<<< HEAD
+=======
+from xarray.namedarray.utils import is_dict_like
+from xarray.core.coordinates import DatasetCoordinates
+from collections.abc import Iterable, Mapping
+>>>>>>> b0916b1 (some futher typing changes)
 
 from linopy.config import options
 from linopy.constants import (
@@ -77,7 +83,7 @@ def format_string_as_variable_name(name):
     return name.replace(" ", "_").replace("-", "_")
 
 
-def get_from_list(lst: Optional[list], index: int):
+def get_from_iterable(lst: Union[str, Iterable[Hashable], None], index: int):
     """
     Returns the element at the specified index of the list, or None if the index
     is out of bounds.
@@ -91,8 +97,8 @@ def get_from_list(lst: Optional[list], index: int):
 
 def pandas_to_dataarray(
     arr: Union[pd.DataFrame, pd.Series],
-    coords: Optional[Union[dict, list]] = None,
-    dims: Optional[list] = None,
+    coords: Union[Mapping[Any, Any], None] = None,
+    dims: Union[Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -105,9 +111,9 @@ def pandas_to_dataarray(
     Parameters:
         arr (Union[pd.DataFrame, pd.Series]):
             The input pandas DataFrame or Series.
-        coords (Optional[Union[dict, list]]):
+        coords (Union[dict, list, None]):
             The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Optional[list]):
+        dims (Union[list, None]):
             The dimensions for the DataArray. If None, the column names of the DataFrame or the index names of the Series will be used.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
@@ -117,7 +123,7 @@ def pandas_to_dataarray(
             The converted DataArray.
     """
     dims = [
-        axis.name or get_from_list(dims, i) or f"dim_{i}"
+        axis.name or get_from_iterable(dims, i) or f"dim_{i}"
         for i, axis in enumerate(arr.axes)
     ]
     if coords is not None:
@@ -145,8 +151,8 @@ def pandas_to_dataarray(
 
 def numpy_to_dataarray(
     arr: np.ndarray,
-    coords: Optional[Union[dict, list]] = None,
-    dims: Optional[list] = None,
+    coords: Union[Mapping[Any, Any], None] = None,
+    dims: Union[str, Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -155,9 +161,9 @@ def numpy_to_dataarray(
     Parameters:
         arr (np.ndarray):
             The input numpy array.
-        coords (Optional[Union[dict, list]]):
+        coords (Union[dict, list, None]):
             The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Optional[list]):
+        dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
@@ -167,13 +173,14 @@ def numpy_to_dataarray(
             The converted DataArray.
     """
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
+    if not isinstance(dims, list):
+        dims = [dims]
 
-    dims_given = dims is not None and len(dims)
-    if dims_given:
+    if dims is not None and len(dims):
         # fill up dims with default names to match the number of dimensions
-        dims = [get_from_list(dims, i) or f"dim_{i}" for i in range(ndim)]
+        dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
-    if isinstance(coords, list) and dims_given:
+    if isinstance(coords, list) and dims is not None and len(dims):
         coords = dict(zip(dims, coords))
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
@@ -181,8 +188,8 @@ def numpy_to_dataarray(
 
 def as_dataarray(
     arr,
-    coords: Optional[Union[dict, list]] = None,
-    dims: Optional[list] = None,
+    coords: Union[Mapping[Any, Any], None] = None,
+    dims: Union[str | Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -191,9 +198,9 @@ def as_dataarray(
     Parameters:
         arr:
             The input object.
-        coords (Optional[Union[dict, list]]):
+        coords (Union[dict, list, None]):
             The coordinates for the DataArray. If None, default coordinates will be used.
-        dims (Optional[list]):
+        dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
@@ -226,8 +233,7 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
-    return arr
-
+    return arr # type: ignore
 
 # TODO: rename to to_pandas_dataframe
 def to_dataframe(ds, mask_func=None):
@@ -256,8 +262,8 @@ def to_dataframe(ds, mask_func=None):
 def check_has_nulls(df: pd.DataFrame, name: str):
     any_nan = df.isna().any()
     if any_nan.any():
-        fields = ", ".join("`" + df.columns[any_nan] + "`")
-        raise ValueError(f"{name} contains nan's in field(s) {fields}")
+        fields = ", ".join(df.columns[any_nan].to_list())
+        raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
 
 
 def infer_schema_polars(ds: pl.DataFrame) -> dict:
@@ -271,14 +277,15 @@ def infer_schema_polars(ds: pl.DataFrame) -> dict:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
-    for col_name, array in ds.items():
-        if np.issubdtype(array.dtype, np.integer):
+    for array in ds.iter_columns():
+        col_name = array.name
+        if np.issubdtype(array.dtype, np.integer): # type: ignore
             schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
-        elif np.issubdtype(array.dtype, np.floating):
+        elif np.issubdtype(array.dtype, np.floating): # type: ignore
             schema[col_name] = pl.Float64
-        elif np.issubdtype(array.dtype, np.bool_):
+        elif np.issubdtype(array.dtype, np.bool_): # type: ignore
             schema[col_name] = pl.Boolean
-        elif np.issubdtype(array.dtype, np.object_):
+        elif np.issubdtype(array.dtype, np.object_): # type: ignore
             schema[col_name] = pl.Object
         else:
             schema[col_name] = pl.Utf8
@@ -383,7 +390,9 @@ def save_join(*dataarrays, integer_dtype=False):
     return Dataset({ds.name: ds for ds in arrs})
 
 
-def fill_missing_coords(ds, fill_helper_dims=False):
+def fill_missing_coords(
+    ds: Union[DataArray, Dataset], fill_helper_dims: bool = False
+) -> Union[DataArray, Dataset]:
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -654,7 +663,7 @@ def is_constant(func):
                 expressions.LinearExpression,
             ),
         ):
-            raise TypeError(f"Assigned rhs must be a constant, got {type()}).")
+            raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
         return func(self, arg)
 
     return wrapper
@@ -703,7 +712,7 @@ class LocIndexer:
         self.object = obj
 
     def __getitem__(self, key) -> Dataset:
-        if not utils.is_dict_like(key):
+        if not is_dict_like(key):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))

@@ -206,7 +206,7 @@ class Variable:
             return self.__class__(data, self.model, self.name)
 
     @property
-    def attrs(self) -> Dict[str, Union[ndarray, str, int64, Tuple[int, int], bool]]:
+    def attrs(self) -> Dict[str, Hashable]:
         """
         Get the attributes of the variable.
         """
@@ -375,7 +375,7 @@ class Variable:
 
     def __mul__(
         self, other: Union[float, int, ndarray, Variable]
-    ) -> Union[QuadraticExpression, LinearExpression]:
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Multiply variables with a coefficient.
         """
@@ -908,7 +908,7 @@ class Variable:
     def where(
         self,
         cond: Union[DataArray, List[bool]],
-        other: Optional[Union[ScalarVariable, Dict[str, float], int, Variable]] = None,
+        other: Optional[Union[ScalarVariable, Dict[str, Union[str, float, int]], int, Variable, Dataset]] = None,
         **kwargs,
     ) -> "Variable":
         """

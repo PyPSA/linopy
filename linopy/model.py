@@ -21,6 +21,7 @@ from numpy import inf, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
+from collections.abc import Mapping
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
@@ -352,7 +353,7 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Optional[Any] = None,
+        coords: Optional[Mapping[Any, Any]],
         name: Optional[str] = None,
         mask: Optional[Union[DataArray, ndarray, Series]] = None,
         binary: bool = False,
@@ -485,7 +486,7 @@ class Model:
         sign: Optional[Union[str, float]] = None,
         rhs: Optional[Union[float, int]] = None,
         name: Optional[str] = None,
-        coords: None = None,
+        coords: Optional[Mapping[Any, Any]] = None,
         mask: Optional[Union[DataArray, Series]] = None,
     ) -> Constraint:
         """

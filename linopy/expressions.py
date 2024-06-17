@@ -11,11 +11,13 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
+from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
+    Hashable,
     List,
     Mapping,
     Optional,
@@ -43,7 +45,9 @@ from xarray import Coordinates, DataArray, Dataset
 from xarray.core.coordinates import DataArrayCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import Dims
+from xarray.core.rolling import DataArrayRolling
 from xarray.core.utils import Frozen
+from xarray.core.coordinates import DatasetCoordinates
 
 from linopy import constraints, variables
 from linopy.common import (
@@ -111,13 +115,11 @@ def exprwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
 
 def _expr_unwrap(
     maybe_expr: Union[
+        Any,
         LinearExpression,
-        int,
         QuadraticExpression,
-        DataArray,
-        Dataset,
-    ]
-) -> Union[int, Dataset, DataArray]:
+    ],
+) -> Any:
     if isinstance(maybe_expr, (LinearExpression, QuadraticExpression)):
         return maybe_expr.data
 
@@ -135,7 +137,7 @@ class LinearExpressionGroupby:
     """
 
     data: xr.Dataset
-    group: xr.DataArray
+    group: Union[str, pd.DataFrame, pd.Series, xr.DataArray, xr.IndexVariable]
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -149,6 +151,11 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
+        if isinstance(self.group, (pd.Series, pd.DataFrame)):
+            raise ValueError(
+                "Grouping by pandas objects is only supported in sum function."
+            )
+
         return self.data.groupby(group=self.group, **self.kwargs)
 
     def map(
@@ -222,7 +229,7 @@ class LinearExpressionGroupby:
             if group_name == group_dim:
                 raise ValueError("Group name cannot be the same as group dimension")
 
-            arrays = [group, group.groupby(group).cumcount()]
+            arrays = [group, group.groupby(group).cumcount()]  # type: ignore
             idx = pd.MultiIndex.from_arrays(
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
@@ -233,9 +240,9 @@ class LinearExpressionGroupby:
 
             if int_map is not None:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
-                index.names = orig_group.columns
+                index.names = [str(col) for col in orig_group.columns]
                 index.name = group_name
-                coords = Coordinates.from_pandas_multiindex(index, group_name)
+                coords = Coordinates.from_pandas_multiindex(index, group_name)  # type: ignore
                 ds = xr.Dataset(ds.assign_coords(coords))
 
             return LinearExpression(ds, self.model)
@@ -269,7 +276,7 @@ class LinearExpressionRolling:
     GroupBy object specialized to grouping LinearExpression objects.
     """
 
-    rolling: xr.core.rolling.DataArrayRolling
+    rolling: DataArrayRolling
     model: Any
 
     def sum(self, **kwargs) -> "LinearExpression":
@@ -327,7 +334,7 @@ class LinearExpression:
 
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
-    def __init__(self, data: Any, model: Optional[Model]) -> None:
+    def __init__(self, data: Any, model: Union[Model, None]) -> None:
         from linopy.model import Model
 
         if data is None:
@@ -536,7 +543,7 @@ class LinearExpression:
         """
         if not other == 2:
             raise ValueError("Power must be 2.")
-        return self * self
+        return self * self  # type: ignore
 
     def __rmul__(
         self, other: Union[float, int, DataArray]
@@ -547,14 +554,12 @@ class LinearExpression:
         return self.__mul__(other)
 
     def __matmul__(
-        self, other: Union[LinearExpression, Variable, ndarray]
+        self, other: Union[LinearExpression, Variable, ndarray, DataArray]
     ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
-        if not isinstance(
-            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
-        ):
+        if not isinstance(other, (LinearExpression, variables.Variable)):
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
@@ -652,7 +657,7 @@ class LinearExpression:
         return self.data.attrs
 
     @property
-    def coords(self) -> xarray.core.coordinates.DatasetCoordinates:
+    def coords(self) -> DatasetCoordinates:
         """
         Get the coordinates of the expression
         """
@@ -701,12 +706,12 @@ class LinearExpression:
         return self._model
 
     @property
-    def dims(self) -> Union[Tuple[str, str, str], Tuple[str], Tuple[str, str]]:
+    def dims(self) -> Tuple[Hashable, ...]:
         # do explicitly sort as in vars (same as in coeffs)
         return self.vars.dims
 
     @property
-    def coord_dims(self) -> Union[Tuple[()], Tuple[str], Tuple[str, str]]:
+    def coord_dims(self) -> Tuple[Hashable, ...]:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
@@ -753,9 +758,9 @@ class LinearExpression:
         """
         m = self.model
         sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
-        sol.loc[-1] = np.nan
+        sol.loc[[-1]] = [np.nan]
         idx = np.ravel(self.vars)
-        values = sol[idx].values.reshape(self.vars.shape)
+        values = sol[idx].to_numpy().reshape(self.vars.shape)
         return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
 
     @property
@@ -774,9 +779,14 @@ class LinearExpression:
     def _sum(
         cls,
         expr: Union["LinearExpression", Dataset],
-        dim: Optional[Union[str, List[str]]] = None,
+        dim: Dims = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
+
+        if isinstance(dim, str):
+            dim = [dim]
+        elif isinstance(dim, EllipsisType):
+            dim = None
 
         if dim is None:
             vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
@@ -784,7 +794,7 @@ class LinearExpression:
             const = data.const.sum()
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
         else:
-            dim = [d for d in np.atleast_1d(dim) if d != TERM_DIM]
+            dim = [d for d in dim if d != TERM_DIM]
             ds = (
                 data[["coeffs", "vars"]]
                 .reset_index(dim, drop=True)
@@ -797,7 +807,7 @@ class LinearExpression:
 
     def sum(
         self,
-        dim: Optional[Union[str, List[str]]] = None,
+        dim: Dims = None,
         drop_zeros: bool = False,
         **kwargs,
     ) -> "LinearExpression":
@@ -839,8 +849,8 @@ class LinearExpression:
         self,
         dim: Dims = None,
         *,
-        skipna: Optional[bool] = None,
-        keep_attrs: Optional[bool] = None,
+        skipna: Union[bool, None] = None,
+        keep_attrs: Union[bool, None] = None,
         **kwargs: Any,
     ) -> "LinearExpression":
         """
@@ -878,8 +888,9 @@ class LinearExpression:
             # dimensions
             dim = self.coord_dims
         if isinstance(dim, str):
-            # Make sure, single mentioned dimensions is handled correctly.
             dim = [dim]
+        elif isinstance(dim, EllipsisType) or dim is None:
+            dim = self.coord_dims
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
@@ -949,9 +960,7 @@ class LinearExpression:
         cls,
         model: Model,
         rule: Callable,
-        coords: Union[
-            xarray.core.coordinates.DatasetCoordinates, Tuple[RangeIndex, List[str]]
-        ],
+        coords: Optional[Mapping[Any, Any]],
     ) -> "LinearExpression":
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -998,7 +1007,7 @@ class LinearExpression:
         >>> expr = LinearExpression.from_rule(m, bound, coords)
         >>> con = m.add_constraints(expr <= 10)
         """
-        if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
+        if not isinstance(coords, DataArrayCoordinates):
             coords = DataArray(coords=coords).coords
 
         # test output type
@@ -1017,7 +1026,7 @@ class LinearExpression:
     def _from_scalarexpression_list(
         cls,
         exprs: List[ScalarLinearExpression],
-        coords: DataArrayCoordinates,
+        coords: Mapping[Any, Any],
         model: Model,
     ) -> "LinearExpression":
         """
@@ -1087,7 +1096,7 @@ class LinearExpression:
     def where(
         self,
         cond: DataArray,
-        other: Optional[Union[LinearExpression, int, DataArray]] = None,
+        other: Union[LinearExpression, int, DataArray, Dict[str, Union[float, int]], None] = None,
         **kwargs,
     ) -> Union[LinearExpression, QuadraticExpression]:
         """
@@ -1129,7 +1138,9 @@ class LinearExpression:
                 )
         return self.__class__(self.data.where(cond, other=other, **kwargs), self.model)
 
-    def fillna(self, value: int) -> "LinearExpression":
+    def fillna(
+        self, value: Union[int, float, DataArray, Dataset, LinearExpression]
+    ) -> "LinearExpression":
         """
         Fill missing values with a given value.
 
@@ -1176,8 +1187,8 @@ class LinearExpression:
     def groupby(
         self,
         group: Union[DataFrame, Series, DataArray],
-        squeeze: "bool" = True,
-        restore_coord_dims: "bool" = None,
+        squeeze: bool = True,
+        restore_coord_dims: Optional[bool] = None,
         **kwargs,
     ) -> LinearExpressionGroupby:
         """
@@ -1211,10 +1222,10 @@ class LinearExpression:
 
     def rolling(
         self,
-        dim: "Mapping[Any, int]" = None,
-        min_periods: "int" = None,
-        center: "bool | Mapping[Any, bool]" = False,
-        **window_kwargs: "int",
+        dim: Optional[Mapping[Any, int]] = None,
+        min_periods: Optional[int] = None,
+        center: bool | Mapping[Any, bool] = False,
+        **window_kwargs: int,
     ) -> LinearExpressionRolling:
         """
         Rolling window object.
@@ -1770,10 +1781,8 @@ class ScalarLinearExpression:
 
     def __init__(
         self,
-        coeffs: Union[Tuple[int, int], Tuple[int, int, int], Tuple[int], Tuple[float]],
-        vars: Union[
-            Tuple[int64, int64], Tuple[int64], Tuple[int64, int64, int64], Tuple[int]
-        ],
+        coeffs: Tuple[Union[int, float], ...],
+        vars: Tuple[int, ...],
         model: Model,
     ) -> None:
         self._coeffs = coeffs
@@ -1793,9 +1802,7 @@ class ScalarLinearExpression:
     @property
     def vars(
         self,
-    ) -> Union[
-        Tuple[int64, int64], Tuple[int64], Tuple[int64, int64, int64], Tuple[int]
-    ]:
+    ) -> Union[Tuple[int, ...], Tuple[int, ...]]:
         return self._vars
 
     @property
@@ -1827,7 +1834,9 @@ class ScalarLinearExpression:
     def nterm(self):
         return len(self.vars)
 
-    def __sub__(self, other: ScalarVariable) -> "ScalarLinearExpression":
+    def __sub__(
+        self, other: Union[ScalarVariable, ScalarLinearExpression]
+    ) -> "ScalarLinearExpression":
         if isinstance(other, variables.ScalarVariable):
             other = other.to_scalar_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
