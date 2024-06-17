@@ -585,8 +585,8 @@ class Variable:
         self,
         dim: Dims = None,
         *,
-        skipna: Optional[bool] = None,
-        keep_attrs: Optional[bool] = None,
+        skipna: Union[bool, None] = None,
+        keep_attrs: Union[bool, None] = None,
         **kwargs: Any,
     ) -> "expressions.LinearExpression":
         """
@@ -848,7 +848,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: Optional[str] = None, **kwargs) -> LinearExpression:
+    def sum(self, dim: Union[str, None] = None, **kwargs) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -908,7 +908,7 @@ class Variable:
     def where(
         self,
         cond: Union[DataArray, List[bool]],
-        other: Optional[Union[ScalarVariable, Dict[str, Union[str, float, int]], int, Variable, Dataset]] = None,
+        other: Union[ScalarVariable, Dict[str, Union[str, float, int]], int, Variable, Dataset, None] = None,
         **kwargs,
     ) -> "Variable":
         """

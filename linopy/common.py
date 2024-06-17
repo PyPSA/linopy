@@ -9,7 +9,11 @@ This module contains commonly used functions.
 import operator
 import os
 from functools import reduce, wraps
+<<<<<<< HEAD
 from typing import Any, Dict, List, Optional, Union
+=======
+from typing import Any, Dict, Hashable, List, Union
+>>>>>>> 8aba373 (follow up)
 from warnings import warn
 
 import numpy as np
@@ -17,11 +21,14 @@ import pandas as pd
 import polars as pl
 from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
+<<<<<<< HEAD
 from xarray.core import indexing, utils
 <<<<<<< HEAD
 =======
+=======
+from xarray.core import indexing
+>>>>>>> 8aba373 (follow up)
 from xarray.namedarray.utils import is_dict_like
-from xarray.core.coordinates import DatasetCoordinates
 from collections.abc import Iterable, Mapping
 >>>>>>> b0916b1 (some futher typing changes)
 

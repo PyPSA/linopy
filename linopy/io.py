@@ -11,7 +11,7 @@ import time
 from io import TextIOWrapper
 from pathlib import Path, PosixPath
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -533,12 +533,12 @@ def to_lp_file_polars(m, fn, integer_label="general"):
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
-def to_file(m, fn, io_api=None, integer_label="general"):
-=======
 def to_file(
-    m: Model, fn: Union[str, PosixPath], integer_label: str = "general"
+    m: Model,
+    fn: Union[str, PosixPath],
+    io_api: Union[str, None] = None,
+    integer_label: str = "general",
 ) -> PosixPath:
->>>>>>> d8cc2c0 (add type annotations through monkeytype)
     """
     Write out a model to a lp or mps file.
     """
@@ -572,7 +572,7 @@ def to_file(
     return fn
 
 
-def to_mosek(m: Model, task: Optional[Any] = None) -> Any:
+def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
     """
     Export model to MOSEK.
 
@@ -675,7 +675,7 @@ def to_mosek(m: Model, task: Optional[Any] = None) -> Any:
     return task
 
 
-def to_gurobipy(m: Model, env: Optional[Any] = None) -> Any:
+def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     """
     Export the model to gurobipy.
 

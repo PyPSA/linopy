@@ -20,7 +20,6 @@ from typing import (
     Hashable,
     List,
     Mapping,
-    Optional,
     Tuple,
     Union,
 )
@@ -36,9 +35,8 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from numpy import array, int64, nan, ndarray
+from numpy import array, nan, ndarray
 from pandas.core.frame import DataFrame
-from pandas.core.indexes.range import RangeIndex
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset
@@ -960,7 +958,7 @@ class LinearExpression:
         cls,
         model: Model,
         rule: Callable,
-        coords: Optional[Mapping[Any, Any]],
+        coords: Union[Mapping[Any, Any], None],
     ) -> "LinearExpression":
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -1188,7 +1186,7 @@ class LinearExpression:
         self,
         group: Union[DataFrame, Series, DataArray],
         squeeze: bool = True,
-        restore_coord_dims: Optional[bool] = None,
+        restore_coord_dims: Union[bool, None] = None,
         **kwargs,
     ) -> LinearExpressionGroupby:
         """
@@ -1222,8 +1220,8 @@ class LinearExpression:
 
     def rolling(
         self,
-        dim: Optional[Mapping[Any, int]] = None,
-        min_periods: Optional[int] = None,
+        dim: Union[Mapping[Any, int], None] = None,
+        min_periods: Union[int, None] = None,
         center: bool | Mapping[Any, bool] = False,
         **window_kwargs: int,
     ) -> LinearExpressionRolling:
@@ -1557,7 +1555,7 @@ class QuadraticExpression(LinearExpression):
 
     @classmethod
     def _sum(
-        cls, expr: "QuadraticExpression", dim: Optional[Union[str, List[str]]] = None
+        cls, expr: "QuadraticExpression", dim: Union[str, List[str], None] = None
     ) -> Dataset:
         data = _expr_unwrap(expr)
         dim = dim or list(set(data.dims) - set(HELPER_DIMS))
@@ -1648,7 +1646,7 @@ class QuadraticExpression(LinearExpression):
 
 
 def as_expression(
-    obj: Any, model: Optional[Model] = None, **kwargs
+    obj: Any, model: Union[Model, None] = None, **kwargs
 ) -> Union[LinearExpression, QuadraticExpression]:
     """
     Convert an object to a LinearExpression or QuadraticExpression.

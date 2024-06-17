@@ -139,7 +139,7 @@ def safe_get_solution(status: Status, func: Callable) -> Solution:
 
 
 def maybe_adjust_objective_sign(
-    solution: Solution, sense: str, io_api: Optional[str]
+    solution: Solution, sense: str, io_api: Union[str, None]
 ) -> None:
     if sense == "min":
         return
@@ -162,7 +162,7 @@ def set_int_index(series: Series) -> Series:
     return series
 
 
-def maybe_convert_path(path: Optional[Union[str, PosixPath]]) -> Optional[str]:
+def maybe_convert_path(path: Union[Union[str, PosixPath]]) -> Union[str, None]:
     """
     Convert a pathlib.Path to a string.
     """
@@ -171,12 +171,12 @@ def maybe_convert_path(path: Optional[Union[str, PosixPath]]) -> Optional[str]:
 
 def run_cbc(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -274,12 +274,12 @@ def run_cbc(
 
 def run_glpk(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -394,12 +394,12 @@ def run_glpk(
 
 def run_highs(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -600,12 +600,12 @@ def run_cplex(
 
 def run_gurobi(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -702,12 +702,12 @@ def run_gurobi(
 
 def run_scip(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -894,12 +894,12 @@ mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \
 
 def run_mosek(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -1201,12 +1201,12 @@ def run_copt(
 
 def run_mindopt(
     model: Model,
-    io_api: Optional[str] = None,
-    problem_fn: Optional[Union[str, PosixPath]] = None,
-    solution_fn: Optional[Union[str, PosixPath]] = None,
-    log_fn: Optional[PosixPath] = None,
-    warmstart_fn: Optional[PosixPath] = None,
-    basis_fn: Optional[PosixPath] = None,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[str, PosixPath, None] = None,
+    solution_fn: Union[str, PosixPath, None] = None,
+    log_fn: Union[PosixPath, None] = None,
+    warmstart_fn: Union[PosixPath, None] = None,
+    basis_fn: Union[PosixPath, None] = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,

@@ -11,7 +11,7 @@ import os
 import re
 from pathlib import Path, PosixPath
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -92,8 +92,8 @@ class Model:
 
     def __init__(
         self,
-        solver_dir: Optional[str] = None,
-        chunk: Optional[Union[str, int]] = None,
+        solver_dir: Union[str, None] = None,
+        chunk: Union[str, int, None] = None,
         force_dim_names: bool = False,
     ) -> None:
         """
@@ -353,9 +353,9 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Optional[Mapping[Any, Any]],
-        name: Optional[str] = None,
-        mask: Optional[Union[DataArray, ndarray, Series]] = None,
+        coords: Union[Mapping[Any, Any], None] = None,
+        name: Union[str, None] = None,
+        mask: Union[DataArray, ndarray, Series, None] = None,
         binary: bool = False,
         integer: bool = False,
         **kwargs,
@@ -483,11 +483,11 @@ class Model:
     def add_constraints(
         self,
         lhs: Any,
-        sign: Optional[Union[str, float]] = None,
-        rhs: Optional[Union[float, int]] = None,
-        name: Optional[str] = None,
-        coords: Optional[Mapping[Any, Any]] = None,
-        mask: Optional[Union[DataArray, Series]] = None,
+        sign: Union[str, float, None] = None,
+        rhs: Union[float, int, None] = None,
+        name: Union[str, None] = None,
+        coords: Union[Mapping[Any, Any], None] = None,
+        mask: Union[DataArray, Series, None] = None,
     ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -904,7 +904,7 @@ class Model:
         )
 
     def get_solution_file(
-        self, solution_fn: Optional[PosixPath] = None
+        self, solution_fn: Union[PosixPath, None] = None
     ) -> Union[str, PosixPath]:
         """
         Get a fresh created solution file if solution file is None.
@@ -924,8 +924,8 @@ class Model:
 
     def get_problem_file(
         self,
-        problem_fn: Optional[Union[str, PosixPath]] = None,
-        io_api: Optional[str] = None,
+        problem_fn: Union[str, PosixPath, None] = None,
+        io_api: Union[str, None] = None,
     ) -> Union[str, PosixPath]:
         """
         Get a fresh created problem file if problem file is None.
@@ -946,13 +946,13 @@ class Model:
 
     def solve(
         self,
-        solver_name: Optional[str] = None,
-        io_api: Optional[str] = None,
-        problem_fn: Optional[PosixPath] = None,
-        solution_fn: Optional[PosixPath] = None,
-        log_fn: Optional[PosixPath] = None,
-        basis_fn: Optional[PosixPath] = None,
-        warmstart_fn: Optional[PosixPath] = None,
+        solver_name: Union[str, None] = None,
+        io_api: Union[str, None] = None,
+        problem_fn: Union[PosixPath, None] = None,
+        solution_fn: Union[PosixPath, None] = None,
+        log_fn: Union[PosixPath, None] = None,
+        basis_fn: Union[PosixPath, None] = None,
+        warmstart_fn: Union[PosixPath, None] = None,
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,

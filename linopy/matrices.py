@@ -27,7 +27,7 @@ def create_vector(
     indices: Union[Series, Index],
     values: Union[Series, ndarray],
     fill_value: Union[str, float, int] = np.nan,
-    shape: Optional[int] = None,
+    shape: Union[int, None] = None,
 ) -> ndarray:
     """Create a vector of a size equal to the maximum index plus one."""
     if shape is None:
