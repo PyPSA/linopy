@@ -43,4 +43,5 @@ repos:
     rev: v1.10.0
     hooks:
     -   id: mypy
-        args: [linopy]
+        args: [--explicit-package-bases]
+        additional_dependencies: [numpy, pandas, xarray, scipy]

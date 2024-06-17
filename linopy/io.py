@@ -535,7 +535,7 @@ def to_lp_file_polars(m, fn, integer_label="general"):
 
 def to_file(
     m: Model,
-    fn: Union[str, PosixPath],
+    fn: Union[str, PosixPath, None],
     io_api: Union[str, None] = None,
     integer_label: str = "general",
 ) -> PosixPath:

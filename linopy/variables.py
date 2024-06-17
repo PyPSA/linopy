@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 from dataclasses import dataclass, field
+from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -908,7 +909,14 @@ class Variable:
     def where(
         self,
         cond: Union[DataArray, List[bool]],
-        other: Union[ScalarVariable, Dict[str, Union[str, float, int]], int, Variable, Dataset, None] = None,
+        other: Union[
+            ScalarVariable,
+            Dict[str, Union[str, float, int]],
+            int,
+            Variable,
+            Dataset,
+            None,
+        ] = None,
         **kwargs,
     ) -> "Variable":
         """
@@ -984,7 +992,8 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1011,7 +1020,8 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1096,8 +1106,8 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    data: Dict[str, Variable] = field(default_factory=dict)
-    model: Any = None  # Model is not defined due to circular imports
+    data: Dict[str, Variable]
+    model: "Model"
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1130,7 +1140,7 @@ class Variables:
         )
 
     def __dir__(self):
-        base_attributes = super().__dir__()
+        base_attributes = list(super().__dir__())
         formatted_names = [
             n for n in self._formatted_names() if n not in base_attributes
         ]
@@ -1145,7 +1155,11 @@ class Variables:
         r += f"\n{line}\n"
 
         for name, ds in self.items():
-            coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
+            coords = (
+                " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
+                if ds.coords
+                else ""
+            )
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1247,28 +1261,34 @@ class Variables:
         """
         Get all binary variables.
         """
-        keys = [v for v in self if self[v].attrs["binary"]]
-        return self[keys]
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].attrs["binary"]},
+            self.model,
+        )
 
     @property
     def integers(self) -> "Variables":
         """
         Get all integers variables.
         """
-        keys = [v for v in self if self[v].attrs["integer"]]
-        return self[keys]
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].attrs["integer"]},
+            self.model,
+        )
 
     @property
     def continuous(self) -> "Variables":
         """
         Get all continuous variables.
         """
-        keys = [
-            v
-            for v in self
-            if not self[v].attrs["integer"] and not self[v].attrs["binary"]
-        ]
-        return self[keys]
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+            },
+            self.model,
+        )
 
     @property
     def solution(self) -> Dataset:
@@ -1295,21 +1315,21 @@ class Variables:
             *[v.get_solver_attribute(attr).rename(k) for k, v in self.items()]
         )
 
-    def get_name_by_label(self, label: Union[str, int]) -> str:
+    def get_name_by_label(self, label: int) -> str:
         """
         Get the variable name of the variable containing the passed label.
-
+    
         Parameters
         ----------
         label : int
             Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
             variable label.
-
+    
         Raises
         ------
         ValueError
             If label is not contained by any variable.
-
+    
         Returns
         -------
         name : str
@@ -1319,7 +1339,7 @@ class Variables:
             raise ValueError("Label must be a positive number.")
         for name, labels in self.labels.items():
             if label in labels:
-                return name
+                return str(name)
         raise ValueError(f"No variable found containing the label {label}.")
 
     def get_label_range(self, name: str):
@@ -1416,7 +1436,7 @@ class ScalarVariable:
         return f"ScalarVariable: {name}{coord_string}"
 
     @property
-    def label(self) -> Union[int64, int]:
+    def label(self) -> int:
         """
         Get the label of the variable.
         """
@@ -1446,7 +1466,7 @@ class ScalarVariable:
         return self._model
 
     def to_scalar_linexpr(
-        self, coeff: Union[ScalarVariable, int] = 1
+        self, coeff: Union[int, float] = 1
     ) -> ScalarLinearExpression:
         if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
@@ -1461,40 +1481,40 @@ class ScalarVariable:
     def __add__(self, other: "ScalarVariable") -> ScalarLinearExpression:
         return self.to_scalar_linexpr(1) + other
 
-    def __radd__(self, other: int) -> "ScalarVariable":
+    def __radd__(self, other: int) -> Union["ScalarVariable", NotImplementedType]:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other
 
-    def __mul__(self, coeff: "ScalarVariable"):
+    def __mul__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(coeff)
 
-    def __rmul__(self, coeff: int) -> ScalarLinearExpression:
+    def __rmul__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(coeff)
 
-    def __div__(self, coeff: "ScalarVariable"):
+    def __div__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(1 / coeff)
 
-    def __truediv__(self, coeff: "ScalarVariable"):
+    def __truediv__(self, coeff: Union[int, float]):
         return self.__div__(coeff)
 
-    def __le__(self, other):
+    def __le__(self, other) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__le__(other)
 
     def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__eq__(other)
 
-    def __gt__(self, other):
+    def __gt__(self, other) -> None:
         raise NotImplementedError(
             "Inequalities only ever defined for >= rather than >."
         )
 
-    def __lt__(self, other):
+    def __lt__(self, other) -> None:
         raise NotImplementedError(
             "Inequalities only ever defined for >= rather than >."
         )

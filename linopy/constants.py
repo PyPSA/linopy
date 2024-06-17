@@ -6,7 +6,7 @@ Linopy module for defining constant values used within the package.
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import Any, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -116,7 +116,11 @@ class TerminationCondition(Enum):
     licensing_problems = "licensing_problems"
 
     @classmethod
-    def process(cls, termination_condition: str) -> "TerminationCondition":
+    def process(
+        cls, termination_condition: Union["TerminationCondition", str]
+    ) -> "TerminationCondition":
+        if isinstance(termination_condition, TerminationCondition):
+            termination_condition = termination_condition.value
         try:
             return cls(termination_condition)
         except ValueError:
@@ -158,7 +162,7 @@ class Status:
 
     status: SolverStatus
     termination_condition: TerminationCondition
-    legacy_status: str = ""
+    legacy_status: Union[Tuple[str, str], str] = ""
 
     @classmethod
     def process(cls, status: str, termination_condition: str) -> "Status":
@@ -193,7 +197,7 @@ class Solution:
 
     primal: pd.Series = field(default_factory=_pd_series_float)
     dual: pd.Series = field(default_factory=_pd_series_float)
-    objective: float = np.nan
+    objective: float = field(default=np.nan)
 
 
 @dataclass
@@ -210,16 +214,22 @@ class Result:
         solver_model_string = (
             "not available" if self.solver_model is None else "available"
         )
+        if self.solution is not None:
+            solution_string = (
+                f"Solution: {len(self.solution.primal)} primals, {len(self.solution.dual)} duals\n"
+                f"Objective: {self.solution.objective:.2e}\n"
+            )
+        else:
+            solution_string = "Solution: None\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
-            f"Solution: {len(self.solution.primal)} primals, {len(self.solution.dual)} duals\n"
-            f"Objective: {self.solution.objective:.2e}\n"
-            f"Solver model: {solver_model_string}\n"
+            + solution_string
+            + f"Solver model: {solver_model_string}\n"
             f"Solver message: {self.status.legacy_status}"
         )
 
-    def info(self) -> str:
+    def info(self) -> None:
         status = self.status
 
         if status.is_ok:

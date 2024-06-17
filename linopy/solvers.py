@@ -77,15 +77,15 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("scip")
 with contextlib.suppress(ImportError):
-    import cplex
+    import cplex # type: ignore
 
     available_solvers.append("cplex")
 with contextlib.suppress(ImportError):
-    import xpress
+    import xpress # type: ignore
 
     available_solvers.append("xpress")
 with contextlib.suppress(ImportError):
-    import mosek
+    import mosek # type: ignore
 
     with contextlib.suppress(mosek.Error):
         with mosek.Env() as m:
@@ -100,7 +100,7 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("mindopt")
 with contextlib.suppress(ImportError):
-    import coptpy
+    import coptpy # type: ignore
 
     with contextlib.suppress(coptpy.CoptError):
         coptpy.Envr()
@@ -162,7 +162,7 @@ def set_int_index(series: Series) -> Series:
     return series
 
 
-def maybe_convert_path(path: Union[Union[str, PosixPath]]) -> Union[str, None]:
+def maybe_convert_path(path: Union[str, PosixPath]) -> Union[str, None]:
     """
     Convert a pathlib.Path to a string.
     """

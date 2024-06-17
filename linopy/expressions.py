@@ -11,7 +11,7 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from types import EllipsisType
+from types import EllipsisType, NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1823,10 +1823,11 @@ class ScalarLinearExpression:
         vars = self.vars + other.vars
         return ScalarLinearExpression(coeffs, vars, self.model)
 
-    def __radd__(self, other: int) -> "ScalarLinearExpression":
+    def __radd__(self, other: Union[int, float]) -> Union["ScalarLinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
         if other == 0:
             return self
+        return NotImplemented
 
     @property
     def nterm(self):
@@ -1876,7 +1877,7 @@ class ScalarLinearExpression:
     def __truediv__(self, other: Union[float, int]) -> "ScalarLinearExpression":
         return self.__div__(other)
 
-    def __le__(self, other):
+    def __le__(self, other: Union[int, float]) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
@@ -1884,7 +1885,7 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
-    def __ge__(self, other: int) -> AnonymousScalarConstraint:
+    def __ge__(self, other: Union[int, float]) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
@@ -1892,13 +1893,13 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(self, other: ScalarVariable):
+    def __eq__(self, other: Union[int, float]) -> AnonymousScalarConstraint: # type: ignore
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, EQUAL, other)
+        return constraints.AnonymousScalarConstraint(self, EQUAL, other) 
 
     def __gt__(self, other):
         raise NotImplementedError(

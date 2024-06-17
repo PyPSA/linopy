@@ -21,6 +21,7 @@ from numpy import inf, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
+from xarray.core.types import T_Chunks
 from collections.abc import Mapping
 
 from linopy import solvers
@@ -93,7 +94,7 @@ class Model:
     def __init__(
         self,
         solver_dir: Union[str, None] = None,
-        chunk: Union[str, int, None] = None,
+        chunk: T_Chunks = None,
         force_dim_names: bool = False,
     ) -> None:
         """
@@ -119,24 +120,24 @@ class Model:
         -------
         linopy.Model
         """
-        self._variables = Variables(model=self)
-        self._constraints = Constraints(model=self)
-        self._objective = Objective(LinearExpression(None, self), self)
-        self._parameters = Dataset()
+        self._variables: Variables = Variables(model=self)
+        self._constraints: Constraints = Constraints(model=self)
+        self._objective: Objective = Objective(LinearExpression(None, self), self)
+        self._parameters: Dataset = Dataset()
 
-        self._status = "initialized"
-        self._termination_condition = ""
-        self._xCounter = 0
-        self._cCounter = 0
-        self._varnameCounter = 0
-        self._connameCounter = 0
-        self._blocks = None
+        self._status: str = "initialized"
+        self._termination_condition: str = ""
+        self._xCounter: int = 0
+        self._cCounter: int = 0
+        self._varnameCounter: int = 0
+        self._connameCounter: int = 0
+        self._blocks: Union[Dataset, None] = None
 
-        self._chunk = chunk
-        self._force_dim_names = bool(force_dim_names)
-        self._solver_dir = Path(gettempdir() if solver_dir is None else solver_dir)
+        self._chunk: T_Chunks = chunk
+        self._force_dim_names: bool = bool(force_dim_names)
+        self._solver_dir: Union[str, Path] = Path(gettempdir() if solver_dir is None else solver_dir)
 
-        self.matrices = MatrixAccessor(self)
+        self.matrices: MatrixAccessor = MatrixAccessor(self)
 
     @property
     def variables(self) -> Variables:
@@ -238,7 +239,7 @@ class Model:
 
     @objective_value.setter
     def objective_value(self, value):
-        self._objective.value = value
+        self._objective.set_value(value)
 
     @property
     def chunk(self):
@@ -248,9 +249,7 @@ class Model:
         return self._chunk
 
     @chunk.setter
-    def chunk(self, value):
-        if not isinstance(value, [int, dict]) and (value != "auto"):
-            raise TypeError("Chunks must int, dict, or 'auto'.")
+    def chunk(self, value: T_Chunks):
         self._chunk = value
 
     @property
@@ -279,7 +278,7 @@ class Model:
 
     @solver_dir.setter
     def solver_dir(self, value):
-        if not isinstance(value, [str, Path]):
+        if not isinstance(value, (str, Path)):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
 
@@ -912,14 +911,13 @@ class Model:
         if solution_fn is not None:
             return solution_fn
 
-        kwargs = dict(
+        with NamedTemporaryFile(
             prefix="linopy-solve-",
             suffix=".sol",
             mode="w",
-            dir=self.solver_dir,
+            dir=str(self.solver_dir),
             delete=False,
-        )
-        with NamedTemporaryFile(**kwargs) as f:
+        ) as f:
             return f.name
 
     def get_problem_file(
@@ -934,14 +932,13 @@ class Model:
             return problem_fn
 
         suffix = ".mps" if io_api == "mps" else ".lp"
-        kwargs = dict(
+        with NamedTemporaryFile(
             prefix="linopy-problem-",
             suffix=suffix,
             mode="w",
             dir=self.solver_dir,
             delete=False,
-        )
-        with NamedTemporaryFile(**kwargs) as f:
+        ) as f:
             return f.name
 
     def solve(
