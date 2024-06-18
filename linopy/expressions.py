@@ -40,12 +40,11 @@ from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset
-from xarray.core.coordinates import DataArrayCoordinates
+from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
-from xarray.core.types import Dims
 from xarray.core.rolling import DataArrayRolling
+from xarray.core.types import Dims
 from xarray.core.utils import Frozen
-from xarray.core.coordinates import DatasetCoordinates
 
 from linopy import constraints, variables
 from linopy.common import (
@@ -135,7 +134,7 @@ class LinearExpressionGroupby:
     """
 
     data: xr.Dataset
-    group: Union[str, pd.DataFrame, pd.Series, xr.DataArray, xr.IndexVariable]
+    group: Union[Hashable, pd.DataFrame, pd.Series, xr.DataArray, xr.IndexVariable]
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -470,7 +469,7 @@ class LinearExpression:
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         return merge(self, other, cls=self.__class__)
 
-    def __radd__(self, other: int) -> "LinearExpression":
+    def __radd__(self, other: int) -> Union["LinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
@@ -584,10 +583,10 @@ class LinearExpression:
     def __le__(self, rhs: int) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: Union[int, ndarray, DataArray]) -> Constraint:
+    def __ge__(self, rhs: Union[int, ndarray, DataArray]) -> Constraint:  # type: ignore
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: Union[LinearExpression, float, Variable, int]) -> Constraint:
+    def __eq__(self, rhs: Union[LinearExpression, float, Variable, int]) -> Constraint:  # type: ignore
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other):
@@ -1094,7 +1093,9 @@ class LinearExpression:
     def where(
         self,
         cond: DataArray,
-        other: Union[LinearExpression, int, DataArray, Dict[str, Union[float, int]], None] = None,
+        other: Union[
+            LinearExpression, int, DataArray, Dict[str, Union[float, int]], None
+        ] = None,
         **kwargs,
     ) -> Union[LinearExpression, QuadraticExpression]:
         """
@@ -1823,7 +1824,9 @@ class ScalarLinearExpression:
         vars = self.vars + other.vars
         return ScalarLinearExpression(coeffs, vars, self.model)
 
-    def __radd__(self, other: Union[int, float]) -> Union["ScalarLinearExpression", NotImplementedType]:
+    def __radd__(
+        self, other: Union[int, float]
+    ) -> Union["ScalarLinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
         if other == 0:
             return self
@@ -1893,13 +1896,13 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(self, other: Union[int, float]) -> AnonymousScalarConstraint: # type: ignore
+    def __eq__(self, other: Union[int, float]) -> AnonymousScalarConstraint:  # type: ignore
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
             )
 
-        return constraints.AnonymousScalarConstraint(self, EQUAL, other) 
+        return constraints.AnonymousScalarConstraint(self, EQUAL, other)
 
     def __gt__(self, other):
         raise NotImplementedError(
