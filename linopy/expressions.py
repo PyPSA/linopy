@@ -35,7 +35,7 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from numpy import array, nan, ndarray
+from numpy import array, isin, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -494,7 +494,7 @@ class LinearExpression:
 
     def __mul__(
         self,
-        other: Union[LinearExpression, int, DataArray, Variable, float],
+        other: Union[int, float, DataArray, Variable, ScalarVariable, LinearExpression],
     ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Multiply the expr by a factor.
@@ -508,31 +508,41 @@ class LinearExpression:
         elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
             other = other.to_linexpr()
 
-        if type(other) is LinearExpression:
-            if other.nterm > 1:
-                raise TypeError("Multiplication of multiple terms is not supported.")
-            # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
-            # with v being the variables and c the constants
-            # merge on factor dimension only returns v1 * v2 + c1 * c2
-            ds = (
-                other.data[["coeffs", "vars"]]
-                .sel(_term=0)
-                .broadcast_like(self.data)
-                .assign(const=other.const)
-            )
-            res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
-            # deal with cross terms c1 * v2 + c2 * v1
-            if self.has_constant:
-                res = res + self.const * other.reset_const()
-            if other.has_constant:
-                res = res + self.reset_const() * other.const
-            return res
+        if isinstance(other, LinearExpression):
+            return self._multiply_by_linear_expression(other)
         else:
-            multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-            coeffs = self.coeffs * multiplier
-            assert set(coeffs.shape) == set(self.coeffs.shape)
-            const = self.const * multiplier
-            return self.assign(coeffs=coeffs, const=const)
+            return self._multiply_by_constant(other)
+
+    def _multiply_by_linear_expression(
+        self, other: LinearExpression
+    ) -> Union[LinearExpression, QuadraticExpression]:
+        if other.nterm > 1:
+            raise TypeError("Multiplication of multiple terms is not supported.")
+        # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
+        # with v being the variables and c the constants
+        # merge on factor dimension only returns v1 * v2 + c1 * c2
+        ds = (
+            other.data[["coeffs", "vars"]]
+            .sel(_term=0)
+            .broadcast_like(self.data)
+            .assign(const=other.const)
+        )
+        res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+        # deal with cross terms c1 * v2 + c2 * v1
+        if self.has_constant:
+            res = res + self.const * other.reset_const()
+        if other.has_constant:
+            res = res + self.reset_const() * other.const
+        return res
+
+    def _multiply_by_constant(
+        self, other: Union[int, float, DataArray]
+    ) -> LinearExpression:
+        multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        coeffs = self.coeffs * multiplier
+        assert set(coeffs.shape) == set(self.coeffs.shape)
+        const = self.const * multiplier
+        return self.assign(coeffs=coeffs, const=const)
 
     def __pow__(self, other: int) -> "QuadraticExpression":
         """
@@ -755,7 +765,7 @@ class LinearExpression:
         """
         m = self.model
         sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
-        sol.loc[[-1]] = [np.nan]
+        sol[-1] = np.nan
         idx = np.ravel(self.vars)
         values = sol[idx].to_numpy().reshape(self.vars.shape)
         return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
@@ -1460,7 +1470,7 @@ class QuadraticExpression(LinearExpression):
         data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
         self._data = data
 
-    def __mul__(self, other: Union[float, Variable, int]) -> "QuadraticExpression":
+    def __mul__(self, other: Union[int, float, Variable]) -> "QuadraticExpression":
         """
         Multiply the expr by a factor.
         """

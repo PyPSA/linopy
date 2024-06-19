@@ -88,7 +88,7 @@ def varwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     return _varwrap
 
 
-def _var_unwrap(var: "Variable") -> Dataset:
+def _var_unwrap(var: Union["Variable", Dataset]) -> Dataset:
     return var.data if isinstance(var, Variable) else var
 
 
@@ -515,8 +515,8 @@ class Variable:
     def groupby(
         self,
         group: DataArray,
-        squeeze: "bool" = True,
-        restore_coord_dims: "bool" = None,
+        squeeze: bool = True,
+        restore_coord_dims: Union[bool, None] = None,
     ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
@@ -549,10 +549,10 @@ class Variable:
 
     def rolling(
         self,
-        dim: "Mapping[Any, int]" = None,
-        min_periods: "int" = None,
-        center: "bool | Mapping[Any, bool]" = False,
-        **window_kwargs: "int",
+        dim: Union[Mapping[Any, int], None] = None,
+        min_periods: Union[int, None] = None,
+        center: Union[bool, Mapping[Any, bool]] = False,
+        **window_kwargs: int,
     ) -> "expressions.LinearExpressionRolling":
         """
         Rolling window object.
@@ -806,9 +806,9 @@ class Variable:
 
         idx = np.ravel(self.labels)
         try:
-            vals = vals[idx].values.reshape(self.labels.shape)
+            vals = vals[idx].to_numpy().reshape(self.labels.shape)
         except KeyError:
-            vals = vals.reindex(idx).values.reshape(self.labels.shape)
+            vals = vals.reindex(idx).to_numpy().reshape(self.labels.shape)
 
         return DataArray(vals, self.coords)
 
@@ -992,8 +992,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1020,8 +1019,7 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1039,8 +1037,8 @@ class Variable:
             return self.__class__(data, self.model, self.name)
         return self
 
-    def equals(self, other):
-        return self.labels.equals(_var_unwrap(other))
+    def equals(self, other: "Variable") -> bool:
+        return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
     assign_attrs = varwrap(Dataset.assign_attrs)
@@ -1318,18 +1316,18 @@ class Variables:
     def get_name_by_label(self, label: int) -> str:
         """
         Get the variable name of the variable containing the passed label.
-    
+
         Parameters
         ----------
         label : int
             Integer label within the range [0, MAX_LABEL] where MAX_LABEL is the last assigned
             variable label.
-    
+
         Raises
         ------
         ValueError
             If label is not contained by any variable.
-    
+
         Returns
         -------
         name : str
@@ -1465,9 +1463,7 @@ class ScalarVariable:
         """
         return self._model
 
-    def to_scalar_linexpr(
-        self, coeff: Union[int, float] = 1
-    ) -> ScalarLinearExpression:
+    def to_scalar_linexpr(self, coeff: Union[int, float] = 1) -> ScalarLinearExpression:
         if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
@@ -1506,7 +1502,7 @@ class ScalarVariable:
     def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
-    def __eq__(self, other) -> AnonymousScalarConstraint:
+    def __eq__(self, other) -> AnonymousScalarConstraint:  # type: ignore
         return self.to_scalar_linexpr(1).__eq__(other)
 
     def __gt__(self, other) -> None:

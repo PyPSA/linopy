@@ -8,12 +8,9 @@ This module contains commonly used functions.
 
 import operator
 import os
+from collections.abc import Iterable, Mapping
 from functools import reduce, wraps
-<<<<<<< HEAD
-from typing import Any, Dict, List, Optional, Union
-=======
 from typing import Any, Dict, Hashable, List, Union
->>>>>>> 8aba373 (follow up)
 from warnings import warn
 
 import numpy as np
@@ -29,8 +26,11 @@ from xarray.core import indexing, utils
 from xarray.core import indexing
 >>>>>>> 8aba373 (follow up)
 from xarray.namedarray.utils import is_dict_like
+<<<<<<< HEAD
 from collections.abc import Iterable, Mapping
 >>>>>>> b0916b1 (some futher typing changes)
+=======
+>>>>>>> 32d56ca (typing: finish common.py)
 
 from linopy.config import options
 from linopy.constants import (
@@ -180,14 +180,14 @@ def numpy_to_dataarray(
             The converted DataArray.
     """
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
-    if not isinstance(dims, list):
+    if isinstance(dims, str):
         dims = [dims]
 
-    if dims is not None and len(dims):
+    if dims is not None and len(list(dims)):
         # fill up dims with default names to match the number of dimensions
         dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
-    if isinstance(coords, list) and dims is not None and len(dims):
+    if isinstance(coords, list) and dims is not None and len(list(dims)):
         coords = dict(zip(dims, coords))
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
@@ -240,7 +240,8 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
-    return arr # type: ignore
+    return arr  # type: ignore
+
 
 # TODO: rename to to_pandas_dataframe
 def to_dataframe(ds, mask_func=None):
@@ -286,16 +287,16 @@ def infer_schema_polars(ds: pl.DataFrame) -> dict:
     schema = {}
     for array in ds.iter_columns():
         col_name = array.name
-        if np.issubdtype(array.dtype, np.integer): # type: ignore
+        if np.issubdtype(array.dtype, np.integer):  # type: ignore
             schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
-        elif np.issubdtype(array.dtype, np.floating): # type: ignore
-            schema[col_name] = pl.Float64
-        elif np.issubdtype(array.dtype, np.bool_): # type: ignore
-            schema[col_name] = pl.Boolean
-        elif np.issubdtype(array.dtype, np.object_): # type: ignore
-            schema[col_name] = pl.Object
+        elif np.issubdtype(array.dtype, np.floating):  # type: ignore
+            schema[col_name] = pl.Float64  # type: ignore
+        elif np.issubdtype(array.dtype, np.bool_):  # type: ignore
+            schema[col_name] = pl.Boolean  # type: ignore
+        elif np.issubdtype(array.dtype, np.object_):  # type: ignore
+            schema[col_name] = pl.Object  # type: ignore
         else:
-            schema[col_name] = pl.Utf8
+            schema[col_name] = pl.Utf8  # type: ignore
     return schema
 
 
@@ -355,7 +356,7 @@ def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
     if "labels" in df.columns:
         cond.append(pl.col("labels").ne(-1))
 
-    cond = reduce(operator.and_, cond)
+    cond = reduce(operator.and_, cond)  # type: ignore
     return df.filter(cond)
 
 
