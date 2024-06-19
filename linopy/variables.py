@@ -146,7 +146,7 @@ class Variable:
 
     _fill_value = {"labels": -1, "lower": np.nan, "upper": np.nan}
 
-    def __init__(self, data: Dataset, model: Any, name: str) -> None:
+    def __init__(self, data: Dataset, model: Any, name: Hashable) -> None:
         """
         Initialize the Variable.
 
@@ -391,7 +391,8 @@ class Variable:
         """
         if not other == 2:
             raise ValueError("Power must be 2.")
-        return self * self
+        expr = self.to_linexpr()
+        return expr._multiply_by_linear_expression(expr)
 
     def __rmul__(
         self, other: Union[float, DataArray, int, ndarray]
@@ -439,7 +440,7 @@ class Variable:
         """
         return self.to_linexpr() + other
 
-    def __radd__(self, other: int) -> "Variable":
+    def __radd__(self, other: int) -> Union["Variable", NotImplementedType]:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
@@ -457,7 +458,7 @@ class Variable:
     def __ge__(self, other: int) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: Union[float, int]) -> Constraint:
+    def __eq__(self, other: Union[float, int]) -> Constraint: # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other):
@@ -623,7 +624,7 @@ class Variable:
         )
 
     @property
-    def name(self) -> str:
+    def name(self) -> Hashable:
         """
         Return the name of the variable.
         """
@@ -992,7 +993,8 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1019,7 +1021,8 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1119,9 +1122,9 @@ class Variables:
         return {format_string_as_variable_name(n): n for n in self}
 
     def __getitem__(
-        self, names: Union[str, Sequence[str]]
+        self, names: Union[Hashable, Sequence[Hashable]]
     ) -> Union[Variable, "Variables"]:
-        if isinstance(names, str):
+        if not isinstance(names, list):
             return self.data[names]
 
         return self.__class__({name: self.data[name] for name in names}, self.model)

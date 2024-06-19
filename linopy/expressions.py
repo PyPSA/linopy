@@ -515,7 +515,7 @@ class LinearExpression:
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression
-    ) -> Union[LinearExpression, QuadraticExpression]:
+    ) -> QuadraticExpression:
         if other.nterm > 1:
             raise TypeError("Multiplication of multiple terms is not supported.")
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
@@ -533,7 +533,7 @@ class LinearExpression:
             res = res + self.const * other.reset_const()
         if other.has_constant:
             res = res + self.reset_const() * other.const
-        return res
+        return res # type: ignore
 
     def _multiply_by_constant(
         self, other: Union[int, float, DataArray]
