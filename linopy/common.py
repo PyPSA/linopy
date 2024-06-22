@@ -10,7 +10,7 @@ import operator
 import os
 from collections.abc import Iterable, Mapping
 from functools import reduce, wraps
-from typing import Any, Dict, Hashable, List, Union
+from typing import Any, Callable, Dict, Hashable, List, Tuple, Union
 from warnings import warn
 
 import numpy as np
@@ -42,7 +42,7 @@ from linopy.constants import (
 )
 
 
-def maybe_replace_sign(sign):
+def maybe_replace_sign(sign: str) -> str:
     """
     Replace the sign with an alternative sign if available.
 
@@ -63,7 +63,7 @@ def maybe_replace_sign(sign):
         raise ValueError(f"Sign {sign} not in {SIGNS} or {SIGNS_alternative}")
 
 
-def maybe_replace_signs(sign):
+def maybe_replace_signs(sign: DataArray) -> DataArray:
     """
     Replace signs with alternative signs if available.
 
@@ -77,7 +77,7 @@ def maybe_replace_signs(sign):
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def format_string_as_variable_name(name):
+def format_string_as_variable_name(name: Hashable):
     """
     Format a string to a valid python variable name.
 
@@ -87,7 +87,7 @@ def format_string_as_variable_name(name):
     Returns:
         str: The formatted name.
     """
-    return name.replace(" ", "_").replace("-", "_")
+    return str(name).replace(" ", "_").replace("-", "_")
 
 
 def get_from_iterable(lst: Union[str, Iterable[Hashable], None], index: int):
@@ -196,7 +196,7 @@ def numpy_to_dataarray(
 def as_dataarray(
     arr,
     coords: Union[Mapping[Any, Any], None] = None,
-    dims: Union[str | Iterable[Hashable], None] = None,
+    dims: Union[str, Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -244,7 +244,7 @@ def as_dataarray(
 
 
 # TODO: rename to to_pandas_dataframe
-def to_dataframe(ds, mask_func=None):
+def to_dataframe(ds: Dataset, mask_func: Union[Callable, None] = None):
     """
     Convert an xarray Dataset to a pandas DataFrame.
 
@@ -257,14 +257,14 @@ def to_dataframe(ds, mask_func=None):
         Dataset to convert to a DataFrame.
     """
     data = broadcast(ds)[0]
-    data = {k: v.values.reshape(-1) for k, v in data.items()}
+    datadict = {k: v.values.reshape(-1) for k, v in data.items()}
 
     if mask_func is not None:
-        mask = mask_func(data)
-        for k, v in data.items():
-            data[k] = v[mask]
+        mask = mask_func(datadict)
+        for k, v in datadict.items():
+            datadict[k] = v[mask]
 
-    return pd.DataFrame(data, copy=False)
+    return pd.DataFrame(datadict, copy=False)
 
 
 def check_has_nulls(df: pd.DataFrame, name: str):
@@ -274,9 +274,9 @@ def check_has_nulls(df: pd.DataFrame, name: str):
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
 
 
-def infer_schema_polars(ds: pl.DataFrame) -> dict:
+def infer_schema_polars(ds: Dataset) -> Dict[Hashable, pl.DataType]:
     """
-    Infer the schema for a Polars DataFrame based on the data types of its columns.
+    Infer the polars data schema from a xarray dataset.
 
     Args:
         ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
@@ -285,19 +285,18 @@ def infer_schema_polars(ds: pl.DataFrame) -> dict:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
-    for array in ds.iter_columns():
-        col_name = array.name
-        if np.issubdtype(array.dtype, np.integer):  # type: ignore
-            schema[col_name] = pl.Int32 if os.name == "nt" else pl.Int64
-        elif np.issubdtype(array.dtype, np.floating):  # type: ignore
-            schema[col_name] = pl.Float64  # type: ignore
-        elif np.issubdtype(array.dtype, np.bool_):  # type: ignore
-            schema[col_name] = pl.Boolean  # type: ignore
-        elif np.issubdtype(array.dtype, np.object_):  # type: ignore
-            schema[col_name] = pl.Object  # type: ignore
+    for name, array in ds.items():
+        if np.issubdtype(array.dtype, np.integer):
+            schema[name] = pl.Int32 if os.name == "nt" else pl.Int64
+        elif np.issubdtype(array.dtype, np.floating):
+            schema[name] = pl.Float64  # type: ignore
+        elif np.issubdtype(array.dtype, np.bool_):
+            schema[name] = pl.Boolean  # type: ignore
+        elif np.issubdtype(array.dtype, np.object_):
+            schema[name] = pl.Object  # type: ignore
         else:
-            schema[col_name] = pl.Utf8  # type: ignore
-    return schema
+            schema[name] = pl.Utf8  # type: ignore
+    return schema  # type: ignore
 
 
 def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
@@ -381,7 +380,7 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def save_join(*dataarrays, integer_dtype=False):
+def save_join(*dataarrays: DataArray, integer_dtype: bool = False):
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
@@ -394,7 +393,7 @@ def save_join(*dataarrays, integer_dtype=False):
         )
         arrs = align(*dataarrays, join="outer")
         if integer_dtype:
-            arrs = [ds.fillna(-1).astype(int) for ds in arrs]
+            arrs = tuple([ds.fillna(-1).astype(int) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
 
 
@@ -445,13 +444,14 @@ def replace_by_map(ds, mapping):
     )
 
 
-def best_int(max_value):
+def best_int(max_value: int):
     """
     Get the minimal int dtype for storing values <= max_value.
     """
     for t in (np.int8, np.int16, np.int32, np.int64):
         if max_value <= np.iinfo(t).max:
             return t
+    raise ValueError(f"Value {max_value} is too large for int64.")
 
 
 def get_index_map(*arrays):
@@ -479,7 +479,7 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
-def align_lines_by_delimiter(lines, delimiter):
+def align_lines_by_delimiter(lines: List[str], delimiter: Union[str, List[str]]):
     # Determine the maximum position of the delimiter
     if isinstance(delimiter, str):
         delimiter = [delimiter]
@@ -500,12 +500,16 @@ def align_lines_by_delimiter(lines, delimiter):
     return formatted_lines
 
 
-def get_label_position(obj, values):
+def get_label_position(obj, values: Union[int, np.ndarray]) -> Union[
+    Union[Tuple[str, dict], Tuple[None, None]],
+    List[Union[Tuple[str, dict], Tuple[None, None]]],
+    List[List[Union[Tuple[str, dict], Tuple[None, None]]]],
+]:
     """
     Get tuple of name and coordinate for variable labels.
     """
 
-    def find_single(value):
+    def find_single(value: int) -> Union[Tuple[str, dict], Tuple[None, None]]:
         if value == -1:
             return None, None
         for name, val in obj.items():
@@ -519,13 +523,17 @@ def get_label_position(obj, values):
                 coord = {
                     dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)
                 }
-
                 # Add the name of the DataArray and the coordinates to the result list
                 return name, coord
+        raise ValueError(f"Label {value} is not existent in the model.")
 
-    ndim = np.array(values).ndim
-    if ndim == 0:
+    if isinstance(values, int):
         return find_single(values)
+
+    values = np.array(values)
+    ndim = values.ndim
+    if ndim == 0:
+        return find_single(values.item())
     elif ndim == 1:
         return [find_single(v) for v in values]
     elif ndim == 2:

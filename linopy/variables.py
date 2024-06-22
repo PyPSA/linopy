@@ -21,6 +21,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    overload,
 )
 from warnings import warn
 
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 logger = logging.getLogger(__name__)
+
+FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan}
 
 
 def varwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
@@ -144,9 +147,9 @@ class Variable:
     __slots__ = ("_data", "_model")
     __array_ufunc__ = None
 
-    _fill_value = {"labels": -1, "lower": np.nan, "upper": np.nan}
+    _fill_value = FILL_VALUE
 
-    def __init__(self, data: Dataset, model: Any, name: Hashable) -> None:
+    def __init__(self, data: Dataset, model: Any, name: str) -> None:
         """
         Initialize the Variable.
 
@@ -172,12 +175,10 @@ class Variable:
 
         data = data.assign_attrs(name=name)
         (data,) = broadcast(data)
-        for attr in (
-            "lower",
-            "upper",
-        ):  # convert to float, important for  operations like "shift"
+        for attr in ("lower", "upper"):
+            # convert to float, important for  operations like "shift"
             if not issubdtype(data[attr].dtype, floating):
-                data[attr] = data[attr].astype(float)
+                data[attr].values = data[attr].values.astype(float)
 
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
@@ -458,7 +459,7 @@ class Variable:
     def __ge__(self, other: int) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: Union[float, int]) -> Constraint: # type: ignore
+    def __eq__(self, other: Union[float, int]) -> Constraint:  # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other):
@@ -624,7 +625,7 @@ class Variable:
         )
 
     @property
-    def name(self) -> Hashable:
+    def name(self) -> str:
         """
         Return the name of the variable.
         """
@@ -682,6 +683,9 @@ class Variable:
         """
         Return the fill value of the variable.
         """
+        warn(
+            "The `.fill_value` attribute is deprecated, use linopy.variables.FILL_VALUE instead."
+        )
         return cls._fill_value
 
     @property
@@ -710,7 +714,7 @@ class Variable:
 
     @upper.setter
     @is_constant
-    def upper(self, value):
+    def upper(self, value: DataArray):
         """
         Set the upper bounds of the variables.
 
@@ -993,8 +997,7 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1021,8 +1024,7 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit)
-            .fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
@@ -1121,13 +1123,16 @@ class Variables:
         """
         return {format_string_as_variable_name(n): n for n in self}
 
-    def __getitem__(
-        self, names: Union[Hashable, Sequence[Hashable]]
-    ) -> Union[Variable, "Variables"]:
-        if not isinstance(names, list):
-            return self.data[names]
+    @overload
+    def __getitem__(self, names: str) -> Variable: ...
 
-        return self.__class__({name: self.data[name] for name in names}, self.model)
+    @overload
+    def __getitem__(self, names: List[str]) -> "Variables": ...
+
+    def __getitem__(self, names: Union[str, List[str]]):
+        if isinstance(names, str):
+            return self.data[names]
+        return Variables({name: self.data[name] for name in names}, self.model)
 
     def __getattr__(self, name: str) -> Variable:
         # If name is an attribute of self (including methods and properties), return that
@@ -1508,12 +1513,12 @@ class ScalarVariable:
     def __eq__(self, other) -> AnonymousScalarConstraint:  # type: ignore
         return self.to_scalar_linexpr(1).__eq__(other)
 
-    def __gt__(self, other) -> None:
+    def __gt__(self, other: Any) -> None:
         raise NotImplementedError(
             "Inequalities only ever defined for >= rather than >."
         )
 
-    def __lt__(self, other) -> None:
+    def __lt__(self, other: Any) -> None:
         raise NotImplementedError(
             "Inequalities only ever defined for >= rather than >."
         )

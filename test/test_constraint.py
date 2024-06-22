@@ -173,7 +173,8 @@ def test_constraint_inherited_properties(x, y):
     assert isinstance(con.shape, tuple)
     assert isinstance(con.size, int)
     assert isinstance(con.dims, xr.core.utils.Frozen)
-    assert con.values is None
+    with pytest.warns(DeprecationWarning):
+        assert con.values is None
 
 
 def test_constraint_wrapped_methods(x, y):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path, PosixPath
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, List, Tuple, Union
@@ -20,9 +21,9 @@ from deprecation import deprecated
 from numpy import inf, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
+from regex import D
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
-from collections.abc import Mapping
 
 from linopy import solvers
 from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
@@ -44,6 +45,14 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers
+from linopy.types import (
+    ConstantLike,
+    ConstraintLike,
+    ExpressionLike,
+    MaskLike,
+    SignLike,
+    VariableLike,
+)
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -120,8 +129,8 @@ class Model:
         -------
         linopy.Model
         """
-        self._variables: Variables = Variables(model=self)
-        self._constraints: Constraints = Constraints(model=self)
+        self._variables: Variables = Variables({}, model=self)
+        self._constraints: Constraints = Constraints({}, model=self)
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
 
@@ -135,7 +144,9 @@ class Model:
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
-        self._solver_dir: Union[str, Path] = Path(gettempdir() if solver_dir is None else solver_dir)
+        self._solver_dir: Union[str, Path] = Path(
+            gettempdir() if solver_dir is None else solver_dir
+        )
 
         self.matrices: MatrixAccessor = MatrixAccessor(self)
 
@@ -230,18 +241,6 @@ class Model:
         self._termination_condition = TerminationCondition[value].value
 
     @property
-    @deprecated("0.2.7", "Use `objective.value` instead.")
-    def objective_value(self):
-        """
-        Objective value of the model.
-        """
-        return self._objective.value
-
-    @objective_value.setter
-    def objective_value(self, value):
-        self._objective.set_value(value)
-
-    @property
     def chunk(self):
         """
         Chunk sizes of the model.
@@ -318,7 +317,7 @@ class Model:
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds: DataArray) -> None:
+    def check_force_dim_names(self, ds: Union[DataArray, Dataset]) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -334,11 +333,12 @@ class Model:
             If broadcasted data leads to unspecified dimension names.
 
         Returns
+
         -------
         None.
         """
         contains_default_dims = any(
-            bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims
+            bool(re.match(r"dim_[0-9]+", str(dim))) for dim in list(ds.dims)
         )
         if self.force_dim_names and contains_default_dims:
             raise ValueError(
@@ -481,12 +481,12 @@ class Model:
 
     def add_constraints(
         self,
-        lhs: Any,
-        sign: Union[str, float, None] = None,
-        rhs: Union[float, int, None] = None,
+        lhs: Union[VariableLike, ExpressionLike, ConstraintLike],
+        sign: Union[SignLike, None] = None,
+        rhs: Union[ConstantLike, VariableLike, ExpressionLike, None] = None,
         name: Union[str, None] = None,
         coords: Union[Mapping[Any, Any], None] = None,
-        mask: Union[DataArray, Series, None] = None,
+        mask: Union[MaskLike, None] = None,
     ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -529,17 +529,10 @@ class Model:
             Array containing the labels of the added constraints.
         """
 
-        def assert_sign_rhs_are_None(lhs, sign, rhs):
-            if sign is not None or rhs is not None:
-                msg = f"Passing arguments `sign` and `rhs` together with a {type(lhs)} is ambiguous."
-                raise ValueError(msg)
+        msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
+        msg_sign_rhs_not_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
 
-        def assert_sign_rhs_not_None(lhs, sign, rhs):
-            if sign is None or rhs is None:
-                msg = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-                raise ValueError(msg)
-
-        if name in self.constraints:
+        if name in list(self.constraints):
             raise ValueError(f"Constraint '{name}' already assigned to model")
         elif name is None:
             name = f"con{self._connameCounter}"
@@ -548,24 +541,30 @@ class Model:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         if isinstance(lhs, LinearExpression):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.to_constraint(sign, rhs).data
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_not_none)
+            data = lhs.to_constraint(sign, rhs).data  # type: ignore
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = Constraint.from_rule(self, rule, coords).data
         elif isinstance(lhs, AnonymousScalarConstraint):
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = lhs.to_constraint().data
         elif isinstance(lhs, Constraint):
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = lhs.data
         elif isinstance(lhs, (list, tuple)):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_none)
             data = self.linexpr(*lhs).to_constraint(sign, rhs).data
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_not_none)
             data = lhs.to_linexpr().to_constraint(sign, rhs).data
         else:
             raise ValueError(
@@ -655,7 +654,7 @@ class Model:
         labels = self.variables[name].labels
         self.variables.remove(name)
 
-        for k in self.constraints:
+        for k in list(self.constraints):
             vars = self.constraints[k].data["vars"]
             vars = vars.where(~vars.isin(labels), -1)
             self.constraints[k].data["vars"] = vars

@@ -75,6 +75,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
+from linopy.types import ConstantLike, ExpressionLike, SignLike, VariableLike
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -357,7 +358,7 @@ class LinearExpression:
         if np.issubdtype(data.vars, np.floating):
             data["vars"] = data.vars.fillna(-1).astype(int)
         if not np.issubdtype(data.coeffs, np.floating):
-            data["coeffs"] = data.coeffs.astype(float)
+            data["coeffs"].values = data.coeffs.values.astype(float)
 
         data = fill_missing_coords(data)
 
@@ -533,7 +534,7 @@ class LinearExpression:
             res = res + self.const * other.reset_const()
         if other.has_constant:
             res = res + self.reset_const() * other.const
-        return res # type: ignore
+        return res  # type: ignore
 
     def _multiply_by_constant(
         self, other: Union[int, float, DataArray]
@@ -1062,7 +1063,9 @@ class LinearExpression:
         data = self.data.assign(vars=vars)
         return QuadraticExpression(data, self.model)
 
-    def to_constraint(self, sign: Union[str, DataArray], rhs: Any) -> Constraint:
+    def to_constraint(
+        self, sign: SignLike, rhs: Union[ConstantLike, VariableLike, ExpressionLike]
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
