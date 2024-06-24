@@ -75,3 +75,8 @@ include = ["linopy"]
 
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
+
+
+[tool.mypy]
+ignore_missing_imports = true
+namespace_packages = true

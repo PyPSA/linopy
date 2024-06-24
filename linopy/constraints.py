@@ -7,16 +7,16 @@ This module contains implementations for the Constraint{s} class.
 
 import functools
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import product
-from typing import Any, Dict, List, Tuple, Union, overload
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy.sparse
 import xarray as xr
 from numpy import array, ndarray
-from scipy.sparse import csc_matrix
 from xarray import DataArray, Dataset
 from xarray.core.coordinates import DataArrayCoordinates
 
@@ -46,6 +46,11 @@ from linopy.common import (
 from linopy.config import options
 from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
 from linopy.types import ConstantLike
+
+if TYPE_CHECKING:
+    from linopy.model import Model
+
+FILL_VALUE = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
 
 
 def conwrap(method, *default_args, **new_default_kwargs):
@@ -80,9 +85,11 @@ class Constraint:
 
     __slots__ = ("_data", "_model", "_assigned")
 
-    _fill_value = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
+    _fill_value = FILL_VALUE
 
-    def __init__(self, data: Dataset, model: Any, name: str = ""):
+    def __init__(
+        self, data: Dataset, model: Any, name: str = "", skip_broadcast: bool = False
+    ):
         """
         Initialize the Constraint.
 
@@ -111,7 +118,8 @@ class Constraint:
 
         data = data.assign_attrs(name=name)
 
-        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+        if not skip_broadcast:
+            (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         self._data = data
         self._model = model
@@ -955,7 +963,7 @@ class Constraints:
         df["key"] = df.labels.map(map_labels)
         return df
 
-    def to_matrix(self, filter_missings=True) -> csc_matrix:
+    def to_matrix(self, filter_missings=True) -> Union[scipy.sparse.csc_matrix, None]:
         """
         Construct a constraint matrix in sparse format.
 
@@ -972,10 +980,14 @@ class Constraints:
             vars = self.model.variables.flat
             shape = (cons.key.max() + 1, vars.key.max() + 1)
             cons["vars"] = cons.vars.map(vars.set_index("labels").key)
-            return csc_matrix((cons.coeffs, (cons.key, cons.vars)), shape=shape)
+            return scipy.sparse.csc_matrix(
+                (cons.coeffs, (cons.key, cons.vars)), shape=shape
+            )
         else:
             shape = self.model.shape
-            return csc_matrix((cons.coeffs, (cons.labels, cons.vars)), shape=shape)
+            return scipy.sparse.csc_matrix(
+                (cons.coeffs, (cons.labels, cons.vars)), shape=shape
+            )
 
     def reset_dual(self) -> None:
         """

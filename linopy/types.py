@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
 import numpy
@@ -14,7 +15,6 @@ if TYPE_CHECKING:
     )
     from linopy.variables import ScalarVariable, Variable
 
-
 ConstantLike = Union[int, float, numpy.ndarray, DataArray, Series, DataFrame]
 SignLike = Union[str, numpy.ndarray, DataArray, Series, DataFrame]
 VariableLike = Union["ScalarVariable", "Variable"]
@@ -24,3 +24,6 @@ ExpressionLike = Union[
 ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
 MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]
 LhsLike = Union[VariableLike, ExpressionLike, ConstraintLike]
+
+
+PathLike = Union[str, Path]

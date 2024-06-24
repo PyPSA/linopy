@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
@@ -17,8 +17,6 @@ from typing import (
     Dict,
     List,
     Mapping,
-    Optional,
-    Sequence,
     Tuple,
     Union,
     overload,
@@ -149,7 +147,9 @@ class Variable:
 
     _fill_value = FILL_VALUE
 
-    def __init__(self, data: Dataset, model: Any, name: str) -> None:
+    def __init__(
+        self, data: Dataset, model: Any, name: str, skip_broadcast: bool = False
+    ) -> None:
         """
         Initialize the Variable.
 
@@ -174,7 +174,8 @@ class Variable:
                 raise ValueError(f"missing '{attr}' in data")
 
         data = data.assign_attrs(name=name)
-        (data,) = broadcast(data)
+        if not skip_broadcast:
+            (data,) = broadcast(data)
         for attr in ("lower", "upper"):
             # convert to float, important for  operations like "shift"
             if not issubdtype(data[attr].dtype, floating):
@@ -629,7 +630,7 @@ class Variable:
         """
         Return the name of the variable.
         """
-        return self.attrs["name"]
+        return str(self.attrs["name"])
 
     @property
     def labels(self) -> DataArray:
@@ -677,7 +678,7 @@ class Variable:
         """
         return self.data.attrs["label_range"]
 
-    @classmethod
+    @classmethod  # type: ignore
     @property
     def fill_value(cls):
         """
@@ -811,11 +812,11 @@ class Variable:
 
         idx = np.ravel(self.labels)
         try:
-            vals = vals[idx].to_numpy().reshape(self.labels.shape)
+            values = vals[idx].to_numpy().reshape(self.labels.shape)
         except KeyError:
-            vals = vals.reindex(idx).to_numpy().reshape(self.labels.shape)
+            values = vals.reindex(idx).to_numpy().reshape(self.labels.shape)
 
-        return DataArray(vals, self.coords)
+        return DataArray(values, self.coords)
 
     @property
     def flat(self) -> DataFrame:
@@ -945,12 +946,13 @@ class Variable:
         -------
         linopy.Variable
         """
+        _other: Union[Dict[str, Union[float, int]], Dataset]
         if other is None:
-            other = self._fill_value
+            _other = self._fill_value
         elif isinstance(other, Variable):
-            other = other.data
+            _other = other.data
         elif isinstance(other, ScalarVariable):
-            other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
+            _other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
         elif not isinstance(other, (dict, Dataset)):
             warn(
                 "other argument of Variable.where should be a Variable, ScalarVariable or dict. "
@@ -958,7 +960,7 @@ class Variable:
                 FutureWarning,
             )
         return self.__class__(
-            self.data.where(cond, other, **kwargs), self.model, self.name
+            self.data.where(cond, _other, **kwargs), self.model, self.name
         )
 
     def fillna(self, fill_value: Union[ScalarVariable, int]) -> "Variable":
@@ -1354,7 +1356,7 @@ class Variables:
         """
         return self[name].range
 
-    def get_label_position(self, values: Union[int64, int, ndarray]) -> Any:
+    def get_label_position(self, values: Union[int, ndarray]) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
         """
@@ -1409,12 +1411,12 @@ class Variables:
             if dim in variable.dims:
                 variable.data["blocks"] = blocks.broadcast_like(variable.labels)
 
-    def get_blockmap(self, dtype=np.int8):
+    def get_blockmap(self, dtype: type = np.int8):
         """
         Get a one-dimensional array mapping the variables to blocks.
         """
         df = self.flat
-        res = np.full(self.model._xCounter + 1, -1, dtype=dtype)
+        res: np.ndarray = np.full(self.model._xCounter + 1, -1, dtype=dtype)
         res[df.labels] = df.blocks
         return res
 

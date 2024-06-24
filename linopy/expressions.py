@@ -93,6 +93,9 @@ SUPPORTED_CONSTANT_TYPES = (
 )
 
 
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+
+
 def exprwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     @functools.wraps(method)
     def _exprwrap(expr, *args, **kwargs):
@@ -330,7 +333,7 @@ class LinearExpression:
     __array_ufunc__ = None
     __array_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+    _fill_value = FILL_VALUE
 
     def __init__(self, data: Any, model: Union[Model, None]) -> None:
         from linopy.model import Model
@@ -370,7 +373,7 @@ class LinearExpression:
         elif not np.issubdtype(data.const, np.floating):
             data["const"] = data.const.astype(float)
 
-        data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
+        (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         data[["coeffs", "vars"]] = xr.broadcast(
             data[["coeffs", "vars"]], exclude=[FACTOR_DIM]
         )[0]
@@ -571,7 +574,7 @@ class LinearExpression:
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
-        return (self * other).sum(dims=common_dims)
+        return (self * other).sum(dim=common_dims)
 
     def __div__(
         self, other: Union[Variable, float, int]
@@ -699,6 +702,9 @@ class LinearExpression:
     @classmethod
     @property
     def fill_value(cls):
+        warn(
+            "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead."
+        )
         return cls._fill_value
 
     @property

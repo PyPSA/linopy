@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
-from pathlib import Path, PosixPath
+from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, List, Tuple, Union
 
@@ -21,7 +21,6 @@ from deprecation import deprecated
 from numpy import inf, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
-from regex import D
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
@@ -140,11 +139,11 @@ class Model:
         self._cCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
-        self._blocks: Union[Dataset, None] = None
+        self._blocks: Union[DataArray, None] = None
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
-        self._solver_dir: Union[str, Path] = Path(
+        self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
 
@@ -269,7 +268,7 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
-    def solver_dir(self):
+    def solver_dir(self) -> Path:
         """
         Solver directory of the model.
         """
@@ -450,32 +449,31 @@ class Model:
             {
                 "lower": as_dataarray(lower, coords, **kwargs),
                 "upper": as_dataarray(upper, coords, **kwargs),
+                "labels": -1,
             }
         )
+        (data,) = xr.broadcast(data)
+        self.check_force_dim_names(data)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
-        labels = DataArray(-2, coords=data.coords)
-
-        self.check_force_dim_names(labels)
-
         start = self._xCounter
-        end = start + labels.size
-        labels.data = np.arange(start, end).reshape(labels.shape)
-        self._xCounter += labels.size
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._xCounter += data.labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
-        data = data.assign(labels=labels).assign_attrs(
+        data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
         )
 
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        variable = Variable(data, name=name, model=self)
+        variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
 
@@ -576,6 +574,9 @@ class Model:
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
 
+        data["labels"] = -1
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
             # TODO: simplify
@@ -583,26 +584,22 @@ class Model:
                 data.dims
             ), "Dimensions of mask not a subset of resulting labels dimensions."
 
-        labels = DataArray(-1, coords=data.indexes)
-
-        self.check_force_dim_names(labels)
+        self.check_force_dim_names(data)
 
         start = self._cCounter
-        end = start + labels.size
-        labels.data = np.arange(start, end).reshape(labels.shape)
-        self._cCounter += labels.size
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._cCounter += data.labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
-        data = data.assign(labels=labels).assign_attrs(
-            label_range=(start, end), name=name
-        )
+        data = data.assign_attrs(label_range=(start, end), name=name)
 
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        constraint = Constraint(data, name=name, model=self)
+        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         self.constraints.add(constraint)
         return constraint
 
@@ -774,7 +771,7 @@ class Model:
         return self._blocks
 
     @blocks.setter
-    def blocks(self, blocks):
+    def blocks(self, blocks: DataArray):
         if not isinstance(blocks, DataArray):
             raise TypeError("Blocks must be of type DataArray")
         assert len(blocks.dims) == 1
@@ -795,7 +792,7 @@ class Model:
 
         dtype = self.blocks.dtype
         self.variables.set_blocks(self.blocks)
-        block_map = self.variables.get_blockmap(dtype)
+        block_map = self.variables.get_blockmap(dtype)  # type: ignore
         self.constraints.set_blocks(block_map)
 
         blocks = replace_by_map(self.objective.vars, block_map)
@@ -901,15 +898,10 @@ class Model:
             index=["min", "max"],
         )
 
-    def get_solution_file(
-        self, solution_fn: Union[PosixPath, None] = None
-    ) -> Union[str, PosixPath]:
+    def get_solution_file(self) -> Path:
         """
         Get a fresh created solution file if solution file is None.
         """
-        if solution_fn is not None:
-            return solution_fn
-
         with NamedTemporaryFile(
             prefix="linopy-solve-",
             suffix=".sol",
@@ -917,19 +909,15 @@ class Model:
             dir=str(self.solver_dir),
             delete=False,
         ) as f:
-            return f.name
+            return Path(f.name)
 
     def get_problem_file(
         self,
-        problem_fn: Union[str, PosixPath, None] = None,
         io_api: Union[str, None] = None,
-    ) -> Union[str, PosixPath]:
+    ) -> Path:
         """
         Get a fresh created problem file if problem file is None.
         """
-        if problem_fn is not None:
-            return problem_fn
-
         suffix = ".mps" if io_api == "mps" else ".lp"
         with NamedTemporaryFile(
             prefix="linopy-problem-",
@@ -938,17 +926,17 @@ class Model:
             dir=self.solver_dir,
             delete=False,
         ) as f:
-            return f.name
+            return Path(f.name)
 
     def solve(
         self,
         solver_name: Union[str, None] = None,
         io_api: Union[str, None] = None,
-        problem_fn: Union[PosixPath, None] = None,
-        solution_fn: Union[PosixPath, None] = None,
-        log_fn: Union[PosixPath, None] = None,
-        basis_fn: Union[PosixPath, None] = None,
-        warmstart_fn: Union[PosixPath, None] = None,
+        problem_fn: Union[Path, None] = None,
+        solution_fn: Union[Path, None] = None,
+        log_fn: Union[Path, None] = None,
+        basis_fn: Union[Path, None] = None,
+        warmstart_fn: Union[Path, None] = None,
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,
@@ -1032,7 +1020,7 @@ class Model:
                 **solver_options,
             )
 
-            self.objective.value = solved.objective.value
+            self.objective.set_value(solved.objective.value)
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
@@ -1048,7 +1036,7 @@ class Model:
         if solver_name is None:
             solver_name = available_solvers[0]
 
-        logger.info(f" Solve problem using {solver_name.title()} solver")
+        logger.info(f" Solve problem using {solver_name.title()} solver")  # type: ignore
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
@@ -1063,8 +1051,14 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
-        problem_fn = self.get_problem_file(problem_fn, io_api=io_api)
-        solution_fn = self.get_solution_file(solution_fn)
+        if problem_fn is None:
+            problem_fn = self.get_problem_file(io_api=io_api)
+        elif not isinstance(problem_fn, Path):
+            problem_fn = Path(problem_fn)
+        if solution_fn is None:
+            solution_fn = self.get_solution_file()
+        elif not isinstance(solution_fn, Path):
+            solution_fn = Path(solution_fn)
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
@@ -1157,9 +1151,9 @@ class Model:
         solver_model.write(f.name)
         labels = []
         for line in f.readlines():
-            line = line.decode()
-            if line.startswith(" c"):
-                labels.append(int(line.split(":")[0][2:]))
+            line_decoded = line.decode()
+            if line_decoded.startswith(" c"):
+                labels.append(int(line_decoded.split(":")[0][2:]))
         return labels
 
     def print_infeasibilities(self, display_max_terms: None = None) -> None:
