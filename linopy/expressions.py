@@ -20,6 +20,7 @@ from typing import (
     Hashable,
     List,
     Mapping,
+    Sequence,
     Tuple,
     Union,
 )
@@ -35,14 +36,15 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
+from h11 import Data
 from numpy import array, isin, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
-from xarray import Coordinates, DataArray, Dataset
+from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
-from xarray.core.rolling import DataArrayRolling
+from xarray.core.rolling import DatasetRolling
 from xarray.core.types import Dims
 from xarray.core.utils import Frozen
 
@@ -138,7 +140,7 @@ class LinearExpressionGroupby:
     """
 
     data: xr.Dataset
-    group: Union[Hashable, pd.DataFrame, pd.Series, xr.DataArray, xr.IndexVariable]
+    group: Union[Hashable, DataArray, IndexVariable, pd.Series, pd.DataFrame]
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -157,7 +159,7 @@ class LinearExpressionGroupby:
                 "Grouping by pandas objects is only supported in sum function."
             )
 
-        return self.data.groupby(group=self.group, **self.kwargs)
+        return self.data.groupby(group=self.group, **self.kwargs)  # type: ignore
 
     def map(
         self, func: Callable, shortcut: bool = False, args: Tuple[()] = (), **kwargs
@@ -213,7 +215,7 @@ class LinearExpressionGroupby:
         """
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group = self.group
+            group: Union[pd.Series, pd.DataFrame, xr.DataArray] = self.group
             group_name = getattr(group, "name", "group") or "group"
 
             if isinstance(group, DataArray):
@@ -277,7 +279,7 @@ class LinearExpressionRolling:
     GroupBy object specialized to grouping LinearExpression objects.
     """
 
-    rolling: DataArrayRolling
+    rolling: DatasetRolling
     model: Any
 
     def sum(self, **kwargs) -> "LinearExpression":
@@ -699,7 +701,7 @@ class LinearExpression:
     def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
-    @classmethod
+    @classmethod  # type: ignore
     @property
     def fill_value(cls):
         warn(
@@ -1055,9 +1057,9 @@ class LinearExpression:
         coeffs = coeffs.reshape((nterm, *shape))
         vars = vars.reshape((nterm, *shape))
 
-        coeffs = DataArray(coeffs, coords, dims=(TERM_DIM, *coords))
-        vars = DataArray(vars, coords, dims=(TERM_DIM, *coords))
-        ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., TERM_DIM)
+        coeffdata = DataArray(coeffs, coords, dims=(TERM_DIM, *coords))
+        vardata = DataArray(vars, coords, dims=(TERM_DIM, *coords))
+        ds = Dataset({"coeffs": coeffdata, "vars": vardata}).transpose(..., TERM_DIM)
 
         return cls(ds, model)
 
@@ -1113,7 +1115,11 @@ class LinearExpression:
         self,
         cond: DataArray,
         other: Union[
-            LinearExpression, int, DataArray, Dict[str, Union[float, int]], None
+            LinearExpression,
+            int,
+            DataArray,
+            Dict[str, Union[float, int, DataArray]],
+            None,
         ] = None,
         **kwargs,
     ) -> Union[LinearExpression, QuadraticExpression]:
@@ -1141,23 +1147,34 @@ class LinearExpression:
         linopy.LinearExpression
         """
         # Cannot set `other` if drop=True
+        _other: Union[
+            Dict[str, float], Dict[str, Union[int, float, DataArray]], DataArray
+        ]
         if other is None or other is np.nan:
             if not kwargs.get("drop", False):
-                other = self._fill_value
-        elif isinstance(other, (DataArray, np.floating, np.integer, int, float)):
-            other = {**self._fill_value, "const": other}
+                _other = FILL_VALUE
+        elif isinstance(other, (int, float, DataArray)):
+            _other = {**self._fill_value, "const": other}
         else:
-            other = _expr_unwrap(other)
+            _other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
         if isinstance(cond, DataArray):
             if helper_dims := set(HELPER_DIMS).intersection(cond.dims):
                 raise ValueError(
                     f"Filtering by a DataArray with a helper dimension(s) ({helper_dims!r}) is not supported."
                 )
-        return self.__class__(self.data.where(cond, other=other, **kwargs), self.model)
+        return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
 
     def fillna(
-        self, value: Union[int, float, DataArray, Dataset, LinearExpression]
+        self,
+        value: Union[
+            int,
+            float,
+            DataArray,
+            Dataset,
+            LinearExpression,
+            Dict[str, Union[float, int, DataArray]],
+        ],
     ) -> "LinearExpression":
         """
         Fill missing values with a given value.
@@ -1319,8 +1336,8 @@ class LinearExpression:
         mod_nnz.pop(axis)
 
         remaining_axes = np.vstack(mod_nnz).T
-        _, idx = np.unique(remaining_axes, axis=0, return_inverse=True)
-        idx = list(idx)
+        _, idx_ = np.unique(remaining_axes, axis=0, return_inverse=True)
+        idx = list(idx_)
         new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
         mod_nnz.insert(axis, new_index)
 
@@ -1479,7 +1496,9 @@ class QuadraticExpression(LinearExpression):
         data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
         self._data = data
 
-    def __mul__(self, other: Union[int, float, Variable]) -> "QuadraticExpression":
+    def __mul__(
+        self, other: Union[ConstantLike, VariableLike, ExpressionLike]
+    ) -> "QuadraticExpression":
         """
         Multiply the expr by a factor.
         """
@@ -1497,14 +1516,14 @@ class QuadraticExpression(LinearExpression):
                 f"{type(self)} and {type(other)}. "
                 "Higher order non-linear expressions are not yet supported."
             )
-        return super().__mul__(other)
+        return super().__mul__(other)  # type: ignore
 
     @property
     def type(self) -> str:
         return "QuadraticExpression"
 
     def __add__(
-        self, other: Union[LinearExpression, Variable, int, QuadraticExpression]
+        self, other: Union[ConstantLike, VariableLike, ExpressionLike]
     ) -> "QuadraticExpression":
         """
         Add an expression to others.
