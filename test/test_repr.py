@@ -50,6 +50,7 @@ lq3 = x * x + 1 * x + 1 + 1 * y + 1 * z
 
 # create anonymous constraint for linear expression
 cu_ = lu >= 0
+print(cu_)
 cv_ = lv >= 0
 cx_ = lx >= 0
 cy_ = ly >= 0

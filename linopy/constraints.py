@@ -9,7 +9,17 @@ import functools
 import warnings
 from dataclasses import dataclass
 from itertools import product
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    ItemsView,
+    Iterator,
+    List,
+    Tuple,
+    Union,
+    overload,
+)
 
 import numpy as np
 import pandas as pd
@@ -121,6 +131,7 @@ class Constraint:
         if not skip_broadcast:
             (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
+        self._assigned = "labels" in data
         self._data = data
         self._model = model
 
@@ -223,7 +234,7 @@ class Constraint:
         """
         Get the labels of the constraint.
         """
-        return self.data.labels if self.is_assigned else DataArray([])
+        return self.data.get("labels", DataArray([]))
 
     @property
     def model(self):
@@ -249,7 +260,7 @@ class Constraint:
 
     @property
     def is_assigned(self):
-        return "labels" in self.data
+        return self._assigned
 
     def __repr__(self):
         """
@@ -344,7 +355,7 @@ class Constraint:
         return TERM_DIM
 
     @property
-    def mask(self):
+    def mask(self) -> Union[DataArray, None]:
         """
         Get the mask of the constraint.
 
@@ -356,7 +367,8 @@ class Constraint:
         xr.DataArray
         """
         if self.is_assigned:
-            return (self.labels != self._fill_value["labels"]).astype(bool)
+            return (self.data.labels != FILL_VALUE["labels"]).astype(bool)
+        return None
 
     @property
     def coeffs(self):
@@ -668,7 +680,7 @@ class Constraints:
         "Right-hand-side constants",
     ]
 
-    def _formatted_names(self):
+    def _formatted_names(self) -> Dict[str, str]:
         """
         Get a dictionary of formatted names to the proper constraint names.
         This map enables a attribute like accession of variable names which
@@ -676,7 +688,7 @@ class Constraints:
         """
         return {format_string_as_variable_name(n): n for n in self}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Return a string representation of the linopy model.
         """
@@ -720,16 +732,16 @@ class Constraints:
         ]
         return base_attributes + formatted_names
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.data.__len__()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return self.data.__iter__()
 
-    def items(self):
+    def items(self) -> ItemsView[str, Constraint]:
         return self.data.items()
 
-    def _ipython_key_completions_(self):
+    def _ipython_key_completions_(self) -> List[str]:
         """
         Provide method for the key-autocompletions in IPython.
 
@@ -739,20 +751,20 @@ class Constraints:
         """
         return list(self)
 
-    def add(self, constraint):
+    def add(self, constraint: Constraint) -> None:
         """
         Add a constraint to the constraints constrainer.
         """
         self.data[constraint.name] = constraint
 
-    def remove(self, name):
+    def remove(self, name: str) -> None:
         """
         Remove constraint `name` from the constraints.
         """
         self.data.pop(name)
 
     @property
-    def labels(self):
+    def labels(self) -> Dataset:
         """
         Get the labels of all constraints.
         """
@@ -762,14 +774,14 @@ class Constraints:
         )
 
     @property
-    def coeffs(self):
+    def coeffs(self) -> Dataset:
         """
         Get the coefficients of all constraints.
         """
         return save_join(*[v.coeffs.rename(k) for k, v in self.items()])
 
     @property
-    def vars(self):
+    def vars(self) -> Dataset:
         """
         Get the variables of all constraints.
         """
@@ -783,21 +795,21 @@ class Constraints:
         )
 
     @property
-    def sign(self):
+    def sign(self) -> Dataset:
         """
         Get the signs of all constraints.
         """
         return save_join(*[v.sign.rename(k) for k, v in self.items()])
 
     @property
-    def rhs(self):
+    def rhs(self) -> Dataset:
         """
         Get the right-hand-side constants of all constraints.
         """
         return save_join(*[v.rhs.rename(k) for k, v in self.items()])
 
     @property
-    def dual(self):
+    def dual(self) -> Dataset:
         """
         Get the dual values of all constraints.
         """
@@ -807,7 +819,7 @@ class Constraints:
             return Dataset()
 
     @property
-    def coefficientrange(self):
+    def coefficientrange(self) -> pd.DataFrame:
         """
         Coefficient range of the constraint.
         """
@@ -817,7 +829,7 @@ class Constraints:
         return pd.DataFrame(d, index=["min", "max"]).T
 
     @property
-    def ncons(self):
+    def ncons(self) -> int:
         """
         Get the number all constraints effectively used by the model.
 
@@ -826,14 +838,14 @@ class Constraints:
         return len(self.flat.labels.unique())
 
     @property
-    def inequalities(self):
+    def inequalities(self) -> "Constraints":
         """
         Get the subset of constraints which are purely inequalities.
         """
         return self[[n for n, s in self.items() if (s.sign != EQUAL).all()]]
 
     @property
-    def equalities(self):
+    def equalities(self) -> "Constraints":
         """
         Get the subset of constraints which are purely equalities.
         """
@@ -860,7 +872,7 @@ class Constraints:
                 contains_non_missing, -1
             )
 
-    def get_name_by_label(self, label):
+    def get_name_by_label(self, label: Union[int, float]) -> str:
         """
         Get the constraint name of the constraint containing the passed label.
 
@@ -917,7 +929,7 @@ class Constraints:
         Get a dataset of same shape as constraints.labels with block values.
 
         Let N be the number of blocks.
-        The following cases are considered:
+        The following ciases are considered:
 
             * where are all vars are -1, the block is -1
             * where are all vars are 0, the block is 0

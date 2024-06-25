@@ -193,11 +193,6 @@ def test_variable_where(x):
     assert x.labels[9] == x.at[0].label
 
 
-def test_variable_where_deprecation_warning(x):
-    with pytest.warns(FutureWarning):
-        x.where([True] * 4 + [False] * 6, 1)
-
-
 def test_variable_shift(x):
     x = x.shift(first=3)
     assert isinstance(x, linopy.variables.Variable)
@@ -227,9 +222,6 @@ def test_isnull(x):
 
 def test_variable_fillna(x):
     x = x.where([True] * 4 + [False] * 6)
-
-    with pytest.warns(FutureWarning):
-        x.fillna(0)
 
     isinstance(x.fillna(x.at[0]), linopy.variables.Variable)
 

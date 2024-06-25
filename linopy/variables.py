@@ -918,7 +918,6 @@ class Variable:
         other: Union[
             ScalarVariable,
             Dict[str, Union[str, float, int]],
-            int,
             Variable,
             Dataset,
             None,
@@ -946,24 +945,29 @@ class Variable:
         -------
         linopy.Variable
         """
-        _other: Union[Dict[str, Union[float, int]], Dataset]
+        _other: Union[Dict[str, Union[float, int, str]], Dataset]
         if other is None:
             _other = self._fill_value
         elif isinstance(other, Variable):
             _other = other.data
         elif isinstance(other, ScalarVariable):
             _other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
-        elif not isinstance(other, (dict, Dataset)):
-            warn(
-                "other argument of Variable.where should be a Variable, ScalarVariable or dict. "
-                "Other types will not be supported in the future.",
-                FutureWarning,
+        elif isinstance(other, (dict, Dataset)):
+            _other = other
+        else:
+            raise ValueError(
+                f"other must be a Variable, ScalarVariable, dict or Dataset, got {type(other)}"
             )
         return self.__class__(
             self.data.where(cond, _other, **kwargs), self.model, self.name
         )
 
-    def fillna(self, fill_value: Union[ScalarVariable, int]) -> "Variable":
+    def fillna(
+        self,
+        fill_value: Union[
+            ScalarVariable, Dict[str, Union[str, float, int]], Variable, Dataset
+        ],
+    ) -> "Variable":
         """
         Fill missing values with a variable.
 
