@@ -42,6 +42,8 @@ Version 0.3.9
 
 * Up to now the `rhs` argument in the `add_constraints` function was not supporting an expression as an input type. This is now added.
 
+* Improve `run_gurobi` to optionally wait for an available token.
+
 * Linopy now supports python 3.12.
 
 **Deprecations**
