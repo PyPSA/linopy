@@ -457,7 +457,7 @@ def run_highs(
     for k, v in solver_options.items():
         h.setOptionValue(k, v)
 
-    if warmstart_fn.endswith(".sol"):
+    if warmstart_fn and warmstart_fn.endswith(".sol"):
         h.readSolution(warmstart_fn, 0)
     elif warmstart_fn:
         h.readBasis(warmstart_fn)
