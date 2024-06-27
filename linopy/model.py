@@ -25,7 +25,13 @@ from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
 from linopy import solvers
-from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
+from linopy.common import (
+    as_dataarray,
+    best_int,
+    maybe_replace_signs,
+    replace_by_map,
+    to_path,
+)
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import (
@@ -932,11 +938,11 @@ class Model:
         self,
         solver_name: Union[str, None] = None,
         io_api: Union[str, None] = None,
-        problem_fn: Union[Path, None] = None,
-        solution_fn: Union[Path, None] = None,
-        log_fn: Union[Path, None] = None,
-        basis_fn: Union[Path, None] = None,
-        warmstart_fn: Union[Path, None] = None,
+        problem_fn: Union[str, Path, None] = None,
+        solution_fn: Union[str, Path, None] = None,
+        log_fn: Union[str, Path, None] = None,
+        basis_fn: Union[str, Path, None] = None,
+        warmstart_fn: Union[str, Path, None] = None,
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,
@@ -1053,12 +1059,8 @@ class Model:
 
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
-        elif not isinstance(problem_fn, Path):
-            problem_fn = Path(problem_fn)
         if solution_fn is None:
             solution_fn = self.get_solution_file()
-        elif not isinstance(solution_fn, Path):
-            solution_fn = Path(solution_fn)
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
@@ -1073,11 +1075,11 @@ class Model:
             result = func(
                 self,
                 io_api=io_api,
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
+                problem_fn=to_path(problem_fn),
+                solution_fn=to_path(solution_fn),
+                log_fn=to_path(log_fn),
+                warmstart_fn=to_path(warmstart_fn),
+                basis_fn=to_path(basis_fn),
                 keep_files=keep_files,
                 env=env,
                 **solver_options,

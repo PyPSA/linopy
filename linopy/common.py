@@ -10,6 +10,7 @@ import operator
 import os
 from collections.abc import Iterable, Mapping
 from functools import reduce, wraps
+from pathlib import Path
 from typing import Any, Callable, Dict, Hashable, List, Tuple, Union, overload
 from warnings import warn
 
@@ -473,6 +474,13 @@ def replace_by_map(ds, mapping):
         dask="parallelized",
         output_dtypes=[mapping.dtype],
     )
+
+
+def to_path(path: Union[str, Path, None]) -> Union[Path, None]:
+    """
+    Convert a string to a Path object.
+    """
+    return Path(path) if path is not None else None
 
 
 def best_int(max_value: int):
