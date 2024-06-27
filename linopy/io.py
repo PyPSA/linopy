@@ -9,7 +9,7 @@ import logging
 import shutil
 import time
 from io import TextIOWrapper
-from pathlib import Path, PosixPath
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
@@ -25,6 +25,7 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
+from linopy.objective import Objective
 
 if TYPE_CHECKING:
 
@@ -297,12 +298,16 @@ def to_lp_file(m, fn, integer_label):
     with open(fn, mode="w") as f:
         start = time.time()
 
-        kwargs = dict(f=f, log=log, batch_size=batch_size)
+        if isinstance(f, int):
+            raise ValueError("File not found.")
+
         objective_to_file(m, f, log=log)
-        constraints_to_file(m, **kwargs)
-        bounds_to_file(m, **kwargs)
-        binaries_to_file(m, **kwargs)
-        integers_to_file(m, integer_label=integer_label, **kwargs)
+        constraints_to_file(m, f=f, log=log, batch_size=batch_size)
+        bounds_to_file(m, f=f, log=log, batch_size=batch_size)
+        binaries_to_file(m, f=f, log=log, batch_size=batch_size)
+        integers_to_file(
+            m, integer_label=integer_label, f=f, log=log, batch_size=batch_size
+        )
         f.write("end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -522,12 +527,11 @@ def to_lp_file_polars(m, fn, integer_label="general"):
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        kwargs = dict(f=f, log=log)
         objective_to_file_polars(m, f, log=log)
-        constraints_to_file_polars(m, **kwargs)
-        bounds_to_file_polars(m, **kwargs)
-        binaries_to_file_polars(m, **kwargs)
-        integers_to_file_polars(m, integer_label=integer_label, **kwargs)
+        constraints_to_file_polars(m, f=f, log=log)
+        bounds_to_file_polars(m, f=f, log=log)
+        binaries_to_file_polars(m, f=f, log=log)
+        integers_to_file_polars(m, integer_label=integer_label, f=f, log=log)
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -589,7 +593,7 @@ def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
     task : MOSEK Task object
     """
 
-    import mosek
+    import mosek  # type: ignore
 
     if task is None:
         task = mosek.Task()
@@ -659,12 +663,15 @@ def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
         buc = [b if b < np.inf else 0.0 for b in M.b]
         # blc = M.b
         # buc = M.b
-        A = M.A.tocsr()
-        task.putarowslice(0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data)
-        task.putconboundslice(0, m.ncons, bkc, blc, buc)
+        if M.A is not None:
+            A = M.A.tocsr()
+            task.putarowslice(
+                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+            )
+            task.putconboundslice(0, m.ncons, bkc, blc, buc)
 
     ## Objective
-    if m.is_quadratic:
+    if M.Q is not None:
         Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
         task.putqobj(Q.row, Q.col, Q.data)
     task.putclist(list(np.arange(m.nvars)), M.c)
@@ -707,7 +714,7 @@ def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
     if m.is_quadratic:
-        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
     else:
         model.setObjective(M.c @ x)
 
@@ -716,8 +723,8 @@ def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
 
     if len(m.constraints):
         names = "c" + M.clabels.astype(str).astype(object)
-        c = model.addMConstr(M.A, x, M.sense, M.b)
-        c.setAttr("ConstrName", list(names))
+        c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
+        c.setAttr("ConstrName", list(names))  # type: ignore
 
     model.update()
     return model
@@ -788,7 +795,7 @@ def to_highspy(m: Model) -> Highs:
     return h
 
 
-def to_block_files(m: Model, fn: PosixPath):
+def to_block_files(m: Model, fn: Path):
     """
     Write out the linopy model to a block structured output.
 
@@ -796,7 +803,7 @@ def to_block_files(m: Model, fn: PosixPath):
     in one constraint row yet!
     """
     if fn is None:
-        fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
+        fn = Path(TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name)
 
     path = Path(fn)
     if path.exists():
@@ -804,6 +811,9 @@ def to_block_files(m: Model, fn: PosixPath):
     path.mkdir(exist_ok=True)
 
     m.calculate_block_maps()
+
+    if m.blocks is None:
+        raise ValueError("Model does not have blocks defined.")
 
     N = int(m.blocks.max())
     for n in range(N + 2):
@@ -964,7 +974,7 @@ def to_netcdf(m: Model, *args, **kwargs) -> None:
     ds.to_netcdf(*args, **kwargs)
 
 
-def read_netcdf(path: PosixPath, **kwargs) -> Model:
+def read_netcdf(path: Union[Path, str], **kwargs) -> Model:
     """
     Read in a model from a netcdf file.
 
@@ -987,6 +997,9 @@ def read_netcdf(path: PosixPath, **kwargs) -> Model:
         Variable,
         Variables,
     )
+
+    if isinstance(path, str):
+        path = Path(path)
 
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
@@ -1019,8 +1032,8 @@ def read_netcdf(path: PosixPath, **kwargs) -> Model:
 
         return ds
 
-    vars = [k for k in ds if k.startswith("variables")]
-    var_names = list({k.rsplit("-", 1)[0] for k in vars})
+    vars = [str(k) for k in ds if str(k).startswith("variables")]
+    var_names = list({str(k).rsplit("-", 1)[0] for k in vars})
     variables = {}
     for k in sorted(var_names):
         name = remove_prefix(k, "variables")
@@ -1028,8 +1041,8 @@ def read_netcdf(path: PosixPath, **kwargs) -> Model:
 
     m._variables = Variables(variables, m)
 
-    cons = [k for k in ds if k.startswith("constraints")]
-    con_names = list({k.rsplit("-", 1)[0] for k in cons})
+    cons = [str(k) for k in ds if str(k).startswith("constraints")]
+    con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
@@ -1037,8 +1050,9 @@ def read_netcdf(path: PosixPath, **kwargs) -> Model:
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    m.objective = LinearExpression(objective, m)
-    m.objective.sense = objective.attrs.pop("sense")
+    m.objective = Objective(
+        LinearExpression(objective, m), m, objective.attrs.pop("sense")
+    )
     m.objective._value = objective.attrs.pop("value", None)
 
     m.parameters = get_prefix(ds, "parameters")

@@ -521,9 +521,9 @@ class Constraint:
         >>> x = m.add_variables(0, 100, coords)
         >>> def bound(m, i, j):
         ...     if i % 2:
-        ...         return (i - 1) * x[i - 1, j] >= 0
+        ...         return (i - 1) * x.at[i - 1, j] >= 0
         ...     else:
-        ...         return i * x[i, j] >= 0
+        ...         return i * x.at[i, j] >= 0
         ...
         >>> con = Constraint.from_rule(m, bound, coords)
         >>> con = m.add_constraints(con)
@@ -857,7 +857,7 @@ class Constraints:
         """
         for name in list(self):
             not_zero = abs(self[name].coeffs) > 1e-10
-            constraint: Constraint = self[name]
+            constraint = self[name]
             constraint.vars = self[name].vars.where(not_zero, -1)
             constraint.coeffs = self[name].coeffs.where(not_zero)
 
@@ -975,7 +975,7 @@ class Constraints:
         df["key"] = df.labels.map(map_labels)
         return df
 
-    def to_matrix(self, filter_missings=True) -> Union[scipy.sparse.csc_matrix, None]:
+    def to_matrix(self, filter_missings=True) -> scipy.sparse.csc_matrix:
         """
         Construct a constraint matrix in sparse format.
 
@@ -986,7 +986,7 @@ class Constraints:
         cons = self.flat
 
         if not len(self):
-            return None
+            raise ValueError("No constraints available to convert to matrix.")
 
         if filter_missings:
             vars = self.model.variables.flat

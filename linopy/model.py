@@ -859,7 +859,7 @@ class Model:
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
         >>> def rule(m, i, j):
-        ...     return a[i, j] + a[(i + 1) % 10, j]
+        ...     return a.at[i, j] + a.at[(i + 1) % 10, j]
         ...
         >>> expr = m.linexpr(rule, coords)
 

@@ -228,7 +228,7 @@ class Objective:
 
     def to_matrix(self, *args, **kwargs) -> csc_matrix:
         "Wrapper for expression.to_matrix"
-        if self.is_linear:
+        if not isinstance(self.expression, expressions.QuadraticExpression):
             raise ValueError("Cannot convert linear objective to matrix.")
         return self.expression.to_matrix(*args, **kwargs)
 
@@ -236,10 +236,13 @@ class Objective:
 
     sel = objwrap(expressions.LinearExpression.sel)
 
-    def __add__(self, expr: Union[int, QuadraticExpression, Objective]) -> "Objective":
-        if not isinstance(expr, Objective):
-            expr = Objective(expr, self.model, self.sense)
-        return Objective(self.expression + expr.expression, self.model, self.sense)
+    def __add__(
+        self, expr: Union[int, QuadraticExpression, LinearExpression, Objective]
+    ) -> "Objective":
+        if isinstance(expr, Objective):
+            expr = expr.expression
+
+        return Objective(self.expression + expr, self.model, self.sense)
 
     def __sub__(self, expr: Union[LinearExpression, Objective]) -> "Objective":
         if not isinstance(expr, Objective):

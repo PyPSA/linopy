@@ -36,8 +36,7 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from h11 import Data
-from numpy import array, isin, nan, ndarray
+from numpy import array, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -52,6 +51,7 @@ from linopy import constraints, variables
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -77,7 +77,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.types import ConstantLike, ExpressionLike, SignLike, VariableLike
+from linopy.types import ConstantLike, ExpressionLike, SideLike, SignLike, VariableLike
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -376,9 +376,8 @@ class LinearExpression:
             data["const"] = data.const.astype(float)
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
-        data[["coeffs", "vars"]] = xr.broadcast(
-            data[["coeffs", "vars"]], exclude=[FACTOR_DIM]
-        )[0]
+        (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
+        data = assign_multiindex_safe(data, **coeffs_vars)
 
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., TERM_DIM))
@@ -473,7 +472,7 @@ class LinearExpression:
             return self.assign(const=self.const + other)
 
         other = as_expression(other, model=self.model, dims=self.coord_dims)
-        return merge(self, other, cls=self.__class__)
+        return merge([self, other], cls=self.__class__)
 
     def __radd__(self, other: int) -> Union["LinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
@@ -487,10 +486,10 @@ class LinearExpression:
         dimension names of self will be filled in other
         """
         if np.isscalar(other):
-            return self.assign(const=self.const - other)
+            return self.assign_multiindex_safe(const=self.const - other)
 
         other = as_expression(other, model=self.model, dims=self.coord_dims)
-        return merge(self, -other, cls=self.__class__)
+        return merge([self, -other], cls=self.__class__)
 
     def __neg__(self) -> Union[LinearExpression, QuadraticExpression]:
         """
@@ -533,7 +532,7 @@ class LinearExpression:
             .broadcast_like(self.data)
             .assign(const=other.const)
         )
-        res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
             res = res + self.const * other.reset_const()
@@ -558,7 +557,7 @@ class LinearExpression:
             raise ValueError("Power must be 2.")
         return self * self  # type: ignore
 
-    def __rmul__(
+    def __rmul__(  # type: ignore
         self, other: Union[float, int, DataArray]
     ) -> Union[LinearExpression, QuadraticExpression]:
         """
@@ -1016,9 +1015,9 @@ class LinearExpression:
         >>> x = m.add_variables(0, 100, coords)
         >>> def bound(m, i, j):
         ...     if i % 2:
-        ...         return (i - 1) * x[i - 1, j]
+        ...         return (i - 1) * x.at[i - 1, j]
         ...     else:
-        ...         return i * x[i, j]
+        ...         return i * x.at[i, j]
         ...
         >>> expr = LinearExpression.from_rule(m, bound, coords)
         >>> con = m.add_constraints(expr <= 10)
@@ -1091,7 +1090,9 @@ class LinearExpression:
         to the right-hand side.
         """
         all_to_lhs = (self - rhs).data
-        data = all_to_lhs[["coeffs", "vars"]].assign(sign=sign, rhs=-all_to_lhs.const)
+        data = assign_multiindex_safe(
+            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+        )
         return constraints.Constraint(data, model=self.model)
 
     def reset_const(self) -> "LinearExpression":
@@ -1148,11 +1149,13 @@ class LinearExpression:
         """
         # Cannot set `other` if drop=True
         _other: Union[
-            Dict[str, float], Dict[str, Union[int, float, DataArray]], DataArray
+            Dict[str, float], Dict[str, Union[int, float, DataArray]], DataArray, None
         ]
         if other is None or other is np.nan:
             if not kwargs.get("drop", False):
                 _other = FILL_VALUE
+            else:
+                _other = None
         elif isinstance(other, (int, float, DataArray)):
             _other = {**self._fill_value, "const": other}
         else:
@@ -1422,6 +1425,8 @@ class LinearExpression:
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)
 
+    assign_multiindex_safe = exprwrap(assign_multiindex_safe)
+
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
     assign_coords = exprwrap(Dataset.assign_coords)
@@ -1537,7 +1542,7 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
-        return merge(self, other, cls=self.__class__)
+        return merge([self, other], cls=self.__class__)  # type: ignore
 
     def __radd__(
         self, other: Union[LinearExpression, int]
@@ -1568,7 +1573,7 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
-        return merge(self, -other, cls=self.__class__)
+        return merge([self, -other], cls=self.__class__)  # type: ignore
 
     def __rsub__(self, other: LinearExpression) -> "QuadraticExpression":
         """
@@ -1578,7 +1583,7 @@ class QuadraticExpression(LinearExpression):
             other = other.to_quadexpr()
             return other.__sub__(self)
         else:
-            NotImplemented
+            return NotImplemented
 
     @property
     def solution(self) -> DataArray:
@@ -1594,13 +1599,15 @@ class QuadraticExpression(LinearExpression):
 
     @classmethod
     def _sum(
-        cls, expr: "QuadraticExpression", dim: Union[str, List[str], None] = None
+        cls,
+        expr: Union[Dataset, LinearExpression, "QuadraticExpression"],
+        dim: Dims = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
         dim = dim or list(set(data.dims) - set(HELPER_DIMS))
         return LinearExpression._sum(expr, dim)
 
-    def to_constraint(self, sign: str, rhs: int):
+    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
         )
@@ -1721,7 +1728,15 @@ def as_expression(
 
 
 def merge(
-    *exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs
+    exprs: Sequence[
+        Union[LinearExpression, QuadraticExpression, variables.Variable, Dataset]
+    ],
+    *add_exprs: Tuple[
+        Union[LinearExpression, QuadraticExpression, variables.Variable, Dataset]
+    ],
+    dim: str = TERM_DIM,
+    cls: type = LinearExpression,
+    **kwargs: Union[str, Union[Dict, str]],
 ) -> Union[LinearExpression, QuadraticExpression]:
     """
     Merge multiple expression together.
@@ -1752,6 +1767,14 @@ def merge(
     """
     linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
 
+    if not isinstance(exprs, list) and len(add_exprs):
+        warn(
+            "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
+            DeprecationWarning,
+        )
+        exprs = [exprs] + list(add_exprs)  # type: ignore
+    model = exprs[0].model
+
     if (
         cls is QuadraticExpression
         and dim == TERM_DIM
@@ -1762,14 +1785,11 @@ def merge(
             "Convert to QuadraticExpression first."
         )
 
-    exprs = exprs[0] if len(exprs) == 1 else list(exprs)  # allow passing a list
-    model = exprs[0].model
-
     if cls in linopy_types and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
-        override = check_common_keys_values(coord_dims)
+        override = check_common_keys_values(coord_dims)  # type: ignore
     else:
         override = False
 
@@ -1778,26 +1798,29 @@ def merge(
 
     if not kwargs:
         kwargs = {
-            "fill_value": cls._fill_value,
             "coords": "minimal",
             "compat": "override",
         }
+        if cls == LinearExpression:
+            kwargs["fill_value"] = FILL_VALUE
+        elif cls == variables.Variable:
+            kwargs["fill_value"] = variables.FILL_VALUE
+
         if override:
             kwargs["join"] = "override"
 
     if dim == TERM_DIM:
-        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)  # type: ignore
         subkwargs = {**kwargs, "fill_value": 0}
-        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
-        ds["const"] = const
+        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)  # type: ignore
+        ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
-        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        ds["coeffs"] = coeffs
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        ds["const"] = const
+        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)  # type: ignore
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)  # type: ignore
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)  # type: ignore
+        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
     else:
-        ds = xr.concat(data, dim, **kwargs)
+        ds = xr.concat(data, dim, **kwargs)  # type: ignore
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
@@ -1833,7 +1856,7 @@ class ScalarLinearExpression:
     @property
     def coeffs(
         self,
-    ) -> Union[Tuple[int, int], Tuple[int, int, int], Tuple[int], Tuple[float]]:
+    ) -> Tuple[Union[int, float], ...]:
         return self._coeffs
 
     @property

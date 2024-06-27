@@ -10,7 +10,7 @@ import operator
 import os
 from collections.abc import Iterable, Mapping
 from functools import reduce, wraps
-from typing import Any, Callable, Dict, Hashable, List, Tuple, Union
+from typing import Any, Callable, Dict, Hashable, List, Tuple, Union, overload
 from warnings import warn
 
 import numpy as np
@@ -40,6 +40,7 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
+from linopy.types import ConstantLike, SignLike
 
 
 def maybe_replace_sign(sign: str) -> str:
@@ -397,9 +398,39 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False):
     return Dataset({ds.name: ds for ds in arrs})
 
 
-def fill_missing_coords(
-    ds: Union[DataArray, Dataset], fill_helper_dims: bool = False
-) -> Union[DataArray, Dataset]:
+def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
+    """
+    Assign a field to a xarray Dataset while being safe against warnings about multiindex corruption.
+
+    See https://github.com/PyPSA/linopy/issues/303 for more information
+
+    Parameters
+    ----------
+    ds : Dataset
+        Dataset to assign the field to
+    keys : Union[str, List[str]]
+        Keys of the fields
+    to_assign : Union[List[DataArray], DataArray, Dataset]
+        New values added to the dataset
+
+    Returns
+    -------
+    Dataset
+        Merged dataset with the new field added
+    """
+    remainders = list(set(ds) - set(fields))
+    return Dataset({**ds[remainders], **fields}, attrs=ds.attrs)
+
+
+@overload
+def fill_missing_coords(ds: DataArray, fill_helper_dims: bool = False) -> DataArray: ...
+
+
+@overload
+def fill_missing_coords(ds: Dataset, fill_helper_dims: bool = False) -> Dataset: ...
+
+
+def fill_missing_coords(ds, fill_helper_dims: bool = False):
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -449,7 +480,7 @@ def best_int(max_value: int):
     Get the minimal int dtype for storing values <= max_value.
     """
     for t in (np.int8, np.int16, np.int32, np.int64):
-        if max_value <= np.iinfo(t).max:
+        if max_value <= np.iinfo(t).max:  # type: ignore
             return t
     raise ValueError(f"Value {max_value} is too large for int64.")
 

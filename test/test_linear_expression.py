@@ -643,7 +643,7 @@ def test_linear_expression_fillna(v):
 def test_variable_expand_dims(v):
     result = v.to_linexpr().expand_dims("new_dim")
     assert isinstance(result, LinearExpression)
-    assert result.coord_dims == ("new_dim", "dim_2")
+    assert result.coord_dims == ("dim_2", "new_dim")
 
 
 def test_variable_stack(v):
@@ -847,7 +847,7 @@ def test_merge(x, y, z):
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
 
-    res = merge(expr1, expr2)
+    res = merge([expr1, expr2])
     assert res.nterm == 6
 
     res = merge([expr1, expr2])
@@ -857,14 +857,14 @@ def test_merge(x, y, z):
     expr1 = z.sel(dim_0=0).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge(expr1, expr2, dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1")
     assert res.nterm == 3
 
     # now with different length of terms
     expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge(expr1, expr2, dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1")
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
 

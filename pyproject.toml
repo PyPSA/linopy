@@ -55,6 +55,7 @@ dev = [
     "netcdf4",
     "pre-commit",
     "paramiko",
+    "types-paramiko",
     "gurobipy",
     "highspy",
 ]

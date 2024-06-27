@@ -40,8 +40,8 @@ repos:
     -   id: jupyter-notebook-cleanup
         exclude: examples/solve-on-remote.ipynb
 -   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+    rev: v1.10.1
     hooks:
     -   id: mypy
         args: [--explicit-package-bases]
-        additional_dependencies: [numpy, pandas, xarray, scipy]
+        additional_dependencies: [numpy, pandas, xarray, scipy, types-paramiko]

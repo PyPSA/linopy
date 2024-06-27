@@ -396,7 +396,7 @@ class Variable:
         expr = self.to_linexpr()
         return expr._multiply_by_linear_expression(expr)
 
-    def __rmul__(
+    def __rmul__(  # type: ignore
         self, other: Union[float, DataArray, int, ndarray]
     ) -> LinearExpression:
         """
@@ -945,7 +945,7 @@ class Variable:
         -------
         linopy.Variable
         """
-        _other: Union[Dict[str, Union[float, int, str]], Dataset]
+        _other: Union[Dict[str, Union[float, int, str]], Dict[str, float], Dataset]
         if other is None:
             _other = self._fill_value
         elif isinstance(other, Variable):

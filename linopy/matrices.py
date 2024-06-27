@@ -31,7 +31,10 @@ def create_vector(
 ) -> ndarray:
     """Create a vector of a size equal to the maximum index plus one."""
     if shape is None:
-        shape = max(indices) + 1
+        max_value = indices.max()
+        if not isinstance(max_value, (np.integer, int)):
+            raise ValueError("Indices must be integers.")
+        shape = max_value + 1
     vector = np.full(shape, fill_value)
     vector[indices] = values
     return vector
@@ -86,7 +89,7 @@ class MatrixAccessor:
 
         ds = pd.concat(specs)
         ds = df.set_index("key").labels.map(ds)
-        return create_vector(ds.index, ds.values, fill_value="")
+        return create_vector(ds.index, ds.to_numpy(), fill_value="")
 
     @property
     def lb(self) -> ndarray:
@@ -133,11 +136,13 @@ class MatrixAccessor:
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
-    def A(self) -> Optional[csc_matrix]:
+    def A(self) -> Union[csc_matrix, None]:
         "Constraint matrix of all non-missing constraints and variables."
         m = self._parent
+        if not len(m.constraints):
+            return None
         A = m.constraints.to_matrix(filter_missings=False)
-        return A[self.clabels][:, self.vlabels] if A is not None else None
+        return A[self.clabels][:, self.vlabels]
 
     @property
     def sense(self) -> ndarray:
@@ -168,7 +173,7 @@ class MatrixAccessor:
     def Q(self) -> Optional[csc_matrix]:
         "Matrix objective coefficients of quadratic terms of all non-missing variables."
         m = self._parent
-        if m.is_linear:
+        expr = m.objective.expression
+        if not isinstance(expr, expressions.QuadraticExpression):
             return None
-
-        return m.objective.expression.to_matrix()[self.vlabels][:, self.vlabels]
+        return expr.to_matrix()[self.vlabels][:, self.vlabels]

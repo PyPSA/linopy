@@ -23,7 +23,7 @@ ExpressionLike = Union[
 ]
 ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
 MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]
-LhsLike = Union[VariableLike, ExpressionLike, ConstraintLike]
+SideLike = Union[ConstantLike, VariableLike, ExpressionLike]
 
 
 PathLike = Union[str, Path]
