@@ -252,7 +252,7 @@ class Variable:
         return self.labels.size
 
     @property
-    def dims(self) -> Union[Tuple[Hashable, ...], str]:
+    def dims(self) -> Tuple[Hashable, ...]:
         """
         Get the dimensions of the variable.
         """
@@ -294,7 +294,7 @@ class Variable:
     def to_linexpr(
         self,
         coefficient: Union[
-            np.number, pd.Series, pd.DataFrame, np.ndarray, DataArray
+            int, float, pd.Series, pd.DataFrame, np.ndarray, DataArray
         ] = 1,
     ) -> "expressions.LinearExpression":
         """

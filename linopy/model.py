@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd

@@ -11,7 +11,6 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from types import EllipsisType, NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -74,7 +73,15 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.types import ConstantLike, ExpressionLike, SideLike, SignLike, VariableLike
+from linopy.types import (
+    ConstantLike,
+    EllipsisType,
+    ExpressionLike,
+    NotImplementedType,
+    SideLike,
+    SignLike,
+    VariableLike,
+)
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint

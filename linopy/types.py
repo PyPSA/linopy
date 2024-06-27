@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
@@ -5,6 +6,12 @@ import numpy
 import numpy.typing
 from pandas import DataFrame, Series
 from xarray import DataArray
+
+if sys.version_info >= (3, 10):
+    from types import EllipsisType, NotImplementedType
+else:
+    EllipsisType = type(Ellipsis)
+    NotImplementedType = type(NotImplemented)
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
