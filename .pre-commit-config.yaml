@@ -44,4 +44,4 @@ repos:
     hooks:
     -   id: mypy
         args: [--explicit-package-bases]
-        additional_dependencies: [numpy, pandas, xarray, scipy, types-paramiko]
+        additional_dependencies: [numpy, pandas, xarray, types-paramiko]
