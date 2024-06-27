@@ -9,7 +9,6 @@ from __future__ import annotations
 import functools
 import logging
 from dataclasses import dataclass
-from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -56,6 +55,7 @@ from linopy.common import (
 from linopy.config import options
 from linopy.constants import TERM_DIM
 from linopy.solvers import set_int_index
+from linopy.types import NotImplementedType
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
