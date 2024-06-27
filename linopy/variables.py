@@ -15,6 +15,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Hashable,
     List,
     Mapping,
     Tuple,
@@ -237,7 +238,7 @@ class Variable:
         return self.data.sizes
 
     @property
-    def shape(self) -> Union[Tuple[int], Tuple[int, int]]:
+    def shape(self) -> Tuple[int, ...]:
         """
         Get the shape of the variable.
         """
@@ -251,7 +252,7 @@ class Variable:
         return self.labels.size
 
     @property
-    def dims(self) -> Union[Tuple[str, str], Tuple[str], Tuple[()]]:
+    def dims(self) -> Union[Tuple[Hashable, ...], str]:
         """
         Get the dimensions of the variable.
         """

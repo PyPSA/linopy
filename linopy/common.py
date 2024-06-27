@@ -19,19 +19,8 @@ import pandas as pd
 import polars as pl
 from numpy import arange
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
-<<<<<<< HEAD
-from xarray.core import indexing, utils
-<<<<<<< HEAD
-=======
-=======
 from xarray.core import indexing
->>>>>>> 8aba373 (follow up)
 from xarray.namedarray.utils import is_dict_like
-<<<<<<< HEAD
-from collections.abc import Iterable, Mapping
->>>>>>> b0916b1 (some futher typing changes)
-=======
->>>>>>> 32d56ca (typing: finish common.py)
 
 from linopy.config import options
 from linopy.constants import (

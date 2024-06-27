@@ -28,11 +28,8 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-<<<<<<< HEAD
 import polars as pl
-=======
 import scipy
->>>>>>> d8cc2c0 (add type annotations through monkeytype)
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
@@ -1397,16 +1394,9 @@ class LinearExpression:
         check_has_nulls(df, name=self.type)
         return df
 
-<<<<<<< HEAD
     def to_polars(self) -> pl.DataFrame:
         """
         Convert the expression to a polars DataFrame.
-=======
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(f"Expression contains nan's in field(s) {fields}")
->>>>>>> d8cc2c0 (add type annotations through monkeytype)
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
@@ -1634,16 +1624,9 @@ class QuadraticExpression(LinearExpression):
         check_has_nulls(df, name=self.type)
         return df
 
-<<<<<<< HEAD
     def to_polars(self, **kwargs):
         """
         Convert the expression to a polars DataFrame.
-=======
-        any_nan = df.isna().any()
-        if any_nan.any():
-            fields = ", ".join("`" + df.columns[any_nan] + "`")
-            raise ValueError(f"Expression contains nan's in field(s) {fields}")
->>>>>>> d8cc2c0 (add type annotations through monkeytype)
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the

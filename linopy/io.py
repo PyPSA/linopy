@@ -289,7 +289,6 @@ def integers_to_file(
         f.writelines(batch)
 
 
-<<<<<<< HEAD
 def to_lp_file(m, fn, integer_label):
     log = m._xCounter > 10_000
 
