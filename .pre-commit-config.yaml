@@ -43,5 +43,5 @@ repos:
     rev: v1.10.1
     hooks:
     -   id: mypy
-        args: [--explicit-package-bases, --exclude benchmark/scripts/leftovers/]
+        args: [--exclude, "benchmarks"]
         additional_dependencies: [numpy, pandas, xarray, types-paramiko]
