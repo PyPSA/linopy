@@ -580,7 +580,7 @@ def run_cplex(
     def get_solver_solution() -> Solution:
         if basis_fn and is_lp:
             try:
-                m.solution.basis.write(basis_fn)
+                m.solution.basis.write(path_to_string(basis_fn))
             except cplex.exceptions.errors.CplexSolverError:
                 logger.info("No model basis stored")
 
