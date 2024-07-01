@@ -145,6 +145,9 @@ def test_repr(m):
 def test_fill_value():
     isinstance(LinearExpression._fill_value, dict)
 
+    with pytest.warns(DeprecationWarning):
+        LinearExpression.fill_value
+
 
 def test_linexpr_with_scalars(m):
     expr = m.linexpr((10, "x"), (1, "y"))
@@ -643,7 +646,7 @@ def test_linear_expression_fillna(v):
 def test_variable_expand_dims(v):
     result = v.to_linexpr().expand_dims("new_dim")
     assert isinstance(result, LinearExpression)
-    assert result.coord_dims == ("new_dim", "dim_2")
+    assert result.coord_dims == ("dim_2", "new_dim")
 
 
 def test_variable_stack(v):
@@ -818,6 +821,9 @@ def test_linear_expression_rolling(v):
     rolled = expr.rolling(dim_2=3).sum()
     assert rolled.nterm == 3
 
+    with pytest.raises(ValueError):
+        expr.rolling().sum()
+
 
 def test_linear_expression_rolling_with_const(v):
     expr = 1 * v + 15
@@ -847,7 +853,7 @@ def test_merge(x, y, z):
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
 
-    res = merge(expr1, expr2)
+    res = merge([expr1, expr2])
     assert res.nterm == 6
 
     res = merge([expr1, expr2])
@@ -857,16 +863,19 @@ def test_merge(x, y, z):
     expr1 = z.sel(dim_0=0).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge(expr1, expr2, dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1")
     assert res.nterm == 3
 
     # now with different length of terms
     expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge(expr1, expr2, dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1")
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
+
+    with pytest.warns(DeprecationWarning):
+        merge(expr1, expr2)
 
 
 def test_linear_expression_outer_sum(x, y):
@@ -877,6 +886,8 @@ def test_linear_expression_outer_sum(x, y):
     expr = 1 * x + 2 * y
     expr2 = sum([1 * x, 2 * y])
     assert_linequal(expr, expr2)
+
+    assert isinstance(expr.sum(), LinearExpression)
 
 
 def test_rename(x, y, z):

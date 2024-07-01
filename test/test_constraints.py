@@ -173,7 +173,8 @@ def test_constraints_flat():
 
     assert isinstance(m.constraints.flat, pd.DataFrame)
     assert m.constraints.flat.empty
-    assert m.constraints.to_matrix() is None
+    with pytest.raises(ValueError):
+        m.constraints.to_matrix()
 
     m.add_constraints(1 * x + 10 * y, EQUAL, 0)
     m.add_constraints(1 * x + 10 * y, LESS_EQUAL, 0)

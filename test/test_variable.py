@@ -179,6 +179,13 @@ def test_variable_sum_warn_unknown_kwargs(x):
         x.sum(unknown_kwarg="first")
 
 
+def test_fill_value():
+    isinstance(linopy.variables.Variable._fill_value, dict)
+
+    with pytest.warns(DeprecationWarning):
+        linopy.variables.Variable.fill_value
+
+
 def test_variable_where(x):
     x = x.where([True] * 4 + [False] * 6)
     assert isinstance(x, linopy.variables.Variable)
@@ -192,10 +199,8 @@ def test_variable_where(x):
     assert isinstance(x, linopy.variables.Variable)
     assert x.labels[9] == x.at[0].label
 
-
-def test_variable_where_deprecation_warning(x):
-    with pytest.warns(FutureWarning):
-        x.where([True] * 4 + [False] * 6, 1)
+    with pytest.raises(ValueError):
+        x.where([True] * 4 + [False] * 6, 0)  # type: ignore
 
 
 def test_variable_shift(x):
@@ -227,9 +232,6 @@ def test_isnull(x):
 
 def test_variable_fillna(x):
     x = x.where([True] * 4 + [False] * 6)
-
-    with pytest.warns(FutureWarning):
-        x.fillna(0)
 
     isinstance(x.fillna(x.at[0]), linopy.variables.Variable)
 

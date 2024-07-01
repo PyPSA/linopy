@@ -116,6 +116,17 @@ def test_to_file_lp(model, tmp_path):
     gurobipy.read(str(fn))
 
 
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_lp_None(model):
+    import gurobipy
+
+    fn = None
+    model.to_file(fn)
+
+    fn = model.get_problem_file()
+    gurobipy.read(str(fn))
+
+
 @pytest.mark.skipif(
     not {"gurobi", "highs"}.issubset(available_solvers),
     reason="Gurobipy of highspy not installed",

@@ -3,7 +3,7 @@
 """
 Linopy module for solving lp files with different solvers.
 """
-
+from __future__ import annotations
 
 import contextlib
 import io
@@ -11,11 +11,12 @@ import logging
 import os
 import re
 import subprocess as sub
-import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Dict, Union
 
 import numpy as np
 import pandas as pd
+from pandas.core.series import Series
 
 from linopy.constants import (
     Result,
@@ -24,6 +25,9 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+
+if TYPE_CHECKING:
+    from linopy.model import Model
 
 QUADRATIC_SOLVERS = [
     "gurobi",
@@ -72,15 +76,15 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("scip")
 with contextlib.suppress(ImportError):
-    import cplex
+    import cplex  # type: ignore
 
     available_solvers.append("cplex")
 with contextlib.suppress(ImportError):
-    import xpress
+    import xpress  # type: ignore
 
     available_solvers.append("xpress")
 with contextlib.suppress(ImportError):
-    import mosek
+    import mosek  # type: ignore
 
     with contextlib.suppress(mosek.Error):
         with mosek.Env() as m:
@@ -95,7 +99,7 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("mindopt")
 with contextlib.suppress(ImportError):
-    import coptpy
+    import coptpy  # type: ignore
 
     with contextlib.suppress(coptpy.CoptError):
         coptpy.Envr()
@@ -120,7 +124,7 @@ io_structure = dict(
 )
 
 
-def safe_get_solution(status, func):
+def safe_get_solution(status: Status, func: Callable) -> Solution:
     """
     Get solution from function call, if status is unknown still try to run it.
     """
@@ -133,7 +137,9 @@ def safe_get_solution(status, func):
     return Solution()
 
 
-def maybe_adjust_objective_sign(solution, sense, io_api):
+def maybe_adjust_objective_sign(
+    solution: Solution, sense: str, io_api: Union[str, None]
+) -> None:
     if sense == "min":
         return
 
@@ -147,7 +153,7 @@ def maybe_adjust_objective_sign(solution, sense, io_api):
         solution.objective *= -1
 
 
-def set_int_index(series):
+def set_int_index(series: Series) -> Series:
     """
     Convert string index to int index.
     """
@@ -155,25 +161,25 @@ def set_int_index(series):
     return series
 
 
-def maybe_convert_path(path):
+def path_to_string(path: Path) -> str:
     """
     Convert a pathlib.Path to a string.
     """
-    return str(path.resolve()) if isinstance(path, Path) else path
+    return str(path.resolve())
 
 
 def run_cbc(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the cbc solver.
 
@@ -211,12 +217,21 @@ def run_cbc(
     if basis_fn:
         command += f"-basisO {basis_fn} "
 
-    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
+    if solution_fn is None:
+        raise ValueError("No solution file specified")
+
+    Path(solution_fn).parent.mkdir(exist_ok=True)
 
     command = command.strip()
 
     if log_fn is None:
         p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
+
+        if p.stdout is None:
+            raise ValueError(
+                f"Command `{command}` did not run successfully. Check if cbc is installed and in PATH."
+            )
+
         output = ""
         for line in iter(p.stdout.readline, b""):
             output += line.decode()
@@ -266,17 +281,17 @@ def run_cbc(
 
 
 def run_glpk(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the glpk solver.
 
@@ -309,7 +324,10 @@ def run_glpk(
     problem_fn = model.to_file(problem_fn, io_api)
     suffix = problem_fn.suffix[1:]
 
-    os.makedirs(os.path.dirname(solution_fn), exist_ok=True)
+    if solution_fn is None:
+        raise ValueError("No solution file specified")
+
+    Path(solution_fn).parent.mkdir(exist_ok=True)
 
     # TODO use --nopresol argument for non-optimal solution output
     command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
@@ -329,6 +347,12 @@ def run_glpk(
     p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
     if log_fn is None:
         output = ""
+
+        if p.stdout is None:
+            raise ValueError(
+                f"Command `{command}` did not run successfully. Check if glpsol is installed and in PATH."
+            )
+
         for line in iter(p.stdout.readline, b""):
             output += line.decode()
         logger.info(output)
@@ -350,8 +374,8 @@ def run_glpk(
                 break
             yield line
 
-    info = io.StringIO("".join(read_until_break(f))[:-2])
-    info = pd.read_csv(info, sep=":", index_col=0, header=None)[1]
+    info_io = io.StringIO("".join(read_until_break(f))[:-2])
+    info = pd.read_csv(info_io, sep=":", index_col=0, header=None)[1]
     condition = info.Status.lower().strip()
     objective = float(re.sub(r"[^0-9\.\+\-e]+", "", info.Objective))
 
@@ -360,8 +384,8 @@ def run_glpk(
     status.legacy_status = condition
 
     def get_solver_solution() -> Solution:
-        dual_ = io.StringIO("".join(read_until_break(f))[:-2])
-        dual_ = pd.read_fwf(dual_)[1:].set_index("Row name")
+        dual_io = io.StringIO("".join(read_until_break(f))[:-2])
+        dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
         if "Marginal" in dual_:
             dual = (
                 pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
@@ -370,9 +394,9 @@ def run_glpk(
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
-        sol = io.StringIO("".join(read_until_break(f))[:-2])
+        sol_io = io.StringIO("".join(read_until_break(f))[:-2])
         sol = (
-            pd.read_fwf(sol)[1:]
+            pd.read_fwf(sol_io)[1:]
             .set_index("Column name")["Activity"]
             .astype(float)
             .pipe(set_int_index)
@@ -386,17 +410,17 @@ def run_glpk(
 
 
 def run_highs(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Highs solver function. Reads a linear problem file and passes it to the
     highs solver. If the solution is feasible the function returns the
@@ -423,7 +447,7 @@ def run_highs(
     constraints_dual : series
     objective : float
     """
-    CONDITION_MAP = {}
+    CONDITION_MAP: Dict[str, str] = {}
 
     if warmstart_fn:
         logger.warning("Warmstart not implemented. Ignoring argument.")
@@ -438,9 +462,9 @@ def run_highs(
         )
 
     if io_api is None or io_api in FILE_IO_APIS:
-        model.to_file(problem_fn, io_api)
+        problem_fn = model.to_file(problem_fn, io_api)
         h = highspy.Highs()
-        h.readModel(maybe_convert_path(problem_fn))
+        h.readModel(path_to_string(problem_fn))
     elif io_api == "direct":
         h = model.to_highspy()
     else:
@@ -450,7 +474,7 @@ def run_highs(
 
     if log_fn is None:
         log_fn = model.solver_dir / "highs.log"
-    solver_options["log_file"] = maybe_convert_path(log_fn)
+    solver_options["log_file"] = path_to_string(log_fn)
     logger.info(f"Log file at {solver_options['log_file']}")
 
     for k, v in solver_options.items():
@@ -487,17 +511,17 @@ def run_highs(
 
 
 def run_cplex(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the cplex solver.
 
@@ -519,17 +543,11 @@ def run_cplex(
             "Keyword argument `io_api` has to be one of `lp`, `mps` or None"
         )
 
-    model.to_file(problem_fn, io_api)
-
+    problem_fn = model.to_file(problem_fn, io_api)
     m = cplex.Cplex()
 
-    problem_fn = maybe_convert_path(problem_fn)
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
     if log_fn is not None:
-        log_f = open(log_fn, "w")
+        log_f = open(path_to_string(log_fn), "w")
         m.set_results_stream(log_f)
         m.set_warning_stream(log_f)
         m.set_error_stream(log_f)
@@ -542,10 +560,10 @@ def run_cplex(
                 param = getattr(param, key_layer)
             param.set(value)
 
-    m.read(problem_fn)
+    m.read(path_to_string(problem_fn))
 
-    if warmstart_fn:
-        m.start.read_basis(warmstart_fn)
+    if warmstart_fn is not None:
+        m.start.read_basis(path_to_string(warmstart_fn))
 
     is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
@@ -562,7 +580,7 @@ def run_cplex(
     def get_solver_solution() -> Solution:
         if basis_fn and is_lp:
             try:
-                m.solution.basis.write(basis_fn)
+                m.solution.basis.write(path_to_string(basis_fn))
             except cplex.exceptions.errors.CplexSolverError:
                 logger.info("No model basis stored")
 
@@ -592,17 +610,17 @@ def run_cplex(
 
 
 def run_gurobi(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: Union["gurobipy.Env", None] = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the gurobi solver.
 
@@ -629,18 +647,13 @@ def run_gurobi(
         17: "internal_solver_error",
     }
 
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
     with contextlib.ExitStack() as stack:
         if env is None:
             env = stack.enter_context(gurobipy.Env())
 
         if io_api is None or io_api in FILE_IO_APIS:
             problem_fn = model.to_file(problem_fn, io_api=io_api)
-            problem_fn = maybe_convert_path(problem_fn)
-            m = gurobipy.read(problem_fn, env=env)
+            m = gurobipy.read(path_to_string(problem_fn), env=env)
         elif io_api == "direct":
             problem_fn = None
             m = model.to_gurobipy(env=env)
@@ -653,15 +666,15 @@ def run_gurobi(
             for key, value in solver_options.items():
                 m.setParam(key, value)
         if log_fn is not None:
-            m.setParam("logfile", log_fn)
+            m.setParam("logfile", path_to_string(log_fn))
 
-        if warmstart_fn:
-            m.read(warmstart_fn)
+        if warmstart_fn is not None:
+            m.read(path_to_string(warmstart_fn))
         m.optimize()
 
-        if basis_fn:
+        if basis_fn is not None:
             try:
-                m.write(basis_fn)
+                m.write(path_to_string(basis_fn))
             except gurobipy.GurobiError as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
@@ -673,7 +686,7 @@ def run_gurobi(
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
-            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
             sol = set_int_index(sol)
 
             try:
@@ -694,33 +707,28 @@ def run_gurobi(
 
 
 def run_scip(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: None = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the scip solver.
 
     This function communicates with scip using the pyscipopt package.
     """
-    CONDITION_MAP = {}
-
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
+    CONDITION_MAP: Dict[str, str] = {}
 
     if io_api is None or io_api in FILE_IO_APIS:
         problem_fn = model.to_file(problem_fn, io_api)
-        problem_fn = maybe_convert_path(problem_fn)
         m = scip.Model()
-        m.readProblem(problem_fn)
+        m.readProblem(path_to_string(problem_fn))
     elif io_api == "direct":
         raise NotImplementedError("Direct API not implemented for SCIP")
     else:
@@ -744,7 +752,7 @@ def run_scip(
         m.setParams(solver_options)
 
     if log_fn is not None:
-        m.setLogfile(log_fn)
+        m.setLogfile(path_to_string(log_fn))
 
     if warmstart_fn:
         logger.warning("Warmstart not implemented for SCIP")
@@ -831,25 +839,20 @@ def run_xpress(
 
     m = xpress.problem()
 
-    problem_fn = maybe_convert_path(problem_fn)
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
-    m.read(problem_fn)
+    m.read(path_to_string(problem_fn))
     m.setControl(solver_options)
 
     if log_fn is not None:
-        m.setlogfile(log_fn)
+        m.setlogfile(path_to_string(log_fn))
 
-    if warmstart_fn:
-        m.readbasis(warmstart_fn)
+    if warmstart_fn is not None:
+        m.readbasis(path_to_string(warmstart_fn))
 
     m.solve()
 
-    if basis_fn:
+    if basis_fn is not None:
         try:
-            m.writebasis(basis_fn)
+            m.writebasis(path_to_string(basis_fn))
         except Exception as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
@@ -867,8 +870,8 @@ def run_xpress(
         sol = set_int_index(sol)
 
         try:
-            dual = [str(d) for d in m.getConstraint()]
-            dual = pd.Series(m.getDual(dual), index=dual, dtype=float)
+            dual_ = [str(d) for d in m.getConstraint()]
+            dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
             dual = set_int_index(dual)
         except xpress.SolverError:
             logger.warning("Dual values of MILP couldn't be parsed")
@@ -886,17 +889,17 @@ mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \
 
 
 def run_mosek(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: Union["mosek.Task", None] = None,
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the MOSEK solver. Both 'direct' mode, mps and
     lp mode are supported; None is interpret as 'direct' mode. MPS mode does
@@ -921,39 +924,33 @@ def run_mosek(
         "solsta.dual_infeas_cer": "infeasible_or_unbounded",
     }
 
-    if io_api is None or io_api in FILE_IO_APIS:
-        problem_fn = model.to_file(problem_fn, io_api)
-        problem_fn = maybe_convert_path(problem_fn)
-    elif io_api != "direct":
-        raise ValueError(
-            "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
-        )
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
     with contextlib.ExitStack() as stack:
         if env is None:
             env = stack.enter_context(mosek.Env())
 
-        with env.Task() as m:
-            if io_api is None or io_api == "direct":
+        with env.Task() as m:  # type: ignore
+            if io_api == "direct":
                 model.to_mosek(m)
+            elif io_api is None or io_api in FILE_IO_APIS:
+                problem_fn = model.to_file(problem_fn, io_api)
+                m.readdata(path_to_string(problem_fn))
             else:
-                m.readdata(problem_fn)
+                raise ValueError(
+                    "Keyword argument `io_api` has to be one of `lp`, `mps`, `direct` or None"
+                )
 
             for k, v in solver_options.items():
                 m.putparam(k, str(v))
 
             if log_fn is not None:
-                m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
+                m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
 
-            if warmstart_fn:
+            if warmstart_fn is not None:
                 m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
                 skx = [mosek.stakey.low] * m.getnumvar()
                 skc = [mosek.stakey.bas] * m.getnumcon()
 
-                with open(warmstart_fn, "rt") as f:
+                with open(path_to_string(warmstart_fn), "rt") as f:
                     for line in f:
                         if line.startswith("NAME "):
                             break
@@ -970,13 +967,13 @@ def run_mosek(
                                     skx[m.getvarnameindex(o.group(2))] = (
                                         mosek.stakey.basis
                                     )
-                                except:
+                                except:  # noqa: E722
                                     pass
                                 try:
                                     skc[m.getvarnameindex(o.group(3))] = (
                                         mosek.stakey.low if key == "XL" else "XU"
                                     )
-                                except:
+                                except:  # noqa: E722
                                     pass
                             else:
                                 key = o.group(4)
@@ -993,10 +990,10 @@ def run_mosek(
 
                                 try:
                                     skx[m.getvarnameindex(name)] = stakey
-                                except:
+                                except:  # noqa: E722
                                     try:
                                         skc[m.getvarnameindex(name)] = stakey
-                                    except:
+                                    except:  # noqa: E722
                                         pass
                 m.putskc(mosek.soltype.bas, skc)
                 m.putskx(mosek.soltype.bas, skx)
@@ -1004,9 +1001,9 @@ def run_mosek(
 
             m.solutionsummary(mosek.streamtype.log)
 
-            if basis_fn:
+            if basis_fn is not None:
                 if m.solutiondef(mosek.soltype.bas):
-                    with open(basis_fn, "wt") as f:
+                    with open(path_to_string(basis_fn), "wt") as f:
                         f.write(f"NAME {basis_fn}\n")
 
                         skc = [
@@ -1021,7 +1018,6 @@ def run_mosek(
                         skc.reverse()
                         skx.sort()
                         skx.reverse()
-                        numcon = m.getnumcon()
                         while skx and skc and skx[-1][0] == 0 and skc[-1][0] == 0:
                             (_, i, kc) = skc.pop()
                             (_, j, kx) = skx.pop()
@@ -1136,32 +1132,27 @@ def run_copt(
 
     problem_fn = model.to_file(problem_fn, io_api)
 
-    problem_fn = maybe_convert_path(problem_fn)
-    log_fn = maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
     if env is None:
         env = coptpy.Envr()
 
     m = env.createModel()
 
-    m.read(str(problem_fn))
+    m.read(path_to_string(problem_fn))
 
-    if log_fn:
-        m.setLogFile(log_fn)
+    if log_fn is not None:
+        m.setLogFile(path_to_string(log_fn))
 
     for k, v in solver_options.items():
         m.setParam(k, v)
 
-    if warmstart_fn:
-        m.readBasis(warmstart_fn)
+    if warmstart_fn is not None:
+        m.readBasis(path_to_string(warmstart_fn))
 
     m.solve()
 
     if basis_fn and m.HasBasis:
         try:
-            m.write(basis_fn)
+            m.write(path_to_string(basis_fn))
         except coptpy.CoptError as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
@@ -1194,17 +1185,17 @@ def run_copt(
 
 
 def run_mindopt(
-    model,
-    io_api=None,
-    problem_fn=None,
-    solution_fn=None,
-    log_fn=None,
-    warmstart_fn=None,
-    basis_fn=None,
-    keep_files=False,
-    env=None,
+    model: Model,
+    io_api: Union[str, None] = None,
+    problem_fn: Union[Path, None] = None,
+    solution_fn: Union[Path, None] = None,
+    log_fn: Union[Path, None] = None,
+    warmstart_fn: Union[Path, None] = None,
+    basis_fn: Union[Path, None] = None,
+    keep_files: bool = False,
+    env: Union["mindoptpy.Env", None] = None,  # type: ignore
     **solver_options,
-):
+) -> Result:
     """
     Solve a linear problem using the MindOpt solver.
 
@@ -1234,32 +1225,27 @@ def run_mindopt(
 
     problem_fn = model.to_file(problem_fn, io_api)
 
-    problem_fn = maybe_convert_path(problem_fn)
-    log_fn = "" if not log_fn else maybe_convert_path(log_fn)
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-
     if env is None:
-        env = mindoptpy.Env(log_fn)
-    env.start()
+        env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")  # type: ignore
+    env.start()  # type: ignore
 
-    m = mindoptpy.read(problem_fn, env)
+    m = mindoptpy.read(path_to_string(problem_fn), env)  # type: ignore
 
     for k, v in solver_options.items():
         m.setParam(k, v)
 
     if warmstart_fn:
         try:
-            m.read(warmstart_fn)
-        except mindoptpy.MindoptError as err:
+            m.read(path_to_string(warmstart_fn))
+        except mindoptpy.MindoptError as err:  # type: ignore
             logger.info("Model basis could not be read. Raised error: %s", err)
 
     m.optimize()
 
     if basis_fn:
         try:
-            m.write(basis_fn)
-        except mindoptpy.MindoptError as err:
+            m.write(path_to_string(basis_fn))
+        except mindoptpy.MindoptError as err:  # type: ignore
             logger.info("No model basis stored. Raised error: %s", err)
 
     condition = m.status
@@ -1276,7 +1262,7 @@ def run_mindopt(
         try:
             dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
             dual = set_int_index(dual)
-        except (mindoptpy.MindoptError, AttributeError):
+        except (mindoptpy.MindoptError, AttributeError):  # type: ignore
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
@@ -1285,7 +1271,7 @@ def run_mindopt(
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
-    env.dispose()
+    env.dispose()  # type: ignore
 
     return Result(status, solution, m)
 

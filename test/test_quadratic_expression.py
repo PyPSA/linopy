@@ -174,15 +174,23 @@ def test_quadratic_expression_wrong_multiplication(x, y):
         x * x * y
 
 
+def merge_raise_deprecation_warning(x, y):
+    expr = x * y
+    with pytest.warns(DeprecationWarning):
+        merge(expr, expr)
+
+
 def test_merge_linear_expression_and_quadratic_expression(x, y):
     linexpr = 10 * x + y + 5
     quadexpr = x * y
 
     with pytest.raises(ValueError):
-        expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
+        expr = merge([linexpr, quadexpr], cls=QuadraticExpression)
+        with pytest.warns(DeprecationWarning):
+            expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
 
     linexpr = linexpr.to_quadexpr()
-    expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
+    expr = merge([linexpr, quadexpr], cls=QuadraticExpression)
     assert isinstance(expr, QuadraticExpression)
     assert expr.nterm == 3
     assert expr.const.sum() == 10

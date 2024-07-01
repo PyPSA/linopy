@@ -339,9 +339,6 @@ def test_default_setting(model, solver, io_api):
     assert np.isclose(model.objective.value, 3.3)
     assert model.solver_name == solver
 
-    with pytest.warns(DeprecationWarning):
-        assert np.isclose(model.objective_value, 3.3)
-
 
 @pytest.mark.parametrize("solver,io_api", params)
 def test_default_setting_sol_and_dual_accessor(model, solver, io_api):

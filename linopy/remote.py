@@ -10,6 +10,7 @@ Created on Sun Feb 13 21:34:55 2022.
 import logging
 import tempfile
 from dataclasses import dataclass
+from typing import Callable, Union
 
 from linopy.io import read_netcdf
 
@@ -112,13 +113,13 @@ class RemoteHandler:
     >>> m = handler.solve_on_remote(m)  # doctest: +SKIP
     """
 
-    hostname: str = None
+    hostname: str
     port: int = 22
-    username: str = None
-    password: str = None
-    client: "paramiko.SSHClient" = None
+    username: Union[str, None] = None
+    password: Union[str, None] = None
+    client: Union["paramiko.SSHClient", None] = None
 
-    python_script: callable = command.format
+    python_script: Callable = command.format
     python_executable: str = "python"
     python_file: str = "/tmp/linopy-execution.py"
 
@@ -144,7 +145,8 @@ class RemoteHandler:
         self.sftp_client = self.client.open_sftp()
 
     def __del__(self):
-        self.client.close()
+        if not self.client is None:
+            self.client.close()
 
     def write_python_file_on_remote(self, **solve_kwargs):
         """

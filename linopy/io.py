@@ -3,22 +3,34 @@
 """
 Module containing all import/export functionalities.
 """
+from __future__ import annotations
+
 import logging
 import shutil
 import time
+from io import TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
+from highspy.highs import Highs
 from numpy import ones_like, zeros_like
+from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
+from linopy.objective import Objective
+
+if TYPE_CHECKING:
+
+    from linopy.model import Model
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +41,7 @@ concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def handle_batch(batch, f, batch_size):
+def handle_batch(batch: List[str], f: TextIOWrapper, batch_size: int) -> List[str]:
     """
     Write out a batch to a file and reset the batch.
     """
@@ -39,7 +51,9 @@ def handle_batch(batch, f, batch_size):
     return batch
 
 
-def objective_write_linear_terms(df, f, batch, batch_size):
+def objective_write_linear_terms(
+    df: DataFrame, f: TextIOWrapper, batch: List[Any], batch_size: int
+) -> List[Union[str, Any]]:
     """
     Write the linear terms of the objective to a file.
     """
@@ -53,7 +67,9 @@ def objective_write_linear_terms(df, f, batch, batch_size):
     return batch
 
 
-def objective_write_quad_terms(quadratic, f, batch, batch_size):
+def objective_write_quad_terms(
+    quadratic: DataFrame, f: TextIOWrapper, batch: List[str], batch_size: int
+) -> List[str]:
     """
     Write the cross terms of the objective to a file.
     """
@@ -69,7 +85,9 @@ def objective_write_quad_terms(quadratic, f, batch, batch_size):
     return batch
 
 
-def objective_to_file(m, f, log=False, batch_size=10000):
+def objective_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+) -> None:
     """
     Write out the objective of a model to a lp file.
     """
@@ -107,7 +125,9 @@ def objective_to_file(m, f, log=False, batch_size=10000):
         f.writelines(batch)
 
 
-def constraints_to_file(m, f, log=False, batch_size=50000):
+def constraints_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 50000
+) -> None:
     if not len(m.constraints):
         return
 
@@ -168,7 +188,9 @@ def constraints_to_file(m, f, log=False, batch_size=50000):
         f.writelines(batch)
 
 
-def bounds_to_file(m, f, log=False, batch_size=10000):
+def bounds_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+) -> None:
     """
     Write out variables of a model to a lp file.
     """
@@ -203,7 +225,9 @@ def bounds_to_file(m, f, log=False, batch_size=10000):
         f.writelines(batch)
 
 
-def binaries_to_file(m, f, log=False, batch_size=1000):
+def binaries_to_file(
+    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 1000
+) -> None:
     """
     Write out binaries of a model to a lp file.
     """
@@ -231,7 +255,13 @@ def binaries_to_file(m, f, log=False, batch_size=1000):
         f.writelines(batch)
 
 
-def integers_to_file(m, f, log=False, batch_size=1000, integer_label="general"):
+def integers_to_file(
+    m: Model,
+    f: TextIOWrapper,
+    log: bool = False,
+    batch_size: int = 1000,
+    integer_label: str = "general",
+) -> None:
     """
     Write out integers of a model to a lp file.
     """
@@ -267,12 +297,16 @@ def to_lp_file(m, fn, integer_label):
     with open(fn, mode="w") as f:
         start = time.time()
 
-        kwargs = dict(f=f, log=log, batch_size=batch_size)
+        if isinstance(f, int):
+            raise ValueError("File not found.")
+
         objective_to_file(m, f, log=log)
-        constraints_to_file(m, **kwargs)
-        bounds_to_file(m, **kwargs)
-        binaries_to_file(m, **kwargs)
-        integers_to_file(m, integer_label=integer_label, **kwargs)
+        constraints_to_file(m, f=f, log=log, batch_size=batch_size)
+        bounds_to_file(m, f=f, log=log, batch_size=batch_size)
+        binaries_to_file(m, f=f, log=log, batch_size=batch_size)
+        integers_to_file(
+            m, integer_label=integer_label, f=f, log=log, batch_size=batch_size
+        )
         f.write("end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -492,22 +526,27 @@ def to_lp_file_polars(m, fn, integer_label="general"):
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        kwargs = dict(f=f, log=log)
         objective_to_file_polars(m, f, log=log)
-        constraints_to_file_polars(m, **kwargs)
-        bounds_to_file_polars(m, **kwargs)
-        binaries_to_file_polars(m, **kwargs)
-        integers_to_file_polars(m, integer_label=integer_label, **kwargs)
+        constraints_to_file_polars(m, f=f, log=log)
+        bounds_to_file_polars(m, f=f, log=log)
+        binaries_to_file_polars(m, f=f, log=log)
+        integers_to_file_polars(m, integer_label=integer_label, f=f, log=log)
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
-def to_file(m, fn, io_api=None, integer_label="general"):
+def to_file(
+    m: Model,
+    fn: Union[Path, None],
+    io_api: Union[str, None] = None,
+    integer_label: str = "general",
+) -> Path:
     """
     Write out a model to a lp or mps file.
     """
-    fn = Path(m.get_problem_file(fn))
+    if fn is None:
+        fn = Path(m.get_problem_file())
     if fn.exists():
         fn.unlink()
 
@@ -537,7 +576,7 @@ def to_file(m, fn, io_api=None, integer_label="general"):
     return fn
 
 
-def to_mosek(model, task=None):
+def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
     """
     Export model to MOSEK.
 
@@ -553,15 +592,15 @@ def to_mosek(model, task=None):
     task : MOSEK Task object
     """
 
-    import mosek
+    import mosek  # type: ignore
 
     if task is None:
         task = mosek.Task()
 
-    task.appendvars(model.nvars)
-    task.appendcons(model.ncons)
+    task.appendvars(m.nvars)
+    task.appendcons(m.ncons)
 
-    M = model.matrices
+    M = m.matrices
     # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
     #    task.putvarname(j, n)
 
@@ -581,29 +620,29 @@ def to_mosek(model, task=None):
     bkx = [
         (
             (
-                (mosek.boundkey.ra if l < u else mosek.boundkey.fx)
-                if u < np.inf
+                (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
+                if ub < np.inf
                 else mosek.boundkey.lo
             )
-            if (l > -np.inf)
-            else (mosek.boundkey.up if (u < np.inf) else mosek.boundkey.fr)
+            if (lb > -np.inf)
+            else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
         )
-        for (l, u) in zip(M.lb, M.ub)
+        for (lb, ub) in zip(M.lb, M.ub)
     ]
     blx = [b if b > -np.inf else 0.0 for b in M.lb]
     bux = [b if b < np.inf else 0.0 for b in M.ub]
-    task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+    task.putvarboundslice(0, m.nvars, bkx, blx, bux)
 
-    if len(model.binaries.labels) + len(model.integers.labels) > 0:
+    if len(m.binaries.labels) + len(m.integers.labels) > 0:
         idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
         task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
-        if len(model.binaries.labels) > 0:
+        if len(m.binaries.labels) > 0:
             bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
             task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
 
     ## Constraints
 
-    if len(model.constraints) > 0:
+    if len(m.constraints) > 0:
         names = "c" + M.clabels.astype(str).astype(object)
         for i, n in enumerate(names):
             task.putconname(i, n)
@@ -623,26 +662,27 @@ def to_mosek(model, task=None):
         buc = [b if b < np.inf else 0.0 for b in M.b]
         # blc = M.b
         # buc = M.b
-        A = M.A.tocsr()
-        task.putarowslice(
-            0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
-        )
-        task.putconboundslice(0, model.ncons, bkc, blc, buc)
+        if M.A is not None:
+            A = M.A.tocsr()
+            task.putarowslice(
+                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+            )
+            task.putconboundslice(0, m.ncons, bkc, blc, buc)
 
     ## Objective
-    if model.is_quadratic:
+    if M.Q is not None:
         Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
         task.putqobj(Q.row, Q.col, Q.data)
-    task.putclist(list(np.arange(model.nvars)), M.c)
+    task.putclist(list(np.arange(m.nvars)), M.c)
 
-    if model.objective.sense == "max":
+    if m.objective.sense == "max":
         task.putobjsense(mosek.objsense.maximize)
     else:
         task.putobjsense(mosek.objsense.minimize)
     return task
 
 
-def to_gurobipy(m, env=None):
+def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     """
     Export the model to gurobipy.
 
@@ -673,7 +713,7 @@ def to_gurobipy(m, env=None):
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
     if m.is_quadratic:
-        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+        model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
     else:
         model.setObjective(M.c @ x)
 
@@ -682,14 +722,14 @@ def to_gurobipy(m, env=None):
 
     if len(m.constraints):
         names = "c" + M.clabels.astype(str).astype(object)
-        c = model.addMConstr(M.A, x, M.sense, M.b)
-        c.setAttr("ConstrName", list(names))
+        c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
+        c.setAttr("ConstrName", list(names))  # type: ignore
 
     model.update()
     return model
 
 
-def to_highspy(m):
+def to_highspy(m: Model) -> Highs:
     """
     Export the model to highspy.
 
@@ -754,7 +794,7 @@ def to_highspy(m):
     return h
 
 
-def to_block_files(m, fn):
+def to_block_files(m: Model, fn: Path):
     """
     Write out the linopy model to a block structured output.
 
@@ -762,7 +802,7 @@ def to_block_files(m, fn):
     in one constraint row yet!
     """
     if fn is None:
-        fn = TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name
+        fn = Path(TemporaryDirectory(prefix="linopy-problem-", dir=m.solver_dir).name)
 
     path = Path(fn)
     if path.exists():
@@ -771,12 +811,12 @@ def to_block_files(m, fn):
 
     m.calculate_block_maps()
 
+    if m.blocks is None:
+        raise ValueError("Model does not have blocks defined.")
+
     N = int(m.blocks.max())
     for n in range(N + 2):
         (path / f"block{n}").mkdir()
-
-    vars = m.variables
-    cons = m.constraints
 
     raise NotImplementedError("This function is not yet implemented fully.")
 
@@ -870,14 +910,16 @@ def to_block_files(m, fn):
     #             )
 
 
-def non_bool_dict(d):
+def non_bool_dict(
+    d: Dict[str, Union[Tuple[int, int], str, bool, List[str], int]]
+) -> Dict[str, Union[Tuple[int, int], str, int, List[str]]]:
     """
     Convert bool to int for netCDF4 storing.
     """
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m, *args, **kwargs):
+def to_netcdf(m: Model, *args, **kwargs) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -931,7 +973,7 @@ def to_netcdf(m, *args, **kwargs):
     ds.to_netcdf(*args, **kwargs)
 
 
-def read_netcdf(path, **kwargs):
+def read_netcdf(path: Union[Path, str], **kwargs) -> Model:
     """
     Read in a model from a netcdf file.
 
@@ -954,6 +996,9 @@ def read_netcdf(path, **kwargs):
         Variable,
         Variables,
     )
+
+    if isinstance(path, str):
+        path = Path(path)
 
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
@@ -986,8 +1031,8 @@ def read_netcdf(path, **kwargs):
 
         return ds
 
-    vars = [k for k in ds if k.startswith("variables")]
-    var_names = list({k.rsplit("-", 1)[0] for k in vars})
+    vars = [str(k) for k in ds if str(k).startswith("variables")]
+    var_names = list({str(k).rsplit("-", 1)[0] for k in vars})
     variables = {}
     for k in sorted(var_names):
         name = remove_prefix(k, "variables")
@@ -995,8 +1040,8 @@ def read_netcdf(path, **kwargs):
 
     m._variables = Variables(variables, m)
 
-    cons = [k for k in ds if k.startswith("constraints")]
-    con_names = list({k.rsplit("-", 1)[0] for k in cons})
+    cons = [str(k) for k in ds if str(k).startswith("constraints")]
+    con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
@@ -1004,8 +1049,9 @@ def read_netcdf(path, **kwargs):
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
-    m.objective = LinearExpression(objective, m)
-    m.objective.sense = objective.attrs.pop("sense")
+    m.objective = Objective(
+        LinearExpression(objective, m), m, objective.attrs.pop("sense")
+    )
     m.objective._value = objective.attrs.pop("value", None)
 
     m.parameters = get_prefix(ds, "parameters")
