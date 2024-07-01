@@ -11,7 +11,7 @@ import os
 from collections.abc import Iterable, Mapping
 from functools import reduce, wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Hashable, List, Tuple, Union, overload
+from typing import Any, Callable, Dict, Hashable, List, Sequence, Tuple, Union, overload
 from warnings import warn
 
 import numpy as np
@@ -95,7 +95,7 @@ def get_from_iterable(lst: Union[str, Iterable[Hashable], None], index: int):
 
 def pandas_to_dataarray(
     arr: Union[pd.DataFrame, pd.Series],
-    coords: Union[Mapping[Any, Any], None] = None,
+    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
     dims: Union[Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
@@ -126,7 +126,7 @@ def pandas_to_dataarray(
     ]
     if coords is not None:
         pandas_coords = dict(zip(dims, arr.axes))
-        if isinstance(coords, (list, tuple)):
+        if isinstance(coords, Sequence):
             coords = dict(zip(dims, coords))
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
@@ -149,7 +149,7 @@ def pandas_to_dataarray(
 
 def numpy_to_dataarray(
     arr: np.ndarray,
-    coords: Union[Mapping[Any, Any], None] = None,
+    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
     dims: Union[str, Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
@@ -186,7 +186,7 @@ def numpy_to_dataarray(
 
 def as_dataarray(
     arr,
-    coords: Union[Mapping[Any, Any], None] = None,
+    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
     dims: Union[str, Iterable[Hashable], None] = None,
     **kwargs,
 ) -> DataArray:
@@ -472,7 +472,7 @@ def to_path(path: Union[str, Path, None]) -> Union[Path, None]:
     return Path(path) if path is not None else None
 
 
-def best_int(max_value: int):
+def best_int(max_value: int) -> type:
     """
     Get the minimal int dtype for storing values <= max_value.
     """

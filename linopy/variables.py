@@ -686,7 +686,8 @@ class Variable:
         Return the fill value of the variable.
         """
         warn(
-            "The `.fill_value` attribute is deprecated, use linopy.variables.FILL_VALUE instead."
+            "The `.fill_value` attribute is deprecated, use linopy.variables.FILL_VALUE instead.",
+            DeprecationWarning,
         )
         return cls._fill_value
 

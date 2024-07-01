@@ -23,7 +23,7 @@ from linopy.constants import (
     short_LESS_EQUAL,
     sign_replace_dict,
 )
-from linopy.constraints import Constraint
+from linopy.constraints import Constraint, Constraints
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_empty_constraints_repr():
 
 def test_constraints_getter(m, c):
     assert c.shape == (10,)
-    assert isinstance(m.constraints[["c"]], linopy.constraints.Constraints)
+    assert isinstance(m.constraints[["c"]], Constraints)
 
 
 def test_anonymous_constraint_from_linear_expression_le(x, y):
@@ -374,8 +374,8 @@ def test_constraint_labels_setter_invalid(c):
 
 
 def test_constraint_sel(c):
-    assert isinstance(c.sel(first=[1, 2]), linopy.constraints.Constraint)
-    assert isinstance(c.isel(first=[1, 2]), linopy.constraints.Constraint)
+    assert isinstance(c.sel(first=[1, 2]), Constraint)
+    assert isinstance(c.isel(first=[1, 2]), Constraint)
 
 
 def test_constraint_flat(c):
@@ -436,6 +436,45 @@ def test_constraint_assignment_with_args_alternative_sign(m, x, y):
         assert m.constraints[f"c{i}"].coeffs.notnull().all()
         assert (m.constraints[f"c{i}"].sign == sign_replace_dict[sign]).all()
         assert (m.constraints[f"c{i}"].rhs == 0).all()
+
+
+def test_constraint_assignment_assert_sign_rhs_not_none(m, x, y):
+    lhs = x + y
+    with pytest.raises(ValueError):
+        m.add_constraints(lhs, EQUAL, None)
+
+
+def test_constraint_assignment_callable_assert_sign_rhs_not_none(m, x, y):
+    def lhs(x):
+        return None
+
+    coords = [x.coords["first"], y.coords["second"]]
+    with pytest.raises(ValueError):
+        m.add_constraints(lhs, EQUAL, None, coords=coords)
+
+
+def test_constraint_assignment_tuple_assert_sign_rhs_not_none(m, x, y):
+    lhs = [(1, x), (2, y)]
+    with pytest.raises(ValueError):
+        m.add_constraints(lhs, EQUAL, None)
+
+
+def test_constraint_assignment_assert_sign_rhs_none(m, x, y):
+    con = x + y >= 0
+    with pytest.raises(ValueError):
+        m.add_constraints(con, EQUAL, None)
+
+    with pytest.raises(ValueError):
+        m.add_constraints(con, None, 0)
+
+
+def test_constraint_assignment_scalar_constraints_assert_sign_rhs_none(m, x, y):
+    con = x.at[0] + y.at[1] >= 0
+    with pytest.raises(ValueError):
+        m.add_constraints(con, EQUAL, None)
+
+    with pytest.raises(ValueError):
+        m.add_constraints(con, None, 0)
 
 
 def test_constraint_assignment_with_args_invalid_sign(m, x, y):
@@ -541,8 +580,8 @@ def test_get_name_by_label():
 
 
 def test_constraints_inequalities(m):
-    assert isinstance(m.constraints.inequalities, linopy.constraints.Constraints)
+    assert isinstance(m.constraints.inequalities, Constraints)
 
 
 def test_constraints_equalities(m):
-    assert isinstance(m.constraints.equalities, linopy.constraints.Constraints)
+    assert isinstance(m.constraints.equalities, Constraints)

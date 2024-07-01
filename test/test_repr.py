@@ -50,7 +50,6 @@ lq3 = x * x + 1 * x + 1 + 1 * y + 1 * z
 
 # create anonymous constraint for linear expression
 cu_ = lu >= 0
-print(cu_)
 cv_ = lv >= 0
 cx_ = lx >= 0
 cy_ = ly >= 0
@@ -176,3 +175,12 @@ def test_print_labels():
     m.variables.print_labels([1, 2, 3])
     m.constraints.print_labels([1, 2, 3])
     m.constraints.print_labels([1, 2, 3], display_max_terms=10)
+
+
+def test_label_position_too_high():
+    with pytest.raises(ValueError):
+        m.variables.print_labels([1000])
+
+
+def test_model_repr_empty():
+    repr(Model())

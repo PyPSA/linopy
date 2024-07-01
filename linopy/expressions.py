@@ -708,7 +708,8 @@ class LinearExpression:
     @property
     def fill_value(cls):
         warn(
-            "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead."
+            "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead.",
+            DeprecationWarning,
         )
         return cls._fill_value
 
@@ -979,7 +980,9 @@ class LinearExpression:
         cls,
         model: Model,
         rule: Callable,
-        coords: Union[Mapping[Any, Any], None],
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
     ) -> "LinearExpression":
         """
         Create a linear expression from a rule and a set of coordinates.
@@ -1045,7 +1048,7 @@ class LinearExpression:
     def _from_scalarexpression_list(
         cls,
         exprs: List[ScalarLinearExpression],
-        coords: Mapping[Any, Any],
+        coords: Mapping,
         model: Model,
     ) -> "LinearExpression":
         """

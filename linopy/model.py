@@ -357,7 +357,9 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Union[Mapping[Any, Any], None] = None,
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
         name: Union[str, None] = None,
         mask: Union[DataArray, ndarray, Series, None] = None,
         binary: bool = False,
@@ -489,7 +491,9 @@ class Model:
         sign: Union[SignLike, None] = None,
         rhs: Union[ConstantLike, VariableLike, ExpressionLike, None] = None,
         name: Union[str, None] = None,
-        coords: Union[Mapping[Any, Any], None] = None,
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
         mask: Union[MaskLike, None] = None,
     ) -> Constraint:
         """
@@ -548,6 +552,11 @@ class Model:
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
             data = lhs.to_constraint(sign, rhs).data  # type: ignore
+        elif isinstance(lhs, (list, tuple)):
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_none)
+            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
+        # directly convert first argument to a constraint
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
@@ -562,10 +571,6 @@ class Model:
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.data
-        elif isinstance(lhs, (list, tuple)):
-            if sign is None or rhs is None:
-                raise ValueError(msg_sign_rhs_none)
-            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
