@@ -5,30 +5,49 @@ Linopy expressions module.
 
 This module contains definition related to affine expressions.
 """
+from __future__ import annotations
 
 import functools
 import logging
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import Any, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Hashable,
+    List,
+    Mapping,
+    Sequence,
+    Tuple,
+    Union,
+)
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
+import scipy
 import xarray as xr
 import xarray.core.groupby
 import xarray.core.rolling
-from numpy import array, nan
+from numpy import array, nan, ndarray
+from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from scipy.sparse import csc_matrix
-from xarray import Coordinates, DataArray, Dataset
-from xarray.core.dataarray import DataArrayCoordinates
+from xarray import Coordinates, DataArray, Dataset, IndexVariable
+from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
+from xarray.core.indexes import Indexes
+from xarray.core.rolling import DatasetRolling
 from xarray.core.types import Dims
+from xarray.core.utils import Frozen
 
 from linopy import constraints, variables
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -54,6 +73,20 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
+from linopy.types import (
+    ConstantLike,
+    EllipsisType,
+    ExpressionLike,
+    NotImplementedType,
+    SideLike,
+    SignLike,
+    VariableLike,
+)
+
+if TYPE_CHECKING:
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.model import Model
+    from linopy.variables import ScalarVariable, Variable
 
 SUPPORTED_CONSTANT_TYPES = (
     np.number,
@@ -66,7 +99,10 @@ SUPPORTED_CONSTANT_TYPES = (
 )
 
 
-def exprwrap(method, *default_args, **new_default_kwargs):
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+
+
+def exprwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     @functools.wraps(method)
     def _exprwrap(expr, *args, **kwargs):
         for k, v in new_default_kwargs.items():
@@ -84,7 +120,13 @@ def exprwrap(method, *default_args, **new_default_kwargs):
     return _exprwrap
 
 
-def _expr_unwrap(maybe_expr):
+def _expr_unwrap(
+    maybe_expr: Union[
+        Any,
+        LinearExpression,
+        QuadraticExpression,
+    ],
+) -> Any:
     if isinstance(maybe_expr, (LinearExpression, QuadraticExpression)):
         return maybe_expr.data
 
@@ -102,12 +144,12 @@ class LinearExpressionGroupby:
     """
 
     data: xr.Dataset
-    group: xr.DataArray
+    group: Union[Hashable, DataArray, IndexVariable, pd.Series, pd.DataFrame]
     model: Any
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
     @property
-    def groupby(self):
+    def groupby(self) -> xarray.core.groupby.DatasetGroupBy:
         """
         Groups the data using the specified group and kwargs.
 
@@ -116,9 +158,16 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        return self.data.groupby(group=self.group, **self.kwargs)
+        if isinstance(self.group, (pd.Series, pd.DataFrame)):
+            raise ValueError(
+                "Grouping by pandas objects is only supported in sum function."
+            )
 
-    def map(self, func, shortcut=False, args=(), **kwargs):
+        return self.data.groupby(group=self.group, **self.kwargs)  # type: ignore
+
+    def map(
+        self, func: Callable, shortcut: bool = False, args: Tuple[()] = (), **kwargs
+    ) -> "LinearExpression":
         """
         Apply a specified function to the groupby object.
 
@@ -142,7 +191,7 @@ class LinearExpressionGroupby:
             self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
         )
 
-    def sum(self, use_fallback=False, **kwargs):
+    def sum(self, use_fallback: bool = False, **kwargs) -> "LinearExpression":
         """
         Sum the groupby object.
 
@@ -170,7 +219,7 @@ class LinearExpressionGroupby:
         """
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(self.group, non_fallback_types) and not use_fallback:
-            group = self.group
+            group: Union[pd.Series, pd.DataFrame, xr.DataArray] = self.group
             group_name = getattr(group, "name", "group") or "group"
 
             if isinstance(group, DataArray):
@@ -187,7 +236,7 @@ class LinearExpressionGroupby:
             if group_name == group_dim:
                 raise ValueError("Group name cannot be the same as group dimension")
 
-            arrays = [group, group.groupby(group).cumcount()]
+            arrays = [group, group.groupby(group).cumcount()]  # type: ignore
             idx = pd.MultiIndex.from_arrays(
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
@@ -198,9 +247,9 @@ class LinearExpressionGroupby:
 
             if int_map is not None:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
-                index.names = orig_group.columns
+                index.names = [str(col) for col in orig_group.columns]
                 index.name = group_name
-                coords = Coordinates.from_pandas_multiindex(index, group_name)
+                coords = Coordinates.from_pandas_multiindex(index, group_name)  # type: ignore
                 ds = xr.Dataset(ds.assign_coords(coords))
 
             return LinearExpression(ds, self.model)
@@ -212,7 +261,7 @@ class LinearExpressionGroupby:
 
         return self.map(func, **kwargs, shortcut=True)
 
-    def roll(self, **kwargs):
+    def roll(self, **kwargs) -> "LinearExpression":
         """
         Roll the groupby object.
 
@@ -234,10 +283,10 @@ class LinearExpressionRolling:
     GroupBy object specialized to grouping LinearExpression objects.
     """
 
-    rolling: xr.core.rolling.DataArrayRolling
+    rolling: DatasetRolling
     model: Any
 
-    def sum(self, **kwargs):
+    def sum(self, **kwargs) -> "LinearExpression":
         data = self.rolling.construct("_rolling_term", keep_attrs=True)
         ds = (
             data[["coeffs", "vars"]]
@@ -290,9 +339,9 @@ class LinearExpression:
     __array_ufunc__ = None
     __array_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+    _fill_value = FILL_VALUE
 
-    def __init__(self, data, model):
+    def __init__(self, data: Any, model: Union[Model, None]) -> None:
         from linopy.model import Model
 
         if data is None:
@@ -318,7 +367,7 @@ class LinearExpression:
         if np.issubdtype(data.vars, np.floating):
             data["vars"] = data.vars.fillna(-1).astype(int)
         if not np.issubdtype(data.coeffs, np.floating):
-            data["coeffs"] = data.coeffs.astype(float)
+            data["coeffs"].values = data.coeffs.values.astype(float)
 
         data = fill_missing_coords(data)
 
@@ -330,10 +379,9 @@ class LinearExpression:
         elif not np.issubdtype(data.const, np.floating):
             data["const"] = data.const.astype(float)
 
-        data = xr.broadcast(data, exclude=HELPER_DIMS)[0]
-        data[["coeffs", "vars"]] = xr.broadcast(
-            data[["coeffs", "vars"]], exclude=[FACTOR_DIM]
-        )[0]
+        (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
+        (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
+        data = assign_multiindex_safe(data, **coeffs_vars)
 
         # transpose with new Dataset to really ensure correct order
         data = Dataset(data.transpose(..., TERM_DIM))
@@ -349,7 +397,7 @@ class LinearExpression:
         self._model = model
         self._data = data
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Print the expression arrays.
         """
@@ -358,7 +406,7 @@ class LinearExpression:
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
-        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
+        masked_entries = 0  # (~self.mask).sum().values.item() if self.mask
         lines = []
 
         header_string = self.type
@@ -398,7 +446,7 @@ class LinearExpression:
 
         return "\n".join(lines)
 
-    def print(self, display_max_rows=20, display_max_terms=20):
+    def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
         Print the linear expression.
 
@@ -415,7 +463,9 @@ class LinearExpression:
             )
             print(self)
 
-    def __add__(self, other):
+    def __add__(
+        self, other: Union[LinearExpression, int, ndarray, Variable, Series]
+    ) -> "LinearExpression":
         """
         Add an expression to others.
 
@@ -426,13 +476,13 @@ class LinearExpression:
             return self.assign(const=self.const + other)
 
         other = as_expression(other, model=self.model, dims=self.coord_dims)
-        return merge(self, other, cls=self.__class__)
+        return merge([self, other], cls=self.__class__)
 
-    def __radd__(self, other):
+    def __radd__(self, other: int) -> Union["LinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> "LinearExpression":
         """
         Subtract others from expression.
 
@@ -440,18 +490,21 @@ class LinearExpression:
         dimension names of self will be filled in other
         """
         if np.isscalar(other):
-            return self.assign(const=self.const - other)
+            return self.assign_multiindex_safe(const=self.const - other)
 
         other = as_expression(other, model=self.model, dims=self.coord_dims)
-        return merge(self, -other, cls=self.__class__)
+        return merge([self, -other], cls=self.__class__)
 
-    def __neg__(self):
+    def __neg__(self) -> Union[LinearExpression, QuadraticExpression]:
         """
         Get the negative of the expression.
         """
         return self.assign(coeffs=-self.coeffs, const=-self.const)
 
-    def __mul__(self, other):
+    def __mul__(
+        self,
+        other: Union[int, float, DataArray, Variable, ScalarVariable, LinearExpression],
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Multiply the expr by a factor.
         """
@@ -464,59 +517,73 @@ class LinearExpression:
         elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
             other = other.to_linexpr()
 
-        if type(other) is LinearExpression:
-            if other.nterm > 1:
-                raise TypeError("Multiplication of multiple terms is not supported.")
-            # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
-            # with v being the variables and c the constants
-            # merge on factor dimension only returns v1 * v2 + c1 * c2
-            ds = (
-                other.data[["coeffs", "vars"]]
-                .sel(_term=0)
-                .broadcast_like(self.data)
-                .assign(const=other.const)
-            )
-            res = merge(self, ds, dim=FACTOR_DIM, cls=QuadraticExpression)
-            # deal with cross terms c1 * v2 + c2 * v1
-            if self.has_constant:
-                res = res + self.const * other.reset_const()
-            if other.has_constant:
-                res = res + self.reset_const() * other.const
-            return res
+        if isinstance(other, LinearExpression):
+            return self._multiply_by_linear_expression(other)
         else:
-            multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-            coeffs = self.coeffs * multiplier
-            assert set(coeffs.shape) == set(self.coeffs.shape)
-            const = self.const * multiplier
-            return self.assign(coeffs=coeffs, const=const)
+            return self._multiply_by_constant(other)
 
-    def __pow__(self, other):
+    def _multiply_by_linear_expression(
+        self, other: LinearExpression
+    ) -> QuadraticExpression:
+        if other.nterm > 1:
+            raise TypeError("Multiplication of multiple terms is not supported.")
+        # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
+        # with v being the variables and c the constants
+        # merge on factor dimension only returns v1 * v2 + c1 * c2
+        ds = (
+            other.data[["coeffs", "vars"]]
+            .sel(_term=0)
+            .broadcast_like(self.data)
+            .assign(const=other.const)
+        )
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
+        # deal with cross terms c1 * v2 + c2 * v1
+        if self.has_constant:
+            res = res + self.const * other.reset_const()
+        if other.has_constant:
+            res = res + self.reset_const() * other.const
+        return res  # type: ignore
+
+    def _multiply_by_constant(
+        self, other: Union[int, float, DataArray]
+    ) -> LinearExpression:
+        multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        coeffs = self.coeffs * multiplier
+        assert set(coeffs.shape) == set(self.coeffs.shape)
+        const = self.const * multiplier
+        return self.assign(coeffs=coeffs, const=const)
+
+    def __pow__(self, other: int) -> "QuadraticExpression":
         """
         Power of the expression with a coefficient. The only coefficient allowed is 2.
         """
         if not other == 2:
             raise ValueError("Power must be 2.")
-        return self * self
+        return self * self  # type: ignore
 
-    def __rmul__(self, other):
+    def __rmul__(  # type: ignore
+        self, other: Union[float, int, DataArray]
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Right-multiply the expr by a factor.
         """
         return self.__mul__(other)
 
-    def __matmul__(self, other):
+    def __matmul__(
+        self, other: Union[LinearExpression, Variable, ndarray, DataArray]
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Matrix multiplication with other, similar to xarray dot.
         """
-        if not isinstance(
-            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
-        ):
+        if not isinstance(other, (LinearExpression, variables.Variable)):
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
-        return (self * other).sum(dims=common_dims)
+        return (self * other).sum(dim=common_dims)
 
-    def __div__(self, other):
+    def __div__(
+        self, other: Union[Variable, float, int]
+    ) -> Union[LinearExpression, QuadraticExpression]:
         if isinstance(
             other, (LinearExpression, variables.Variable, variables.ScalarVariable)
         ):
@@ -527,16 +594,18 @@ class LinearExpression:
             )
         return self.__mul__(1 / other)
 
-    def __truediv__(self, other):
+    def __truediv__(
+        self, other: Union[float, Variable, int]
+    ) -> Union[LinearExpression, QuadraticExpression]:
         return self.__div__(other)
 
-    def __le__(self, rhs):
+    def __le__(self, rhs: int) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs):
+    def __ge__(self, rhs: Union[int, ndarray, DataArray]) -> Constraint:  # type: ignore
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs):
+    def __eq__(self, rhs: Union[LinearExpression, float, Variable, int]) -> Constraint:  # type: ignore
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other):
@@ -579,13 +648,15 @@ class LinearExpression:
         """
         return self.__pow__(other)
 
-    def dot(self, other):
+    def dot(self, other: ndarray) -> "LinearExpression":
         """
         Matrix multiplication with other, similar to xarray dot.
         """
         return self.__matmul__(other)
 
-    def __getitem__(self, selector) -> Union["LinearExpression", "QuadraticExpression"]:
+    def __getitem__(
+        self, selector: Union[int, Tuple[slice, List[int]], slice]
+    ) -> Union["LinearExpression", "QuadraticExpression"]:
         """
         Get selection from the expression.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -595,72 +666,76 @@ class LinearExpression:
         return self.__class__(data, self.model)
 
     @property
-    def attrs(self):
+    def attrs(self) -> Dict[Any, Any]:
         """
         Get the attributes of the expression
         """
         return self.data.attrs
 
     @property
-    def coords(self):
+    def coords(self) -> DatasetCoordinates:
         """
         Get the coordinates of the expression
         """
         return self.data.coords
 
     @property
-    def indexes(self):
+    def indexes(self) -> Indexes:
         """
         Get the indexes of the expression
         """
         return self.data.indexes
 
     @property
-    def sizes(self):
+    def sizes(self) -> Frozen:
         """
         Get the sizes of the expression
         """
         return self.data.sizes
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         """
         Get the number of dimensions.
         """
         return self.const.ndim
 
     @property
-    def loc(self):
+    def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
-    @classmethod
+    @classmethod  # type: ignore
     @property
     def fill_value(cls):
+        warn(
+            "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead.",
+            DeprecationWarning,
+        )
         return cls._fill_value
 
     @property
-    def type(self):
+    def type(self) -> str:
         return "LinearExpression"
 
     @property
-    def data(self):
+    def data(self) -> Dataset:
         return self._data
 
     @property
-    def model(self):
+    def model(self) -> Model:
         return self._model
 
     @property
-    def dims(self):
+    def dims(self) -> Tuple[Hashable, ...]:
         # do explicitly sort as in vars (same as in coeffs)
         return self.vars.dims
 
     @property
-    def coord_dims(self):
+    def coord_dims(self) -> Tuple[Hashable, ...]:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
-    def coord_sizes(self):
+    def coord_sizes(self) -> Dict[str, int]:
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -688,28 +763,28 @@ class LinearExpression:
         self.data["const"] = value
 
     @property
-    def has_constant(self):
+    def has_constant(self) -> DataArray:
         return self.const.any()
 
     # create a dummy for a mask, which can be implemented later
     @property
-    def mask(self):
+    def mask(self) -> None:
         return None
 
     @has_optimized_model
-    def _map_solution(self):
+    def _map_solution(self) -> DataArray:
         """
         Replace variable labels by solution values.
         """
         m = self.model
         sol = pd.Series(m.matrices.sol, m.matrices.vlabels)
-        sol.loc[-1] = np.nan
+        sol[-1] = np.nan
         idx = np.ravel(self.vars)
-        values = sol[idx].values.reshape(self.vars.shape)
+        values = sol[idx].to_numpy().reshape(self.vars.shape)
         return xr.DataArray(values, dims=self.vars.dims, coords=self.vars.coords)
 
     @property
-    def solution(self):
+    def solution(self) -> DataArray:
         """
         Get the optimal values of the expression.
 
@@ -721,8 +796,17 @@ class LinearExpression:
         return sol.rename("solution")
 
     @classmethod
-    def _sum(cls, expr: Union["LinearExpression", Dataset], dim=None) -> Dataset:
+    def _sum(
+        cls,
+        expr: Union["LinearExpression", Dataset],
+        dim: Dims = None,
+    ) -> Dataset:
         data = _expr_unwrap(expr)
+
+        if isinstance(dim, str):
+            dim = [dim]
+        elif isinstance(dim, EllipsisType):
+            dim = None
 
         if dim is None:
             vars = DataArray(data.vars.data.ravel(), dims=TERM_DIM)
@@ -730,7 +814,7 @@ class LinearExpression:
             const = data.const.sum()
             ds = xr.Dataset({"vars": vars, "coeffs": coeffs, "const": const})
         else:
-            dim = [d for d in np.atleast_1d(dim) if d != TERM_DIM]
+            dim = [d for d in dim if d != TERM_DIM]
             ds = (
                 data[["coeffs", "vars"]]
                 .reset_index(dim, drop=True)
@@ -741,7 +825,12 @@ class LinearExpression:
 
         return ds
 
-    def sum(self, dim=None, drop_zeros=False, **kwargs) -> "LinearExpression":
+    def sum(
+        self,
+        dim: Dims = None,
+        drop_zeros: bool = False,
+        **kwargs,
+    ) -> "LinearExpression":
         """
         Sum the expression over all or a subset of dimensions.
 
@@ -780,8 +869,8 @@ class LinearExpression:
         self,
         dim: Dims = None,
         *,
-        skipna: Optional[bool] = None,
-        keep_attrs: Optional[bool] = None,
+        skipna: Union[bool, None] = None,
+        keep_attrs: Union[bool, None] = None,
         **kwargs: Any,
     ) -> "LinearExpression":
         """
@@ -819,13 +908,14 @@ class LinearExpression:
             # dimensions
             dim = self.coord_dims
         if isinstance(dim, str):
-            # Make sure, single mentioned dimensions is handled correctly.
             dim = [dim]
+        elif isinstance(dim, EllipsisType) or dim is None:
+            dim = self.coord_dims
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     @classmethod
-    def from_tuples(cls, *tuples, model=None, chunk=None):
+    def from_tuples(cls, *tuples, model=None, chunk=None) -> "LinearExpression":
         """
         Create a linear expression by using tuples of coefficients and
         variables.
@@ -886,7 +976,14 @@ class LinearExpression:
         return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 
     @classmethod
-    def from_rule(cls, model, rule, coords):
+    def from_rule(
+        cls,
+        model: Model,
+        rule: Callable,
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
+    ) -> "LinearExpression":
         """
         Create a linear expression from a rule and a set of coordinates.
 
@@ -925,14 +1022,14 @@ class LinearExpression:
         >>> x = m.add_variables(0, 100, coords)
         >>> def bound(m, i, j):
         ...     if i % 2:
-        ...         return (i - 1) * x[i - 1, j]
+        ...         return (i - 1) * x.at[i - 1, j]
         ...     else:
-        ...         return i * x[i, j]
+        ...         return i * x.at[i, j]
         ...
         >>> expr = LinearExpression.from_rule(m, bound, coords)
         >>> con = m.add_constraints(expr <= 10)
         """
-        if not isinstance(coords, xr.core.dataarray.DataArrayCoordinates):
+        if not isinstance(coords, DataArrayCoordinates):
             coords = DataArray(coords=coords).coords
 
         # test output type
@@ -948,7 +1045,12 @@ class LinearExpression:
         return cls._from_scalarexpression_list(exprs, coords, model)
 
     @classmethod
-    def _from_scalarexpression_list(cls, exprs, coords: DataArrayCoordinates, model):
+    def _from_scalarexpression_list(
+        cls,
+        exprs: List[ScalarLinearExpression],
+        coords: Mapping,
+        model: Model,
+    ) -> "LinearExpression":
         """
         Create a LinearExpression from a list of lists with different lengths.
         """
@@ -961,13 +1063,13 @@ class LinearExpression:
         coeffs = coeffs.reshape((nterm, *shape))
         vars = vars.reshape((nterm, *shape))
 
-        coeffs = DataArray(coeffs, coords, dims=(TERM_DIM, *coords))
-        vars = DataArray(vars, coords, dims=(TERM_DIM, *coords))
-        ds = Dataset({"coeffs": coeffs, "vars": vars}).transpose(..., TERM_DIM)
+        coeffdata = DataArray(coeffs, coords, dims=(TERM_DIM, *coords))
+        vardata = DataArray(vars, coords, dims=(TERM_DIM, *coords))
+        ds = Dataset({"coeffs": coeffdata, "vars": vardata}).transpose(..., TERM_DIM)
 
         return cls(ds, model)
 
-    def to_quadexpr(self):
+    def to_quadexpr(self) -> "QuadraticExpression":
         """Convert LinearExpression to QuadraticExpression."""
         vars = self.data.vars.expand_dims(FACTOR_DIM)
         fill_value = self._fill_value["vars"]
@@ -975,7 +1077,9 @@ class LinearExpression:
         data = self.data.assign(vars=vars)
         return QuadraticExpression(data, self.model)
 
-    def to_constraint(self, sign, rhs):
+    def to_constraint(
+        self, sign: SignLike, rhs: Union[ConstantLike, VariableLike, ExpressionLike]
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -993,16 +1097,18 @@ class LinearExpression:
         to the right-hand side.
         """
         all_to_lhs = (self - rhs).data
-        data = all_to_lhs[["coeffs", "vars"]].assign(sign=sign, rhs=-all_to_lhs.const)
+        data = assign_multiindex_safe(
+            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+        )
         return constraints.Constraint(data, model=self.model)
 
-    def reset_const(self):
+    def reset_const(self) -> "LinearExpression":
         """
         Reset the constant of the linear expression to zero.
         """
         return self.__class__(self.data[["coeffs", "vars"]], self.model)
 
-    def isnull(self):
+    def isnull(self) -> DataArray:
         """
         Get a boolean mask with true values where there is only missing values in an expression.
 
@@ -1013,7 +1119,18 @@ class LinearExpression:
         helper_dims = set(self.vars.dims).intersection(HELPER_DIMS)
         return (self.vars == -1).all(helper_dims) & self.const.isnull()
 
-    def where(self, cond, other=None, **kwargs):
+    def where(
+        self,
+        cond: DataArray,
+        other: Union[
+            LinearExpression,
+            int,
+            DataArray,
+            Dict[str, Union[float, int, DataArray]],
+            None,
+        ] = None,
+        **kwargs,
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Filter variables based on a condition.
 
@@ -1038,22 +1155,37 @@ class LinearExpression:
         linopy.LinearExpression
         """
         # Cannot set `other` if drop=True
+        _other: Union[
+            Dict[str, float], Dict[str, Union[int, float, DataArray]], DataArray, None
+        ]
         if other is None or other is np.nan:
             if not kwargs.get("drop", False):
-                other = self._fill_value
-        elif isinstance(other, (DataArray, np.floating, np.integer, int, float)):
-            other = {**self._fill_value, "const": other}
+                _other = FILL_VALUE
+            else:
+                _other = None
+        elif isinstance(other, (int, float, DataArray)):
+            _other = {**self._fill_value, "const": other}
         else:
-            other = _expr_unwrap(other)
+            _other = _expr_unwrap(other)
         cond = _expr_unwrap(cond)
         if isinstance(cond, DataArray):
             if helper_dims := set(HELPER_DIMS).intersection(cond.dims):
                 raise ValueError(
                     f"Filtering by a DataArray with a helper dimension(s) ({helper_dims!r}) is not supported."
                 )
-        return self.__class__(self.data.where(cond, other=other, **kwargs), self.model)
+        return self.__class__(self.data.where(cond, other=_other, **kwargs), self.model)
 
-    def fillna(self, value):
+    def fillna(
+        self,
+        value: Union[
+            int,
+            float,
+            DataArray,
+            Dataset,
+            LinearExpression,
+            Dict[str, Union[float, int, DataArray]],
+        ],
+    ) -> "LinearExpression":
         """
         Fill missing values with a given value.
 
@@ -1077,7 +1209,7 @@ class LinearExpression:
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
 
-    def diff(self, dim, n=1):
+    def diff(self, dim: str, n: int = 1) -> "LinearExpression":
         """
         Calculate the n-th order discrete difference along given axis.
 
@@ -1098,7 +1230,11 @@ class LinearExpression:
         return self - self.shift({dim: n})
 
     def groupby(
-        self, group, squeeze: "bool" = True, restore_coord_dims: "bool" = None, **kwargs
+        self,
+        group: Union[DataFrame, Series, DataArray],
+        squeeze: bool = True,
+        restore_coord_dims: Union[bool, None] = None,
+        **kwargs,
     ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
@@ -1131,10 +1267,10 @@ class LinearExpression:
 
     def rolling(
         self,
-        dim: "Mapping[Any, int]" = None,
-        min_periods: "int" = None,
-        center: "bool | Mapping[Any, bool]" = False,
-        **window_kwargs: "int",
+        dim: Union[Mapping[Any, int], None] = None,
+        min_periods: Union[int, None] = None,
+        center: bool | Mapping[Any, bool] = False,
+        **window_kwargs: int,
     ) -> LinearExpressionRolling:
         """
         Rolling window object.
@@ -1167,14 +1303,14 @@ class LinearExpression:
         return LinearExpressionRolling(rolling, model=self.model)
 
     @property
-    def nterm(self):
+    def nterm(self) -> int:
         """
         Get the number of terms in the linear expression.
         """
         return len(self.data._term)
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[int]:
         """
         Get the total shape of the linear expression.
         """
@@ -1182,19 +1318,19 @@ class LinearExpression:
         return self.vars.shape
 
     @property
-    def size(self):
+    def size(self) -> int:
         """
         Get the total size of the linear expression.
         """
         return self.vars.size
 
-    def empty(self):
+    def empty(self) -> bool:
         """
         Get whether the linear expression is empty.
         """
         return self.shape == (0,)
 
-    def densify_terms(self):
+    def densify_terms(self) -> "LinearExpression":
         """
         Move all non-zero term entries to the front and cut off all-zero
         entries in the term-axis.
@@ -1210,8 +1346,8 @@ class LinearExpression:
         mod_nnz.pop(axis)
 
         remaining_axes = np.vstack(mod_nnz).T
-        _, idx = np.unique(remaining_axes, axis=0, return_inverse=True)
-        idx = list(idx)
+        _, idx_ = np.unique(remaining_axes, axis=0, return_inverse=True)
+        idx = list(idx_)
         new_index = np.array([idx[:i].count(j) for i, j in enumerate(idx)])
         mod_nnz.insert(axis, new_index)
 
@@ -1225,7 +1361,7 @@ class LinearExpression:
 
         return self.__class__(data.sel({TERM_DIM: slice(0, nterm)}), self.model)
 
-    def sanitize(self):
+    def sanitize(self) -> "LinearExpression":
         """
         Sanitize LinearExpression by ensuring int dtype for variables.
 
@@ -1289,6 +1425,8 @@ class LinearExpression:
     # Wrapped function which would convert variable to dataarray
     assign = exprwrap(Dataset.assign)
 
+    assign_multiindex_safe = exprwrap(assign_multiindex_safe)
+
     assign_attrs = exprwrap(Dataset.assign_attrs)
 
     assign_coords = exprwrap(Dataset.assign_coords)
@@ -1348,7 +1486,7 @@ class QuadraticExpression(LinearExpression):
 
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
-    def __init__(self, data, model):
+    def __init__(self, data: Dataset, model: Model) -> None:
         super().__init__(data, model)
 
         if data is None:
@@ -1363,7 +1501,9 @@ class QuadraticExpression(LinearExpression):
         data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
         self._data = data
 
-    def __mul__(self, other):
+    def __mul__(
+        self, other: Union[ConstantLike, VariableLike, ExpressionLike]
+    ) -> "QuadraticExpression":
         """
         Multiply the expr by a factor.
         """
@@ -1381,13 +1521,15 @@ class QuadraticExpression(LinearExpression):
                 f"{type(self)} and {type(other)}. "
                 "Higher order non-linear expressions are not yet supported."
             )
-        return super().__mul__(other)
+        return super().__mul__(other)  # type: ignore
 
     @property
-    def type(self):
+    def type(self) -> str:
         return "QuadraticExpression"
 
-    def __add__(self, other):
+    def __add__(
+        self, other: Union[ConstantLike, VariableLike, ExpressionLike]
+    ) -> "QuadraticExpression":
         """
         Add an expression to others.
 
@@ -1400,9 +1542,11 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
-        return merge(self, other, cls=self.__class__)
+        return merge([self, other], cls=self.__class__)  # type: ignore
 
-    def __radd__(self, other):
+    def __radd__(
+        self, other: Union[LinearExpression, int]
+    ) -> Union[LinearExpression, QuadraticExpression]:
         """
         Add others to expression.
         """
@@ -1414,7 +1558,9 @@ class QuadraticExpression(LinearExpression):
         else:
             return NotImplemented
 
-    def __sub__(self, other):
+    def __sub__(
+        self, other: Union[LinearExpression, Variable, int, QuadraticExpression]
+    ) -> "QuadraticExpression":
         """
         Subtract others from expression.
 
@@ -1427,9 +1573,9 @@ class QuadraticExpression(LinearExpression):
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
-        return merge(self, -other, cls=self.__class__)
+        return merge([self, -other], cls=self.__class__)  # type: ignore
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: LinearExpression) -> "QuadraticExpression":
         """
         Subtract expression from others.
         """
@@ -1437,10 +1583,10 @@ class QuadraticExpression(LinearExpression):
             other = other.to_quadexpr()
             return other.__sub__(self)
         else:
-            NotImplemented
+            return NotImplemented
 
     @property
-    def solution(self):
+    def solution(self) -> DataArray:
         """
         Get the optimal values of the expression.
 
@@ -1452,18 +1598,22 @@ class QuadraticExpression(LinearExpression):
         return sol.rename("solution")
 
     @classmethod
-    def _sum(cls, expr: "QuadraticExpression", dim=None) -> Dataset:
+    def _sum(
+        cls,
+        expr: Union[Dataset, LinearExpression, "QuadraticExpression"],
+        dim: Dims = None,
+    ) -> Dataset:
         data = _expr_unwrap(expr)
         dim = dim or list(set(data.dims) - set(HELPER_DIMS))
         return LinearExpression._sum(expr, dim)
 
-    def to_constraint(self, sign, rhs):
+    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
         )
 
     @property
-    def flat(self):
+    def flat(self) -> DataFrame:
         """
         Return a flattened expression.
         """
@@ -1506,7 +1656,7 @@ class QuadraticExpression(LinearExpression):
         check_has_nulls_polars(df, name=self.type)
         return df
 
-    def to_matrix(self):
+    def to_matrix(self) -> scipy.sparse._csc.csc_matrix:
         """
         Return a sparse matrix representation of the expression only including
         quadratic terms.
@@ -1534,7 +1684,9 @@ class QuadraticExpression(LinearExpression):
         return csc_matrix((data, (row, col)), shape=(nvars, nvars))
 
 
-def as_expression(obj, model=None, **kwargs):
+def as_expression(
+    obj: Any, model: Union[Model, None] = None, **kwargs
+) -> Union[LinearExpression, QuadraticExpression]:
     """
     Convert an object to a LinearExpression or QuadraticExpression.
 
@@ -1568,7 +1720,17 @@ def as_expression(obj, model=None, **kwargs):
         return LinearExpression(obj, model)
 
 
-def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
+def merge(
+    exprs: Sequence[
+        Union[LinearExpression, QuadraticExpression, variables.Variable, Dataset]
+    ],
+    *add_exprs: Tuple[
+        Union[LinearExpression, QuadraticExpression, variables.Variable, Dataset]
+    ],
+    dim: str = TERM_DIM,
+    cls: type = LinearExpression,
+    **kwargs: Union[str, Union[Dict, str]],
+) -> Union[LinearExpression, QuadraticExpression]:
     """
     Merge multiple expression together.
 
@@ -1598,6 +1760,14 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
     """
     linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
 
+    if not isinstance(exprs, list) and len(add_exprs):
+        warn(
+            "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
+            DeprecationWarning,
+        )
+        exprs = [exprs] + list(add_exprs)  # type: ignore
+    model = exprs[0].model
+
     if (
         cls is QuadraticExpression
         and dim == TERM_DIM
@@ -1608,14 +1778,11 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
             "Convert to QuadraticExpression first."
         )
 
-    exprs = exprs[0] if len(exprs) == 1 else list(exprs)  # allow passing a list
-    model = exprs[0].model
-
     if cls in linopy_types and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
-        override = check_common_keys_values(coord_dims)
+        override = check_common_keys_values(coord_dims)  # type: ignore
     else:
         override = False
 
@@ -1624,26 +1791,29 @@ def merge(*exprs, dim=TERM_DIM, cls=LinearExpression, **kwargs):
 
     if not kwargs:
         kwargs = {
-            "fill_value": cls._fill_value,
             "coords": "minimal",
             "compat": "override",
         }
+        if cls == LinearExpression:
+            kwargs["fill_value"] = FILL_VALUE
+        elif cls == variables.Variable:
+            kwargs["fill_value"] = variables.FILL_VALUE
+
         if override:
             kwargs["join"] = "override"
 
     if dim == TERM_DIM:
-        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)  # type: ignore
         subkwargs = {**kwargs, "fill_value": 0}
-        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
-        ds["const"] = const
+        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)  # type: ignore
+        ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
-        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        ds["coeffs"] = coeffs
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        ds["const"] = const
+        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)  # type: ignore
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)  # type: ignore
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)  # type: ignore
+        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
     else:
-        ds = xr.concat(data, dim, **kwargs)
+        ds = xr.concat(data, dim, **kwargs)  # type: ignore
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
@@ -1662,7 +1832,12 @@ class ScalarLinearExpression:
 
     __slots__ = ("_coeffs", "_vars", "_model")
 
-    def __init__(self, coeffs, vars, model):
+    def __init__(
+        self,
+        coeffs: Tuple[Union[int, float], ...],
+        vars: Tuple[int, ...],
+        model: Model,
+    ) -> None:
         self._coeffs = coeffs
         self._vars = vars
         self._model = model
@@ -1672,18 +1847,24 @@ class ScalarLinearExpression:
         return f"ScalarLinearExpression: {expr_string}"
 
     @property
-    def coeffs(self):
+    def coeffs(
+        self,
+    ) -> Tuple[Union[int, float], ...]:
         return self._coeffs
 
     @property
-    def vars(self):
+    def vars(
+        self,
+    ) -> Union[Tuple[int, ...], Tuple[int, ...]]:
         return self._vars
 
     @property
-    def model(self):
+    def model(self) -> Model:
         return self._model
 
-    def __add__(self, other):
+    def __add__(
+        self, other: Union[ScalarLinearExpression, ScalarVariable]
+    ) -> "ScalarLinearExpression":
         if isinstance(other, variables.ScalarVariable):
             coeffs = self.coeffs + (1,)
             vars = self.vars + (other.label,)
@@ -1697,16 +1878,21 @@ class ScalarLinearExpression:
         vars = self.vars + other.vars
         return ScalarLinearExpression(coeffs, vars, self.model)
 
-    def __radd__(self, other):
+    def __radd__(
+        self, other: Union[int, float]
+    ) -> Union["ScalarLinearExpression", NotImplementedType]:
         # This is needed for using python's sum function
         if other == 0:
             return self
+        return NotImplemented
 
     @property
     def nterm(self):
         return len(self.vars)
 
-    def __sub__(self, other):
+    def __sub__(
+        self, other: Union[ScalarVariable, ScalarLinearExpression]
+    ) -> "ScalarLinearExpression":
         if isinstance(other, variables.ScalarVariable):
             other = other.to_scalar_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
@@ -1720,12 +1906,12 @@ class ScalarLinearExpression:
             self.model,
         )
 
-    def __neg__(self):
+    def __neg__(self) -> "ScalarLinearExpression":
         return ScalarLinearExpression(
             tuple(-c for c in self.coeffs), self.vars, self.model
         )
 
-    def __mul__(self, other):
+    def __mul__(self, other: Union[float, int]) -> "ScalarLinearExpression":
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
@@ -1735,20 +1921,20 @@ class ScalarLinearExpression:
             tuple(other * c for c in self.coeffs), self.vars, self.model
         )
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: int) -> "ScalarLinearExpression":
         return self.__mul__(other)
 
-    def __div__(self, other):
+    def __div__(self, other: Union[float, int]) -> "ScalarLinearExpression":
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for /: " f"{type(self)} and {type(other)}"
             )
         return self.__mul__(1 / other)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Union[float, int]) -> "ScalarLinearExpression":
         return self.__div__(other)
 
-    def __le__(self, other):
+    def __le__(self, other: Union[int, float]) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
@@ -1756,7 +1942,7 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
-    def __ge__(self, other):
+    def __ge__(self, other: Union[int, float]) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
@@ -1764,7 +1950,7 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Union[int, float]) -> AnonymousScalarConstraint:  # type: ignore
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
                 "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
@@ -1782,7 +1968,7 @@ class ScalarLinearExpression:
             "Inequalities only ever defined for >= rather than >."
         )
 
-    def to_linexpr(self):
+    def to_linexpr(self) -> LinearExpression:
         coeffs = xr.DataArray(list(self.coeffs), dims=TERM_DIM)
         vars = xr.DataArray(list(self.vars), dims=TERM_DIM)
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
