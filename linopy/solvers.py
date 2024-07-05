@@ -449,9 +449,6 @@ def run_highs(
     """
     CONDITION_MAP: Dict[str, str] = {}
 
-    if warmstart_fn:
-        logger.warning("Warmstart not implemented. Ignoring argument.")
-
     if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
         "QP",
         "MILP",
@@ -480,12 +477,23 @@ def run_highs(
     for k, v in solver_options.items():
         h.setOptionValue(k, v)
 
+    if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
+        h.readSolution(path_to_string(warmstart_fn), 0)
+    elif warmstart_fn:
+        h.readBasis(path_to_string(warmstart_fn))
+
     h.run()
 
     condition = h.modelStatusToString(h.getModelStatus()).lower()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
     status.legacy_status = condition
+
+    if basis_fn:
+        h.writeBasis(path_to_string(basis_fn))
+
+    if solution_fn:
+        h.writeSolution(path_to_string(solution_fn), 0)
 
     def get_solver_solution() -> Solution:
         objective = h.getObjectiveValue()
