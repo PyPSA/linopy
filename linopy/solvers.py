@@ -449,10 +449,6 @@ def run_highs(
     """
     CONDITION_MAP: Dict[str, str] = {}
 
-    warmstart_fn = maybe_convert_path(warmstart_fn)
-    basis_fn = maybe_convert_path(basis_fn)
-    solution_fn = maybe_convert_path(solution_fn)
-
     if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
         "QP",
         "MILP",
@@ -481,10 +477,10 @@ def run_highs(
     for k, v in solver_options.items():
         h.setOptionValue(k, v)
 
-    if warmstart_fn and warmstart_fn.endswith(".sol"):
-        h.readSolution(warmstart_fn, 0)
+    if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
+        h.readSolution(path_to_string(warmstart_fn), 0)
     elif warmstart_fn:
-        h.readBasis(warmstart_fn)
+        h.readBasis(path_to_string(warmstart_fn))
 
     h.run()
 
@@ -494,10 +490,10 @@ def run_highs(
     status.legacy_status = condition
 
     if basis_fn:
-        h.writeBasis(basis_fn)
+        h.writeBasis(path_to_string(basis_fn))
 
     if solution_fn:
-        h.writeSolution(solution_fn, 0)
+        h.writeSolution(path_to_string(solution_fn), 0)
 
     def get_solver_solution() -> Solution:
         objective = h.getObjectiveValue()
