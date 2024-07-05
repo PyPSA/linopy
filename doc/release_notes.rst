@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Linopy now uses mypy for type checking allowing for a more secure and stable code base.
+
 
 Version 0.3.11
 --------------
