@@ -4,25 +4,41 @@ Linopy model module.
 
 This module contains frontend implementations of the package.
 """
+from __future__ import annotations
 
 import logging
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
+from typing import Any, List, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, nan
+from numpy import inf, nan, ndarray
+from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from xarray import DataArray, Dataset
+from xarray.core.types import T_Chunks
 
 from linopy import solvers
-from linopy.common import as_dataarray, best_int, maybe_replace_signs, replace_by_map
+from linopy.common import (
+    as_dataarray,
+    best_int,
+    maybe_replace_signs,
+    replace_by_map,
+    to_path,
+)
 from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
-from linopy.expressions import LinearExpression, ScalarLinearExpression
+from linopy.expressions import (
+    LinearExpression,
+    QuadraticExpression,
+    ScalarLinearExpression,
+)
 from linopy.io import (
     to_block_files,
     to_file,
@@ -34,6 +50,14 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import available_solvers, quadratic_solvers
+from linopy.types import (
+    ConstantLike,
+    ConstraintLike,
+    ExpressionLike,
+    MaskLike,
+    SignLike,
+    VariableLike,
+)
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
@@ -81,7 +105,12 @@ class Model:
         "matrices",
     )
 
-    def __init__(self, solver_dir=None, chunk=None, force_dim_names=False):
+    def __init__(
+        self,
+        solver_dir: Union[str, None] = None,
+        chunk: T_Chunks = None,
+        force_dim_names: bool = False,
+    ) -> None:
         """
         Initialize the linopy model.
 
@@ -105,24 +134,26 @@ class Model:
         -------
         linopy.Model
         """
-        self._variables = Variables(model=self)
-        self._constraints = Constraints(model=self)
-        self._objective = Objective(LinearExpression(None, self), self)
-        self._parameters = Dataset()
+        self._variables: Variables = Variables({}, model=self)
+        self._constraints: Constraints = Constraints({}, model=self)
+        self._objective: Objective = Objective(LinearExpression(None, self), self)
+        self._parameters: Dataset = Dataset()
 
-        self._status = "initialized"
-        self._termination_condition = ""
-        self._xCounter = 0
-        self._cCounter = 0
-        self._varnameCounter = 0
-        self._connameCounter = 0
-        self._blocks = None
+        self._status: str = "initialized"
+        self._termination_condition: str = ""
+        self._xCounter: int = 0
+        self._cCounter: int = 0
+        self._varnameCounter: int = 0
+        self._connameCounter: int = 0
+        self._blocks: Union[DataArray, None] = None
 
-        self._chunk = chunk
-        self._force_dim_names = bool(force_dim_names)
-        self._solver_dir = Path(gettempdir() if solver_dir is None else solver_dir)
+        self._chunk: T_Chunks = chunk
+        self._force_dim_names: bool = bool(force_dim_names)
+        self._solver_dir: Path = Path(
+            gettempdir() if solver_dir is None else solver_dir
+        )
 
-        self.matrices = MatrixAccessor(self)
+        self.matrices: MatrixAccessor = MatrixAccessor(self)
 
     @property
     def variables(self) -> Variables:
@@ -179,14 +210,14 @@ class Model:
         self._parameters = Dataset(value)
 
     @property
-    def solution(self):
+    def solution(self) -> Dataset:
         """
         Solution calculated by the optimization.
         """
         return self.variables.solution
 
     @property
-    def dual(self):
+    def dual(self) -> Dataset:
         """
         Dual values calculated by the optimization.
         """
@@ -215,18 +246,6 @@ class Model:
         self._termination_condition = TerminationCondition[value].value
 
     @property
-    @deprecated("0.2.7", "Use `objective.value` instead.")
-    def objective_value(self):
-        """
-        Objective value of the model.
-        """
-        return self._objective.value
-
-    @objective_value.setter
-    def objective_value(self, value):
-        self._objective.value = value
-
-    @property
     def chunk(self):
         """
         Chunk sizes of the model.
@@ -234,21 +253,8 @@ class Model:
         return self._chunk
 
     @chunk.setter
-    def chunk(self, value):
-        if not isinstance(value, [int, dict]) and (value != "auto"):
-            raise TypeError("Chunks must int, dict, or 'auto'.")
+    def chunk(self, value: T_Chunks):
         self._chunk = value
-
-    @property
-    def blocks(self):
-        """
-        Blocks of the model.
-        """
-        return self._blocks
-
-    @blocks.setter
-    def blocks(self, value):
-        self._blocks = DataArray(value)
 
     @property
     def force_dim_names(self):
@@ -268,7 +274,7 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
-    def solver_dir(self):
+    def solver_dir(self) -> Path:
         """
         Solver directory of the model.
         """
@@ -276,16 +282,16 @@ class Model:
 
     @solver_dir.setter
     def solver_dir(self, value):
-        if not isinstance(value, [str, Path]):
+        if not isinstance(value, (str, Path)):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
 
     @property
-    def dataset_attrs(self):
+    def dataset_attrs(self) -> List[str]:
         return ["parameters"]
 
     @property
-    def scalar_attrs(self):
+    def scalar_attrs(self) -> List[str]:
         return [
             "status",
             "_xCounter",
@@ -295,7 +301,7 @@ class Model:
             "force_dim_names",
         ]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Return a string representation of the linopy model.
         """
@@ -310,13 +316,13 @@ class Model:
             f"Status:\n-------\n{self.status}"
         )
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Variable:
         """
         Get a model variable by the name.
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds):
+    def check_force_dim_names(self, ds: Union[DataArray, Dataset]) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -332,11 +338,12 @@ class Model:
             If broadcasted data leads to unspecified dimension names.
 
         Returns
+
         -------
         None.
         """
         contains_default_dims = any(
-            bool(re.match(r"dim_[0-9]+", dim)) for dim in ds.dims
+            bool(re.match(r"dim_[0-9]+", str(dim))) for dim in list(ds.dims)
         )
         if self.force_dim_names and contains_default_dims:
             raise ValueError(
@@ -348,15 +355,17 @@ class Model:
 
     def add_variables(
         self,
-        lower=-inf,
-        upper=inf,
-        coords=None,
-        name=None,
-        mask=None,
-        binary=False,
-        integer=False,
+        lower: Any = -inf,
+        upper: Any = inf,
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
+        name: Union[str, None] = None,
+        mask: Union[DataArray, ndarray, Series, None] = None,
+        binary: bool = False,
+        integer: bool = False,
         **kwargs,
-    ):
+    ) -> Variable:
         """
         Assign a new, possibly multi-dimensional array of variables to the
         model.
@@ -448,38 +457,45 @@ class Model:
             {
                 "lower": as_dataarray(lower, coords, **kwargs),
                 "upper": as_dataarray(upper, coords, **kwargs),
+                "labels": -1,
             }
         )
+        (data,) = xr.broadcast(data)
+        self.check_force_dim_names(data)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
-        labels = DataArray(-2, coords=data.coords)
-
-        self.check_force_dim_names(labels)
-
         start = self._xCounter
-        end = start + labels.size
-        labels.data = np.arange(start, end).reshape(labels.shape)
-        self._xCounter += labels.size
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._xCounter += data.labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
-        data = data.assign(labels=labels).assign_attrs(
+        data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
         )
 
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        variable = Variable(data, name=name, model=self)
+        variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
 
     def add_constraints(
-        self, lhs, sign=None, rhs=None, name=None, coords=None, mask=None
-    ):
+        self,
+        lhs: Union[VariableLike, ExpressionLike, ConstraintLike],
+        sign: Union[SignLike, None] = None,
+        rhs: Union[ConstantLike, VariableLike, ExpressionLike, None] = None,
+        name: Union[str, None] = None,
+        coords: Union[
+            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
+        ] = None,
+        mask: Union[MaskLike, None] = None,
+    ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -521,17 +537,10 @@ class Model:
             Array containing the labels of the added constraints.
         """
 
-        def assert_sign_rhs_are_None(lhs, sign, rhs):
-            if sign is not None or rhs is not None:
-                msg = f"Passing arguments `sign` and `rhs` together with a {type(lhs)} is ambiguous."
-                raise ValueError(msg)
+        msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
+        msg_sign_rhs_not_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
 
-        def assert_sign_rhs_not_None(lhs, sign, rhs):
-            if sign is None or rhs is None:
-                msg = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
-                raise ValueError(msg)
-
-        if name in self.constraints:
+        if name in list(self.constraints):
             raise ValueError(f"Constraint '{name}' already assigned to model")
         elif name is None:
             name = f"con{self._connameCounter}"
@@ -540,24 +549,31 @@ class Model:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         if isinstance(lhs, LinearExpression):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = lhs.to_constraint(sign, rhs).data
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_not_none)
+            data = lhs.to_constraint(sign, rhs).data  # type: ignore
+        elif isinstance(lhs, (list, tuple)):
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_none)
+            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
+        # directly convert first argument to a constraint
         elif callable(lhs):
             assert coords is not None, "`coords` must be given when lhs is a function"
             rule = lhs
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = Constraint.from_rule(self, rule, coords).data
         elif isinstance(lhs, AnonymousScalarConstraint):
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = lhs.to_constraint().data
         elif isinstance(lhs, Constraint):
-            assert_sign_rhs_are_None(lhs, sign, rhs)
+            if sign is not None or rhs is not None:
+                raise ValueError(msg_sign_rhs_none)
             data = lhs.data
-        elif isinstance(lhs, (list, tuple)):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
-            data = self.linexpr(*lhs).to_constraint(sign, rhs).data
         elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
-            assert_sign_rhs_not_None(lhs, sign, rhs)
+            if sign is None or rhs is None:
+                raise ValueError(msg_sign_rhs_not_none)
             data = lhs.to_linexpr().to_constraint(sign, rhs).data
         else:
             raise ValueError(
@@ -569,6 +585,9 @@ class Model:
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
 
+        data["labels"] = -1
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
             # TODO: simplify
@@ -576,30 +595,31 @@ class Model:
                 data.dims
             ), "Dimensions of mask not a subset of resulting labels dimensions."
 
-        labels = DataArray(-1, coords=data.indexes)
-
-        self.check_force_dim_names(labels)
+        self.check_force_dim_names(data)
 
         start = self._cCounter
-        end = start + labels.size
-        labels.data = np.arange(start, end).reshape(labels.shape)
-        self._cCounter += labels.size
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._cCounter += data.labels.size
 
         if mask is not None:
-            labels = labels.where(mask, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
-        data = data.assign(labels=labels).assign_attrs(
-            label_range=(start, end), name=name
-        )
+        data = data.assign_attrs(label_range=(start, end), name=name)
 
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        constraint = Constraint(data, name=name, model=self)
+        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         self.constraints.add(constraint)
         return constraint
 
-    def add_objective(self, expr, overwrite=False, sense="min"):
+    def add_objective(
+        self,
+        expr: Union[List[Tuple[int, Variable]], LinearExpression, QuadraticExpression],
+        overwrite: bool = False,
+        sense: str = "min",
+    ) -> None:
         """
         Add an objective function to the model.
 
@@ -623,7 +643,7 @@ class Model:
         self.objective.expression = expr
         self.objective.sense = sense
 
-    def remove_variables(self, name):
+    def remove_variables(self, name: str) -> None:
         """
         Remove all variables stored under reference name `name` from the model.
 
@@ -642,7 +662,7 @@ class Model:
         labels = self.variables[name].labels
         self.variables.remove(name)
 
-        for k in self.constraints:
+        for k in list(self.constraints):
             vars = self.constraints[k].data["vars"]
             vars = vars.where(~vars.isin(labels), -1)
             self.constraints[k].data["vars"] = vars
@@ -651,7 +671,7 @@ class Model:
             {TERM_DIM: ~self.objective.vars.isin(labels)}
         )
 
-    def remove_constraints(self, name):
+    def remove_constraints(self, name: Union[str, List[str]]) -> None:
         """
         Remove all constraints stored under reference name 'name' from the
         model.
@@ -675,7 +695,7 @@ class Model:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
 
-    def remove_objective(self):
+    def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
 
@@ -686,36 +706,36 @@ class Model:
         self.objective = Objective(LinearExpression(None, self), self)
 
     @property
-    def continuous(self):
+    def continuous(self) -> Variables:
         """
         Get all continuous variables.
         """
         return self.variables.continuous
 
     @property
-    def binaries(self):
+    def binaries(self) -> Variables:
         """
         Get all binary variables.
         """
         return self.variables.binaries
 
     @property
-    def integers(self):
+    def integers(self) -> Variables:
         """
         Get all integer variables.
         """
         return self.variables.integers
 
     @property
-    def is_linear(self):
+    def is_linear(self) -> bool:
         return self.objective.is_linear
 
     @property
-    def is_quadratic(self):
+    def is_quadratic(self) -> bool:
         return self.objective.is_quadratic
 
     @property
-    def type(self):
+    def type(self) -> str:
         if (len(self.binaries) or len(self.integers)) and len(self.continuous):
             variable_type = "MI"
         elif len(self.binaries) or len(self.integers):
@@ -728,7 +748,7 @@ class Model:
         return f"{variable_type}{objective_type}P"
 
     @property
-    def nvars(self):
+    def nvars(self) -> int:
         """
         Get the total number of variables.
 
@@ -737,7 +757,7 @@ class Model:
         return self.variables.nvars
 
     @property
-    def ncons(self):
+    def ncons(self) -> int:
         """
         Get the total number of constraints.
 
@@ -746,7 +766,7 @@ class Model:
         return self.constraints.ncons
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[int, int]:
         """
         Get the shape of the non-filtered constraint matrix.
 
@@ -762,7 +782,7 @@ class Model:
         return self._blocks
 
     @blocks.setter
-    def blocks(self, blocks):
+    def blocks(self, blocks: DataArray):
         if not isinstance(blocks, DataArray):
             raise TypeError("Blocks must be of type DataArray")
         assert len(blocks.dims) == 1
@@ -775,7 +795,7 @@ class Model:
 
         self._blocks = blocks
 
-    def calculate_block_maps(self):
+    def calculate_block_maps(self) -> None:
         """
         Calculate the matrix block mappings based on dimensional blocks.
         """
@@ -783,13 +803,13 @@ class Model:
 
         dtype = self.blocks.dtype
         self.variables.set_blocks(self.blocks)
-        block_map = self.variables.get_blockmap(dtype)
+        block_map = self.variables.get_blockmap(dtype)  # type: ignore
         self.constraints.set_blocks(block_map)
 
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
-    def linexpr(self, *args):
+    def linexpr(self, *args) -> LinearExpression:
         """
         Create a linopy.LinearExpression from argument list.
 
@@ -850,7 +870,7 @@ class Model:
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> a = m.add_variables(coords=coords)
         >>> def rule(m, i, j):
-        ...     return a[i, j] + a[(i + 1) % 10, j]
+        ...     return a.at[i, j] + a.at[(i + 1) % 10, j]
         ...
         >>> expr = m.linexpr(rule, coords)
 
@@ -873,14 +893,14 @@ class Model:
         return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
 
     @property
-    def coefficientrange(self):
+    def coefficientrange(self) -> DataFrame:
         """
         Coefficient range of the constraints in the model.
         """
         return self.constraints.coefficientrange
 
     @property
-    def objectiverange(self):
+    def objectiverange(self) -> Series:
         """
         Objective range of the objective in the model.
         """
@@ -889,56 +909,51 @@ class Model:
             index=["min", "max"],
         )
 
-    def get_solution_file(self, solution_fn=None):
+    def get_solution_file(self) -> Path:
         """
         Get a fresh created solution file if solution file is None.
         """
-        if solution_fn is not None:
-            return solution_fn
-
-        kwargs = dict(
+        with NamedTemporaryFile(
             prefix="linopy-solve-",
             suffix=".sol",
             mode="w",
-            dir=self.solver_dir,
+            dir=str(self.solver_dir),
             delete=False,
-        )
-        with NamedTemporaryFile(**kwargs) as f:
-            return f.name
+        ) as f:
+            return Path(f.name)
 
-    def get_problem_file(self, problem_fn=None, io_api=None):
+    def get_problem_file(
+        self,
+        io_api: Union[str, None] = None,
+    ) -> Path:
         """
         Get a fresh created problem file if problem file is None.
         """
-        if problem_fn is not None:
-            return problem_fn
-
         suffix = ".mps" if io_api == "mps" else ".lp"
-        kwargs = dict(
+        with NamedTemporaryFile(
             prefix="linopy-problem-",
             suffix=suffix,
             mode="w",
             dir=self.solver_dir,
             delete=False,
-        )
-        with NamedTemporaryFile(**kwargs) as f:
-            return f.name
+        ) as f:
+            return Path(f.name)
 
     def solve(
         self,
-        solver_name=None,
-        io_api=None,
-        problem_fn=None,
-        solution_fn=None,
-        log_fn=None,
-        basis_fn=None,
-        warmstart_fn=None,
-        keep_files=False,
-        env=None,
-        sanitize_zeros=True,
-        remote=None,
+        solver_name: Union[str, None] = None,
+        io_api: Union[str, None] = None,
+        problem_fn: Union[str, Path, None] = None,
+        solution_fn: Union[str, Path, None] = None,
+        log_fn: Union[str, Path, None] = None,
+        basis_fn: Union[str, Path, None] = None,
+        warmstart_fn: Union[str, Path, None] = None,
+        keep_files: bool = False,
+        env: None = None,
+        sanitize_zeros: bool = True,
+        remote: None = None,
         **solver_options,
-    ):
+    ) -> Tuple[str, str]:
         """
         Solve the model with possibly different solvers.
 
@@ -1016,7 +1031,7 @@ class Model:
                 **solver_options,
             )
 
-            self.objective.value = solved.objective.value
+            self.objective.set_value(solved.objective.value)
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
@@ -1032,7 +1047,7 @@ class Model:
         if solver_name is None:
             solver_name = available_solvers[0]
 
-        logger.info(f" Solve problem using {solver_name.title()} solver")
+        logger.info(f" Solve problem using {solver_name.title()} solver")  # type: ignore
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result
@@ -1047,8 +1062,10 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
-        problem_fn = self.get_problem_file(problem_fn, io_api=io_api)
-        solution_fn = self.get_solution_file(solution_fn)
+        if problem_fn is None:
+            problem_fn = self.get_problem_file(io_api=io_api)
+        if solution_fn is None:
+            solution_fn = self.get_solution_file()
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
@@ -1063,11 +1080,11 @@ class Model:
             result = func(
                 self,
                 io_api=io_api,
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
+                problem_fn=to_path(problem_fn),
+                solution_fn=to_path(solution_fn),
+                log_fn=to_path(log_fn),
+                warmstart_fn=to_path(warmstart_fn),
+                basis_fn=to_path(basis_fn),
                 keep_files=keep_files,
                 env=env,
                 **solver_options,
@@ -1114,7 +1131,7 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_infeasibilities(self):
+    def compute_infeasibilities(self) -> List[int]:
         """
         Compute a set of infeasible constraints.
 
@@ -1141,12 +1158,12 @@ class Model:
         solver_model.write(f.name)
         labels = []
         for line in f.readlines():
-            line = line.decode()
-            if line.startswith(" c"):
-                labels.append(int(line.split(":")[0][2:]))
+            line_decoded = line.decode()
+            if line_decoded.startswith(" c"):
+                labels.append(int(line_decoded.split(":")[0][2:]))
         return labels
 
-    def print_infeasibilities(self, display_max_terms=None):
+    def print_infeasibilities(self, display_max_terms: None = None) -> None:
         """
         Print a list of infeasible constraints.
 
@@ -1159,7 +1176,7 @@ class Model:
     @deprecated(
         details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
     )
-    def compute_set_of_infeasible_constraints(self):
+    def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
         Compute a set of infeasible constraints.
 
@@ -1179,7 +1196,7 @@ class Model:
         )
         return subset
 
-    def reset_solution(self):
+    def reset_solution(self) -> None:
         """
         Reset the solution and dual values if available of the model.
         """
