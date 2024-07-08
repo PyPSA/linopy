@@ -9,9 +9,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Fetch all history for all tags and branches (necessary for setuptools_scm)
-      run: git fetch --prune --unshallow
+      with:
+        fetch-depth: 0 # Fetch all history for all tags and branches (necessary for setuptools_scm)
 
     - name: Set up Python 3.9
       uses: actions/setup-python@v5
