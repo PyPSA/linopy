@@ -77,6 +77,10 @@ include = ["linopy"]
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
 
+[tool.coverage.run]
+branch = true
+source = ["linopy"]
+omit = ["test/*"]
 
 [tool.mypy]
 ignore_missing_imports = true
