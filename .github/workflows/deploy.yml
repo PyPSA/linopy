@@ -1,6 +1,9 @@
 name: Deploy Package
 
-on: [push]
+on:
+  push:
+    tags:
+      - v*.*.*
 
 jobs:
   build-n-publish:
@@ -9,9 +12,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Fetch all history for all tags and branches (necessary for setuptools_scm)
-      run: git fetch --prune --unshallow
+      with:
+        fetch-depth: 0 # Fetch all history for all tags and branches (necessary for setuptools_scm)
 
     - name: Set up Python 3.9
       uses: actions/setup-python@v5
@@ -34,7 +36,6 @@ jobs:
         .
 
     - name: Publish distribution 📦 to PyPI
-      if: startsWith(github.ref, 'refs/tags')
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         user: __token__

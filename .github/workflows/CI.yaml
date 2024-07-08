@@ -26,14 +26,14 @@ jobs:
         - windows-latest
     steps:
     - uses: actions/checkout@v4
-
-    - name: Fetch all history for all tags and branches (necessary for setuptools_scm)
-      run: git fetch --prune --unshallow
+      with:
+        fetch-depth: 0 # Fetch all history for all tags and branches (necessary for setuptools_scm)
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
 
     - name: Install ubuntu dependencies
       if: matrix.os == 'ubuntu-latest'
