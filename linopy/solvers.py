@@ -686,6 +686,12 @@ def run_gurobi(
             except gurobipy.GurobiError as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
+        if solution_fn is not None and solution_fn.suffix == ".sol":
+            try:
+                m.write(path_to_string(solution_fn))
+            except gurobipy.GurobiError as err:
+                logger.info("Unable to save solution file. Raised error: %s", err)
+
         condition = m.status
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)

@@ -645,6 +645,14 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
     assert status == "ok"
 
 
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solution_fn(model, solver, io_api, tmp_path):
+    if solver == "gurobi":
+        solution_fn = tmp_path / "solution_file.sol"
+        model.solve(solver, solution_fn=solution_fn, keep_files=True)
+        assert solution_fn.exists()
+
+
 @pytest.mark.parametrize("solver", available_solvers)
 def test_non_supported_solver_io(model, solver):
     with pytest.raises(ValueError):
