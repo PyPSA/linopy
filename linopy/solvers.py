@@ -886,7 +886,7 @@ def run_xpress(
 
     if solution_fn is not None:
         try:
-            m.writeSolution(path_to_string(solution_fn))
+            m.tofile(path_to_string(solution_fn), filetype="sol")
         except Exception as err:
             logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -1095,6 +1095,12 @@ def run_mosek(
                         soltype = possible_soltype
                 except mosek.Error:
                     pass
+
+            if solution_fn is not None:
+                try:
+                    m.writesolution(mosek.soltype.bas, path_to_string(solution_fn))
+                except mosek.Error as err:
+                    logger.info("Unable to save solution file. Raised error: %s", err)
 
             condition = str(m.getsolsta(soltype))
             termination_condition = CONDITION_MAP.get(condition, condition)
