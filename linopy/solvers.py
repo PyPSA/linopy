@@ -577,6 +577,13 @@ def run_cplex(
 
     with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
         m.solve()
+
+    if solution_fn is not None:
+        try:
+            m.solution.write(path_to_string(solution_fn))
+        except cplex.exceptions.errors.CplexSolverError as err:
+            logger.info("Unable to save solution file. Raised error: %s", err)
+
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -686,6 +693,12 @@ def run_gurobi(
             except gurobipy.GurobiError as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
+        if solution_fn is not None and solution_fn.suffix == ".sol":
+            try:
+                m.write(path_to_string(solution_fn))
+            except gurobipy.GurobiError as err:
+                logger.info("Unable to save solution file. Raised error: %s", err)
+
         condition = m.status
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
@@ -772,6 +785,12 @@ def run_scip(
 
     if basis_fn:
         logger.warning("Basis not implemented for SCIP")
+
+    if solution_fn:
+        try:
+            m.writeSol(m.getBestSol(), filename=path_to_string(solution_fn))
+        except FileNotFoundError as err:
+            logger.warning("Unable to save solution file. Raised error: %s", err)
 
     condition = m.getStatus()
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -863,6 +882,12 @@ def run_xpress(
             m.writebasis(path_to_string(basis_fn))
         except Exception as err:
             logger.info("No model basis stored. Raised error: %s", err)
+
+    if solution_fn is not None:
+        try:
+            m.writeSolution(path_to_string(solution_fn))
+        except Exception as err:
+            logger.info("Unable to save solution file. Raised error: %s", err)
 
     condition = m.getProbStatusString()
     termination_condition = CONDITION_MAP.get(condition, condition)
@@ -1164,6 +1189,12 @@ def run_copt(
         except coptpy.CoptError as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
+    if solution_fn:
+        try:
+            m.write(path_to_string(solution_fn))
+        except coptpy.CoptError as err:
+            logger.info("No model solution stored. Raised error: %s", err)
+
     condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -1255,6 +1286,12 @@ def run_mindopt(
             m.write(path_to_string(basis_fn))
         except mindoptpy.MindoptError as err:  # type: ignore
             logger.info("No model basis stored. Raised error: %s", err)
+
+    if solution_fn:
+        try:
+            m.write(path_to_string(solution_fn))
+        except mindoptpy.MindoptError as err:  # type: ignore
+            logger.info("No model solution stored. Raised error: %s", err)
 
     condition = m.status
     termination_condition = CONDITION_MAP.get(condition, condition)

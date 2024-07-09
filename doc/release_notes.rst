@@ -6,7 +6,7 @@ Upcoming Version
 
 * Support for warmstart in HiGHS using basis or solution files, including support for writing basis and solution files of a solved model.
 * Linopy now uses mypy for type checking allowing for a more secure and stable code base.
-
+* The creation of solution files with gurobi, scip and mindopt is now supported.
 
 Version 0.3.11
 --------------
