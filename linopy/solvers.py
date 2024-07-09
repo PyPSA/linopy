@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess as sub
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Union
 
