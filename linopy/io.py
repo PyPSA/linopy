@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
-from highspy.highs import Highs
 from numpy import ones_like, zeros_like
 from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
@@ -28,6 +27,7 @@ from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
+    from highspy.highs import Highs
 
     from linopy.model import Model
 
