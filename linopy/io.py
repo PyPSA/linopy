@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
-from highspy.highs import Highs
 from numpy import ones_like, zeros_like
 from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
@@ -729,7 +728,7 @@ def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     return model
 
 
-def to_highspy(m: Model) -> Highs:
+def to_highspy(m: Model) -> 'Highs':
     """
     Export the model to highspy.
 
