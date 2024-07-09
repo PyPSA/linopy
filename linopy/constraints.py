@@ -34,6 +34,7 @@ from linopy import expressions, variables
 from linopy.common import (
     LocIndexer,
     align_lines_by_delimiter,
+    assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -383,8 +384,7 @@ class Constraint:
     @coeffs.setter
     def coeffs(self, value):
         value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
-        self._data = self.data.assign(coeffs=value)
-        self.data["coeffs"] = value
+        self._data = assign_multiindex_safe(self.data, coeffs=value)
 
     @property
     def vars(self):
@@ -403,7 +403,7 @@ class Constraint:
         if not isinstance(value, DataArray):
             raise TypeError("Expected value to be of type DataArray or Variable")
         value = value.broadcast_like(self.coeffs, exclude=[self.term_dim])
-        self.data["vars"] = value
+        self._data = assign_multiindex_safe(self.data, vars=value)
 
     @property
     def lhs(self):
@@ -480,7 +480,7 @@ class Constraint:
         Get the dual values of the constraint.
         """
         value = DataArray(value).broadcast_like(self.labels)
-        self.data["dual"] = value
+        self._data = assign_multiindex_safe(self.data, dual=value)
 
     @classmethod
     def from_rule(cls, model, rule, coords):
@@ -620,6 +620,8 @@ class Constraint:
 
     # Wrapped function which would convert variable to dataarray
     assign = conwrap(Dataset.assign)
+
+    assign_multiindex_safe = conwrap(assign_multiindex_safe)
 
     assign_attrs = conwrap(Dataset.assign_attrs)
 

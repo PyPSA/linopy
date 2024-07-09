@@ -38,6 +38,7 @@ import linopy.expressions as expressions
 from linopy.common import (
     LocIndexer,
     as_dataarray,
+    assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -770,7 +771,7 @@ class Variable:
         Set the optimal values of the variable.
         """
         value = DataArray(value).broadcast_like(self.labels)
-        self.data["solution"] = value
+        self._data = assign_multiindex_safe(self.data, solution=value)
 
     @property
     @has_optimized_model
@@ -1007,8 +1008,7 @@ class Variable:
             # breaks with Dataset.ffill, use map instead
             .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
         )
-        data = data.assign(labels=data.labels.astype(int))
-        return self.__class__(data, self.model, self.name)
+        return self.assign_multiindex_safe(labels=data.labels.astype(int))
 
     def bfill(self, dim: str, limit: None = None) -> "Variable":
         """
@@ -1057,6 +1057,8 @@ class Variable:
     assign_attrs = varwrap(Dataset.assign_attrs)
 
     assign_coords = varwrap(Dataset.assign_coords)
+
+    assign_multiindex_safe = varwrap(assign_multiindex_safe)
 
     broadcast_like = varwrap(Dataset.broadcast_like)
 
