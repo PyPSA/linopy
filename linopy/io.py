@@ -728,7 +728,7 @@ def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     return model
 
 
-def to_highspy(m: Model) -> 'Highs':
+def to_highspy(m: Model) -> "Highs":
     """
     Export the model to highspy.
 
