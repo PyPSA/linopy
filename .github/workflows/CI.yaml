@@ -26,10 +26,14 @@ jobs:
         - windows-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Fetch all history for all tags and branches (necessary for setuptools_scm)
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
 
     - name: Install ubuntu dependencies
       if: matrix.os == 'ubuntu-latest'
@@ -61,7 +65,7 @@ jobs:
       run: |
         pip install flake8
         # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=benchmark/scripts
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=benchmark/scripts,.git/
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
@@ -72,9 +76,5 @@ jobs:
         pytest --cov=./ --cov-report=xml linopy --doctest-modules test
 
     - name: Upload code coverage report
+      if: matrix.os == 'ubuntu-latest'
       uses: codecov/codecov-action@v4
-      with:
-        fail_ci_if_error: true # optional (default = false)
-        name: codecov-umbrella # optional
-        token: ${{ secrets.CODECOV_TOKEN }} # required
-        verbose: true # optional (default = false)

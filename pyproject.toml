@@ -20,7 +20,7 @@ classifiers = [
 
 requires-python = ">=3.9"
 dependencies = [
-    "numpy",
+    "numpy<2.0",
     "scipy",
     "bottleneck",
     "toolz",
@@ -55,6 +55,7 @@ dev = [
     "netcdf4",
     "pre-commit",
     "paramiko",
+    "types-paramiko",
     "gurobipy",
     "highspy",
 ]
@@ -75,3 +76,12 @@ include = ["linopy"]
 
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
+
+[tool.coverage.run]
+branch = true
+source = ["linopy"]
+omit = ["test/*"]
+
+[tool.mypy]
+ignore_missing_imports = true
+# namespace_packages = true

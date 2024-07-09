@@ -5,19 +5,36 @@ Created on Mon Oct 10 13:33:55 2022.
 
 @author: fabian
 """
+from __future__ import annotations
 
 from functools import cached_property
+from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 import pandas as pd
+from numpy import ndarray
+from pandas.core.indexes.base import Index
+from pandas.core.series import Series
+from scipy.sparse._csc import csc_matrix
 
 from linopy import expressions
 
+if TYPE_CHECKING:
+    from linopy.model import Model
 
-def create_vector(indices, values, fill_value=np.nan, shape=None):
+
+def create_vector(
+    indices: Union[Series, Index],
+    values: Union[Series, ndarray],
+    fill_value: Union[str, float, int] = np.nan,
+    shape: Union[int, None] = None,
+) -> ndarray:
     """Create a vector of a size equal to the maximum index plus one."""
     if shape is None:
-        shape = max(indices) + 1
+        max_value = indices.max()
+        if not isinstance(max_value, (np.integer, int)):
+            raise ValueError("Indices must be integers.")
+        shape = max_value + 1
     vector = np.full(shape, fill_value)
     vector[indices] = values
     return vector
@@ -28,7 +45,7 @@ class MatrixAccessor:
     Helper class to quickly access model related vectors and matrices.
     """
 
-    def __init__(self, model):
+    def __init__(self, model: Model) -> None:
         self._parent = model
 
     def clean_cached_properties(self):
@@ -50,13 +67,13 @@ class MatrixAccessor:
         return m.constraints.flat
 
     @property
-    def vlabels(self):
+    def vlabels(self) -> ndarray:
         "Vector of labels of all non-missing variables."
         df = self.flat_vars
         return create_vector(df.key, df.labels, -1)
 
     @property
-    def vtypes(self):
+    def vtypes(self) -> ndarray:
         "Vector of types of all non-missing variables."
         m = self._parent
         df = self.flat_vars
@@ -72,10 +89,10 @@ class MatrixAccessor:
 
         ds = pd.concat(specs)
         ds = df.set_index("key").labels.map(ds)
-        return create_vector(ds.index, ds.values, fill_value="")
+        return create_vector(ds.index, ds.to_numpy(), fill_value="")
 
     @property
-    def lb(self):
+    def lb(self) -> ndarray:
         "Vector of lower bounds of all non-missing variables."
         df = self.flat_vars
         return create_vector(df.key, df.lower)
@@ -105,13 +122,13 @@ class MatrixAccessor:
         return create_vector(df.key, df.dual, fill_value=np.nan)
 
     @property
-    def ub(self):
+    def ub(self) -> ndarray:
         "Vector of upper bounds of all non-missing variables."
         df = self.flat_vars
         return create_vector(df.key, df.upper)
 
     @property
-    def clabels(self):
+    def clabels(self) -> ndarray:
         "Vector of labels of all non-missing constraints."
         df = self.flat_cons
         if df.empty:
@@ -119,26 +136,28 @@ class MatrixAccessor:
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
-    def A(self):
+    def A(self) -> Union[csc_matrix, None]:
         "Constraint matrix of all non-missing constraints and variables."
         m = self._parent
+        if not len(m.constraints):
+            return None
         A = m.constraints.to_matrix(filter_missings=False)
-        return A[self.clabels][:, self.vlabels] if A is not None else None
+        return A[self.clabels][:, self.vlabels]
 
     @property
-    def sense(self):
+    def sense(self) -> ndarray:
         "Vector of senses of all non-missing constraints."
         df = self.flat_cons
         return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
 
     @property
-    def b(self):
+    def b(self) -> ndarray:
         "Vector of right-hand-sides of all non-missing constraints."
         df = self.flat_cons
         return create_vector(df.key, df.rhs)
 
     @property
-    def c(self):
+    def c(self) -> ndarray:
         "Vector of objective coefficients of all non-missing variables."
         m = self._parent
         ds = m.objective.flat
@@ -151,10 +170,10 @@ class MatrixAccessor:
         return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
 
     @property
-    def Q(self):
+    def Q(self) -> Optional[csc_matrix]:
         "Matrix objective coefficients of quadratic terms of all non-missing variables."
         m = self._parent
-        if m.is_linear:
+        expr = m.objective.expression
+        if not isinstance(expr, expressions.QuadraticExpression):
             return None
-
-        return m.objective.expression.to_matrix()[self.vlabels][:, self.vlabels]
+        return expr.to_matrix()[self.vlabels][:, self.vlabels]
