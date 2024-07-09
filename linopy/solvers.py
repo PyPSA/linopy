@@ -876,6 +876,12 @@ def run_xpress(
         except Exception as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
+    if solution_fn is not None:
+        try:
+            m.write(path_to_string(solution_fn))
+        except Exception as err:
+            logger.info("Unable to save solution file. Raised error: %s", err)
+
     condition = m.getProbStatusString()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -1175,6 +1181,12 @@ def run_copt(
             m.write(path_to_string(basis_fn))
         except coptpy.CoptError as err:
             logger.info("No model basis stored. Raised error: %s", err)
+
+    if solution_fn:
+        try:
+            m.write(path_to_string(solution_fn))
+        except coptpy.CoptError as err:
+            logger.info("No model solution stored. Raised error: %s", err)
 
     condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
     termination_condition = CONDITION_MAP.get(condition, condition)
