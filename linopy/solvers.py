@@ -948,7 +948,7 @@ def run_mosek(
             if log_fn is not None:
                 m.linkfiletostream(mosek.streamtype.log, log_fn, 0)
             else:
-                m.set_Stream(mosek.streamtype.log, lambda x: sys.stdout.write(x))
+                m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
             if warmstart_fn:
                 m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
