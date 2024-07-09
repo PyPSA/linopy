@@ -577,6 +577,13 @@ def run_cplex(
 
     with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
         m.solve()
+
+    if solution_fn is not None:
+        try:
+            m.solution.write(path_to_string(solution_fn))
+        except cplex.exceptions.errors.CplexSolverError as err:
+            logger.info("Unable to save solution file. Raised error: %s", err)
+
     condition = m.solution.get_status_string()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -878,7 +885,7 @@ def run_xpress(
 
     if solution_fn is not None:
         try:
-            m.write(path_to_string(solution_fn))
+            m.writeSolution(path_to_string(solution_fn))
         except Exception as err:
             logger.info("Unable to save solution file. Raised error: %s", err)
 
