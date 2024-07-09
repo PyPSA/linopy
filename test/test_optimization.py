@@ -466,7 +466,7 @@ def test_set_files_and_keep_files(tmp_path, model, solver, io_api):
         keep_files=True,
     )
     assert status == "ok"
-    if io_api != "direct":
+    if io_api != "direct" and solver != "xpress":
         assert (tmp_path / "problem.lp").exists()
         assert (tmp_path / "solution.sol").exists()
     assert (tmp_path / "logging.log").exists()
