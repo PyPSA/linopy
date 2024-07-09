@@ -365,7 +365,7 @@ class LinearExpression:
             )
 
         if np.issubdtype(data.vars, np.floating):
-            data["vars"] = data.vars.fillna(-1).astype(int)
+            data = assign_multiindex_safe(data, vars=data.vars.fillna(-1).astype(int))
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
 
@@ -377,7 +377,7 @@ class LinearExpression:
         if "const" not in data:
             data = data.assign(const=0.0)
         elif not np.issubdtype(data.const, np.floating):
-            data["const"] = data.const.astype(float)
+            data = assign_multiindex_safe(data, const=data.const.astype(float))
 
         (data,) = xr.broadcast(data, exclude=HELPER_DIMS)
         (coeffs_vars,) = xr.broadcast(data[["coeffs", "vars"]], exclude=[FACTOR_DIM])
@@ -499,7 +499,7 @@ class LinearExpression:
         """
         Get the negative of the expression.
         """
-        return self.assign(coeffs=-self.coeffs, const=-self.const)
+        return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
     def __mul__(
         self,
@@ -821,7 +821,7 @@ class LinearExpression:
                 .rename({TERM_DIM: STACKED_TERM_DIM})
                 .stack({TERM_DIM: [STACKED_TERM_DIM] + dim}, create_index=False)
             )
-            ds["const"] = data.const.sum(dim)
+            ds = assign_multiindex_safe(ds, const=data.const.sum(dim))
 
         return ds
 
