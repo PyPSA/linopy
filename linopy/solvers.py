@@ -779,6 +779,9 @@ def run_scip(
     if basis_fn:
         logger.warning("Basis not implemented for SCIP")
 
+    if solution_fn:
+        m.writeSol(m.getBestSol(), filename=path_to_string(solution_fn))
+
     condition = m.getStatus()
     termination_condition = CONDITION_MAP.get(condition, condition)
     status = Status.from_termination_condition(termination_condition)
@@ -1261,6 +1264,9 @@ def run_mindopt(
             m.write(path_to_string(basis_fn))
         except mindoptpy.MindoptError as err:  # type: ignore
             logger.info("No model basis stored. Raised error: %s", err)
+
+    if solution_fn:
+        m.write(path_to_string(solution_fn))
 
     condition = m.status
     termination_condition = CONDITION_MAP.get(condition, condition)

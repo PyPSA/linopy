@@ -459,12 +459,17 @@ def test_set_files(tmp_path, model, solver, io_api):
 def test_set_files_and_keep_files(tmp_path, model, solver, io_api):
     status, condition = model.solve(
         solver,
+        io_api=io_api,
         problem_fn=tmp_path / "problem.lp",
         solution_fn=tmp_path / "solution.sol",
         log_fn=tmp_path / "logging.log",
         keep_files=True,
     )
     assert status == "ok"
+    if io_api != "direct":
+        assert (tmp_path / "problem.lp").exists()
+        assert (tmp_path / "solution.sol").exists()
+    assert (tmp_path / "logging.log").exists()
 
 
 @pytest.mark.parametrize("solver,io_api", params)
@@ -643,14 +648,6 @@ def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
     solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
     status, condition = model.solve(solver, io_api=io_api, solution_fn=solution_fn)
     assert status == "ok"
-
-
-@pytest.mark.parametrize("solver,io_api", params)
-def test_solution_fn(model, solver, io_api, tmp_path):
-    if solver == "gurobi":
-        solution_fn = tmp_path / "solution_file.sol"
-        model.solve(solver, solution_fn=solution_fn, keep_files=True)
-        assert solution_fn.exists()
 
 
 @pytest.mark.parametrize("solver", available_solvers)
