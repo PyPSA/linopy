@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess as sub
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Union
 
@@ -977,6 +978,8 @@ def run_mosek(
 
             if log_fn is not None:
                 m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
+            else:
+                m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
             if warmstart_fn is not None:
                 m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
