@@ -27,8 +27,8 @@ from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
-
     from linopy.model import Model
+    from highspy.highs import Highs
 
 
 logger = logging.getLogger(__name__)
@@ -728,7 +728,7 @@ def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
     return model
 
 
-def to_highspy(m: Model) -> "Highs":  # type: ignore
+def to_highspy(m: Model) -> Highs:
     """
     Export the model to highspy.
 
