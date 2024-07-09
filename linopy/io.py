@@ -27,8 +27,9 @@ from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
-    from linopy.model import Model
     from highspy.highs import Highs
+
+    from linopy.model import Model
 
 
 logger = logging.getLogger(__name__)
