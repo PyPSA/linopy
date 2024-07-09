@@ -5,6 +5,12 @@ Upcoming Version
 ----------------
 
 
+Version 0.3.13
+--------------
+
+* Follow-up release to properly fix all deprecations from multiindexed data assignments in xarray datasets.
+* Fix typing relevant import for non-default highs dependency in vanilla installation
+
 Version 0.3.12
 --------------
 
