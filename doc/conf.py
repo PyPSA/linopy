@@ -24,6 +24,10 @@ author = "Fabian Hofmann"
 # The full version, including alpha/beta/rc tags
 version = pkg_resources.get_distribution("linopy").version
 release = "master" if "dev" in version else version
+
+# For some reason is this needed, otherwise autosummary does fail on RTD but not locally
+import linopy  # noqa
+
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be
