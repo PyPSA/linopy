@@ -80,7 +80,8 @@ jobs:
 
     - name: Install package and dependencies
       run: |
-        pip install ${{ fromJSON(steps.baipp.outputs.dist_file_paths_json_array)[0] }}[dev,solvers]
+        ls -R
+        python -m pip install dist/*.whl[dev,solvers]
 
     - name: Lint with flake8
       run: |
