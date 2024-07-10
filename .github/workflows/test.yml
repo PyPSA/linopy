@@ -81,7 +81,9 @@ jobs:
     - name: Install package and dependencies
       run: |
         ls dist
-        python -m pip install -v $(ls dist/*.whl)[dev,solvers]
+        filename=$(ls dist/*.whl)
+        echo $filename
+        python -m pip install -v "$filename"
 
     - name: Lint with flake8
       run: |
