@@ -1,0 +1,49 @@
+# This CD workflow is adapted from:
+# scientific-python/cookie (2024-06-28), BSD-3-Clause license
+# Refs:
+# - https://github.com/scientific-python/cookie/blob/23926fe2b88af44377f20afb3b11d63afb7fe315/.github/workflows/cd.yml
+# - https://learn.scientific-python.org/development/guides/gha-pure/
+
+name: CD
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+jobs:
+  dist:
+    # Build the Python SDist and wheel, performs metadata and readme linting
+    # Ref: https://github.com/hynek/build-and-inspect-python-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hynek/build-and-inspect-python-package@v2
+
+  release:
+    # Publish a GitHub release from the given git tag
+    # Ref: https://github.com/softprops/action-gh-release
+    needs: [dist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+  publish:
+    # Publish the built SDist and wheel from "dist" job on PyPI
+    # Ref: https://github.com/pypa/gh-action-pypi-publish
+    needs: [dist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Packages
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TOKEN }}

@@ -77,3 +77,13 @@ jobs:
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
       uses: codecov/codecov-action@v4
+
+  baipp:
+    # Build the Python SDist and wheel, performs metadata and readme linting
+    # Ref: https://github.com/hynek/build-and-inspect-python-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hynek/build-and-inspect-python-package@v2
