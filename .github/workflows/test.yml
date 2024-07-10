@@ -81,7 +81,7 @@ jobs:
 
     - name: Install package and dependencies
       run: |
-        python -m pip install "${{ needs.build.outputs.wheel-path }}[dev,solvers]"
+        python -m pip install "$(ls dist/*.whl)[dev,solvers]"
 
     - name: Lint with flake8
       run: |
