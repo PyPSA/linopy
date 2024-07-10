@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Build the Python SDist and wheel, performs metadata and readme linting
   build:
     name: Build and verify package
     runs-on: ubuntu-latest
@@ -70,6 +71,12 @@ jobs:
       if: matrix.os == 'windows-latest'
       run: |
         choco install glpk
+
+    - name: Download package
+      uses: actions/download-artifact@v4
+      with:
+        name: Packages
+        path: dist
 
     - name: Install package and dependencies
       run: |
