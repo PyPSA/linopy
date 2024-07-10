@@ -26,6 +26,7 @@ jobs:
 
     outputs:
       python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
+      wheel-path: $(ls dist/*.whl)
 
   test:
     name: Test package
@@ -81,9 +82,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         ls dist
-        filename=$(ls dist/*.whl)
-        echo $filename
-        python -m pip install -v "$filename"
+        echo ${{ needs.build.outputs.wheel-path }}
 
     - name: Lint with flake8
       run: |
