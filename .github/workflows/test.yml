@@ -83,6 +83,9 @@ jobs:
       run: |
         ls dist
         echo ${{ needs.build.outputs.wheel-path }}
+        echo ${{ needs.build.outputs.wheel-path }}[dev]
+        echo "${{ needs.build.outputs.wheel-path }}[dev]"
+        python -m pip install "${{ needs.build.outputs.wheel-path }}[dev]"
 
     - name: Lint with flake8
       run: |
