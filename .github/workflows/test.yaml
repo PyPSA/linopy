@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJson(needs.build-package.outputs.python-versions) }}
+        python-version: ${{ fromJson(needs.build.outputs.python-versions) }}
         os:
         - ubuntu-latest
         - macos-latest
