@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Needed for setuptools_scm
       - uses: hynek/build-and-inspect-python-package@v2
         id: baipp
 
@@ -80,7 +80,6 @@ jobs:
 
     - name: Install package and dependencies
       run: |
-        ls -R
         ls dist
         python -m pip install dist/*.whl[dev,solvers]
 
