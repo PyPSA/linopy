@@ -28,12 +28,12 @@ jobs:
 
   test:
     name: Test package
-    needs: [build]
+    needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJson(needs.build.outputs.python-versions) }}
+        python-version: ${{ fromJSON(needs.build.outputs.python-versions) }}
         os:
         - ubuntu-latest
         - macos-latest
@@ -73,7 +73,7 @@ jobs:
 
     - name: Install package and dependencies
       run: |
-        pip install ${{ fromJson(steps.baipp.outputs.dist_file_paths_json_array)[0] }}[dev,solvers]
+        pip install ${{ fromJSON(steps.baipp.outputs.dist_file_paths_json_array)[0] }}[dev,solvers]
 
     - name: Lint with flake8
       run: |
