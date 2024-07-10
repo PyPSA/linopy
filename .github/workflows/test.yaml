@@ -10,26 +10,37 @@ on:
 
 jobs:
   build:
+    name: Build and verify package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hynek/build-and-inspect-python-package@v2
+        id: baipp
 
+    outputs:
+      python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
+
+  test:
+    name: Test package
+    needs: [build]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-        - 3.9
-        - "3.10"
-        - "3.11"
-        - "3.12"
+        python-version: ${{ fromJson(needs.build-package.outputs.python-versions) }}
         os:
         - ubuntu-latest
         - macos-latest
         - windows-latest
+
     steps:
     - uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Fetch all history for all tags and branches (necessary for setuptools_scm)
+        fetch-depth: 0 # Needed for setuptools_scm
 
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
@@ -56,9 +67,9 @@ jobs:
       run: |
         choco install glpk
 
-    - name: Install dependencies for python ${{ matrix.python-version }}
+    - name: Install package and dependencies
       run: |
-        pip install -e .[dev,solvers]
+        pip install ${{ fromJson(steps.baipp.outputs.dist_file_paths_json_array)[0] }}[dev,solvers]
 
     - name: Lint with flake8
       run: |
@@ -77,13 +88,3 @@ jobs:
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
       uses: codecov/codecov-action@v4
-
-  baipp:
-    # Build the Python SDist and wheel, performs metadata and readme linting
-    # Ref: https://github.com/hynek/build-and-inspect-python-package
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: hynek/build-and-inspect-python-package@v2

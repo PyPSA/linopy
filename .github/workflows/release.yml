@@ -1,10 +1,4 @@
-# This CD workflow is adapted from:
-# scientific-python/cookie (2024-06-28), BSD-3-Clause license
-# Refs:
-# - https://github.com/scientific-python/cookie/blob/23926fe2b88af44377f20afb3b11d63afb7fe315/.github/workflows/cd.yml
-# - https://learn.scientific-python.org/development/guides/gha-pure/
-
-name: CD
+name: Release
 
 on:
   push:
@@ -14,7 +8,7 @@ on:
 jobs:
   dist:
     # Build the Python SDist and wheel, performs metadata and readme linting
-    # Ref: https://github.com/hynek/build-and-inspect-python-package
+    name: Build distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +18,7 @@ jobs:
 
   release:
     # Publish a GitHub release from the given git tag
-    # Ref: https://github.com/softprops/action-gh-release
+    name: Create GitHub Release
     needs: [dist]
     runs-on: ubuntu-latest
     steps:
@@ -35,15 +29,17 @@ jobs:
 
   publish:
     # Publish the built SDist and wheel from "dist" job on PyPI
-    # Ref: https://github.com/pypa/gh-action-pypi-publish
+    name: Publish to PyPI
     needs: [dist]
     runs-on: ubuntu-latest
+    environment:
+      name: Release
+      url: https://pypi.org/project/linopy/
+    permissions:
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: Packages
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_TOKEN }}
