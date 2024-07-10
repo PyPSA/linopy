@@ -8,6 +8,10 @@ on:
   schedule:
   - cron: "0 5 * * TUE"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build and verify package
