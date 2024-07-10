@@ -81,6 +81,7 @@ jobs:
     - name: Install package and dependencies
       run: |
         ls -R
+        ls dist
         python -m pip install dist/*.whl[dev,solvers]
 
     - name: Lint with flake8
