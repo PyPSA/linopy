@@ -26,7 +26,7 @@ jobs:
           generate_release_notes: true
 
   publish:
-    # Publish the built SDist and wheel from "dist" job on PyPI
+    # Publish the built SDist and wheel from "dist" job to PyPI
     name: Publish to PyPI
     needs: [dist]
     runs-on: ubuntu-latest
