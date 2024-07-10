@@ -26,7 +26,6 @@ jobs:
 
     outputs:
       python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
-      wheel-path: $(ls dist/*.whl) # this is used to "pip install" the wheel in the test job
 
   test:
     name: Test package
