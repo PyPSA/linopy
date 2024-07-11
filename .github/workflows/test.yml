@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Build the Python SDist and wheel, performs metadata and readme linting
   build:
+    # Build the Python SDist and wheel, performs metadata and readme linting
     name: Build and verify package
     runs-on: ubuntu-latest
     steps:
@@ -28,6 +28,7 @@ jobs:
       python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
 
   test:
+    # Test package build in matrix of OS and Python versions
     name: Test package
     needs: [build]
     runs-on: ${{ matrix.os }}
