@@ -243,7 +243,11 @@ class Model:
 
     @termination_condition.setter
     def termination_condition(self, value):
-        self._termination_condition = TerminationCondition[value].value
+        # TODO: remove if-clause, only kept for backward compatibility
+        if value:
+            self._termination_condition = TerminationCondition[value].value
+        else:
+            self._termination_condition = value
 
     @property
     def chunk(self):
@@ -294,6 +298,7 @@ class Model:
     def scalar_attrs(self) -> List[str]:
         return [
             "status",
+            "termination_condition",
             "_xCounter",
             "_cCounter",
             "_varnameCounter",
