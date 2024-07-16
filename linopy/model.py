@@ -244,7 +244,7 @@ class Model:
     @termination_condition.setter
     def termination_condition(self, value):
         # TODO: remove if-clause, only kept for backward compatibility
-        if value != "":
+        if value:
             self._termination_condition = TerminationCondition[value].value
         else:
             self._termination_condition = value
