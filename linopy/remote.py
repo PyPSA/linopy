@@ -11,6 +11,7 @@ import logging
 import tempfile
 from dataclasses import dataclass
 import os
+from requests import Response, post
 from typing import Callable, Union
 
 from linopy.io import read_netcdf
@@ -265,7 +266,16 @@ class OetCloudHandler:
             model.to_netcdf(fn.name)
             logger.info(f'Model written to: {fn.name}')
             solved_file = fn.name[:-3] + '.sol.nc'
-            input(f'Call OETC on the above file, then place result file from OETC at {solved_file}, and press Enter to continue: ')
+            logger.info('Calling OETC...')
+            with open(fn.name, "rb") as nc_file:
+                response: Response = post(
+                    f"http://127.0.0.1:5000/compute-job/create",
+                    files={"nc_file": nc_file},
+                )
+                if "uuid" in response.content:
+                    logger.info(f'OETC job submitted successfully. ID: {response.content["uuid"]}')
+                if not response.ok:
+                    raise ValueError(f'OETC Error: {response.text}')
 
             solved = read_netcdf(solved_file)
             os.remove(solved_file)
