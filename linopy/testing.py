@@ -46,4 +46,7 @@ def assert_model_equal(a: Model, b: Model) -> None:
     assert a.objective.sense == b.objective.sense
     assert a.objective.value == b.objective.value
 
+    assert a.status == b.status
+    assert a.termination_condition == b.termination_condition
+
     assert a.type == b.type

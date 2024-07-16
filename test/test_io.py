@@ -92,6 +92,17 @@ def test_model_to_netcdf_with_dash_names(model_with_dash_names, tmp_path):
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_with_status_and_condition(model_with_dash_names, tmp_path):
+    m = model_with_dash_names
+    fn = tmp_path / "test.nc"
+    m._status = "ok"
+    m._termination_condition = "optimal"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+
+
 # skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
 @pytest.mark.skipif(
     xr.__version__ in ["2024.1.0", "2024.1.1"],
