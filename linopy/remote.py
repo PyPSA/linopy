@@ -10,6 +10,7 @@ Created on Sun Feb 13 21:34:55 2022.
 import logging
 import tempfile
 from dataclasses import dataclass
+import os
 from typing import Callable, Union
 
 from linopy.io import read_netcdf
@@ -238,3 +239,34 @@ class RemoteHandler:
         self.sftp_client.remove(self.model_solved_file)
 
         return solved
+
+# TODO perhaps we make RemoteHandler an abstract base class, and rename the class above as SshHandler, and have that and OetCloudHandler inherit from RemoteHandler?
+
+class OetCloudHandler:
+
+    def solve_on_remote(self, model, **kwargs):
+        """
+        Solve a linopy model on the OET Cloud compute app.
+
+        Parameters
+        ----------
+        model : linopy.model.Model
+        **kwargs :
+            Keyword arguments passed to `linopy.model.Model.solve`.
+
+        Returns
+        -------
+        linopy.model.Model
+            Solved model.
+        """
+        logger.warning(f'Ignoring these kwargs for now: {kwargs}')  # TODO
+
+        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+            model.to_netcdf(fn.name)
+            logger.info(f'Model written to: {fn.name}')
+            solved_file = fn.name[:-3] + '.sol.nc'
+            input(f'Call OETC on the above file, then place result file from OETC at {solved_file}, and press Enter to continue: ')
+
+            solved = read_netcdf(solved_file)
+            os.remove(solved_file)
+            return solved

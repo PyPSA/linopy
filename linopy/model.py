@@ -49,6 +49,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
+from linopy.remote import OetCloudHandler
 from linopy.solvers import available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,
@@ -1020,6 +1021,10 @@ class Model:
         """
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
+
+        if remote == "oet-cloud":
+            remote = OetCloudHandler()
+            # TODO for consistency should we change the way the SSH remote handler is used to be to pass a similar string argument?
 
         if remote:
             solved = remote.solve_on_remote(
