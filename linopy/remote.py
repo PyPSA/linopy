@@ -271,12 +271,17 @@ class OetCloudHandler:
                 response: Response = post(
                     f"http://127.0.0.1:5000/compute-job/create",
                     files={"nc_file": nc_file},
-                )
-                if "uuid" in response.content:
-                    logger.info(f'OETC job submitted successfully. ID: {response.content["uuid"]}')
+                ) # TODO add content type?
                 if not response.ok:
                     raise ValueError(f'OETC Error: {response.text}')
+                content = response.json()
+                if "uuid" in content:
+                    logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
+                else:
+                    raise ValueError(f'Unexpected response: {response.text}')
+                input(f'Once OETC has finished, place the result file at {solved_file}, and press Enter to continue: ')
 
             solved = read_netcdf(solved_file)
+            # TODO print objective value and termination cond
             os.remove(solved_file)
             return solved
