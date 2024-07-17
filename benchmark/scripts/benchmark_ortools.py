@@ -1,9 +1,9 @@
 from common import profile
-from numpy.random import randint, seed
+from numpy.random import default_rng
 from ortools.linear_solver import pywraplp
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 def model(n, solver):
@@ -41,8 +41,8 @@ def knapsack_model(n, solver):
     # Create a new linear solver
     solver = pywraplp.Solver("LinearExample", pywraplp.Solver.GUROBI_LINEAR_PROGRAMMING)
 
-    weight = randint(1, 100, size=n)
-    value = randint(1, 100, size=n)
+    weight = rng.integers(1, 100, size=n)
+    value = rng.integers(1, 100, size=n)
 
     x = {i: solver.BoolVar("x_%d" % i) for i in range(n)}
     # Create constraints

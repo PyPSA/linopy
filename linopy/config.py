@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri Jan 13 12:57:45 2023.
 
 @author: fabian
 """
+
 from __future__ import annotations
 
 
@@ -37,7 +37,7 @@ class OptionSettings:
     def reset(self) -> None:
         self._current_values = self._defaults.copy()
 
-    def __enter__(self) -> "OptionSettings":
+    def __enter__(self) -> OptionSettings:
         return self
 
     def __exit__(self, exc_type: None, exc_val: None, exc_tb: None) -> None:

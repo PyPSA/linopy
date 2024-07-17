@@ -1,10 +1,9 @@
 import pulp
 from common import profile
-from numpy import arange
-from numpy.random import randint, seed
+from numpy.random import default_rng
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 def basic_model(n, solver):
@@ -34,8 +33,8 @@ def knapsack_model(n, solver):
     m.i = list(range(n))
 
     # Define the variables
-    weight = randint(1, 100, size=n)
-    value = randint(1, 100, size=n)
+    weight = rng.integers(1, 100, size=n)
+    value = rng.integers(1, 100, size=n)
 
     x = pulp.LpVariable.dicts("x", (m.i,), lowBound=0, upBound=1, cat=pulp.LpInteger)
 

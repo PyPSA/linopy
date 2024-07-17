@@ -1,18 +1,18 @@
-# -*- coding: utf-8 -*-
 """
 Linopy model module.
 
 This module contains frontend implementations of the package.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, List, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -107,7 +107,7 @@ class Model:
 
     def __init__(
         self,
-        solver_dir: Union[str, None] = None,
+        solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
     ) -> None:
@@ -145,7 +145,7 @@ class Model:
         self._cCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
-        self._blocks: Union[DataArray, None] = None
+        self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
@@ -291,11 +291,11 @@ class Model:
         self._solver_dir = Path(value)
 
     @property
-    def dataset_attrs(self) -> List[str]:
+    def dataset_attrs(self) -> list[str]:
         return ["parameters"]
 
     @property
-    def scalar_attrs(self) -> List[str]:
+    def scalar_attrs(self) -> list[str]:
         return [
             "status",
             "termination_condition",
@@ -327,7 +327,7 @@ class Model:
         """
         return self.variables[key]
 
-    def check_force_dim_names(self, ds: Union[DataArray, Dataset]) -> None:
+    def check_force_dim_names(self, ds: DataArray | Dataset) -> None:
         """
         Ensure that the added data does not lead to unintended broadcasting.
 
@@ -343,7 +343,6 @@ class Model:
             If broadcasted data leads to unspecified dimension names.
 
         Returns
-
         -------
         None.
         """
@@ -362,11 +361,9 @@ class Model:
         self,
         lower: Any = -inf,
         upper: Any = inf,
-        coords: Union[
-            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
-        ] = None,
-        name: Union[str, None] = None,
-        mask: Union[DataArray, ndarray, Series, None] = None,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        name: str | None = None,
+        mask: DataArray | ndarray | Series | None = None,
         binary: bool = False,
         integer: bool = False,
         **kwargs,
@@ -492,14 +489,12 @@ class Model:
 
     def add_constraints(
         self,
-        lhs: Union[VariableLike, ExpressionLike, ConstraintLike],
-        sign: Union[SignLike, None] = None,
-        rhs: Union[ConstantLike, VariableLike, ExpressionLike, None] = None,
-        name: Union[str, None] = None,
-        coords: Union[
-            Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None
-        ] = None,
-        mask: Union[MaskLike, None] = None,
+        lhs: VariableLike | ExpressionLike | ConstraintLike,
+        sign: SignLike | None = None,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
+        name: str | None = None,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        mask: MaskLike | None = None,
     ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -621,7 +616,7 @@ class Model:
 
     def add_objective(
         self,
-        expr: Union[List[Tuple[int, Variable]], LinearExpression, QuadraticExpression],
+        expr: list[tuple[int, Variable]] | LinearExpression | QuadraticExpression,
         overwrite: bool = False,
         sense: str = "min",
     ) -> None:
@@ -676,7 +671,7 @@ class Model:
             {TERM_DIM: ~self.objective.vars.isin(labels)}
         )
 
-    def remove_constraints(self, name: Union[str, List[str]]) -> None:
+    def remove_constraints(self, name: str | list[str]) -> None:
         """
         Remove all constraints stored under reference name 'name' from the
         model.
@@ -771,7 +766,7 @@ class Model:
         return self.constraints.ncons
 
     @property
-    def shape(self) -> Tuple[int, int]:
+    def shape(self) -> tuple[int, int]:
         """
         Get the shape of the non-filtered constraint matrix.
 
@@ -859,7 +854,6 @@ class Model:
 
         Examples
         --------
-
         For creating an expression from tuples:
 
         >>> from linopy import Model
@@ -879,7 +873,7 @@ class Model:
         ...
         >>> expr = m.linexpr(rule, coords)
 
-        See also
+        See Also
         --------
         LinearExpression.from_tuples, LinearExpression.from_rule
         """
@@ -929,7 +923,7 @@ class Model:
 
     def get_problem_file(
         self,
-        io_api: Union[str, None] = None,
+        io_api: str | None = None,
     ) -> Path:
         """
         Get a fresh created problem file if problem file is None.
@@ -946,19 +940,19 @@ class Model:
 
     def solve(
         self,
-        solver_name: Union[str, None] = None,
-        io_api: Union[str, None] = None,
-        problem_fn: Union[str, Path, None] = None,
-        solution_fn: Union[str, Path, None] = None,
-        log_fn: Union[str, Path, None] = None,
-        basis_fn: Union[str, Path, None] = None,
-        warmstart_fn: Union[str, Path, None] = None,
+        solver_name: str | None = None,
+        io_api: str | None = None,
+        problem_fn: str | Path | None = None,
+        solution_fn: str | Path | None = None,
+        log_fn: str | Path | None = None,
+        basis_fn: str | Path | None = None,
+        warmstart_fn: str | Path | None = None,
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,
         remote: None = None,
         **solver_options,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Solve the model with possibly different solvers.
 
@@ -1136,7 +1130,7 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
-    def compute_infeasibilities(self) -> List[int]:
+    def compute_infeasibilities(self) -> list[int]:
         """
         Compute a set of infeasible constraints.
 

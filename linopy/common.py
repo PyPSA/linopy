@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Linopy common module.
 
@@ -8,10 +7,10 @@ This module contains commonly used functions.
 
 import operator
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from functools import reduce, wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Hashable, List, Sequence, Tuple, Union, overload
+from typing import Any, Callable, Union, overload
 from warnings import warn
 
 import numpy as np
@@ -30,20 +29,22 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
-from linopy.types import ConstantLike, SignLike
 
 
 def maybe_replace_sign(sign: str) -> str:
     """
     Replace the sign with an alternative sign if available.
 
-    Parameters:
+    Parameters
+    ----------
         sign (str): The sign to be replaced.
 
-    Returns:
+    Returns
+    -------
         str: The replaced sign.
 
-    Raises:
+    Raises
+    ------
         ValueError: If the sign is not in the available signs.
     """
     if sign in SIGNS_alternative:
@@ -58,10 +59,12 @@ def maybe_replace_signs(sign: DataArray) -> DataArray:
     """
     Replace signs with alternative signs if available.
 
-    Parameters:
+    Parameters
+    ----------
         sign (np.ndarray): The signs to be replaced.
 
-    Returns:
+    Returns
+    -------
         np.ndarray: The replaced signs.
     """
     func = np.vectorize(maybe_replace_sign)
@@ -72,10 +75,12 @@ def format_string_as_variable_name(name: Hashable):
     """
     Format a string to a valid python variable name.
 
-    Parameters:
+    Parameters
+    ----------
         name (str): The name to be converted.
 
-    Returns:
+    Returns
+    -------
         str: The formatted name.
     """
     return str(name).replace(" ", "_").replace("-", "_")
@@ -106,7 +111,8 @@ def pandas_to_dataarray(
     coordinates (index, columns) will be used as coordinates for the DataArray.
     Solely the dimension names can be specified.
 
-    Parameters:
+    Parameters
+    ----------
         arr (Union[pd.DataFrame, pd.Series]):
             The input pandas DataFrame or Series.
         coords (Union[dict, list, None]):
@@ -116,7 +122,8 @@ def pandas_to_dataarray(
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
-    Returns:
+    Returns
+    -------
         DataArray:
             The converted DataArray.
     """
@@ -156,7 +163,8 @@ def numpy_to_dataarray(
     """
     Convert a numpy array to a DataArray.
 
-    Parameters:
+    Parameters
+    ----------
         arr (np.ndarray):
             The input numpy array.
         coords (Union[dict, list, None]):
@@ -166,7 +174,8 @@ def numpy_to_dataarray(
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
-    Returns:
+    Returns
+    -------
         DataArray:
             The converted DataArray.
     """
@@ -193,7 +202,8 @@ def as_dataarray(
     """
     Convert an object to a DataArray.
 
-    Parameters:
+    Parameters
+    ----------
         arr:
             The input object.
         coords (Union[dict, list, None]):
@@ -203,7 +213,8 @@ def as_dataarray(
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
-    Returns:
+    Returns
+    -------
         DataArray:
             The converted DataArray.
     """
@@ -265,14 +276,16 @@ def check_has_nulls(df: pd.DataFrame, name: str):
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
 
 
-def infer_schema_polars(ds: Dataset) -> Dict[Hashable, pl.DataType]:
+def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     """
     Infer the polars data schema from a xarray dataset.
 
     Args:
+    ----
         ds (polars.DataFrame): The Polars DataFrame for which to infer the schema.
 
     Returns:
+    -------
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
@@ -314,10 +327,12 @@ def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
     Checks if the given DataFrame contains any null values and raises a ValueError if it does.
 
     Args:
+    ----
         df (pl.DataFrame): The DataFrame to check for null values.
         name (str): The name of the data container being checked.
 
     Raises:
+    ------
         ValueError: If the DataFrame contains null values,
         a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
     """
@@ -332,9 +347,11 @@ def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
     Filter out rows containing "empty" values from a polars DataFrame.
 
     Args:
+    ----
         df (pl.DataFrame): The DataFrame to filter.
 
     Returns:
+    -------
         pl.DataFrame: The filtered DataFrame.
     """
     cond = []
@@ -355,9 +372,11 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     Groups terms in a polars DataFrame.
 
     Args:
+    ----
         df (pl.DataFrame): The input DataFrame containing the terms.
 
     Returns:
+    -------
         pl.DataFrame: The DataFrame with grouped terms.
 
     """
@@ -507,7 +526,7 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
-def align_lines_by_delimiter(lines: List[str], delimiter: Union[str, List[str]]):
+def align_lines_by_delimiter(lines: list[str], delimiter: Union[str, list[str]]):
     # Determine the maximum position of the delimiter
     if isinstance(delimiter, str):
         delimiter = [delimiter]
@@ -528,16 +547,18 @@ def align_lines_by_delimiter(lines: List[str], delimiter: Union[str, List[str]])
     return formatted_lines
 
 
-def get_label_position(obj, values: Union[int, np.ndarray]) -> Union[
-    Union[Tuple[str, dict], Tuple[None, None]],
-    List[Union[Tuple[str, dict], Tuple[None, None]]],
-    List[List[Union[Tuple[str, dict], Tuple[None, None]]]],
+def get_label_position(
+    obj, values: Union[int, np.ndarray]
+) -> Union[
+    Union[tuple[str, dict], tuple[None, None]],
+    list[Union[tuple[str, dict], tuple[None, None]]],
+    list[list[Union[tuple[str, dict], tuple[None, None]]]],
 ]:
     """
     Get tuple of name and coordinate for variable labels.
     """
 
-    def find_single(value: int) -> Union[Tuple[str, dict], Tuple[None, None]]:
+    def find_single(value: int) -> Union[tuple[str, dict], tuple[None, None]]:
         if value == -1:
             return None, None
         for name, val in obj.items():
@@ -731,7 +752,7 @@ def forward_as_properties(**routes):
     return deco
 
 
-def check_common_keys_values(list_of_dicts: List[Dict[str, Any]]) -> bool:
+def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     """
     Check if all common keys among a list of dictionaries have the same value.
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Tue Nov  2 22:36:38 2021.
 
@@ -71,7 +70,6 @@ def test_wrong_variable_init(m, x):
 
 
 def test_variable_getter(x, z):
-
     with pytest.warns(FutureWarning):
         assert isinstance(x[0], linopy.variables.ScalarVariable)
         assert isinstance(z[0], linopy.variables.ScalarVariable)

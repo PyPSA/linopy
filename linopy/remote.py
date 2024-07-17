@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Sun Feb 13 21:34:55 2022.
 
 @author: fabian
 """
-
 
 import logging
 import tempfile
@@ -145,7 +143,7 @@ class RemoteHandler:
         self.sftp_client = self.client.open_sftp()
 
     def __del__(self):
-        if not self.client is None:
+        if self.client is not None:
             self.client.close()
 
     def write_python_file_on_remote(self, **solve_kwargs):

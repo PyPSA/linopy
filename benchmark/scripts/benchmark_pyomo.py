@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri Nov 19 17:40:33 2021.
 
 @author: fabian
 """
 
-
 from common import profile
 from numpy import arange
-from numpy.random import randint, seed
+from numpy.random import default_rng
 from pyomo.environ import (
     Binary,
     ConcreteModel,
@@ -18,12 +16,11 @@ from pyomo.environ import (
     Set,
     Var,
     maximize,
-    value,
 )
 from pyomo.opt import SolverFactory
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 def basic_model(n, solver):
@@ -57,8 +54,8 @@ def knapsack_model(n, solver):
     m.i = Set(initialize=arange(n))
 
     m.x = Var(m.i, domain=Binary)
-    m.weight = randint(1, 100, size=n)
-    m.value = randint(1, 100, size=n)
+    m.weight = rng.integers(1, 100, size=n)
+    m.value = rng.integers(1, 100, size=n)
 
     def bound1(m):
         return sum(m.x[i] * m.weight[i] for i in m.i) <= 200

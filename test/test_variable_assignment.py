@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 This module aims at testing the correct assignment of variable to the model.
 """
@@ -42,7 +41,7 @@ def test_variable_assignment():
 def test_variable_assignment_broadcasted():
     m = Model()
     # setting only one dimension, the other has to be broadcasted
-    lower = xr.DataArray(np.zeros((10)), coords=[range(10)])
+    lower = xr.DataArray(np.zeros(10), coords=[range(10)])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
@@ -51,7 +50,7 @@ def test_variable_assignment_broadcasted():
 def test_variable_assignment_no_coords():
     # setting bounds without explicit coords
     m = Model()
-    lower = xr.DataArray(np.zeros((10)))
+    lower = xr.DataArray(np.zeros(10))
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
@@ -60,7 +59,7 @@ def test_variable_assignment_no_coords():
 def test_variable_assignment_pd_index():
     # setting bounds with pandas index
     m = Model()
-    lower = xr.DataArray(np.zeros((10)), coords=[pd.Index(range(10))])
+    lower = xr.DataArray(np.zeros(10), coords=[pd.Index(range(10))])
     upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
@@ -89,7 +88,7 @@ def test_variable_assignment_with_dataframe_and_series():
     # setting bounds with one pd.DataFrame and one pd.Series
     m = Model()
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
 
@@ -98,7 +97,7 @@ def test_variable_assignment_chunked():
     # setting bounds with one pd.DataFrame and one pd.Series
     m = Model(chunk=5)
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
     assert isinstance(m.variables.labels.x.data, dask.array.core.Array)
@@ -108,7 +107,7 @@ def test_variable_assignment_different_shapes():
     # setting bounds with different shapes
     m = Model()
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
 
@@ -117,7 +116,7 @@ def test_variable_assignment_without_coords():
     # setting bounds without explicit coords
     m = Model()
     lower = np.zeros((10, 10))
-    upper = np.ones((10))
+    upper = np.ones(10)
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
 
@@ -173,11 +172,11 @@ def test_variable_assignment_different_coords():
     # since v0.1 new coordinates are reindexed to the old ones
     m = Model()
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     m.add_variables(lower, upper, name="x")
 
     lower = pd.DataFrame(np.zeros((20, 10)))
-    upper = pd.Series(np.ones((20)))
+    upper = pd.Series(np.ones(20))
     m.add_variables(lower, upper, name="y")
 
     with pytest.warns(UserWarning):
@@ -208,7 +207,7 @@ def test_variable_assigment_masked():
     m = Model()
 
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     mask = pd.Series([True] * 5 + [False] * 5)
     m.add_variables(lower, upper, mask=mask)
     assert m.variables.labels.var0[-1, -1].item() == -1

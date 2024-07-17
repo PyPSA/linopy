@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri Nov 19 17:40:33 2021.
 
 @author: fabian
 """
-
 
 from benchmark_pyomo import basic_model, knapsack_model
 
