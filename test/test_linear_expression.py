@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Wed Mar 17 17:06:36 2021.
 
@@ -63,7 +62,6 @@ def test_empty_linexpr(m):
 
 
 def test_linexpr_with_wrong_data(m):
-
     with pytest.raises(ValueError):
         LinearExpression(xr.Dataset({"a": [1]}), m)
 

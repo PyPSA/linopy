@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Mon Oct 10 13:33:55 2022.
 
 @author: fabian
 """
+
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -24,10 +24,10 @@ if TYPE_CHECKING:
 
 
 def create_vector(
-    indices: Union[Series, Index],
-    values: Union[Series, ndarray],
-    fill_value: Union[str, float, int] = np.nan,
-    shape: Union[int, None] = None,
+    indices: Series | Index,
+    values: Series | ndarray,
+    fill_value: str | float | int = np.nan,
+    shape: int | None = None,
 ) -> ndarray:
     """Create a vector of a size equal to the maximum index plus one."""
     if shape is None:
@@ -49,7 +49,7 @@ class MatrixAccessor:
         self._parent = model
 
     def clean_cached_properties(self):
-        "Clear the cache for all cached properties of an object"
+        """Clear the cache for all cached properties of an object"""
 
         for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
             # check existence of cached_prop without creating it
@@ -68,13 +68,13 @@ class MatrixAccessor:
 
     @property
     def vlabels(self) -> ndarray:
-        "Vector of labels of all non-missing variables."
+        """Vector of labels of all non-missing variables."""
         df = self.flat_vars
         return create_vector(df.key, df.labels, -1)
 
     @property
     def vtypes(self) -> ndarray:
-        "Vector of types of all non-missing variables."
+        """Vector of types of all non-missing variables."""
         m = self._parent
         df = self.flat_vars
         specs = []
@@ -93,13 +93,13 @@ class MatrixAccessor:
 
     @property
     def lb(self) -> ndarray:
-        "Vector of lower bounds of all non-missing variables."
+        """Vector of lower bounds of all non-missing variables."""
         df = self.flat_vars
         return create_vector(df.key, df.lower)
 
     @cached_property
     def sol(self):
-        "Vector of solution values of all non-missing variables."
+        """Vector of solution values of all non-missing variables."""
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         if "solution" not in self.flat_vars:
@@ -109,7 +109,7 @@ class MatrixAccessor:
 
     @cached_property
     def dual(self):
-        "Vector of dual values of all non-missing constraints."
+        """Vector of dual values of all non-missing constraints."""
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         if "dual" not in self.flat_cons:
@@ -123,21 +123,21 @@ class MatrixAccessor:
 
     @property
     def ub(self) -> ndarray:
-        "Vector of upper bounds of all non-missing variables."
+        """Vector of upper bounds of all non-missing variables."""
         df = self.flat_vars
         return create_vector(df.key, df.upper)
 
     @property
     def clabels(self) -> ndarray:
-        "Vector of labels of all non-missing constraints."
+        """Vector of labels of all non-missing constraints."""
         df = self.flat_cons
         if df.empty:
             return np.array([], dtype=int)
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
-    def A(self) -> Union[csc_matrix, None]:
-        "Constraint matrix of all non-missing constraints and variables."
+    def A(self) -> csc_matrix | None:
+        """Constraint matrix of all non-missing constraints and variables."""
         m = self._parent
         if not len(m.constraints):
             return None
@@ -146,19 +146,19 @@ class MatrixAccessor:
 
     @property
     def sense(self) -> ndarray:
-        "Vector of senses of all non-missing constraints."
+        """Vector of senses of all non-missing constraints."""
         df = self.flat_cons
         return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
 
     @property
     def b(self) -> ndarray:
-        "Vector of right-hand-sides of all non-missing constraints."
+        """Vector of right-hand-sides of all non-missing constraints."""
         df = self.flat_cons
         return create_vector(df.key, df.rhs)
 
     @property
     def c(self) -> ndarray:
-        "Vector of objective coefficients of all non-missing variables."
+        """Vector of objective coefficients of all non-missing variables."""
         m = self._parent
         ds = m.objective.flat
         if isinstance(m.objective.expression, expressions.QuadraticExpression):
@@ -170,8 +170,8 @@ class MatrixAccessor:
         return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
 
     @property
-    def Q(self) -> Optional[csc_matrix]:
-        "Matrix objective coefficients of quadratic terms of all non-missing variables."
+    def Q(self) -> csc_matrix | None:
+        """Matrix objective coefficients of quadratic terms of all non-missing variables."""
         m = self._parent
         expr = m.objective.expression
         if not isinstance(expr, expressions.QuadraticExpression):

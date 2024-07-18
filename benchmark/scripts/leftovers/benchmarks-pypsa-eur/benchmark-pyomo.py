@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Tue Feb 15 16:20:51 2022.
 
@@ -18,7 +17,7 @@ def solve():
     n.generators.p_nom_max.fillna(np.inf, inplace=True)
     n.snapshots = n.snapshots[:NSNAPSHOTS]
 
-    m = n.lopf(
+    m = n.lopf(  # noqa: F841
         solver_options=SOLVER_PARAMS, formulation="kirchhoff", solver_name=SOLVER
     )
 

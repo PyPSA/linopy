@@ -5,10 +5,12 @@ repos:
     -   id: end-of-file-fixer
     -   id: trailing-whitespace
     -   id: check-merge-conflict
--   repo: https://github.com/psf/black
-    rev: 24.4.2
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.2
     hooks:
-    -   id: black
+    -   id: ruff
+        args: [--fix]
+    -   id: ruff-format
     # Current docformatter version has a problem with urls (it's annoying)
 # -   repo: https://github.com/PyCQA/docformatter
 #     rev: v1.6.0.rc1
@@ -18,16 +20,7 @@ repos:
 -   repo: https://github.com/keewis/blackdoc
     rev: v0.3.9
     hooks:
-      - id: blackdoc
--   repo: https://github.com/MarcoGorelli/absolufy-imports
-    rev: v0.3.1
-    hooks:
-    -   id: absolufy-imports
--   repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: ["--profile", "black", "--filter-files"]
+    -   id: blackdoc
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.3.0
     hooks:

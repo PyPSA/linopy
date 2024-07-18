@@ -104,13 +104,13 @@ def test_sel(linear_objective):
 
 
 def test_is_linear(linear_objective, quadratic_objective):
-    assert linear_objective.is_linear == True
-    assert quadratic_objective.is_linear == False
+    assert linear_objective.is_linear is True
+    assert quadratic_objective.is_linear is False
 
 
 def test_is_quadratic(linear_objective, quadratic_objective):
-    assert linear_objective.is_quadratic == False
-    assert quadratic_objective.is_quadratic == True
+    assert linear_objective.is_quadratic is False
+    assert quadratic_objective.is_quadratic is True
 
 
 def test_to_matrix(linear_objective, quadratic_objective):

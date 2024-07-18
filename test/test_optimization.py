@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Thu Mar 18 08:49:08 2021.
 
@@ -8,7 +7,6 @@ Created on Thu Mar 18 08:49:08 2021.
 
 import logging
 import platform
-import sys
 
 import numpy as np
 import pandas as pd
@@ -409,7 +407,6 @@ def test_solver_options(model, solver, io_api):
         "gurobi": {"TimeLimit": 1},
         "glpk": {"tmlim": 1},
         "cplex": {"timelimit": 1},
-        "scip": {"time_limit": 1},
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
         "scip": {"limits/time": 1},

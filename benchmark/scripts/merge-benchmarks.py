@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Mon Feb 14 18:00:44 2022.
 
 @author: fabian
 """
-
-
-from pathlib import Path
 
 import pandas as pd
 

@@ -1,10 +1,10 @@
 import gurobipy as gp
 import numpy as np
 from common import profile
-from numpy.random import randint, seed
+from numpy.random import default_rng
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 def basic_model(n, solver):
@@ -32,8 +32,8 @@ def knapsack_model(n, solver):
     # Create a new model
     m = gp.Model()
 
-    weight = randint(1, 100, size=n)
-    value = randint(1, 100, size=n)
+    weight = rng.integers(1, 100, size=n)
+    value = rng.integers(1, 100, size=n)
 
     # Create variables
     x = m.addMVar(n, vtype=gp.GRB.BINARY, name="x")

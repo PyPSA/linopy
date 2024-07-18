@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Linopy module for defining constant values used within the package.
 """
+
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Tuple, Union
+from typing import Any, Union
 
 import numpy as np
 import pandas as pd
@@ -162,7 +162,7 @@ class Status:
 
     status: SolverStatus
     termination_condition: TerminationCondition
-    legacy_status: Union[Tuple[str, str], str] = ""
+    legacy_status: Union[tuple[str, str], str] = ""
 
     @classmethod
     def process(cls, status: str, termination_condition: str) -> "Status":

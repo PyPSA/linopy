@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Linopy constraints module.
 
@@ -7,16 +6,12 @@ This module contains implementations for the Constraint{s} class.
 
 import functools
 import warnings
+from collections.abc import ItemsView, Iterator
 from dataclasses import dataclass
 from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    ItemsView,
-    Iterator,
-    List,
-    Tuple,
     Union,
     overload,
 )
@@ -670,7 +665,7 @@ class Constraints:
     A constraint container used for storing multiple constraint arrays.
     """
 
-    data: Dict[str, Constraint]
+    data: dict[str, Constraint]
     model: "Model"  # Model is not defined due to circular imports
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
@@ -682,7 +677,7 @@ class Constraints:
         "Right-hand-side constants",
     ]
 
-    def _formatted_names(self) -> Dict[str, str]:
+    def _formatted_names(self) -> dict[str, str]:
         """
         Get a dictionary of formatted names to the proper constraint names.
         This map enables a attribute like accession of variable names which
@@ -709,9 +704,9 @@ class Constraints:
     def __getitem__(self, names: str) -> Constraint: ...
 
     @overload
-    def __getitem__(self, names: List[str]) -> "Constraints": ...
+    def __getitem__(self, names: list[str]) -> "Constraints": ...
 
-    def __getitem__(self, names: Union[str, List[str]]):
+    def __getitem__(self, names: Union[str, list[str]]):
         if isinstance(names, str):
             return self.data[names]
         return Constraints({name: self.data[name] for name in names}, self.model)
@@ -727,7 +722,7 @@ class Constraints:
             f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
         )
 
-    def __dir__(self) -> List[str]:
+    def __dir__(self) -> list[str]:
         base_attributes = list(super().__dir__())
         formatted_names = [
             n for n in self._formatted_names() if n not in base_attributes
@@ -743,7 +738,7 @@ class Constraints:
     def items(self) -> ItemsView[str, Constraint]:
         return self.data.items()
 
-    def _ipython_key_completions_(self) -> List[str]:
+    def _ipython_key_completions_(self) -> list[str]:
         """
         Provide method for the key-autocompletions in IPython.
 
@@ -901,10 +896,12 @@ class Constraints:
                 return name
         raise ValueError(f"No constraint found containing the label {label}.")
 
-    def get_label_position(self, values: Union[int, ndarray]) -> Union[
-        Union[Tuple[str, dict], Tuple[None, None]],
-        List[Union[Tuple[str, dict], Tuple[None, None]]],
-        List[List[Union[Tuple[str, dict], Tuple[None, None]]]],
+    def get_label_position(
+        self, values: Union[int, ndarray]
+    ) -> Union[
+        Union[tuple[str, dict], tuple[None, None]],
+        list[Union[tuple[str, dict], tuple[None, None]]],
+        list[list[Union[tuple[str, dict], tuple[None, None]]]],
     ]:
         """
         Get tuple of name and coordinate for constraint labels.
