@@ -56,7 +56,6 @@ docs = [
 dev = [
     "pytest",
     "pytest-cov",
-    "pytest-xdist",
     "netcdf4",
     "pre-commit",
     "paramiko",
