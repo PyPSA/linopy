@@ -4,6 +4,9 @@ Release Notes
 Upcoming Version
 ----------------
 
+Version 0.3.14
+--------------
+
 * Ensure compatibility with xarray >= v2024.07.0, which has drop the ``squeeze`` argument from the ``groupby`` function.
 
 Version 0.3.13
