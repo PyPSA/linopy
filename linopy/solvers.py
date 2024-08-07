@@ -907,7 +907,7 @@ def run_xpress(
             dual_ = [str(d) for d in m.getConstraint()]
             dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
             dual = set_int_index(dual)
-        except xpress.SolverError:
+        except (xpress.SolverError, SystemError):
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
