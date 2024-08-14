@@ -516,7 +516,6 @@ class Variable:
     def groupby(
         self,
         group: DataArray,
-        squeeze: bool = True,
         restore_coord_dims: bool | None = None,
     ) -> LinearExpressionGroupby:
         """
@@ -530,10 +529,6 @@ class Variable:
         group : str, DataArray or IndexVariable
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
-        squeeze : bool, optional
-            If "group" is a dimension of any arrays in this dataset, `squeeze`
-            controls whether the subarrays have a dimension of length 1 along
-            that dimension or if the dimension is squeezed out.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.
@@ -545,7 +540,7 @@ class Variable:
             the correct return type.
         """
         return self.to_linexpr().groupby(
-            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+            group=group, restore_coord_dims=restore_coord_dims
         )
 
     def rolling(

@@ -1212,7 +1212,6 @@ class LinearExpression:
     def groupby(
         self,
         group: DataFrame | Series | DataArray,
-        squeeze: bool = True,
         restore_coord_dims: bool | None = None,
         **kwargs,
     ) -> LinearExpressionGroupby:
@@ -1227,10 +1226,6 @@ class LinearExpression:
         group : str, DataArray or IndexVariable
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
-        squeeze : bool, optional
-            If "group" is a dimension of any arrays in this dataset, `squeeze`
-            controls whether the subarrays have a dimension of length 1 along
-            that dimension or if the dimension is squeezed out.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.
@@ -1242,7 +1237,7 @@ class LinearExpression:
             the correct return type.
         """
         ds = self.data
-        kwargs = dict(squeeze=squeeze, restore_coord_dims=restore_coord_dims, **kwargs)
+        kwargs = dict(restore_coord_dims=restore_coord_dims, **kwargs)
         return LinearExpressionGroupby(ds, group, model=self.model, kwargs=kwargs)
 
     def rolling(
