@@ -11,7 +11,8 @@ import logging
 import tempfile
 from dataclasses import dataclass
 import os
-from requests import Response, post
+from requests import Response, post, get
+from time import sleep
 from typing import Callable, Union
 
 from linopy.io import read_netcdf
@@ -266,22 +267,61 @@ class OetCloudHandler:
             model.to_netcdf(fn.name)
             logger.info(f'Model written to: {fn.name}')
             solved_file = fn.name[:-3] + '.sol.nc'
-            logger.info('Calling OETC...')
-            with open(fn.name, "rb") as nc_file:
-                response: Response = post(
-                    f"http://127.0.0.1:5000/compute-job/create",
-                    files={"nc_file": nc_file},
-                ) # TODO add content type?
-                if not response.ok:
-                    raise ValueError(f'OETC Error: {response.text}')
-                content = response.json()
-                if "uuid" in content:
-                    logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
-                else:
-                    raise ValueError(f'Unexpected response: {response.text}')
-                input(f'Once OETC has finished, place the result file at {solved_file}, and press Enter to continue: ')
+
+            job_uuid = self._submit_job(fn.name)
+            job_data = self._wait_and_get_job_data(job_uuid)
+
+            out_file_url = job_data['output_files'][0]['download_url']
+            self._download_result(out_file_url, solved_file)
 
             solved = read_netcdf(solved_file)
             # TODO print objective value and termination cond
             os.remove(solved_file)
             return solved
+
+    def _submit_job(self, input_file_name):
+        logger.info('Calling OETC...')
+        with open(input_file_name, "rb") as nc_file:
+            response: Response = post(
+                "http://127.0.0.1:5000/compute-job/create",
+                files={"nc_file": nc_file},
+            ) # TODO add content type?
+        if not response.ok:
+            raise ValueError(f'OETC Error: {response.text}')
+        content = response.json()
+        if not "uuid" in content:
+            raise ValueError(f'Unexpected response: {response.text}')
+        logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
+        return content['uuid']
+
+    def _wait_and_get_job_data(self, uuid: str, retries=5):
+        """Waits for job completion upto `retries` times, with wait time doubling each
+        time; returns job data including output file download links."""
+        wait_time = 2
+        for _ in range(retries):
+            logger.info('Checking job status...')
+            response: Response = get(f"http://127.0.0.1:5000/compute-job/{uuid}")
+            if not response.ok:
+                raise ValueError(f'OETC Error: {response.text}')
+            content = response.json()
+            if not "status" in content:
+                raise ValueError(f'Unexpected response: {response.text}')
+            if content['status'] == 'FINISHED':
+                logger.info('OETC completed job execution')
+                return content
+            elif content['status'] != 'RUNNING':
+                raise ValueError(f"Unexpected status: {content['status']}")
+            logger.info('OETC still crunching...')
+            sleep(wait_time)
+            wait_time *= 2
+            
+
+    def _download_result(self, output_file_url, output_file_path):
+        response: Response = get(output_file_url)
+        if not response.ok:
+            raise ValueError(f'OETC Error: {response.text}')
+        with open(output_file_path, 'wb') as f:
+            f.write(response.content)
+        logger.info(f'Saved job result to: {output_file_path}')
+        return
+
