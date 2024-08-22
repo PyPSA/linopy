@@ -19,6 +19,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
+    "Typing :: Typed",
     "Operating System :: OS Independent",
 ]
 
@@ -77,6 +78,9 @@ solvers = [
 
 [tool.setuptools.packages.find]
 include = ["linopy"]
+
+[tool.setuptools.package-data]
+"linopy" = ["py.typed"]
 
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
