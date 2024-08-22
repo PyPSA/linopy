@@ -19,6 +19,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
+    "Typing :: Typed",
     "Operating System :: OS Independent",
 ]
 
@@ -56,8 +57,9 @@ docs = [
 dev = [
     "pytest",
     "pytest-cov",
-    "netcdf4",
+    'mypy',
     "pre-commit",
+    "netcdf4",
     "paramiko",
     "types-paramiko",
     "gurobipy",
@@ -78,6 +80,9 @@ solvers = [
 [tool.setuptools.packages.find]
 include = ["linopy"]
 
+[tool.setuptools.package-data]
+"linopy" = ["py.typed"]
+
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
 
@@ -87,8 +92,8 @@ source = ["linopy"]
 omit = ["test/*"]
 
 [tool.mypy]
+exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
 ignore_missing_imports = true
-# namespace_packages = true
 
 [tool.ruff]
 extend-include = ['*.ipynb']
