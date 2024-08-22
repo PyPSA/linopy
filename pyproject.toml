@@ -57,8 +57,9 @@ docs = [
 dev = [
     "pytest",
     "pytest-cov",
-    "netcdf4",
+    'mypy',
     "pre-commit",
+    "netcdf4",
     "paramiko",
     "types-paramiko",
     "gurobipy",
@@ -91,8 +92,8 @@ source = ["linopy"]
 omit = ["test/*"]
 
 [tool.mypy]
+exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
 ignore_missing_imports = true
-# namespace_packages = true
 
 [tool.ruff]
 extend-include = ['*.ipynb']
