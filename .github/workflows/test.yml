@@ -93,3 +93,5 @@ jobs:
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
       uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
