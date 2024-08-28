@@ -226,7 +226,7 @@ class LinearExpressionGroupby:
             if group_name == group_dim:
                 raise ValueError("Group name cannot be the same as group dimension")
 
-            arrays = [group, group.groupby(group).cumcount()]  # type: ignore
+            arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(
                 arrays, names=[group_name, GROUPED_TERM_DIM]
             )
@@ -239,7 +239,7 @@ class LinearExpressionGroupby:
                 index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
                 index.names = [str(col) for col in orig_group.columns]
                 index.name = group_name
-                coords = Coordinates.from_pandas_multiindex(index, group_name)  # type: ignore
+                coords = Coordinates.from_pandas_multiindex(index, group_name)
                 ds = xr.Dataset(ds.assign_coords(coords))
 
             return LinearExpression(ds, self.model)
