@@ -1,24 +1,19 @@
-# -*- coding: utf-8 -*-
 """
 Linopy variables module.
 
 This module contains variable related definitions of the package.
 """
+
 from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
-    Hashable,
-    List,
-    Mapping,
-    Tuple,
-    Union,
     overload,
 )
 from warnings import warn
@@ -91,7 +86,7 @@ def varwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
     return _varwrap
 
 
-def _var_unwrap(var: Union["Variable", Dataset]) -> Dataset:
+def _var_unwrap(var: Variable | Dataset) -> Dataset:
     return var.data if isinstance(var, Variable) else var
 
 
@@ -190,9 +185,8 @@ class Variable:
         self._model = model
 
     def __getitem__(
-        self, selector: Union[List[int], int, slice, Tuple[int64, str_]]
-    ) -> Union["Variable", "ScalarVariable"]:
-
+        self, selector: list[int] | int | slice | tuple[int64, str_]
+    ) -> Variable | ScalarVariable:
         keys = selector if isinstance(selector, tuple) else (selector,)
         if all(map(pd.api.types.is_scalar, keys)):
             warn(
@@ -211,7 +205,7 @@ class Variable:
             return self.__class__(data, self.model, self.name)
 
     @property
-    def attrs(self) -> Dict[str, Hashable]:
+    def attrs(self) -> dict[str, Hashable]:
         """
         Get the attributes of the variable.
         """
@@ -239,7 +233,7 @@ class Variable:
         return self.data.sizes
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """
         Get the shape of the variable.
         """
@@ -253,7 +247,7 @@ class Variable:
         return self.labels.size
 
     @property
-    def dims(self) -> Tuple[Hashable, ...]:
+    def dims(self) -> tuple[Hashable, ...]:
         """
         Get the dimensions of the variable.
         """
@@ -267,7 +261,7 @@ class Variable:
         return self.labels.ndim
 
     @property
-    def at(self) -> "AtIndexer":
+    def at(self) -> AtIndexer:
         """
         Access a single value of the variable.
 
@@ -294,10 +288,13 @@ class Variable:
 
     def to_linexpr(
         self,
-        coefficient: Union[
-            int, float, pd.Series, pd.DataFrame, np.ndarray, DataArray
-        ] = 1,
-    ) -> "expressions.LinearExpression":
+        coefficient: int
+        | float
+        | pd.Series
+        | pd.DataFrame
+        | np.ndarray
+        | DataArray = 1,
+    ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
 
@@ -306,6 +303,7 @@ class Variable:
         coefficient : array-like, optional
                 Coefficient for the linear expression. This can be a numeric value, numpy array,
                 pandas series/dataframe or a DataArray. Default is 1.
+
         Returns
         -------
         linopy.LinearExpression
@@ -379,8 +377,8 @@ class Variable:
         return self.to_linexpr(-1)
 
     def __mul__(
-        self, other: Union[float, int, ndarray, Variable]
-    ) -> Union[LinearExpression, QuadraticExpression]:
+        self, other: float | int | ndarray | Variable
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
         """
@@ -399,7 +397,7 @@ class Variable:
         return expr._multiply_by_linear_expression(expr)
 
     def __rmul__(  # type: ignore
-        self, other: Union[float, DataArray, int, ndarray]
+        self, other: float | DataArray | int | ndarray
     ) -> LinearExpression:
         """
         Right-multiply variables with a coefficient.
@@ -407,15 +405,15 @@ class Variable:
         return self.to_linexpr(other)
 
     def __matmul__(
-        self, other: Union[LinearExpression, ndarray, Variable]
-    ) -> Union[QuadraticExpression, LinearExpression]:
+        self, other: LinearExpression | ndarray | Variable
+    ) -> QuadraticExpression | LinearExpression:
         """
         Matrix multiplication of variables with a coefficient.
         """
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: Union[float, int, LinearExpression, Variable]
+        self, other: float | int | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -429,7 +427,7 @@ class Variable:
         return self.to_linexpr(1 / other)
 
     def __truediv__(
-        self, coefficient: Union[float, int, LinearExpression, Variable]
+        self, coefficient: float | int | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -437,20 +435,20 @@ class Variable:
         return self.__div__(coefficient)
 
     def __add__(
-        self, other: Union[int, QuadraticExpression, LinearExpression, Variable]
-    ) -> Union[QuadraticExpression, LinearExpression]:
+        self, other: int | QuadraticExpression | LinearExpression | Variable
+    ) -> QuadraticExpression | LinearExpression:
         """
         Add variables to linear expressions or other variables.
         """
         return self.to_linexpr() + other
 
-    def __radd__(self, other: int) -> Union["Variable", NotImplementedType]:
+    def __radd__(self, other: int) -> Variable | NotImplementedType:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
     def __sub__(
-        self, other: Union[QuadraticExpression, LinearExpression, Variable]
-    ) -> Union[QuadraticExpression, LinearExpression]:
+        self, other: QuadraticExpression | LinearExpression | Variable
+    ) -> QuadraticExpression | LinearExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """
@@ -462,7 +460,7 @@ class Variable:
     def __ge__(self, other: int) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: Union[float, int]) -> Constraint:  # type: ignore
+    def __eq__(self, other: float | int) -> Constraint:  # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other):
@@ -478,13 +476,13 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: "Variable") -> LinearExpression:
+    def add(self, other: Variable) -> LinearExpression:
         """
         Add variables to linear expressions or other variables.
         """
         return self.__add__(other)
 
-    def sub(self, other: "Variable") -> LinearExpression:
+    def sub(self, other: Variable) -> LinearExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """
@@ -508,9 +506,7 @@ class Variable:
         """
         return self.__pow__(other)
 
-    def dot(
-        self, other: Union[ndarray, Variable]
-    ) -> Union[QuadraticExpression, LinearExpression]:
+    def dot(self, other: ndarray | Variable) -> QuadraticExpression | LinearExpression:
         """
         Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
         multiplaction of the two objects with a subsequent summation over common dimensions.
@@ -520,8 +516,7 @@ class Variable:
     def groupby(
         self,
         group: DataArray,
-        squeeze: bool = True,
-        restore_coord_dims: Union[bool, None] = None,
+        restore_coord_dims: bool | None = None,
     ) -> LinearExpressionGroupby:
         """
         Returns a LinearExpressionGroupBy object for performing grouped
@@ -534,10 +529,6 @@ class Variable:
         group : str, DataArray or IndexVariable
             Array whose unique values should be used to group this array. If a
             string, must be the name of a variable contained in this dataset.
-        squeeze : bool, optional
-            If "group" is a dimension of any arrays in this dataset, `squeeze`
-            controls whether the subarrays have a dimension of length 1 along
-            that dimension or if the dimension is squeezed out.
         restore_coord_dims : bool, optional
             If True, also restore the dimension order of multi-dimensional
             coordinates.
@@ -549,16 +540,16 @@ class Variable:
             the correct return type.
         """
         return self.to_linexpr().groupby(
-            group=group, squeeze=squeeze, restore_coord_dims=restore_coord_dims
+            group=group, restore_coord_dims=restore_coord_dims
         )
 
     def rolling(
         self,
-        dim: Union[Mapping[Any, int], None] = None,
-        min_periods: Union[int, None] = None,
-        center: Union[bool, Mapping[Any, bool]] = False,
+        dim: Mapping[Any, int] | None = None,
+        min_periods: int | None = None,
+        center: bool | Mapping[Any, bool] = False,
         **window_kwargs: int,
-    ) -> "expressions.LinearExpressionRolling":
+    ) -> expressions.LinearExpressionRolling:
         """
         Rolling window object.
 
@@ -591,10 +582,10 @@ class Variable:
         self,
         dim: Dims = None,
         *,
-        skipna: Union[bool, None] = None,
-        keep_attrs: Union[bool, None] = None,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
         **kwargs: Any,
-    ) -> "expressions.LinearExpression":
+    ) -> expressions.LinearExpression:
         """
         Cumulated sum along a given axis.
 
@@ -674,7 +665,7 @@ class Variable:
             return "Continuous Variable"
 
     @property
-    def range(self) -> Tuple[int, int]:
+    def range(self) -> tuple[int, int]:
         """
         Return the range of the variable.
         """
@@ -858,7 +849,7 @@ class Variable:
         check_has_nulls_polars(df, name=f"{self.type} {self.name}")
         return df
 
-    def sum(self, dim: Union[str, None] = None, **kwargs) -> LinearExpression:
+    def sum(self, dim: str | None = None, **kwargs) -> LinearExpression:
         """
         Sum the variables over all or a subset of dimensions.
 
@@ -917,16 +908,14 @@ class Variable:
 
     def where(
         self,
-        cond: Union[DataArray, List[bool]],
-        other: Union[
-            ScalarVariable,
-            Dict[str, Union[str, float, int]],
-            Variable,
-            Dataset,
-            None,
-        ] = None,
+        cond: DataArray | list[bool],
+        other: ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset
+        | None = None,
         **kwargs,
-    ) -> "Variable":
+    ) -> Variable:
         """
         Filter variables based on a condition.
 
@@ -948,7 +937,7 @@ class Variable:
         -------
         linopy.Variable
         """
-        _other: Union[Dict[str, Union[float, int, str]], Dict[str, float], Dataset]
+        _other: dict[str, float | int | str] | dict[str, float] | Dataset
         if other is None:
             _other = self._fill_value
         elif isinstance(other, Variable):
@@ -967,10 +956,8 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: Union[
-            ScalarVariable, Dict[str, Union[str, float, int]], Variable, Dataset
-        ],
-    ) -> "Variable":
+        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
+    ) -> Variable:
         """
         Fill missing values with a variable.
 
@@ -984,7 +971,7 @@ class Variable:
         """
         return self.where(~self.isnull(), fill_value)
 
-    def ffill(self, dim: str, limit: None = None) -> "Variable":
+    def ffill(self, dim: str, limit: None = None) -> Variable:
         """
         Forward fill the variable along a dimension.
 
@@ -1006,11 +993,12 @@ class Variable:
             self.data.where(self.labels != -1)
             # .ffill(dim, limit=limit)
             # breaks with Dataset.ffill, use map instead
-            .map(DataArray.ffill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.ffill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         return self.assign_multiindex_safe(labels=data.labels.astype(int))
 
-    def bfill(self, dim: str, limit: None = None) -> "Variable":
+    def bfill(self, dim: str, limit: None = None) -> Variable:
         """
         Backward fill the variable along a dimension.
 
@@ -1032,12 +1020,13 @@ class Variable:
             self.data.where(~self.isnull())
             # .bfill(dim, limit=limit)
             # breaks with Dataset.bfill, use map instead
-            .map(DataArray.bfill, dim=dim, limit=limit).fillna(self._fill_value)
+            .map(DataArray.bfill, dim=dim, limit=limit)
+            .fillna(self._fill_value)
         )
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
 
-    def sanitize(self) -> "Variable":
+    def sanitize(self) -> Variable:
         """
         Sanitize variable by ensuring int dtype with fill value of -1.
 
@@ -1050,7 +1039,7 @@ class Variable:
             return self.__class__(data, self.model, self.name)
         return self
 
-    def equals(self, other: "Variable") -> bool:
+    def equals(self, other: Variable) -> bool:
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1095,8 +1084,7 @@ class AtIndexer:
     def __init__(self, obj: Variable) -> None:
         self.object = obj
 
-    def __getitem__(self, keys: Any) -> "ScalarVariable":
-
+    def __getitem__(self, keys: Any) -> ScalarVariable:
         keys = keys if isinstance(keys, tuple) else (keys,)
         object = self.object
 
@@ -1119,13 +1107,13 @@ class Variables:
     A variables container used for storing multiple variable arrays.
     """
 
-    data: Dict[str, Variable]
-    model: "Model"
+    data: dict[str, Variable]
+    model: Model
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
 
-    def _formatted_names(self) -> Dict[str, str]:
+    def _formatted_names(self) -> dict[str, str]:
         """
         Get a dictionary of formatted names to the proper variable names.
         This map enables a attribute like accession of variable names which
@@ -1137,9 +1125,9 @@ class Variables:
     def __getitem__(self, names: str) -> Variable: ...
 
     @overload
-    def __getitem__(self, names: List[str]) -> "Variables": ...
+    def __getitem__(self, names: list[str]) -> Variables: ...
 
-    def __getitem__(self, names: Union[str, List[str]]):
+    def __getitem__(self, names: str | list[str]):
         if isinstance(names, str):
             return self.data[names]
         return Variables({name: self.data[name] for name in names}, self.model)
@@ -1213,7 +1201,7 @@ class Variables:
         self.data.pop(name)
 
     @property
-    def attrs(self) -> Dict[Any, Any]:
+    def attrs(self) -> dict[Any, Any]:
         """
         Get the attributes of all variables.
         """
@@ -1273,7 +1261,7 @@ class Variables:
         return len(self.flat.labels.unique())
 
     @property
-    def binaries(self) -> "Variables":
+    def binaries(self) -> Variables:
         """
         Get all binary variables.
         """
@@ -1283,7 +1271,7 @@ class Variables:
         )
 
     @property
-    def integers(self) -> "Variables":
+    def integers(self) -> Variables:
         """
         Get all integers variables.
         """
@@ -1293,7 +1281,7 @@ class Variables:
         )
 
     @property
-    def continuous(self) -> "Variables":
+    def continuous(self) -> Variables:
         """
         Get all continuous variables.
         """
@@ -1364,13 +1352,13 @@ class Variables:
         """
         return self[name].range
 
-    def get_label_position(self, values: Union[int, ndarray]) -> Any:
+    def get_label_position(self, values: int | ndarray) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
         """
         return get_label_position(self, values)
 
-    def print_labels(self, values: List[int]) -> None:
+    def print_labels(self, values: list[int]) -> None:
         """
         Print a selection of labels of the variables.
 
@@ -1481,7 +1469,7 @@ class ScalarVariable:
         """
         return self._model
 
-    def to_scalar_linexpr(self, coeff: Union[int, float] = 1) -> ScalarLinearExpression:
+    def to_scalar_linexpr(self, coeff: int | float = 1) -> ScalarLinearExpression:
         if not isinstance(coeff, (int, np.integer, float)):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
@@ -1492,26 +1480,26 @@ class ScalarVariable:
     def __neg__(self):
         return self.to_scalar_linexpr(-1)
 
-    def __add__(self, other: "ScalarVariable") -> ScalarLinearExpression:
+    def __add__(self, other: ScalarVariable) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(1) + other
 
-    def __radd__(self, other: int) -> Union["ScalarVariable", NotImplementedType]:
+    def __radd__(self, other: int) -> ScalarVariable | NotImplementedType:
         # This is needed for using python's sum function
         return self if other == 0 else NotImplemented
 
     def __sub__(self, other):
         return self.to_scalar_linexpr(1) - other
 
-    def __mul__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
+    def __mul__(self, coeff: int | float) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(coeff)
 
-    def __rmul__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
+    def __rmul__(self, coeff: int | float) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(coeff)
 
-    def __div__(self, coeff: Union[int, float]) -> ScalarLinearExpression:
+    def __div__(self, coeff: int | float) -> ScalarLinearExpression:
         return self.to_scalar_linexpr(1 / coeff)
 
-    def __truediv__(self, coeff: Union[int, float]):
+    def __truediv__(self, coeff: int | float):
         return self.__div__(coeff)
 
     def __le__(self, other) -> AnonymousScalarConstraint:

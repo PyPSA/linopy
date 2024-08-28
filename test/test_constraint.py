@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Tue Nov  2 22:38:48 2021.
 
@@ -13,7 +12,6 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-import linopy
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, LinearExpression, Model
 from linopy.constants import (
     HELPER_DIMS,
@@ -156,7 +154,7 @@ def test_anonymous_constraint_with_expression_on_both_sides(x, y):
 def test_anonymous_scalar_constraint_with_scalar_variable_on_rhs(x, y):
     expr = 10 * x.at[0] + y.at[1]
     with pytest.raises(TypeError):
-        con = expr == x.at[0]
+        expr == x.at[0]
         # assert isinstance(con.lhs, LinearExpression)
         # assert (con.sign == EQUAL).all()
         # assert (con.rhs == 0).all()

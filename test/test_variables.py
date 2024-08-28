@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 This module aims at testing the correct behavior of the Variables class.
 """
@@ -50,10 +49,10 @@ def test_variables_assignment_with_merge():
     """
     m = Model()
 
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     var0 = m.add_variables(upper)
 
-    upper = pd.Series(np.ones((12)))
+    upper = pd.Series(np.ones(12))
     var1 = m.add_variables(upper)
 
     with pytest.warns(UserWarning):

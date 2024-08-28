@@ -1,10 +1,10 @@
 import cvxpy as cp
 import numpy as np
 from common import profile
-from numpy.random import randint, seed
+from numpy.random import default_rng
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 def basic_model(n, solver):
@@ -26,8 +26,8 @@ def basic_model(n, solver):
 
 def knapsack_model(n, solver):
     # Define the variables
-    weight = randint(1, 100, size=n)
-    value = randint(1, 100, size=n)
+    weight = rng.integers(1, 100, size=n)
+    value = rng.integers(1, 100, size=n)
 
     x = cp.Variable(n, boolean=True)
 

@@ -1,15 +1,28 @@
 # linopy: Optimization with array-like variables and constraints
 
-[![PyPI](https://img.shields.io/pypi/v/linopy)](https://pypi.org/project/linopy/) [![CI](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml/badge.svg)](https://github.com/FabianHofmann/linopy/actions/workflows/CI.yaml) [![License](https://img.shields.io/pypi/l/linopy.svg)](LICENSE.txt) [![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/) [![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
+[![PyPI](https://img.shields.io/pypi/v/linopy)](https://pypi.org/project/linopy/)
+[![License](https://img.shields.io/pypi/l/linopy.svg)](LICENSE.txt)
+[![Tests](https://github.com/PyPSA/linopy/actions/workflows/test.yml/badge.svg)](https://github.com/PyPSA/linopy/actions/workflows/test.yml)
+[![doc](https://readthedocs.org/projects/linopy/badge/?version=latest)](https://linopy.readthedocs.io/en/latest/)
+[![codecov](https://codecov.io/gh/PyPSA/linopy/branch/master/graph/badge.svg?token=TT4EYFCCZX)](https://codecov.io/gh/PyPSA/linopy)
+
+
+
+&nbsp; &nbsp; &nbsp; &nbsp; **L**inear\
+&nbsp; &nbsp; &nbsp; &nbsp; **I**nteger\
+&nbsp; &nbsp; &nbsp; &nbsp; **N**on-linear\
+&nbsp; &nbsp; &nbsp; &nbsp; **O**ptimization in\
+&nbsp; &nbsp; &nbsp; &nbsp; **P Y**thon
 
 **linopy** is an open-source python package that facilitates **optimization** with **real world data**. It builds a bridge between data analysis packages like [xarray](https://github.com/pydata/xarray) & [pandas](https://pandas.pydata.org/) and problem solvers like [cbc](https://projects.coin-or.org/Cbc), [gurobi](https://www.gurobi.com/) (see the full list below). **Linopy** supports **Linear, Integer, Mixed-Integer and Quadratic Programming** while aiming to make linear programming in Python easy, highly-flexible and performant.
+
 
 
 ## Benchmarks
 
 **linopy** is designed to be fast and efficient. The following benchmark compares the performance of **linopy** with the alternative popular optimization packages.
 
-![Performance Benchmark](https://private-user-images.githubusercontent.com/19226431/311655091-e3b8a6b9-da72-407b-bd37-7c80ada39d46.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3MTQ3NDY1NzYsIm5iZiI6MTcxNDc0NjI3NiwicGF0aCI6Ii8xOTIyNjQzMS8zMTE2NTUwOTEtZTNiOGE2YjktZGE3Mi00MDdiLWJkMzctN2M4MGFkYTM5ZDQ2LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNDA1MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjQwNTAzVDE0MjQzNlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWQ3M2Q5MTMxY2EzNTI4OTUzNDViMzUzZTkyOGQ0MzliYTYxNjc2ODdhNDFjODRiNmE4OGIwNWI0MWZlNDZmMWUmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JmFjdG9yX2lkPTAma2V5X2lkPTAmcmVwb19pZD0wIn0.WFHwXmalW05hSm0oxWGmAEnVvcdFyCvQMxDJB7v3yBk)
+![Performance Benchmark](doc/benchmark_resource-overhead.png)
 
 
 ## Main features

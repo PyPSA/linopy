@@ -1,11 +1,10 @@
-import pandas as pd
 from numpy import arange
-from numpy.random import randint, seed
+from numpy.random import default_rng
 
 from linopy import Model
 
 # Random seed for reproducibility
-seed(125)
+rng = default_rng(125)
 
 
 if snakemake.config["benchmark"] == "basic":
@@ -25,8 +24,8 @@ elif snakemake.config["benchmark"] == "knapsack":
     def create_model(n):
         m = Model()
         packages = m.add_variables(coords=[arange(n)], binary=True)
-        weight = randint(1, 100, size=n)
-        value = randint(1, 100, size=n)
+        weight = rng.integers(1, 100, size=n)
+        value = rng.integers(1, 100, size=n)
         m.add_constraints((weight * packages).sum() <= 200)
         m.add_objective(-(value * packages).sum())  # use minus because of minimization
         return m

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Linopy objective module.
 
 This module contains definition related to objective expressions.
 """
+
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 from numpy import float64
@@ -58,13 +58,10 @@ class Objective:
 
     def __init__(
         self,
-        expression: Union[
-            expressions.LinearExpression, expressions.QuadraticExpression
-        ],
+        expression: expressions.LinearExpression | expressions.QuadraticExpression,
         model: Model,
         sense: str = "min",
     ) -> None:
-
         self._model = model
         self._value = None
 
@@ -83,7 +80,7 @@ class Objective:
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
 
     @property
-    def attrs(self) -> Dict[Any, Any]:
+    def attrs(self) -> dict[Any, Any]:
         """
         Returns the attributes of the objective.
         """
@@ -206,7 +203,7 @@ class Objective:
         self._sense = sense
 
     @property
-    def value(self) -> Optional[Union[float64, float]]:
+    def value(self) -> float64 | float | None:
         """
         Returns the value of the objective.
         """
@@ -227,7 +224,7 @@ class Objective:
         return type(self.expression) is expressions.QuadraticExpression
 
     def to_matrix(self, *args, **kwargs) -> csc_matrix:
-        "Wrapper for expression.to_matrix"
+        """Wrapper for expression.to_matrix"""
         if not isinstance(self.expression, expressions.QuadraticExpression):
             raise ValueError("Cannot convert linear objective to matrix.")
         return self.expression.to_matrix(*args, **kwargs)
@@ -237,28 +234,28 @@ class Objective:
     sel = objwrap(expressions.LinearExpression.sel)
 
     def __add__(
-        self, expr: Union[int, QuadraticExpression, LinearExpression, Objective]
-    ) -> "Objective":
+        self, expr: int | QuadraticExpression | LinearExpression | Objective
+    ) -> Objective:
         if isinstance(expr, Objective):
             expr = expr.expression
 
         return Objective(self.expression + expr, self.model, self.sense)
 
-    def __sub__(self, expr: Union[LinearExpression, Objective]) -> "Objective":
+    def __sub__(self, expr: LinearExpression | Objective) -> Objective:
         if not isinstance(expr, Objective):
             expr = Objective(expr, self.model)
         return Objective(self.expression - expr.expression, self.model, self.sense)
 
-    def __mul__(self, expr: int) -> "Objective":
+    def __mul__(self, expr: int) -> Objective:
         # only allow scalar multiplication
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for multiplication.")
         return Objective(self.expression * expr, self.model, self.sense)
 
-    def __neg__(self) -> "Objective":
+    def __neg__(self) -> Objective:
         return Objective(-self.expression, self.model, self.sense)
 
-    def __truediv__(self, expr: Union[int, Objective]) -> "Objective":
+    def __truediv__(self, expr: int | Objective) -> Objective:
         # only allow scalar division
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for division.")

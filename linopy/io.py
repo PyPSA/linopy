@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Module containing all import/export functionalities.
 """
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +11,7 @@ import time
 from io import TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,7 @@ concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def handle_batch(batch: List[str], f: TextIOWrapper, batch_size: int) -> List[str]:
+def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[str]:
     """
     Write out a batch to a file and reset the batch.
     """
@@ -52,8 +52,8 @@ def handle_batch(batch: List[str], f: TextIOWrapper, batch_size: int) -> List[st
 
 
 def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: List[Any], batch_size: int
-) -> List[Union[str, Any]]:
+    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int
+) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
     """
@@ -68,8 +68,8 @@ def objective_write_linear_terms(
 
 
 def objective_write_quad_terms(
-    quadratic: DataFrame, f: TextIOWrapper, batch: List[str], batch_size: int
-) -> List[str]:
+    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int
+) -> list[str]:
     """
     Write the cross terms of the objective to a file.
     """
@@ -350,7 +350,7 @@ def objective_to_file_polars(m, f, log=False):
         logger.info("Writing objective.")
 
     sense = m.objective.sense
-    f.write(f"{sense}\n\nobj:\n\n".encode("utf-8"))
+    f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
 
     if m.is_linear:
@@ -445,7 +445,7 @@ def integers_to_file_polars(m, f, log=False, integer_label="general"):
     if not len(list(names)):
         return
 
-    f.write(f"\n\n{integer_label}\n\n".encode("utf-8"))
+    f.write(f"\n\n{integer_label}\n\n".encode())
     if log:
         names = tqdm(
             list(names),
@@ -538,8 +538,8 @@ def to_lp_file_polars(m, fn, integer_label="general"):
 
 def to_file(
     m: Model,
-    fn: Union[Path, None],
-    io_api: Union[str, None] = None,
+    fn: Path | None,
+    io_api: str | None = None,
     integer_label: str = "general",
 ) -> Path:
     """
@@ -576,7 +576,7 @@ def to_file(
     return fn
 
 
-def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
+def to_mosek(m: Model, task: Any | None = None) -> Any:
     """
     Export model to MOSEK.
 
@@ -682,7 +682,7 @@ def to_mosek(m: Model, task: Union[Any, None] = None) -> Any:
     return task
 
 
-def to_gurobipy(m: Model, env: Union[Any, None] = None) -> Any:
+def to_gurobipy(m: Model, env: Any | None = None) -> Any:
     """
     Export the model to gurobipy.
 
@@ -911,8 +911,8 @@ def to_block_files(m: Model, fn: Path):
 
 
 def non_bool_dict(
-    d: Dict[str, Union[Tuple[int, int], str, bool, List[str], int]]
-) -> Dict[str, Union[Tuple[int, int], str, int, List[str]]]:
+    d: dict[str, tuple[int, int] | str | bool | list[str] | int],
+) -> dict[str, tuple[int, int] | str | int | list[str]]:
     """
     Convert bool to int for netCDF4 storing.
     """
@@ -973,7 +973,7 @@ def to_netcdf(m: Model, *args, **kwargs) -> None:
     ds.to_netcdf(*args, **kwargs)
 
 
-def read_netcdf(path: Union[Path, str], **kwargs) -> Model:
+def read_netcdf(path: Path | str, **kwargs) -> Model:
     """
     Read in a model from a netcdf file.
 

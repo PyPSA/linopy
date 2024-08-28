@@ -11,7 +11,8 @@ def simple_two_single_variables_model() -> Model:
     """
     Creates a simple linear programming model with two single variables.
 
-    Returns:
+    Returns
+    -------
         Model: The created linear programming model.
     """
     m = Model()
@@ -30,7 +31,8 @@ def simple_two_array_variables_model() -> Model:
     """
     Creates a simple linear programming model with two array variables.
 
-    Returns:
+    Returns
+    -------
         Model: The created linear programming model.
     """
     m = Model()
@@ -55,11 +57,13 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
     Creates a benchmark linear programming model used in https://doi.org/10.21105/joss.04823.
 
     Args:
+    ----
         n (int): The size of the benchmark models dimensions.
         integerlabels (bool, optional): Whether to use integer labels for variables.
         Defaults to False.
 
     Returns:
+    -------
         Model: The created linear programming model.
     """
     m = Model()

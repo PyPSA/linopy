@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Wed Mar 10 11:23:13 2021.
 
@@ -85,7 +84,7 @@ def test_constraint_assignment_chunked():
     # setting bounds with one pd.DataFrame and one pd.Series
     m = Model(chunk=5)
     lower = pd.DataFrame(np.zeros((10, 10)))
-    upper = pd.Series(np.ones((10)))
+    upper = pd.Series(np.ones(10))
     x = m.add_variables(lower, upper)
     m.add_constraints(x, GREATER_EQUAL, 0, name="c")
     assert m.constraints.coeffs.c.data.shape == (

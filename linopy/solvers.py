@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Linopy module for solving lp files with different solvers.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -13,7 +13,7 @@ import re
 import subprocess as sub
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Union
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import pandas as pd
@@ -139,7 +139,7 @@ def safe_get_solution(status: Status, func: Callable) -> Solution:
 
 
 def maybe_adjust_objective_sign(
-    solution: Solution, sense: str, io_api: Union[str, None]
+    solution: Solution, sense: str, io_api: str | None
 ) -> None:
     if sense == "min":
         return
@@ -171,12 +171,12 @@ def path_to_string(path: Path) -> str:
 
 def run_cbc(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -244,7 +244,7 @@ def run_cbc(
         p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
         p.wait()
 
-    with open(solution_fn, "r") as f:
+    with open(solution_fn) as f:
         data = f.readline()
 
     if data.startswith("Optimal - objective value"):
@@ -283,12 +283,12 @@ def run_cbc(
 
 def run_glpk(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -412,12 +412,12 @@ def run_glpk(
 
 def run_highs(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -448,7 +448,7 @@ def run_highs(
     constraints_dual : series
     objective : float
     """
-    CONDITION_MAP: Dict[str, str] = {}
+    CONDITION_MAP: dict[str, str] = {}
 
     if solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
         "QP",
@@ -521,12 +521,12 @@ def run_highs(
 
 def run_cplex(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -627,14 +627,14 @@ def run_cplex(
 
 def run_gurobi(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
-    env: Union["gurobipy.Env", None] = None,
+    env: gurobipy.Env | None = None,
     **solver_options,
 ) -> Result:
     """
@@ -722,20 +722,20 @@ def run_gurobi(
 
             return Solution(sol, dual, objective)
 
-    solution = safe_get_solution(status, get_solver_solution)
-    maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
+        solution = safe_get_solution(status, get_solver_solution)
+        maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
     return Result(status, solution, m)
 
 
 def run_scip(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
     env: None = None,
     **solver_options,
@@ -745,7 +745,7 @@ def run_scip(
 
     This function communicates with scip using the pyscipopt package.
     """
-    CONDITION_MAP: Dict[str, str] = {}
+    CONDITION_MAP: dict[str, str] = {}
 
     if io_api is None or io_api in FILE_IO_APIS:
         problem_fn = model.to_file(problem_fn, io_api)
@@ -907,7 +907,7 @@ def run_xpress(
             dual_ = [str(d) for d in m.getConstraint()]
             dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
             dual = set_int_index(dual)
-        except xpress.SolverError:
+        except (xpress.SolverError, SystemError):
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
@@ -924,14 +924,14 @@ mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \
 
 def run_mosek(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
-    env: Union["mosek.Task", None] = None,
+    env: mosek.Task | None = None,
     **solver_options,
 ) -> Result:
     """
@@ -986,7 +986,7 @@ def run_mosek(
                 skx = [mosek.stakey.low] * m.getnumvar()
                 skc = [mosek.stakey.bas] * m.getnumcon()
 
-                with open(path_to_string(warmstart_fn), "rt") as f:
+                with open(path_to_string(warmstart_fn)) as f:
                     for line in f:
                         if line.startswith("NAME "):
                             break
@@ -1039,7 +1039,7 @@ def run_mosek(
 
             if basis_fn is not None:
                 if m.solutiondef(mosek.soltype.bas):
-                    with open(path_to_string(basis_fn), "wt") as f:
+                    with open(path_to_string(basis_fn), "w") as f:
                         f.write(f"NAME {basis_fn}\n")
 
                         skc = [
@@ -1234,14 +1234,14 @@ def run_copt(
 
 def run_mindopt(
     model: Model,
-    io_api: Union[str, None] = None,
-    problem_fn: Union[Path, None] = None,
-    solution_fn: Union[Path, None] = None,
-    log_fn: Union[Path, None] = None,
-    warmstart_fn: Union[Path, None] = None,
-    basis_fn: Union[Path, None] = None,
+    io_api: str | None = None,
+    problem_fn: Path | None = None,
+    solution_fn: Path | None = None,
+    log_fn: Path | None = None,
+    warmstart_fn: Path | None = None,
+    basis_fn: Path | None = None,
     keep_files: bool = False,
-    env: Union["mindoptpy.Env", None] = None,  # type: ignore
+    env: mindoptpy.Env | None = None,  # type: ignore
     **solver_options,
 ) -> Result:
     """
