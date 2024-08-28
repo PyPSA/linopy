@@ -551,7 +551,7 @@ class Model:
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
-            data = lhs.to_constraint(sign, rhs).data  # type: ignore
+            data = lhs.to_constraint(sign, rhs).data
         elif isinstance(lhs, (list, tuple)):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_none)
@@ -803,7 +803,7 @@ class Model:
 
         dtype = self.blocks.dtype
         self.variables.set_blocks(self.blocks)
-        block_map = self.variables.get_blockmap(dtype)  # type: ignore
+        block_map = self.variables.get_blockmap(dtype)
         self.constraints.set_blocks(block_map)
 
         blocks = replace_by_map(self.objective.vars, block_map)
@@ -1046,7 +1046,7 @@ class Model:
         if solver_name is None:
             solver_name = available_solvers[0]
 
-        logger.info(f" Solve problem using {solver_name.title()} solver")  # type: ignore
+        logger.info(f" Solve problem using {solver_name.title()} solver")
         assert solver_name in available_solvers, f"Solver {solver_name} not installed"
 
         # reset result

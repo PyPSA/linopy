@@ -242,7 +242,7 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
-    return arr  # type: ignore
+    return arr
 
 
 # TODO: rename to to_pandas_dataframe
@@ -496,7 +496,7 @@ def best_int(max_value: int) -> type:
     Get the minimal int dtype for storing values <= max_value.
     """
     for t in (np.int8, np.int16, np.int32, np.int64):
-        if max_value <= np.iinfo(t).max:  # type: ignore
+        if max_value <= np.iinfo(t).max:
             return t
     raise ValueError(f"Value {max_value} is too large for int64.")
 

@@ -77,15 +77,15 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("scip")
 with contextlib.suppress(ImportError):
-    import cplex  # type: ignore
+    import cplex
 
     available_solvers.append("cplex")
 with contextlib.suppress(ImportError):
-    import xpress  # type: ignore
+    import xpress
 
     available_solvers.append("xpress")
 with contextlib.suppress(ImportError):
-    import mosek  # type: ignore
+    import mosek
 
     with contextlib.suppress(mosek.Error):
         with mosek.Env() as m:
@@ -100,7 +100,7 @@ with contextlib.suppress(ImportError):
 
     available_solvers.append("mindopt")
 with contextlib.suppress(ImportError):
-    import coptpy  # type: ignore
+    import coptpy
 
     with contextlib.suppress(coptpy.CoptError):
         coptpy.Envr()
@@ -962,7 +962,7 @@ def run_mosek(
         if env is None:
             env = stack.enter_context(mosek.Env())
 
-        with env.Task() as m:  # type: ignore
+        with env.Task() as m:
             if io_api == "direct":
                 model.to_mosek(m)
             elif io_api is None or io_api in FILE_IO_APIS:
@@ -1241,7 +1241,7 @@ def run_mindopt(
     warmstart_fn: Path | None = None,
     basis_fn: Path | None = None,
     keep_files: bool = False,
-    env: mindoptpy.Env | None = None,  # type: ignore
+    env: mindoptpy.Env | None = None,
     **solver_options,
 ) -> Result:
     """
@@ -1274,10 +1274,10 @@ def run_mindopt(
     problem_fn = model.to_file(problem_fn, io_api)
 
     if env is None:
-        env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")  # type: ignore
-    env.start()  # type: ignore
+        env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
+    env.start()
 
-    m = mindoptpy.read(path_to_string(problem_fn), env)  # type: ignore
+    m = mindoptpy.read(path_to_string(problem_fn), env)
 
     for k, v in solver_options.items():
         m.setParam(k, v)
@@ -1285,7 +1285,7 @@ def run_mindopt(
     if warmstart_fn:
         try:
             m.read(path_to_string(warmstart_fn))
-        except mindoptpy.MindoptError as err:  # type: ignore
+        except mindoptpy.MindoptError as err:
             logger.info("Model basis could not be read. Raised error: %s", err)
 
     m.optimize()
@@ -1293,13 +1293,13 @@ def run_mindopt(
     if basis_fn:
         try:
             m.write(path_to_string(basis_fn))
-        except mindoptpy.MindoptError as err:  # type: ignore
+        except mindoptpy.MindoptError as err:
             logger.info("No model basis stored. Raised error: %s", err)
 
     if solution_fn:
         try:
             m.write(path_to_string(solution_fn))
-        except mindoptpy.MindoptError as err:  # type: ignore
+        except mindoptpy.MindoptError as err:
             logger.info("No model solution stored. Raised error: %s", err)
 
     condition = m.status
@@ -1316,7 +1316,7 @@ def run_mindopt(
         try:
             dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
             dual = set_int_index(dual)
-        except (mindoptpy.MindoptError, AttributeError):  # type: ignore
+        except (mindoptpy.MindoptError, AttributeError):
             logger.warning("Dual values of MILP couldn't be parsed")
             dual = pd.Series(dtype=float)
 
@@ -1325,7 +1325,7 @@ def run_mindopt(
     solution = safe_get_solution(status, get_solver_solution)
     maybe_adjust_objective_sign(solution, model.objective.sense, io_api)
 
-    env.dispose()  # type: ignore
+    env.dispose()
 
     return Result(status, solution, m)
 

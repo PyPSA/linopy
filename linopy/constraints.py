@@ -184,7 +184,7 @@ class Constraint:
             "The `.values` attribute is deprecated. Use `.labels.values` instead.",
             DeprecationWarning,
         )
-        return self.labels.values if self.is_assigned else None  # type: ignore
+        return self.labels.values if self.is_assigned else None
 
     @property
     def nterm(self):
@@ -767,7 +767,7 @@ class Constraints:
         """
         return save_join(
             *[v.labels.rename(k) for k, v in self.items()],
-            integer_dtype=True,  # type: ignore
+            integer_dtype=True,
         )
 
     @property

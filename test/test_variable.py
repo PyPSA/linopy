@@ -198,7 +198,7 @@ def test_variable_where(x):
     assert x.labels[9] == x.at[0].label
 
     with pytest.raises(ValueError):
-        x.where([True] * 4 + [False] * 6, 0)  # type: ignore
+        x.where([True] * 4 + [False] * 6, 0)
 
 
 def test_variable_shift(x):
