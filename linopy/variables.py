@@ -396,9 +396,7 @@ class Variable:
         expr = self.to_linexpr()
         return expr._multiply_by_linear_expression(expr)
 
-    def __rmul__(  # type: ignore
-        self, other: float | DataArray | int | ndarray
-    ) -> LinearExpression:
+    def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
         """
         Right-multiply variables with a coefficient.
         """

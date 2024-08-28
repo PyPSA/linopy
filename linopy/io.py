@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import shutil
 import time
+from collections.abc import Iterable
 from io import TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -132,7 +133,7 @@ def constraints_to_file(
         return
 
     f.write("\n\ns.t.\n\n")
-    names = m.constraints
+    names: Iterable = m.constraints
     if log:
         names = tqdm(
             list(names),
@@ -194,7 +195,7 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names: Iterable = list(m.variables.continuous) + list(m.variables.integers)
     if not len(list(names)):
         return
 
@@ -231,7 +232,7 @@ def binaries_to_file(
     """
     Write out binaries of a model to a lp file.
     """
-    names = m.variables.binaries
+    names: Iterable = m.variables.binaries
     if not len(list(names)):
         return
 
@@ -265,7 +266,7 @@ def integers_to_file(
     """
     Write out integers of a model to a lp file.
     """
-    names = m.variables.integers
+    names: Iterable = m.variables.integers
     if not len(list(names)):
         return
 
@@ -592,7 +593,7 @@ def to_mosek(m: Model, task: Any | None = None) -> Any:
     task : MOSEK Task object
     """
 
-    import mosek  # type: ignore
+    import mosek
 
     if task is None:
         task = mosek.Task()

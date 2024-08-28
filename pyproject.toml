@@ -91,10 +91,23 @@ version_scheme = "no-guess-dev"
 branch = true
 source = ["linopy"]
 omit = ["test/*"]
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
 
 [tool.mypy]
 exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
 ignore_missing_imports = true
+no_implicit_optional = true
+warn_unused_ignores = true
+show_error_code_links = true
+# disallow_any_generics = true
+# warn_return_any = true
+
+# [[tool.mypy.overrides]]
+# module = "linopy.*"
+# disallow_untyped_defs = true
 
 [tool.ruff]
 extend-include = ['*.ipynb']

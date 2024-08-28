@@ -153,7 +153,7 @@ class LinearExpressionGroupby:
                 "Grouping by pandas objects is only supported in sum function."
             )
 
-        return self.data.groupby(group=self.group, **self.kwargs)  # type: ignore
+        return self.data.groupby(group=self.group, **self.kwargs)
 
     def map(
         self, func: Callable, shortcut: bool = False, args: tuple[()] = (), **kwargs
@@ -549,7 +549,7 @@ class LinearExpression:
             raise ValueError("Power must be 2.")
         return self * self  # type: ignore
 
-    def __rmul__(  # type: ignore
+    def __rmul__(
         self, other: float | int | DataArray
     ) -> LinearExpression | QuadraticExpression:
         """
@@ -590,7 +590,7 @@ class LinearExpression:
     def __le__(self, rhs: int) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: int | ndarray | DataArray) -> Constraint:  # type: ignore
+    def __ge__(self, rhs: int | ndarray | DataArray) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
     def __eq__(self, rhs: LinearExpression | float | Variable | int) -> Constraint:  # type: ignore

@@ -441,7 +441,7 @@ def test_assign_multiindex_safe():
     assert result["humidity"].equals(data)
 
     # Case 2: Assigning a Dataset
-    result = assign_multiindex_safe(ds, **xr.Dataset({"humidity": data}))  # type: ignore
+    result = assign_multiindex_safe(ds, **xr.Dataset({"humidity": data}))
     assert "humidity" in result
     assert "value" in result
     assert result["humidity"].equals(data)

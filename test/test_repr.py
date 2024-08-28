@@ -13,15 +13,15 @@ types = pd.Index(list("abcdefgh"), name="types")
 
 u = m.add_variables(0, upper, name="u")
 v = m.add_variables(lower, upper, name="v")
-x = m.add_variables(lower, 10, coords=[lower.index], name="x")  # type: ignore
+x = m.add_variables(lower, 10, coords=[lower.index], name="x")
 y = m.add_variables(0, 10, name="y")
 z = m.add_variables(name="z", binary=True)
-a = m.add_variables(coords=[lower.index], name="a", binary=True)  # type: ignore
-b = m.add_variables(coords=[lower.index], name="b", integer=True)  # type: ignore
+a = m.add_variables(coords=[lower.index], name="a", binary=True)
+b = m.add_variables(coords=[lower.index], name="b", integer=True)
 c_mask = xr.DataArray(False, coords=upper.axes)
 c_mask[:, 5:] = True
 c = m.add_variables(lower, upper, name="c", mask=c_mask)
-d = m.add_variables(0, 10, coords=[types], name="d")  # type: ignore
+d = m.add_variables(0, 10, coords=[types], name="d")
 
 # new behavior in v0.2, variable with dimension name and other
 # coordinates are added without a warning
