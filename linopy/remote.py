@@ -273,7 +273,7 @@ class OetCloudHandler:
             self._download_result(out_file_url, solved_file)
 
             solved = read_netcdf(solved_file)
-            # TODO print objective value and termination cond
+            logger.info(f'OETC result: {solved.status}, {solved.termination_condition}, Objective: {solved.objective.value:.2e}')
             os.remove(solved_file)
             return solved
 
@@ -292,10 +292,9 @@ class OetCloudHandler:
         logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
         return content['uuid']
 
-    def _wait_and_get_job_data(self, uuid: str, retries=5):
-        """Waits for job completion upto `retries` times, with wait time doubling each
-        time; returns job data including output file download links."""
-        wait_time = 2
+    def _wait_and_get_job_data(self, uuid: str, retries=4*60, retry_every_s=15):
+        """Waits for job completion upto `retries` times, waiting `retry_every_s` seconds
+        in between retries; returns job data including output file download links."""
         for _ in range(retries):
             logger.info('Checking job status...')
             response: Response = get(f"http://127.0.0.1:5000/compute-job/{uuid}")
@@ -307,11 +306,11 @@ class OetCloudHandler:
             if content['status'] == 'FINISHED':
                 logger.info('OETC completed job execution')
                 return content
-            elif content['status'] != 'RUNNING':
+            elif content['status'] not in {'RUNNING', 'PENDING'}:
                 raise ValueError(f"Unexpected status: {content['status']}")
             logger.info('OETC still crunching...')
-            sleep(wait_time)
-            wait_time *= 2
+            sleep(retry_every_s)
+        raise TimeoutError('Timed out waiting for OETC. Pleae check the status manually.')
             
 
     def _download_result(self, output_file_url, output_file_path):
