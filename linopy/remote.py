@@ -244,6 +244,9 @@ class RemoteHandler:
 
 class OetCloudHandler:
 
+    def __init__(self):
+        self.oetc_url = os.environ.get('OETC_URL', 'http://127.0.0.1:5000')
+
     def solve_on_remote(self, model, **kwargs):
         """
         Solve a linopy model on the OET Cloud compute app.
@@ -281,7 +284,7 @@ class OetCloudHandler:
         logger.info('Calling OETC...')
         with open(input_file_name, "rb") as nc_file:
             response: Response = post(
-                "http://127.0.0.1:5000/compute-job/create",
+                f"{self.oetc_url}/compute-job/create",
                 files={"nc_file": nc_file},
             ) # TODO add content type?
         if not response.ok:
@@ -297,7 +300,7 @@ class OetCloudHandler:
         in between retries; returns job data including output file download links."""
         for _ in range(retries):
             logger.info('Checking job status...')
-            response: Response = get(f"http://127.0.0.1:5000/compute-job/{uuid}")
+            response: Response = get(f"{self.oetc_url}/compute-job/{uuid}")
             if not response.ok:
                 raise ValueError(f'OETC Error: {response.text}')
             content = response.json()
