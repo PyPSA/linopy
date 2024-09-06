@@ -88,7 +88,7 @@ jobs:
       env:
         MOSEKLM_LICENSE_FILE: ${{ secrets.MSK_LICENSE }}
       run: |
-        pytest --cov=./ --cov-report=xml linopy --doctest-modules test
+        pytest --cov=./ --cov-report=xml linopy --doctest-modules test --numprocesses=auto --dist=loadscope
 
     - name: Upload code coverage report
       if: matrix.os == 'ubuntu-latest'
