@@ -1075,18 +1075,24 @@ class Model:
             )
 
         try:
-            func = getattr(solvers, f"run_{solver_name}")
-            result = func(
-                self,
+            solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
+            if io_api != "direct":
+                problem_fn = self.to_file(to_path(problem_fn), io_api)
+            # initialize the solver as object of solver subclass <solver_class>
+            solver = solver_class(
+                sense=self.sense,
                 io_api=io_api,
+                env=env,
+                **solver_options,
+            )
+            # solve the problem from problem file or directly from model
+            result = solver.solve_problem_file(
                 problem_fn=to_path(problem_fn),
                 solution_fn=to_path(solution_fn),
                 log_fn=to_path(log_fn),
                 warmstart_fn=to_path(warmstart_fn),
                 basis_fn=to_path(basis_fn),
-                keep_files=keep_files,
-                env=env,
-                **solver_options,
+                model=self,
             )
         finally:
             for fn in (problem_fn, solution_fn):
