@@ -575,7 +575,7 @@ class Highs(Solver):
         CONDITION_MAP: dict[str, str] = {}
 
         # check if problem file name is specified
-        if problem_fn is None:
+        if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
 
         if self.io_api is None or self.io_api in FILE_IO_APIS:
@@ -598,13 +598,11 @@ class Highs(Solver):
                     "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
                 )
 
-        if log_fn is None:
-            if model is not None:
-                log_fn = model.solver_dir / "highs.log"
-            else:
-                log_fn = "./highs.log"
-        self.solver_options["log_file"] = self.path_to_string(log_fn)
-        logger.info(f"Log file at {self.solver_options['log_file']}")
+        if log_fn is None and model is not None:
+            log_fn = model.solver_dir / "highs.log"
+        if log_fn is not None:
+            self.solver_options["log_file"] = self.path_to_string(log_fn)
+            logger.info(f"Log file at {self.solver_options['log_file']}")
 
         for k, v in self.solver_options.items():
             h.setOptionValue(k, v)
@@ -718,7 +716,7 @@ class Gurobi(Solver):
         }
 
         # check if problem file name is specified
-        if problem_fn is None:
+        if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
 
         with contextlib.ExitStack() as stack:
