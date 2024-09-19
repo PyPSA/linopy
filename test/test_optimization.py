@@ -14,8 +14,9 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
+from linopy.common import to_path
 
 logger = logging.getLogger(__name__)
 
@@ -679,6 +680,42 @@ def test_model_resolve(model, solver, io_api):
     assert status == "ok"
     # x = -0.75, y = 3.0
     assert np.isclose(model.objective.value, 5.25)
+
+
+@pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" not in p])
+def test_solver_classes_from_problem_file(model, solver, io_api):
+    # initialize the solver as object of solver subclass <solver_class>
+    solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
+    solver_ = solver_class(sense=model.sense, io_api=io_api)
+    # get problem file for testing
+    problem_fn = model.get_problem_file(io_api=io_api)
+    model.to_file(to_path(problem_fn), io_api)
+    solution_fn = model.get_solution_file() if solver in ["glpk", "cbc"] else None
+    result = solver_.solve_problem_file(problem_fn, solution_fn)
+    assert result.status.status.value == "ok"
+    # x = -0.1, y = 1.7
+    assert np.isclose(result.solution.objective, 3.3)
+    # test for Value error message if no problem file is given
+    with pytest.raises(ValueError):
+        solver_.solve_problem_file(solution_fn)
+    # test for Value error message if no solution file is passed to glpk or cbc
+    if solver in ["glpk", "cbc"]:
+        with pytest.raises(ValueError):
+            solver_.solve_problem_file(problem_fn)
+
+
+@pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" in p])
+def test_solver_classes_direct(model, solver, io_api):
+    # initialize the solver as object of solver subclass <solver_class>
+    solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
+    solver_ = solver_class(sense=model.sense, io_api=io_api)
+    result = solver_.solve_problem_file(model=model)
+    assert result.status.status.value == "ok"
+    # x = -0.1, y = 1.7
+    assert np.isclose(result.solution.objective, 3.3)
+    # test for Value error message if direct is tried without giving model
+    with pytest.raises(ValueError):
+        solver_.solve_problem_file()
 
 
 # def init_model_large():
