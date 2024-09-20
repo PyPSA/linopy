@@ -171,14 +171,11 @@ class Solver:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-    def path_to_string(self, path: Path | None) -> str:
+    def path_to_string(self, path: Path) -> str:
         """
         Convert a pathlib.Path to a string.
         """
-        if isinstance(path, str):
-            return path
-        else:
-            return str(path.resolve())
+        return str(path.resolve())
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
