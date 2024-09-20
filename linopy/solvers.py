@@ -170,7 +170,7 @@ class Solver:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-    def path_to_string(self, path: Path | str) -> str:
+    def path_to_string(self, path: Path | None) -> str:
         """
         Convert a pathlib.Path to a string.
         """
