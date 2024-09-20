@@ -202,6 +202,13 @@ class Solver:
             )
             solution.objective *= -1
 
+    def read_sense_from_problem_file(self, problem_fn):
+        f = open(problem_fn, "r").read()
+        return "min" if "min" in f else "max"
+
+    def read_io_api_from_problem_file(self, problem_fn):
+        return self.path_to_string(problem_fn).split(".")[-1]
+
     def solve_problem_file(self):
         """
         Function to solve a given linear problem using a specific solver from an input problem file.
@@ -275,6 +282,9 @@ class CBC(Solver):
             raise ValueError(
                 "No solution file specified. For solving with CBC this is necessary."
             )
+
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
 
         # printingOptions is about what goes in solution file
         command = f"cbc -printingOptions all -import {problem_fn} "
@@ -424,6 +434,9 @@ class GLPK(Solver):
             raise ValueError(
                 "No solution file specified. For solving with GLPK this is necessary."
             )
+
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
 
         Path(solution_fn).parent.mkdir(exist_ok=True)
         suffix = problem_fn.suffix[1:]
@@ -582,6 +595,10 @@ class Highs(Solver):
         if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
 
+        if self.io_api != "direct":
+            self.sense = self.read_sense_from_problem_file(problem_fn)
+            self.io_api = self.read_io_api_from_problem_file(problem_fn)
+
         if self.io_api is None or self.io_api in FILE_IO_APIS:
             h = highspy.Highs()
             h.readModel(self.path_to_string(problem_fn))
@@ -726,6 +743,10 @@ class Gurobi(Solver):
         if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
 
+        if self.io_api != "direct":
+            self.sense = self.read_sense_from_problem_file(problem_fn)
+            self.io_api = self.read_io_api_from_problem_file(problem_fn)
+
         with contextlib.ExitStack() as stack:
             if self.env is None:
                 self.env = stack.enter_context(gurobipy.Env())
@@ -849,6 +870,9 @@ class Cplex(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+
         m = cplex.Cplex()
 
         if log_fn is not None:
@@ -971,6 +995,9 @@ class SCIP(Solver):
         # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
 
         m = scip.Model()
         m.readProblem(self.path_to_string(problem_fn))
@@ -1109,6 +1136,9 @@ class Xpress(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+
         m = xpress.problem()
 
         m.read(self.path_to_string(problem_fn))
@@ -1232,6 +1262,10 @@ class Mosek(Solver):
         # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+
+        if self.io_api != "direct":
+            self.sense = self.read_sense_from_problem_file(problem_fn)
+            self.io_api = self.read_io_api_from_problem_file(problem_fn)
 
         with contextlib.ExitStack() as stack:
             if self.env is None:
@@ -1486,6 +1520,9 @@ class COPT(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+
         if self.env is None:
             self.env = coptpy.Envr()
 
@@ -1616,6 +1653,9 @@ class MindOpt(Solver):
         # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+
+        self.sense = self.read_sense_from_problem_file(problem_fn)
+        self.io_api = self.read_io_api_from_problem_file(problem_fn)
 
         if model is not None:
             if (
