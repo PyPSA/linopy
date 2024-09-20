@@ -15,8 +15,8 @@ import xarray as xr
 from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
-from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 from linopy.common import to_path
+from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
 
