@@ -203,7 +203,7 @@ class Solver:
             solution.objective *= -1
 
     def read_sense_from_problem_file(self, problem_fn):
-        f = open(problem_fn, "r").read()
+        f = open(problem_fn).read()
         return "min" if "min" in f else "max"
 
     def read_io_api_from_problem_file(self, problem_fn):
