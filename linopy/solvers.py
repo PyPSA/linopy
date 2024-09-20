@@ -6,13 +6,13 @@ Linopy module for solving lp files with different solvers.
 from __future__ import annotations
 
 import contextlib
+import enum
 import io
 import logging
 import os
 import re
 import subprocess as sub
 import sys
-import enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -156,11 +156,12 @@ class Solver:
     For a specified solver the function solve_problem_file() needs to be implemented.
     """
 
-    def __init__(self,
-                 sense: str | None = None,
-                 io_api: str | None = None,
-                 **solver_options,
-                 ):
+    def __init__(
+        self,
+        sense: str | None = None,
+        io_api: str | None = None,
+        **solver_options,
+    ):
         self.sense = sense
         self.io_api = io_api
         self.solver_options = solver_options
@@ -191,9 +192,7 @@ class Solver:
                 return func()
         return Solution()
 
-    def maybe_adjust_objective_sign(
-            self, solution: Solution
-    ) -> None:
+    def maybe_adjust_objective_sign(self, solution: Solution) -> None:
         if self.sense == "min":
             return
 
@@ -220,21 +219,20 @@ class CBC(Solver):
     Solver subclass for the CBC solver.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
 
         # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
         if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
@@ -245,14 +243,15 @@ class CBC(Solver):
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for CBC")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the cbc solver.
         The function reads the linear problem file and passes it to the cbc
@@ -261,7 +260,7 @@ class CBC(Solver):
         options, run 'cbc' in your shell.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name
         log_fn              log file name (optional)
@@ -276,7 +275,9 @@ class CBC(Solver):
 
         # check if solution file name is specified
         if solution_fn is None:
-            raise ValueError("No solution file specified. For solving with CBC this is necessary.")
+            raise ValueError(
+                "No solution file specified. For solving with CBC this is necessary."
+            )
 
         # printingOptions is about what goes in solution file
         command = f"cbc -printingOptions all -import {problem_fn} "
@@ -286,8 +287,10 @@ class CBC(Solver):
 
         if self.solver_options:
             command += (
-                    " ".join("-" + " ".join([k, str(v)]) for k, v in self.solver_options.items())
-                    + " "
+                " ".join(
+                    "-" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
+                )
+                + " "
             )
         command += f"-solve -solu {solution_fn} "
 
@@ -329,7 +332,7 @@ class CBC(Solver):
         status.legacy_status = data
 
         def get_solver_solution():
-            objective = float(data[len("Optimal - objective value "):])
+            objective = float(data[len("Optimal - objective value ") :])
 
             with open(solution_fn, "rb") as f:
                 trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
@@ -359,22 +362,20 @@ class GLPK(Solver):
     Solver subclass for the GLPK solver.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
 
         # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
         if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
@@ -385,14 +386,15 @@ class GLPK(Solver):
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for GLPK")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the glpk solver.
 
@@ -405,7 +407,7 @@ class GLPK(Solver):
         https://kam.mff.cuni.cz/~elias/glpk.pdf
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name
         log_fn              log file name (optional)
@@ -422,7 +424,9 @@ class GLPK(Solver):
             raise ValueError("No problem file specified.")
 
         if solution_fn is None:
-            raise ValueError("No solution file specified. For solving with GLPK this is necessary.")
+            raise ValueError(
+                "No solution file specified. For solving with GLPK this is necessary."
+            )
 
         Path(solution_fn).parent.mkdir(exist_ok=True)
         suffix = problem_fn.suffix[1:]
@@ -437,8 +441,10 @@ class GLPK(Solver):
             command += f"-w {basis_fn} "
         if self.solver_options:
             command += (
-                    " ".join("--" + " ".join([k, str(v)]) for k, v in self.solver_options.items())
-                    + " "
+                " ".join(
+                    "--" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
+                )
+                + " "
             )
         command = command.strip()
 
@@ -486,7 +492,9 @@ class GLPK(Solver):
             dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
             if "Marginal" in dual_:
                 dual = (
-                    pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).pipe(set_int_index)
+                    pd.to_numeric(dual_["Marginal"], "coerce")
+                    .fillna(0)
+                    .pipe(set_int_index)
                 )
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
@@ -522,31 +530,30 @@ class Highs(Solver):
     * time_limit : inf by default.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the Highs solver.
         Reads a linear problem file and passes it to the highs solver.
@@ -554,7 +561,7 @@ class Highs(Solver):
         objective, solution and dual constraint variables.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -589,7 +596,11 @@ class Highs(Solver):
             )
 
         if model is not None:
-            if self.solver_options.get("solver") in ["simplex", "ipm", "pdlp"] and model.type in [
+            if self.solver_options.get("solver") in [
+                "simplex",
+                "ipm",
+                "pdlp",
+            ] and model.type in [
                 "QP",
                 "MILP",
             ]:
@@ -633,12 +644,12 @@ class Highs(Solver):
                 sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
                 dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
             else:
-                sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float).pipe(
-                    set_int_index
-                )
-                dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float).pipe(
-                    set_int_index
-                )
+                sol = pd.Series(
+                    solution.col_value, h.getLp().col_names_, dtype=float
+                ).pipe(set_int_index)
+                dual = pd.Series(
+                    solution.row_dual, h.getLp().row_names_, dtype=float
+                ).pipe(set_int_index)
 
             return Solution(sol, dual, objective)
 
@@ -653,40 +664,39 @@ class Gurobi(Solver):
     Solver subclass for the gurobi solver.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
     env                 The gurobipy environment. Defaults to new gurobipy.Env
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: gurobipy.Env | None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: gurobipy.Env | None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         self.env = env
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
         Reads a problem file and passes it to the Gurobi solver.
         This function communicates with gurobi using the gurobipy package.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -791,33 +801,32 @@ class Cplex(Solver):
     i.e. `**{'aa.bb.cc' : x}`.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for Cplex")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the cplex solver.
 
@@ -826,7 +835,7 @@ class Cplex(Solver):
         constraint dual values. Cplex must be installed for using this function.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -920,40 +929,39 @@ class SCIP(Solver):
     Solver subclass for the SCIP solver.
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for SCIP")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the scip solver.
 
         This function communicates with scip using the pyscipopt package.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -1015,7 +1023,9 @@ class SCIP(Solver):
 
             s = m.getSols()[0]
             sol = pd.Series({v.name: s[v] for v in m.getVars()})
-            sol.drop(["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0)
+            sol.drop(
+                ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
+            )
             sol = set_int_index(sol)
 
             cons = m.getConss()
@@ -1023,7 +1033,7 @@ class SCIP(Solver):
                 dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
                 dual = dual[
                     dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
-                    ]
+                ]
                 dual = set_int_index(dual)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
@@ -1045,33 +1055,32 @@ class Xpress(Solver):
     https://www.fico.com/fico-xpress-optimization/docs/latest/solver/GUID-ACD7E60C-7852-36B7-A78A-CED0EA291CDD.html
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for Xpress")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the Xpress solver.
 
@@ -1081,7 +1090,7 @@ class Xpress(Solver):
         must be installed for using this function.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -1176,39 +1185,38 @@ class Mosek(Solver):
     {"MSK_SPAR_REMOTE_OPTSERVER_HOST": "http://solve.mosek.com:30080"}
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
     env                 The mosek Task environment
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: mosek.Task | None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: mosek.Task | None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         self.env = env
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the MOSEK solver. Both 'direct' mode, mps and
         lp mode are supported; MPS mode does not support quadratic terms.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -1246,12 +1254,16 @@ class Mosek(Solver):
                     m.putparam(k, str(v))
 
                 if log_fn is not None:
-                    m.linkfiletostream(mosek.streamtype.log, self.path_to_string(log_fn), 0)
+                    m.linkfiletostream(
+                        mosek.streamtype.log, self.path_to_string(log_fn), 0
+                    )
                 else:
                     m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
                 if warmstart_fn is not None:
-                    m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+                    m.putintparam(
+                        mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys
+                    )
                     skx = [mosek.stakey.low] * m.getnumvar()
                     skc = [mosek.stakey.bas] * m.getnumcon()
 
@@ -1367,9 +1379,13 @@ class Mosek(Solver):
 
                 if solution_fn is not None:
                     try:
-                        m.writesolution(mosek.soltype.bas, self.path_to_string(solution_fn))
+                        m.writesolution(
+                            mosek.soltype.bas, self.path_to_string(solution_fn)
+                        )
                     except mosek.Error as err:
-                        logger.info("Unable to save solution file. Raised error: %s", err)
+                        logger.info(
+                            "Unable to save solution file. Raised error: %s", err
+                        )
 
                 condition = str(m.getsolsta(soltype))
                 termination_condition = CONDITION_MAP.get(condition, condition)
@@ -1395,7 +1411,9 @@ class Mosek(Solver):
 
                     return Solution(sol, dual, objective)
 
-                solution = self.safe_get_solution(status=status, func=get_solver_solution)
+                solution = self.safe_get_solution(
+                    status=status, func=get_solver_solution
+                )
                 self.maybe_adjust_objective_sign(solution)
 
         return Result(status, solution)
@@ -1411,41 +1429,40 @@ class COPT(Solver):
     https://guide.coap.online/copt/en-doc/parameter.html
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     env                 The coptpy Environment
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: coptpy.Envr = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: coptpy.Envr = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         self.env = env
 
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for COPT")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the COPT solver.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -1548,41 +1565,40 @@ class MindOpt(Solver):
     https://solver.damo.alibaba.com/doc/en/html/API2/param/index.html
 
     Attributes
-    -------
+    ----------
     sense               The sense of the problem solver
     io_api              The type of API (has to be either `lp`, `mps` or None)
     env                 The mindoptpy Environment
     **solver_options    options for the given solver
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: mindoptpy.Env | None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: mindoptpy.Env | None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         self.env = env
 
         if self.io_api == "direct":
             raise NotImplementedError("Direct API not implemented for MindOpt")
 
-    def solve_problem_file(self,
-                           problem_fn: Path | None = None,
-                           solution_fn: Path | None = None,
-                           log_fn: Path | None = None,
-                           warmstart_fn: Path | None = None,
-                           basis_fn: Path | None = None,
-                           model: Model | None = None,
-                           ) -> Result:
+    def solve_problem_file(
+        self,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+    ) -> Result:
         """
         Solve a linear problem from a problem file using the MindOpt solver.
 
         Parameters
-        -------
+        ----------
         problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
@@ -1605,7 +1621,9 @@ class MindOpt(Solver):
             raise ValueError("No problem file specified.")
 
         if model is not None:
-            if (self.io_api == "lp" or str(problem_fn).endswith(".lp")) and model.type == "QP":
+            if (
+                self.io_api == "lp" or str(problem_fn).endswith(".lp")
+            ) and model.type == "QP":
                 raise ValueError(
                     "MindOpt does not support QP problems in LP format. Use `io_api='mps'` instead."
                 )
@@ -1672,14 +1690,12 @@ class PIPS(Solver):
     Solver subclass for the PIPS solver.
     """
 
-    def __init__(self,
-                 sense: str = "min",
-                 io_api: str | None = None,
-                 env: None = None,
-                 **solver_options,
-                 ):
-        super().__init__(sense,
-                         io_api,
-                         **solver_options
-                         )
+    def __init__(
+        self,
+        sense: str = "min",
+        io_api: str | None = None,
+        env: None = None,
+        **solver_options,
+    ):
+        super().__init__(sense, io_api, **solver_options)
         raise NotImplementedError("The PIPS++ solver interface is not yet implemented.")
