@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* A new method ``unstack`` was added to the `Variable`, `LinearExpression` and `Constraint` classes. This method allows to unstack the object along a given dimension.
+
 Version 0.3.14
 --------------
 

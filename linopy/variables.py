@@ -1075,6 +1075,8 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
+    unstack = varwrap(Dataset.unstack)
+
 
 class AtIndexer:
     __slots__ = ("object",)

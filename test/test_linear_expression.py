@@ -647,10 +647,14 @@ def test_variable_expand_dims(v):
     assert result.coord_dims == ("dim_2", "new_dim")
 
 
-def test_variable_stack(v):
+def test_variable_stack_and_unstack(v):
     result = v.to_linexpr().expand_dims("new_dim").stack(new=("new_dim", "dim_2"))
     assert isinstance(result, LinearExpression)
     assert result.coord_dims == ("new",)
+
+    result = result.unstack("new")
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new_dim", "dim_2")
 
 
 def test_linear_expression_diff(v):

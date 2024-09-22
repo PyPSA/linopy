@@ -658,6 +658,8 @@ class Constraint:
 
     stack = conwrap(Dataset.stack)
 
+    unstack = conwrap(Dataset.unstack)
+
 
 @dataclass(repr=False)
 class Constraints:

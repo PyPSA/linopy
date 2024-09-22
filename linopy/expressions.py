@@ -1446,6 +1446,8 @@ class LinearExpression:
 
     stack = exprwrap(Dataset.stack)
 
+    unstack = exprwrap(Dataset.unstack)
+
 
 class QuadraticExpression(LinearExpression):
     """
