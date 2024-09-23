@@ -49,7 +49,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.solvers import available_solvers, quadratic_solvers, Solver
+from linopy.solvers import available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,
     ConstraintLike,

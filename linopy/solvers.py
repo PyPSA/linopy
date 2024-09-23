@@ -157,7 +157,7 @@ def path_to_string(path: Path) -> str:
 
 
 def read_sense_from_problem_file(problem_fn: Path | str):
-    f = open(problem_fn, "r").read()
+    f = open(problem_fn).read()
     return "min" if "min" in f else "max"
 
 
@@ -1297,9 +1297,7 @@ class Mosek(Solver):
                     m.putparam(k, str(v))
 
                 if log_fn is not None:
-                    m.linkfiletostream(
-                        mosek.streamtype.log, path_to_string(log_fn), 0
-                    )
+                    m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
                 else:
                     m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
@@ -1422,9 +1420,7 @@ class Mosek(Solver):
 
                 if solution_fn is not None:
                     try:
-                        m.writesolution(
-                            mosek.soltype.bas, path_to_string(solution_fn)
-                        )
+                        m.writesolution(mosek.soltype.bas, path_to_string(solution_fn))
                     except mosek.Error as err:
                         logger.info(
                             "Unable to save solution file. Raised error: %s", err
