@@ -149,6 +149,25 @@ class SolverName(enum.Enum):
     PIPS = "pips"
 
 
+def path_to_string(path: Path) -> str:
+    """
+    Convert a pathlib.Path to a string.
+    """
+    return str(path.resolve())
+
+
+def read_sense_from_problem_file(problem_fn: Path | str):
+    f = open(problem_fn, "r").read()
+    return "min" if "min" in f else "max"
+
+
+def read_io_api_from_problem_file(problem_fn: Path | str):
+    if isinstance(problem_fn, Path):
+        return path_to_string(problem_fn).split(".")[-1]
+    else:
+        return problem_fn.split(".")[-1]
+
+
 class Solver:
     """
     A solver class for the solving of a given linear problem from an input file.
@@ -170,12 +189,6 @@ class Solver:
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
-
-    def path_to_string(self, path: Path) -> str:
-        """
-        Convert a pathlib.Path to a string.
-        """
-        return str(path.resolve())
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
@@ -201,13 +214,6 @@ class Solver:
                 "Adjusting objective sign due to switched coefficients in MPS file."
             )
             solution.objective *= -1
-
-    def read_sense_from_problem_file(self, problem_fn):
-        f = open(problem_fn).read()
-        return "min" if "min" in f else "max"
-
-    def read_io_api_from_problem_file(self, problem_fn):
-        return self.path_to_string(problem_fn).split(".")[-1]
 
     def solve_problem_file(self):
         """
@@ -283,8 +289,8 @@ class CBC(Solver):
                 "No solution file specified. For solving with CBC this is necessary."
             )
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         # printingOptions is about what goes in solution file
         command = f"cbc -printingOptions all -import {problem_fn} "
@@ -435,8 +441,8 @@ class GLPK(Solver):
                 "No solution file specified. For solving with GLPK this is necessary."
             )
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         Path(solution_fn).parent.mkdir(exist_ok=True)
         suffix = problem_fn.suffix[1:]
@@ -594,14 +600,18 @@ class Highs(Solver):
         # check if problem file name is specified
         if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
+        elif problem_fn is not None:
+            # for highs solver, the path needs to be a string
+            problem_fn_ = path_to_string(problem_fn)
 
         if self.io_api != "direct":
-            self.sense = self.read_sense_from_problem_file(problem_fn)
-            self.io_api = self.read_io_api_from_problem_file(problem_fn)
+            # for non-direct execution retrieve sense and io_api information
+            self.sense = read_sense_from_problem_file(problem_fn_)
+            self.io_api = read_io_api_from_problem_file(problem_fn_)
 
         if self.io_api is None or self.io_api in FILE_IO_APIS:
             h = highspy.Highs()
-            h.readModel(self.path_to_string(problem_fn))
+            h.readModel(problem_fn_)
         elif self.io_api == "direct" and model is not None:
             h = model.to_highspy()
         else:
@@ -626,16 +636,16 @@ class Highs(Solver):
         if log_fn is None and model is not None:
             log_fn = model.solver_dir / "highs.log"
         if log_fn is not None:
-            self.solver_options["log_file"] = self.path_to_string(log_fn)
+            self.solver_options["log_file"] = path_to_string(log_fn)
             logger.info(f"Log file at {self.solver_options['log_file']}")
 
         for k, v in self.solver_options.items():
             h.setOptionValue(k, v)
 
         if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
-            h.readSolution(self.path_to_string(warmstart_fn), 0)
+            h.readSolution(path_to_string(warmstart_fn), 0)
         elif warmstart_fn:
-            h.readBasis(self.path_to_string(warmstart_fn))
+            h.readBasis(path_to_string(warmstart_fn))
 
         h.run()
 
@@ -645,10 +655,10 @@ class Highs(Solver):
         status.legacy_status = condition
 
         if basis_fn:
-            h.writeBasis(self.path_to_string(basis_fn))
+            h.writeBasis(path_to_string(basis_fn))
 
         if solution_fn:
-            h.writeSolution(self.path_to_string(solution_fn), 0)
+            h.writeSolution(path_to_string(solution_fn), 0)
 
         def get_solver_solution() -> Solution:
             objective = h.getObjectiveValue()
@@ -742,17 +752,19 @@ class Gurobi(Solver):
         # check if problem file name is specified
         if problem_fn is None and self.io_api != "direct":
             raise ValueError("No problem file specified.")
+        elif problem_fn is not None:
+            problem_fn_ = path_to_string(problem_fn)
 
         if self.io_api != "direct":
-            self.sense = self.read_sense_from_problem_file(problem_fn)
-            self.io_api = self.read_io_api_from_problem_file(problem_fn)
+            self.sense = read_sense_from_problem_file(problem_fn_)
+            self.io_api = read_io_api_from_problem_file(problem_fn_)
 
         with contextlib.ExitStack() as stack:
             if self.env is None:
                 self.env = stack.enter_context(gurobipy.Env())
 
             if self.io_api is None or self.io_api in FILE_IO_APIS:
-                m = gurobipy.read(self.path_to_string(problem_fn), env=self.env)
+                m = gurobipy.read(problem_fn_, env=self.env)
             elif self.io_api == "direct" and model is not None:
                 m = model.to_gurobipy(env=self.env)
             else:
@@ -764,21 +776,21 @@ class Gurobi(Solver):
                 for key, value in self.solver_options.items():
                     m.setParam(key, value)
             if log_fn is not None:
-                m.setParam("logfile", self.path_to_string(log_fn))
+                m.setParam("logfile", path_to_string(log_fn))
 
             if warmstart_fn is not None:
-                m.read(self.path_to_string(warmstart_fn))
+                m.read(path_to_string(warmstart_fn))
             m.optimize()
 
             if basis_fn is not None:
                 try:
-                    m.write(self.path_to_string(basis_fn))
+                    m.write(path_to_string(basis_fn))
                 except gurobipy.GurobiError as err:
                     logger.info("No model basis stored. Raised error: %s", err)
 
             if solution_fn is not None and solution_fn.suffix == ".sol":
                 try:
-                    m.write(self.path_to_string(solution_fn))
+                    m.write(path_to_string(solution_fn))
                 except gurobipy.GurobiError as err:
                     logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -870,13 +882,13 @@ class Cplex(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         m = cplex.Cplex()
 
         if log_fn is not None:
-            log_f = open(self.path_to_string(log_fn), "w")
+            log_f = open(path_to_string(log_fn), "w")
             m.set_results_stream(log_f)
             m.set_warning_stream(log_f)
             m.set_error_stream(log_f)
@@ -889,10 +901,10 @@ class Cplex(Solver):
                     param = getattr(param, key_layer)
                 param.set(value)
 
-        m.read(self.path_to_string(problem_fn))
+        m.read(path_to_string(problem_fn))
 
         if warmstart_fn is not None:
-            m.start.read_basis(self.path_to_string(warmstart_fn))
+            m.start.read_basis(path_to_string(warmstart_fn))
 
         is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
@@ -901,7 +913,7 @@ class Cplex(Solver):
 
         if solution_fn is not None:
             try:
-                m.solution.write(self.path_to_string(solution_fn))
+                m.solution.write(path_to_string(solution_fn))
             except cplex.exceptions.errors.CplexSolverError as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -916,7 +928,7 @@ class Cplex(Solver):
         def get_solver_solution() -> Solution:
             if basis_fn and is_lp:
                 try:
-                    m.solution.basis.write(self.path_to_string(basis_fn))
+                    m.solution.basis.write(path_to_string(basis_fn))
                 except cplex.exceptions.errors.CplexSolverError:
                     logger.info("No model basis stored")
 
@@ -996,11 +1008,11 @@ class SCIP(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         m = scip.Model()
-        m.readProblem(self.path_to_string(problem_fn))
+        m.readProblem(path_to_string(problem_fn))
 
         if self.solver_options is not None:
             emphasis = self.solver_options.pop("setEmphasis", None)
@@ -1018,7 +1030,7 @@ class SCIP(Solver):
             m.setParams(self.solver_options)
 
         if log_fn is not None:
-            m.setLogfile(self.path_to_string(log_fn))
+            m.setLogfile(path_to_string(log_fn))
 
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
@@ -1033,7 +1045,7 @@ class SCIP(Solver):
 
         if solution_fn:
             try:
-                m.writeSol(m.getBestSol(), filename=self.path_to_string(solution_fn))
+                m.writeSol(m.getBestSol(), filename=path_to_string(solution_fn))
             except FileNotFoundError as err:
                 logger.warning("Unable to save solution file. Raised error: %s", err)
 
@@ -1136,32 +1148,32 @@ class Xpress(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         m = xpress.problem()
 
-        m.read(self.path_to_string(problem_fn))
+        m.read(path_to_string(problem_fn))
         m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(self.path_to_string(log_fn))
+            m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(self.path_to_string(warmstart_fn))
+            m.readbasis(path_to_string(warmstart_fn))
 
         m.solve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(self.path_to_string(basis_fn))
+                m.writebasis(path_to_string(basis_fn))
             except Exception as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
                 # TODO: possibly update saving of solution file
-                m.tofile(self.path_to_string(solution_fn), filetype="sol")
+                m.tofile(path_to_string(solution_fn), filetype="sol")
             except Exception as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -1264,8 +1276,8 @@ class Mosek(Solver):
             raise ValueError("No problem file specified.")
 
         if self.io_api != "direct":
-            self.sense = self.read_sense_from_problem_file(problem_fn)
-            self.io_api = self.read_io_api_from_problem_file(problem_fn)
+            self.sense = read_sense_from_problem_file(problem_fn)
+            self.io_api = read_io_api_from_problem_file(problem_fn)
 
         with contextlib.ExitStack() as stack:
             if self.env is None:
@@ -1273,7 +1285,7 @@ class Mosek(Solver):
 
             with self.env.Task() as m:
                 if self.io_api is None or self.io_api in FILE_IO_APIS:
-                    m.readdata(self.path_to_string(problem_fn))
+                    m.readdata(path_to_string(problem_fn))
                 elif self.io_api == "direct" and model is not None:
                     model.to_mosek(m)
                 else:
@@ -1286,7 +1298,7 @@ class Mosek(Solver):
 
                 if log_fn is not None:
                     m.linkfiletostream(
-                        mosek.streamtype.log, self.path_to_string(log_fn), 0
+                        mosek.streamtype.log, path_to_string(log_fn), 0
                     )
                 else:
                     m.set_Stream(mosek.streamtype.log, sys.stdout.write)
@@ -1298,7 +1310,7 @@ class Mosek(Solver):
                     skx = [mosek.stakey.low] * m.getnumvar()
                     skc = [mosek.stakey.bas] * m.getnumcon()
 
-                    with open(self.path_to_string(warmstart_fn)) as f:
+                    with open(path_to_string(warmstart_fn)) as f:
                         for line in f:
                             if line.startswith("NAME "):
                                 break
@@ -1351,7 +1363,7 @@ class Mosek(Solver):
 
                 if basis_fn is not None:
                     if m.solutiondef(mosek.soltype.bas):
-                        with open(self.path_to_string(basis_fn), "w") as f:
+                        with open(path_to_string(basis_fn), "w") as f:
                             f.write(f"NAME {basis_fn}\n")
 
                             skc = [
@@ -1411,7 +1423,7 @@ class Mosek(Solver):
                 if solution_fn is not None:
                     try:
                         m.writesolution(
-                            mosek.soltype.bas, self.path_to_string(solution_fn)
+                            mosek.soltype.bas, path_to_string(solution_fn)
                         )
                     except mosek.Error as err:
                         logger.info(
@@ -1520,36 +1532,36 @@ class COPT(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         if self.env is None:
             self.env = coptpy.Envr()
 
         m = self.env.createModel()
 
-        m.read(self.path_to_string(problem_fn))
+        m.read(path_to_string(problem_fn))
 
         if log_fn is not None:
-            m.setLogFile(self.path_to_string(log_fn))
+            m.setLogFile(path_to_string(log_fn))
 
         for k, v in self.solver_options.items():
             m.setParam(k, v)
 
         if warmstart_fn is not None:
-            m.readBasis(self.path_to_string(warmstart_fn))
+            m.readBasis(path_to_string(warmstart_fn))
 
         m.solve()
 
         if basis_fn and m.HasBasis:
             try:
-                m.write(self.path_to_string(basis_fn))
+                m.write(path_to_string(basis_fn))
             except coptpy.CoptError as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn:
             try:
-                m.write(self.path_to_string(solution_fn))
+                m.write(path_to_string(solution_fn))
             except coptpy.CoptError as err:
                 logger.info("No model solution stored. Raised error: %s", err)
 
@@ -1654,8 +1666,8 @@ class MindOpt(Solver):
         if problem_fn is None:
             raise ValueError("No problem file specified.")
 
-        self.sense = self.read_sense_from_problem_file(problem_fn)
-        self.io_api = self.read_io_api_from_problem_file(problem_fn)
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         if model is not None:
             if (
@@ -1666,17 +1678,17 @@ class MindOpt(Solver):
                 )
 
         if self.env is None:
-            self.env = mindoptpy.Env(self.path_to_string(log_fn) if log_fn else "")
+            self.env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
         self.env.start()
 
-        m = mindoptpy.read(self.path_to_string(problem_fn), self.env)
+        m = mindoptpy.read(path_to_string(problem_fn), self.env)
 
         for k, v in self.solver_options.items():
             m.setParam(k, v)
 
         if warmstart_fn:
             try:
-                m.read(self.path_to_string(warmstart_fn))
+                m.read(path_to_string(warmstart_fn))
             except mindoptpy.MindoptError as err:
                 logger.info("Model basis could not be read. Raised error: %s", err)
 
@@ -1684,13 +1696,13 @@ class MindOpt(Solver):
 
         if basis_fn:
             try:
-                m.write(self.path_to_string(basis_fn))
+                m.write(path_to_string(basis_fn))
             except mindoptpy.MindoptError as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn:
             try:
-                m.write(self.path_to_string(solution_fn))
+                m.write(path_to_string(solution_fn))
             except mindoptpy.MindoptError as err:
                 logger.info("No model solution stored. Raised error: %s", err)
 

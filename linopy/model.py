@@ -49,7 +49,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.solvers import available_solvers, quadratic_solvers
+from linopy.solvers import available_solvers, quadratic_solvers, Solver
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -78,6 +78,9 @@ class Model:
     The model supports different solvers (see `linopy.available_solvers`) for
     the optimization process.
     """
+
+    solver_model: Any
+    solver_name: str
 
     __slots__ = (
         # containers
