@@ -792,7 +792,7 @@ class Gurobi(Solver):
             def get_solver_solution() -> Solution:
                 objective = m.ObjVal
 
-                sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
+                sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
                 sol = set_int_index(sol)
 
                 try:
