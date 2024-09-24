@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* The group dimension when grouping by a pandas dataframe is now always `group`. This fixes the case that the dataframe contains a column named `name`.
+
 Version 0.3.14
 --------------
 

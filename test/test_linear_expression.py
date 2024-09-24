@@ -690,42 +690,74 @@ def test_linear_expression_groupby_with_name(v, use_fallback):
     assert grouped.nterm == 10
 
 
-def test_linear_expression_groupby_with_series(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_series(v, use_fallback):
     expr = 1 * v
     groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
-    grouped = expr.groupby(groups).sum()
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     assert "group" in grouped.dims
     assert (grouped.data.group == [1, 2]).all()
     assert grouped.nterm == 10
 
 
-def test_linear_expression_groupby_with_series_false(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_series_with_name(v, use_fallback):
+    expr = 1 * v
+    groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes[v.dims[0]], name="my_group")
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "my_group" in grouped.dims
+    assert (grouped.data.my_group == [1, 2]).all()
+    assert grouped.nterm == 10
+
+
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_series_false(v, use_fallback):
     expr = 1 * v
     groups = pd.Series([1] * 10 + [2] * 10, index=v.indexes["dim_2"])
     groups.name = "dim_2"
-    with pytest.raises(ValueError):
-        expr.groupby(groups).sum()
+    if not use_fallback:
+        with pytest.raises(ValueError):
+            expr.groupby(groups).sum(use_fallback=use_fallback)
+        return
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
+    assert "dim_2" in grouped.dims
+    assert (grouped.data.dim_2 == [1, 2]).all()
+    assert grouped.nterm == 10
 
 
-def test_linear_expression_groupby_with_dataframe(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_dataframe(v, use_fallback):
     expr = 1 * v
     groups = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
-    grouped = expr.groupby(groups).sum()
+    if use_fallback:
+        with pytest.raises(ValueError):
+            expr.groupby(groups).sum(use_fallback=use_fallback)
+        return
+
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     index = pd.MultiIndex.from_frame(groups)
     assert "group" in grouped.dims
     assert set(grouped.data.group.values) == set(index.values)
     assert grouped.nterm == 3
 
 
-def test_linear_expression_groupby_with_dataarray(v):
+@pytest.mark.parametrize("use_fallback", [True, False])
+def test_linear_expression_groupby_with_dataarray(v, use_fallback):
     expr = 1 * v
     df = pd.DataFrame(
         {"a": [1] * 10 + [2] * 10, "b": list(range(4)) * 5}, index=v.indexes["dim_2"]
     )
     groups = xr.DataArray(df)
-    grouped = expr.groupby(groups).sum()
+
+    # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
+    if use_fallback:
+        with pytest.raises(KeyError):
+            expr.groupby(groups).sum(use_fallback=use_fallback)
+        return
+
+    grouped = expr.groupby(groups).sum(use_fallback=use_fallback)
     index = pd.MultiIndex.from_frame(df)
     assert "group" in grouped.dims
     assert set(grouped.data.group.values) == set(index.values)
