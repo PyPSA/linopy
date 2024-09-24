@@ -165,6 +165,7 @@ def read_sense_from_problem_file(problem_fn: Path | str):
     else:
         raise ValueError("Unsupported problem file format.")
 
+
 def read_io_api_from_problem_file(problem_fn: Path | str):
     if isinstance(problem_fn, Path):
         return problem_fn.suffix[1:]
@@ -178,6 +179,7 @@ class Solver:
     All relevant functions are passed on to the specific solver subclasses.
     For a specified solver the function solve_problem_file() needs to be implemented.
     """
+
     model: Model | None
     io_api: str
     sense: str
@@ -396,7 +398,6 @@ class GLPK(Solver):
         raise NotImplementedError("Direct API not implemented for GLPK")
 
     def read_from_problem_file(self, problem_fn: Path):
-
         self.sense = read_sense_from_problem_file(problem_fn)
         self.io_api = read_io_api_from_problem_file(problem_fn)
 
@@ -618,8 +619,10 @@ class Highs(Solver):
         if self.model is not None:
             h = self.model.to_highspy()
         elif problem_fn is None:
-            raise ValueError("No problem file specified. Please specify problem file or"
-                             "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
+            raise ValueError(
+                "No problem file specified. Please specify problem file or"
+                "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
+            )
         else:
             # read sense and io_api from problem file
             self.read_from_problem_file(problem_fn)
@@ -660,8 +663,12 @@ class Highs(Solver):
             solution = h.getSolution()
 
             if self.io_api == "direct" and self.model is not None:
-                sol = pd.Series(solution.col_value, self.model.matrices.vlabels, dtype=float)
-                dual = pd.Series(solution.row_dual, self.model.matrices.clabels, dtype=float)
+                sol = pd.Series(
+                    solution.col_value, self.model.matrices.vlabels, dtype=float
+                )
+                dual = pd.Series(
+                    solution.row_dual, self.model.matrices.clabels, dtype=float
+                )
             else:
                 sol = pd.Series(
                     solution.col_value, h.getLp().col_names_, dtype=float
@@ -744,8 +751,10 @@ class Gurobi(Solver):
             if self.model is not None:
                 m = self.model.to_gurobipy(env=env)
             elif problem_fn is None:
-                raise ValueError("No problem file specified. Please specify problem file or"
-                                 "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
+                raise ValueError(
+                    "No problem file specified. Please specify problem file or"
+                    "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
+                )
             else:
                 # read sense and io_api from problem file
                 self.read_from_problem_file(problem_fn)
@@ -1235,8 +1244,10 @@ class Mosek(Solver):
                 if self.model is not None:
                     self.model.to_mosek(m)
                 elif problem_fn is None:
-                    raise ValueError("No problem file specified. Please specify problem file or"
-                                     "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
+                    raise ValueError(
+                        "No problem file specified. Please specify problem file or"
+                        "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
+                    )
                 else:
                     # read sense and io_api from problem file
                     self.read_from_problem_file(problem_fn)
