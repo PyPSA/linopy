@@ -156,7 +156,7 @@ class LinearExpressionGroupby:
             group_name = self.group.name or "group"
             group = DataArray(self.group, name=group_name)
         else:
-            group = self.group
+            group = self.group  # type: ignore
 
         return self.data.groupby(group=group, **self.kwargs)
 
