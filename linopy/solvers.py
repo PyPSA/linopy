@@ -158,12 +158,16 @@ def path_to_string(path: Path) -> str:
 
 def read_sense_from_problem_file(problem_fn: Path | str):
     f = open(problem_fn).read()
-    return "min" if "min" in f else "max"
-
+    if read_io_api_from_problem_file(problem_fn) == "lp":
+        return "min" if "min" in f.lower() else "max"
+    elif read_io_api_from_problem_file(problem_fn) == "mps":
+        return "max" if "OBJSENSE\n  MAX\n" in f else "min"
+    else:
+        raise ValueError("Unsupported problem file format.")
 
 def read_io_api_from_problem_file(problem_fn: Path | str):
     if isinstance(problem_fn, Path):
-        return path_to_string(problem_fn).split(".")[-1]
+        return problem_fn.suffix[1:]
     else:
         return problem_fn.split(".")[-1]
 
@@ -174,21 +178,17 @@ class Solver:
     All relevant functions are passed on to the specific solver subclasses.
     For a specified solver the function solve_problem_file() needs to be implemented.
     """
+    model: Model | None
+    io_api: str
+    sense: str
 
     def __init__(
         self,
-        sense: str | None = None,
-        io_api: str | None = None,
         **solver_options,
     ):
-        self.sense = sense
-        self.io_api = io_api
         self.solver_options = solver_options
-
-        if self.io_api is not None and self.io_api not in IO_APIS:
-            raise ValueError(
-                f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
-            )
+        # initialize model as None per default
+        self.model = None
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
@@ -215,7 +215,16 @@ class Solver:
             )
             solution.objective *= -1
 
-    def solve_problem_file(self):
+    def set_direct_model(self, model: Model):
+        self.model = model
+        self.io_api = "direct"
+        self.sense = model.sense
+
+    def read_from_problem_file(self, problem_fn: Path):
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
+
+    def solve_problem(self):
         """
         Function to solve a given linear problem using a specific solver from an input problem file.
         The function reads the linear problem file and passes it to the
@@ -230,19 +239,21 @@ class CBC(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
+        super().__init__(**solver_options)
+
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for CBC")
+
+    def read_from_problem_file(self, problem_fn: Path):
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
         if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
@@ -250,17 +261,14 @@ class CBC(Solver):
                 "CBC does not support maximization in MPS format highspy versions >=1.7.1"
             )
 
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for CBC")
-
-    def solve_problem_file(
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the cbc solver.
@@ -276,21 +284,20 @@ class CBC(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
         """
 
         # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
         # check if solution file name is specified
         if solution_fn is None:
             raise ValueError(
                 "No solution file specified. For solving with CBC this is necessary."
             )
-
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         # printingOptions is about what goes in solution file
         command = f"cbc -printingOptions all -import {problem_fn} "
@@ -376,19 +383,22 @@ class GLPK(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
+        super().__init__(**solver_options)
+
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for GLPK")
+
+    def read_from_problem_file(self, problem_fn: Path):
+
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
         if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
@@ -396,17 +406,14 @@ class GLPK(Solver):
                 "GLPK does not support maximization in MPS format highspy versions >=1.7.1"
             )
 
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for GLPK")
-
-    def solve_problem_file(
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the glpk solver.
@@ -426,7 +433,6 @@ class GLPK(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
@@ -435,17 +441,17 @@ class GLPK(Solver):
 
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
+            suffix = self.io_api
 
         if solution_fn is None:
             raise ValueError(
                 "No solution file specified. For solving with GLPK this is necessary."
             )
 
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
-
         Path(solution_fn).parent.mkdir(exist_ok=True)
-        suffix = problem_fn.suffix[1:]
 
         # TODO use --nopresol argument for non-optimal solution output
         command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
@@ -547,28 +553,41 @@ class Highs(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def set_direct_model(self, model: Model):
+        self.model = model
+        self.io_api = "direct"
+        self.sense = model.sense
+        # check for Highs solver compatibility
+        if self.solver_options.get("solver") in [
+            "simplex",
+            "ipm",
+            "pdlp",
+        ] and model.type in [
+            "QP",
+            "MILP",
+        ]:
+            logger.warning(
+                "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
+                "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
+            )
+
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Highs solver.
@@ -583,7 +602,6 @@ class Highs(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
 
         Returns
         -------
@@ -597,44 +615,21 @@ class Highs(Solver):
         """
         CONDITION_MAP: dict[str, str] = {}
 
-        # check if problem file name is specified
-        if problem_fn is None and self.io_api != "direct":
-            raise ValueError("No problem file specified.")
-        elif problem_fn is not None:
+        if self.model is not None:
+            h = self.model.to_highspy()
+        elif problem_fn is None:
+            raise ValueError("No problem file specified. Please specify problem file or"
+                             "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
             # for highs solver, the path needs to be a string
             problem_fn_ = path_to_string(problem_fn)
-
-        if self.io_api != "direct":
-            # for non-direct execution retrieve sense and io_api information
-            self.sense = read_sense_from_problem_file(problem_fn_)
-            self.io_api = read_io_api_from_problem_file(problem_fn_)
-
-        if self.io_api is None or self.io_api in FILE_IO_APIS:
             h = highspy.Highs()
             h.readModel(problem_fn_)
-        elif self.io_api == "direct" and model is not None:
-            h = model.to_highspy()
-        else:
-            raise ValueError(
-                "For direct API, linopy model has to be given as argument."
-            )
 
-        if model is not None:
-            if self.solver_options.get("solver") in [
-                "simplex",
-                "ipm",
-                "pdlp",
-            ] and model.type in [
-                "QP",
-                "MILP",
-            ]:
-                logger.warning(
-                    "The HiGHS solver ignores quadratic terms / integrality if the solver is set to 'simplex', 'ipm' or 'pdlp'. "
-                    "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
-                )
-
-        if log_fn is None and model is not None:
-            log_fn = model.solver_dir / "highs.log"
+        if log_fn is None and self.model is not None:
+            log_fn = self.model.solver_dir / "highs.log"
         if log_fn is not None:
             self.solver_options["log_file"] = path_to_string(log_fn)
             logger.info(f"Log file at {self.solver_options['log_file']}")
@@ -664,9 +659,9 @@ class Highs(Solver):
             objective = h.getObjectiveValue()
             solution = h.getSolution()
 
-            if self.io_api == "direct" and model is not None:
-                sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-                dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
+            if self.io_api == "direct" and self.model is not None:
+                sol = pd.Series(solution.col_value, self.model.matrices.vlabels, dtype=float)
+                dual = pd.Series(solution.row_dual, self.model.matrices.clabels, dtype=float)
             else:
                 sol = pd.Series(
                     solution.col_value, h.getLp().col_names_, dtype=float
@@ -689,30 +684,23 @@ class Gurobi(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
-    env                 The gurobipy environment. Defaults to new gurobipy.Env
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: gurobipy.Env | None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        self.env = env
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: gurobipy.Env | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -726,7 +714,7 @@ class Gurobi(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
+        env                 The gurobipy environment. Defaults to new gurobipy.Env
         """
         # see https://www.gurobi.com/documentation/10.0/refman/optimization_status_codes.html
         CONDITION_MAP = {
@@ -749,28 +737,21 @@ class Gurobi(Solver):
             17: "internal_solver_error",
         }
 
-        # check if problem file name is specified
-        if problem_fn is None and self.io_api != "direct":
-            raise ValueError("No problem file specified.")
-        elif problem_fn is not None:
-            problem_fn_ = path_to_string(problem_fn)
-
-        if self.io_api != "direct":
-            self.sense = read_sense_from_problem_file(problem_fn_)
-            self.io_api = read_io_api_from_problem_file(problem_fn_)
-
         with contextlib.ExitStack() as stack:
-            if self.env is None:
-                self.env = stack.enter_context(gurobipy.Env())
+            if env is None:
+                env = stack.enter_context(gurobipy.Env())
 
-            if self.io_api is None or self.io_api in FILE_IO_APIS:
-                m = gurobipy.read(problem_fn_, env=self.env)
-            elif self.io_api == "direct" and model is not None:
-                m = model.to_gurobipy(env=self.env)
+            if self.model is not None:
+                m = self.model.to_gurobipy(env=env)
+            elif problem_fn is None:
+                raise ValueError("No problem file specified. Please specify problem file or"
+                                 "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
             else:
-                raise ValueError(
-                    "For `direct` API, linopy model has to be given as argument."
-                )
+                # read sense and io_api from problem file
+                self.read_from_problem_file(problem_fn)
+                # for gurobi solver, the path needs to be a string
+                problem_fn_ = path_to_string(problem_fn)
+                m = gurobipy.read(problem_fn_, env=env)
 
             if self.solver_options is not None:
                 for key, value in self.solver_options.items():
@@ -832,30 +813,26 @@ class Cplex(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for Cplex")
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for Cplex")
+
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the cplex solver.
@@ -871,19 +848,17 @@ class Cplex(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
         """
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
         }
 
-        # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
-
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
         m = cplex.Cplex()
 
@@ -963,30 +938,26 @@ class SCIP(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for SCIP")
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for SCIP")
+
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the scip solver.
@@ -1000,16 +971,14 @@ class SCIP(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
         """
         CONDITION_MAP: dict[str, str] = {}
 
-        # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
-
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
         m = scip.Model()
         m.readProblem(path_to_string(problem_fn))
@@ -1092,30 +1061,26 @@ class Xpress(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for Xpress")
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for Xpress")
+
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Xpress solver.
@@ -1132,7 +1097,6 @@ class Xpress(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
         """
         CONDITION_MAP = {
             "lp_optimal": "optimal",
@@ -1144,12 +1108,11 @@ class Xpress(Solver):
             "mip_unbounded": "unbounded",
         }
 
-        # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
-
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
         m = xpress.problem()
 
@@ -1225,30 +1188,23 @@ class Mosek(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps`, `direct` or None)
-    env                 The mosek Task environment
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: mosek.Task | None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        self.env = env
+        super().__init__(**solver_options)
 
-    def solve_problem_file(
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: mosek.Task | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MOSEK solver. Both 'direct' mode, mps and
@@ -1261,7 +1217,7 @@ class Mosek(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
+        env                 The mosek Task environment
         """
         CONDITION_MAP = {
             "solsta.unknown": "unknown",
@@ -1271,27 +1227,22 @@ class Mosek(Solver):
             "solsta.dual_infeas_cer": "infeasible_or_unbounded",
         }
 
-        # check if problem file name is specified
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-
-        if self.io_api != "direct":
-            self.sense = read_sense_from_problem_file(problem_fn)
-            self.io_api = read_io_api_from_problem_file(problem_fn)
-
         with contextlib.ExitStack() as stack:
-            if self.env is None:
-                self.env = stack.enter_context(mosek.Env())
+            if env is None:
+                env = stack.enter_context(mosek.Env())
 
-            with self.env.Task() as m:
-                if self.io_api is None or self.io_api in FILE_IO_APIS:
-                    m.readdata(path_to_string(problem_fn))
-                elif self.io_api == "direct" and model is not None:
-                    model.to_mosek(m)
+            with env.Task() as m:
+                if self.model is not None:
+                    self.model.to_mosek(m)
+                elif problem_fn is None:
+                    raise ValueError("No problem file specified. Please specify problem file or"
+                                     "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API.")
                 else:
-                    raise ValueError(
-                        "For `direct` API, linopy model has to be given as argument."
-                    )
+                    # read sense and io_api from problem file
+                    self.read_from_problem_file(problem_fn)
+                    # for Mosek solver, the path needs to be a string
+                    problem_fn_ = path_to_string(problem_fn)
+                    m.readdata(problem_fn_)
 
                 for k, v in self.solver_options.items():
                     m.putparam(k, str(v))
@@ -1469,33 +1420,26 @@ class COPT(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
-    env                 The coptpy Environment
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: coptpy.Envr = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        self.env = env
+        super().__init__(**solver_options)
 
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for COPT")
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for COPT")
 
-    def solve_problem_file(
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: coptpy.Envr = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the COPT solver.
@@ -1507,7 +1451,7 @@ class COPT(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
+        env                 The coptpy Environment
         """
         # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
         CONDITION_MAP = {
@@ -1524,17 +1468,16 @@ class COPT(Solver):
             10: "interrupted",
         }
 
-        # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
+        if env is None:
+            env = coptpy.Envr()
 
-        if self.env is None:
-            self.env = coptpy.Envr()
-
-        m = self.env.createModel()
+        m = env.createModel()
 
         m.read(path_to_string(problem_fn))
 
@@ -1561,8 +1504,8 @@ class COPT(Solver):
             except coptpy.CoptError as err:
                 logger.info("No model solution stored. Raised error: %s", err)
 
-        if model is not None:
-            condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
+        if self.model is not None:
+            condition = m.LpStatus if self.model.type in ["LP", "QP"] else m.MipStatus
         else:
             # TODO: check if this suffices
             condition = m.MipStatus if m.ismip else m.LpStatus
@@ -1571,8 +1514,8 @@ class COPT(Solver):
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            if model is not None:
-                objective = m.LpObjval if model.type in ["LP", "QP"] else m.BestObj
+            if self.model is not None:
+                objective = m.LpObjval if self.model.type in ["LP", "QP"] else m.BestObj
             else:
                 # TODO: check if this suffices
                 objective = m.BestObj if m.ismip else m.LpObjVal
@@ -1592,7 +1535,7 @@ class COPT(Solver):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         self.maybe_adjust_objective_sign(solution)
 
-        self.env.close()
+        env.close()
 
         return Result(status, solution, m)
 
@@ -1608,33 +1551,36 @@ class MindOpt(Solver):
 
     Attributes
     ----------
-    sense               The sense of the problem solver
-    io_api              The type of API (has to be either `lp`, `mps` or None)
-    env                 The mindoptpy Environment
     **solver_options    options for the given solver
     """
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: mindoptpy.Env | None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
-        self.env = env
+        super().__init__(**solver_options)
 
-        if self.io_api == "direct":
-            raise NotImplementedError("Direct API not implemented for MindOpt")
+    def set_direct_model(self, model: Model):
+        raise NotImplementedError("Direct API not implemented for MindOpt")
 
-    def solve_problem_file(
+    def read_from_problem_file(self, problem_fn: Path):
+        self.sense = read_sense_from_problem_file(problem_fn)
+        self.io_api = read_io_api_from_problem_file(problem_fn)
+        if self.io_api == "lp":
+            # for model type "QP", lp file with have "[" and "]" in objective function
+            if "[" in open(problem_fn).read() and "]" in open(problem_fn).read():
+                raise ValueError(
+                    "MindOpt does not support QP problems in LP format. Use MPS file format instead."
+                )
+
+    def solve_problem(
         self,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        model: Model | None = None,
+        env: mindoptpy.Env | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MindOpt solver.
@@ -1646,7 +1592,7 @@ class MindOpt(Solver):
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        model               linopy model that is to be solved (optional)
+        env                 The mindoptpy Environment
         """
         CONDITION_MAP = {
             -1: "error",
@@ -1658,26 +1604,17 @@ class MindOpt(Solver):
             5: "suboptimal",
         }
 
-        # check if problem file name is specified
         if problem_fn is None:
             raise ValueError("No problem file specified.")
+        else:
+            # read sense and io_api from problem file
+            self.read_from_problem_file(problem_fn)
 
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
+        if env is None:
+            env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
+        env.start()
 
-        if model is not None:
-            if (
-                self.io_api == "lp" or str(problem_fn).endswith(".lp")
-            ) and model.type == "QP":
-                raise ValueError(
-                    "MindOpt does not support QP problems in LP format. Use `io_api='mps'` instead."
-                )
-
-        if self.env is None:
-            self.env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
-        self.env.start()
-
-        m = mindoptpy.read(path_to_string(problem_fn), self.env)
+        m = mindoptpy.read(path_to_string(problem_fn), env)
 
         for k, v in self.solver_options.items():
             m.setParam(k, v)
@@ -1725,7 +1662,7 @@ class MindOpt(Solver):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         self.maybe_adjust_objective_sign(solution)
 
-        self.env.dispose()
+        env.dispose()
 
         return Result(status, solution, m)
 
@@ -1737,10 +1674,7 @@ class PIPS(Solver):
 
     def __init__(
         self,
-        sense: str = "min",
-        io_api: str | None = None,
-        env: None = None,
         **solver_options,
     ):
-        super().__init__(sense, io_api, **solver_options)
+        super().__init__(**solver_options)
         raise NotImplementedError("The PIPS++ solver interface is not yet implemented.")
