@@ -153,7 +153,7 @@ class LinearExpressionGroupby:
                 "Grouping by pandas objects is only supported in sum function."
             )
 
-        return self.data.groupby(group=self.group, **self.kwargs)
+        return self.data.groupby(group=self.group, **self.kwargs)  # type: ignore
 
     def map(
         self, func: Callable, shortcut: bool = False, args: tuple[()] = (), **kwargs

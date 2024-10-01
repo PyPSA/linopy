@@ -1091,20 +1091,25 @@ class Model:
             )
             if io_api == "direct":
                 # no problem file written and direct model is set for solver
-                problem_fn = None
-                solver.set_direct_model(model=self)
+                result = solver.solve_problem_from_model(
+                    model=self,
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
+                )
             else:
                 problem_fn = self.to_file(to_path(problem_fn), io_api)
+                result = solver.solve_problem_from_file(
+                    problem_fn=to_path(problem_fn),
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
+                )
 
-            # solve the problem from problem file or directly from model
-            result = solver.solve_problem(
-                problem_fn=to_path(problem_fn),
-                solution_fn=to_path(solution_fn),
-                log_fn=to_path(log_fn),
-                warmstart_fn=to_path(warmstart_fn),
-                basis_fn=to_path(basis_fn),
-                env=env,
-            )
         finally:
             for fn in (problem_fn, solution_fn):
                 if fn is not None and (os.path.exists(fn) and not keep_files):
