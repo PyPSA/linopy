@@ -357,6 +357,37 @@ class Model:
         else:
             return
 
+    def check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
+        """
+        Ensure that the added data does not lead to a naming conflict.
+
+        Parameters
+        ----------
+        model : linopy.Model
+        ds : xr.DataArray/Variable/LinearExpression
+            Data that should be added to the model.
+
+        Raises
+        ------
+        ValueError
+            If broadcasted data leads to unsupported dimension names.
+
+        Returns
+        -------
+        None.
+        """
+        unsupported_dim_names = ["labels", "coeffs", "vars", "sign", "rhs"]
+        contains_unsupported_dim_names = any(
+            dim in unsupported_dim_names for dim in list(ds.dims)
+        )
+        if contains_unsupported_dim_names:
+            raise ValueError(
+                "Added data contains unsupported dimension names. "
+                "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign' or 'rhs'."
+            )
+        else:
+            return
+
     def add_variables(
         self,
         lower: Any = -inf,
@@ -464,6 +495,7 @@ class Model:
         )
         (data,) = xr.broadcast(data)
         self.check_force_dim_names(data)
+        self.check_valid_dim_names(data)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
