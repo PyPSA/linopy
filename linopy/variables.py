@@ -42,6 +42,7 @@ from linopy.common import (
     get_label_position,
     has_optimized_model,
     is_constant,
+    iterate_slices,
     print_coord,
     print_single_variable,
     save_join,
@@ -1074,6 +1075,8 @@ class Variable:
     roll = varwrap(Dataset.roll)
 
     stack = varwrap(Dataset.stack)
+
+    iterate_slices = iterate_slices
 
 
 class AtIndexer:
