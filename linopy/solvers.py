@@ -50,11 +50,11 @@ available_solvers = []
 which = "where" if os.name == "nt" else "which"
 
 # the first available solver will be the default solver
-with contextlib.suppress(ImportError):
+with contextlib.suppress(ModuleNotFoundError):
     import gurobipy
 
     available_solvers.append("gurobi")
-with contextlib.suppress(ImportError):
+with contextlib.suppress(ModuleNotFoundError):
     _new_highspy_mps_layout = None
     import highspy
 
@@ -73,19 +73,22 @@ if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode 
 if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
-with contextlib.suppress(ImportError):
+with contextlib.suppress(ModuleNotFoundError):
     import pyscipopt as scip
 
     available_solvers.append("scip")
-with contextlib.suppress(ImportError):
+
+with contextlib.suppress(ModuleNotFoundError):
     import cplex
 
     available_solvers.append("cplex")
-with contextlib.suppress(ImportError):
+
+with contextlib.suppress(ModuleNotFoundError):
     import xpress
 
     available_solvers.append("xpress")
-with contextlib.suppress(ImportError):
+
+with contextlib.suppress(ModuleNotFoundError):
     import mosek
 
     with contextlib.suppress(mosek.Error):
@@ -96,11 +99,12 @@ with contextlib.suppress(ImportError):
 
         available_solvers.append("mosek")
 
-with contextlib.suppress(ImportError):
+with contextlib.suppress(ModuleNotFoundError):
     import mindoptpy
 
     available_solvers.append("mindopt")
-with contextlib.suppress(ImportError):
+
+with contextlib.suppress(ModuleNotFoundError):
     import coptpy
 
     with contextlib.suppress(coptpy.CoptError):

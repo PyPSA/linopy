@@ -1184,12 +1184,24 @@ class Model:
                 labels.append(int(line_decoded.split(":")[0][2:]))
         return labels
 
-    def print_infeasibilities(self, display_max_terms: None = None) -> None:
+    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
         """
         Print a list of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` and the
-        termination condition was infeasible.
+        This function requires that the model was solved using `gurobi`
+        and the termination condition was infeasible.
+
+        Parameters
+        ----------
+        display_max_terms : int, optional
+            The maximum number of infeasible terms to display. If `None`,
+            all infeasible terms will be displayed.
+
+        Returns
+        -------
+        None
+            This function does not return anything. It simply prints the
+            infeasible constraints.
         """
         labels = self.compute_infeasibilities()
         self.constraints.print_labels(labels, display_max_terms=display_max_terms)

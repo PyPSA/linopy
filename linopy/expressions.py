@@ -148,12 +148,17 @@ class LinearExpressionGroupby:
         xarray.core.groupby.DataArrayGroupBy
             The groupby object.
         """
-        if isinstance(self.group, (pd.Series, pd.DataFrame)):
+        if isinstance(self.group, pd.DataFrame):
             raise ValueError(
-                "Grouping by pandas objects is only supported in sum function."
+                "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
             )
+        if isinstance(self.group, pd.Series):
+            group_name = self.group.name or "group"
+            group = DataArray(self.group, name=group_name)
+        else:
+            group = self.group  # type: ignore
 
-        return self.data.groupby(group=self.group, **self.kwargs)  # type: ignore
+        return self.data.groupby(group=group, **self.kwargs)
 
     def map(
         self, func: Callable, shortcut: bool = False, args: tuple[()] = (), **kwargs
@@ -210,7 +215,11 @@ class LinearExpressionGroupby:
         non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
         if isinstance(self.group, non_fallback_types) and not use_fallback:
             group: pd.Series | pd.DataFrame | xr.DataArray = self.group
-            group_name = getattr(group, "name", "group") or "group"
+            if isinstance(group, pd.DataFrame):
+                # dataframes do not have a name, so we need to set it
+                group_name = "group"
+            else:
+                group_name = getattr(group, "name", "group") or "group"
 
             if isinstance(group, DataArray):
                 group = group.to_pandas()
@@ -224,7 +233,9 @@ class LinearExpressionGroupby:
 
             group_dim = group.index.name
             if group_name == group_dim:
-                raise ValueError("Group name cannot be the same as group dimension")
+                raise ValueError(
+                    "Group name cannot be the same as group dimension in non-fallback mode."
+                )
 
             arrays = [group, group.groupby(group).cumcount()]
             idx = pd.MultiIndex.from_arrays(
