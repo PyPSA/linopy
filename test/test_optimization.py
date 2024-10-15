@@ -401,6 +401,15 @@ def test_default_settings_chunked(model_chunked, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_default_settings_small_slices(model, solver, io_api):
+    assert model.objective.sense == "min"
+    status, condition = model.solve(solver, io_api=io_api, slice_size=2)
+    assert status == "ok"
+    assert np.isclose(model.objective.value, 3.3)
+    assert model.solver_name == solver
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_solver_options(model, solver, io_api):
     time_limit_option = {
         "cbc": {"sec": 1},

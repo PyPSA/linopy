@@ -40,6 +40,7 @@ from linopy.common import (
     has_optimized_model,
     infer_schema_polars,
     is_constant,
+    iterate_slices,
     maybe_replace_signs,
     print_coord,
     print_single_constraint,
@@ -657,6 +658,8 @@ class Constraint:
     roll = conwrap(Dataset.roll)
 
     stack = conwrap(Dataset.stack)
+
+    iterate_slices = iterate_slices
 
 
 @dataclass(repr=False)

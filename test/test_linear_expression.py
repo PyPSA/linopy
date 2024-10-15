@@ -526,6 +526,14 @@ def test_linear_expression_flat(v):
     assert (df.coeffs == coeff).all()
 
 
+def test_iterate_slices(x, y):
+    expr = x + 10 * y
+    for s in expr.iterate_slices(slice_size=2):
+        assert isinstance(s, LinearExpression)
+        assert s.nterm == expr.nterm
+        assert s.coord_dims == expr.coord_dims
+
+
 def test_linear_expression_to_polars(v):
     coeff = np.arange(1, 21)  # use non-zero coefficients
     expr = coeff * v
