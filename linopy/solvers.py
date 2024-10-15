@@ -13,10 +13,10 @@ import os
 import re
 import subprocess as sub
 import sys
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-import numpy as np
 import pandas as pd
 from pandas.core.series import Series
 
@@ -163,7 +163,8 @@ def read_sense_from_problem_file(problem_fn: Path | str):
     elif read_io_api_from_problem_file(problem_fn) == "mps":
         return "max" if "OBJSENSE\n  MAX\n" in f else "min"
     else:
-        raise ValueError("Unsupported problem file format.")
+        msg = "Unsupported problem file format."
+        raise ValueError(msg)
 
 
 def read_io_api_from_problem_file(problem_fn: Path | str):
@@ -173,24 +174,29 @@ def read_io_api_from_problem_file(problem_fn: Path | str):
         return problem_fn.split(".")[-1]
 
 
-class Solver:
-    """
-    A solver class for the solving of a given linear problem from an input file.
-    All relevant functions are passed on to the specific solver subclasses.
-    For a specified solver the function solve_problem_file() needs to be implemented.
-    """
+def maybe_adjust_objective_sign(solution: Solution, io_api: str | None) -> Solution:
+    if io_api == "mps" and not _new_highspy_mps_layout:
+        logger.info(
+            "Adjusting objective sign due to switched coefficients in MPS file."
+        )
+        solution.objective *= -1
+    return solution
 
-    model: Model | None
-    io_api: str
-    sense: str
+
+class Solver(ABC):
+    """
+    Abstract base class for solving a given linear problem.
+
+    All relevant functions are passed on to the specific solver subclasses.
+    Subclasses must implement the `solve_problem_from_model()` and
+    `solve_problem_from_file()` methods.
+    """
 
     def __init__(
         self,
         **solver_options,
     ):
         self.solver_options = solver_options
-        # initialize model as None per default
-        self.model = None
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
@@ -204,35 +210,85 @@ class Solver:
                 return func()
         return Solution()
 
-    def maybe_adjust_objective_sign(self, solution: Solution) -> None:
-        if self.sense == "min":
-            return
+    @abstractmethod
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        """
+        Abstract method to solve a linear problem from a model.
 
-        if np.isnan(solution.objective):
-            return
+        Needs to be implemented in the specific solver subclass. Even if the solver
+        does not support solving from a model, this method should be implemented and
+        raise a NotImplementedError.
+        """
+        pass
 
-        if self.io_api == "mps" and not _new_highspy_mps_layout:
-            logger.info(
-                "Adjusting objective sign due to switched coefficients in MPS file."
+    @abstractmethod
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        """
+        Abstract method to solve a linear problem from a problem file.
+
+        Needs to be implemented in the specific solver subclass. Even if the solver
+        does not support solving from a file, this method should be implemented and
+        raise a NotImplementedError.
+        """
+        pass
+
+    def solve_problem(
+        self,
+        model: Model | None = None,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        """
+        Solve a linear problem either from a model or a problem file.
+
+        Wraps around `self.solve_problem_from_model()` and
+        `self.solve_problem_from_file()` and calls the appropriate method
+        based on the input arguments (`model` or `problem_fn`).
+        """
+        if problem_fn is not None and model is not None:
+            msg = "Both problem file and model are given. Please specify only one."
+            raise ValueError(msg)
+        elif model is not None:
+            return self.solve_problem_from_model(
+                model=model,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
             )
-            solution.objective *= -1
-
-    def set_direct_model(self, model: Model):
-        self.model = model
-        self.io_api = "direct"
-        self.sense = model.sense
-
-    def read_from_problem_file(self, problem_fn: Path):
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
-
-    def solve_problem(self):
-        """
-        Function to solve a given linear problem using a specific solver from an input problem file.
-        The function reads the linear problem file and passes it to the
-        solver. This function needs to be implemented for each Solver subclass.
-        """
-        raise NotImplementedError
+        elif problem_fn is not None:
+            return self.solve_problem_from_file(
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
+            )
+        else:
+            msg = "No problem file or model specified."
+            raise ValueError(msg)
 
 
 class CBC(Solver):
@@ -250,22 +306,21 @@ class CBC(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for CBC")
-
-    def read_from_problem_file(self, problem_fn: Path):
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
-
-        # CBC does not like the OBJSENSE line in MPS files, which new highspy versions write
-        if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
-            raise ValueError(
-                "CBC does not support maximization in MPS format highspy versions >=1.7.1"
-            )
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ):
+        msg = "Direct API not implemented for CBC"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -273,33 +328,44 @@ class CBC(Solver):
         env: None = None,
     ) -> Result:
         """
-        Solve a linear problem from a problem file using the cbc solver.
-        The function reads the linear problem file and passes it to the cbc
-        solver. If the solution is successful it returns variable solutions
-        and constraint dual values. For more information on the solver
-        options, run 'cbc' in your shell.
+        Solve a linear problem from a problem file using the CBC solver.
+
+        The function reads the linear problem file and passes it to the solver.
+        If the solution is successful it returns variable solutions
+        and constraint dual values.
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path
+            Path to the solution file. This is necessary for solving with CBC.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
         """
+        sense = read_sense_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
 
-        # check if problem file name is specified
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
-
-        # check if solution file name is specified
         if solution_fn is None:
-            raise ValueError(
-                "No solution file specified. For solving with CBC this is necessary."
+            msg = "No solution file specified. For solving with CBC this is necessary."
+            raise ValueError(msg)
+
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+            msg = (
+                "CBC does not support maximization in MPS format highspy versions "
+                " >=1.7.1"
             )
+            raise ValueError(msg)
 
         # printingOptions is about what goes in solution file
         command = f"cbc -printingOptions all -import {problem_fn} "
@@ -327,9 +393,11 @@ class CBC(Solver):
             p = sub.Popen(command.split(" "), stdout=sub.PIPE, stderr=sub.PIPE)
 
             if p.stdout is None:
-                raise ValueError(
-                    f"Command `{command}` did not run successfully. Check if cbc is installed and in PATH."
+                msg = (
+                    f"Command `{command}` did not run successfully. Check if cbc is "
+                    " installed and in PATH."
                 )
+                raise ValueError(msg)
 
             output = ""
             for line in iter(p.stdout.readline, b""):
@@ -374,7 +442,7 @@ class CBC(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution)
 
@@ -394,22 +462,21 @@ class GLPK(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for GLPK")
-
-    def read_from_problem_file(self, problem_fn: Path):
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
-
-        # GLPK does not like the OBJSENSE line in MPS files, which new highspy versions write
-        if self.io_api == "mps" and self.sense == "max" and _new_highspy_mps_layout:
-            raise ValueError(
-                "GLPK does not support maximization in MPS format highspy versions >=1.7.1"
-            )
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for GLPK"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -429,33 +496,40 @@ class GLPK(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path
+            Path to the solution file. This is necessary for solving with GLPK.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
             "undefined": "infeasible_or_unbounded",
         }
-
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
-            suffix = self.io_api
-
+        sense = read_sense_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
         if solution_fn is None:
-            raise ValueError(
-                "No solution file specified. For solving with GLPK this is necessary."
+            msg = "No solution file specified. For solving with GLPK this is necessary."
+            raise ValueError(msg)
+
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+            msg = (
+                "GLPK does not support maximization in MPS format highspy versions "
+                " >=1.7.1"
             )
+            raise ValueError(msg)
 
         Path(solution_fn).parent.mkdir(exist_ok=True)
 
         # TODO use --nopresol argument for non-optimal solution output
-        command = f"glpsol --{suffix} {problem_fn} --output {solution_fn} "
+        command = f"glpsol --{io_api} {problem_fn} --output {solution_fn} "
         if log_fn is not None:
             command += f"--log {log_fn} "
         if warmstart_fn:
@@ -476,9 +550,11 @@ class GLPK(Solver):
             output = ""
 
             if p.stdout is None:
-                raise ValueError(
-                    f"Command `{command}` did not run successfully. Check if glpsol is installed and in PATH."
+                msg = (
+                    f"Command `{command}` did not run successfully. Check if glpsol is "
+                    "installed and in PATH."
                 )
+                raise ValueError(msg)
 
             for line in iter(p.stdout.readline, b""):
                 output += line.decode()
@@ -534,7 +610,7 @@ class GLPK(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
         return Result(status, solution)
 
 
@@ -563,10 +639,15 @@ class Highs(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        self.model = model
-        self.io_api = "direct"
-        self.sense = model.sense
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
         # check for Highs solver compatibility
         if self.solver_options.get("solver") in [
             "simplex",
@@ -581,9 +662,24 @@ class Highs(Solver):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-    def solve_problem(
+        h = model.to_highspy()
+
+        if log_fn is None and model is not None:
+            log_fn = model.solver_dir / "highs.log"
+
+        return self._solve(
+            h,
+            solution_fn,
+            log_fn,
+            warmstart_fn,
+            basis_fn,
+            model=model,
+            io_api="direct",
+        )
+
+    def solve_problem_from_file(
         self,
-        problem_fn: Path | None = None,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -614,25 +710,47 @@ class Highs(Solver):
         constraints_dual : series
         objective : float
         """
+
+        problem_fn_ = path_to_string(problem_fn)
+        h = highspy.Highs()
+        h.readModel(problem_fn_)
+
+        return self._solve(
+            h,
+            solution_fn,
+            log_fn,
+            warmstart_fn,
+            basis_fn,
+            io_api=read_io_api_from_problem_file(problem_fn),
+        )
+
+    def _solve(
+        self,
+        h: highspy.Highs,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+        io_api: str | None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a Highs object.
+
+        Parameters
+        ----------
+        h                   Highs object
+        solution_fn         solution file name (optional)
+        log_fn              log file name (optional)
+        warmstart_fn        warmstart file name (optional)
+        basis_fn            basis file name (optional)
+
+        Returns
+        -------
+        Result
+        """
         CONDITION_MAP: dict[str, str] = {}
 
-        if self.model is not None:
-            h = self.model.to_highspy()
-        elif problem_fn is None:
-            raise ValueError(
-                "No problem file specified. Please specify problem file or"
-                "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
-            )
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
-            # for highs solver, the path needs to be a string
-            problem_fn_ = path_to_string(problem_fn)
-            h = highspy.Highs()
-            h.readModel(problem_fn_)
-
-        if log_fn is None and self.model is not None:
-            log_fn = self.model.solver_dir / "highs.log"
         if log_fn is not None:
             self.solver_options["log_file"] = path_to_string(log_fn)
             logger.info(f"Log file at {self.solver_options['log_file']}")
@@ -662,13 +780,9 @@ class Highs(Solver):
             objective = h.getObjectiveValue()
             solution = h.getSolution()
 
-            if self.io_api == "direct" and self.model is not None:
-                sol = pd.Series(
-                    solution.col_value, self.model.matrices.vlabels, dtype=float
-                )
-                dual = pd.Series(
-                    solution.row_dual, self.model.matrices.clabels, dtype=float
-                )
+            if model is not None:
+                sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
+                dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
             else:
                 sol = pd.Series(
                     solution.col_value, h.getLp().col_names_, dtype=float
@@ -680,7 +794,7 @@ class Highs(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution, h)
 
@@ -700,14 +814,73 @@ class Gurobi(Solver):
     ):
         super().__init__(**solver_options)
 
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: gurobipy.Env | None = None,
+        env: None = None,
+    ) -> Result:
+        with contextlib.ExitStack() as stack:
+            if env is None:
+                env_ = stack.enter_context(gurobipy.Env())
+            else:
+                env_ = env
+
+            m = model.to_gurobipy(env=env_)
+
+            return self.__solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api="direct",
+                sense=model.sense,
+            )
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        sense = read_sense_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
+        problem_fn_ = path_to_string(problem_fn)
+
+        with contextlib.ExitStack() as stack:
+            if env is None:
+                env_ = stack.enter_context(gurobipy.Env())
+            else:
+                env_ = env
+
+            m = gurobipy.read(problem_fn_, env=env_)
+
+            return self.__solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                sense=sense,
+                io_api=io_api,
+            )
+
+    def __solve(
+        self,
+        m,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        sense: str | None = None,
+        io_api: str | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -716,12 +889,10 @@ class Gurobi(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
         solution_fn         solution file name (optional)
         log_fn              log file name (optional)
         warmstart_fn        warmstart file name (optional)
         basis_fn            basis file name (optional)
-        env                 The gurobipy environment. Defaults to new gurobipy.Env
         """
         # see https://www.gurobi.com/documentation/10.0/refman/optimization_status_codes.html
         CONDITION_MAP = {
@@ -744,70 +915,52 @@ class Gurobi(Solver):
             17: "internal_solver_error",
         }
 
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env = stack.enter_context(gurobipy.Env())
+        if self.solver_options is not None:
+            for key, value in self.solver_options.items():
+                m.setParam(key, value)
+        if log_fn is not None:
+            m.setParam("logfile", path_to_string(log_fn))
 
-            if self.model is not None:
-                m = self.model.to_gurobipy(env=env)
-            elif problem_fn is None:
-                raise ValueError(
-                    "No problem file specified. Please specify problem file or"
-                    "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
+        if warmstart_fn is not None:
+            m.read(path_to_string(warmstart_fn))
+        m.optimize()
+
+        if basis_fn is not None:
+            try:
+                m.write(path_to_string(basis_fn))
+            except gurobipy.GurobiError as err:
+                logger.info("No model basis stored. Raised error: %s", err)
+
+        if solution_fn is not None and solution_fn.suffix == ".sol":
+            try:
+                m.write(path_to_string(solution_fn))
+            except gurobipy.GurobiError as err:
+                logger.info("Unable to save solution file. Raised error: %s", err)
+
+        condition = m.status
+        termination_condition = CONDITION_MAP.get(condition, condition)
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = condition
+
+        def get_solver_solution() -> Solution:
+            objective = m.ObjVal
+
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+            sol = set_int_index(sol)
+
+            try:
+                dual = pd.Series(
+                    {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
                 )
-            else:
-                # read sense and io_api from problem file
-                self.read_from_problem_file(problem_fn)
-                # for gurobi solver, the path needs to be a string
-                problem_fn_ = path_to_string(problem_fn)
-                m = gurobipy.read(problem_fn_, env=env)
+                dual = set_int_index(dual)
+            except AttributeError:
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = pd.Series(dtype=float)
 
-            if self.solver_options is not None:
-                for key, value in self.solver_options.items():
-                    m.setParam(key, value)
-            if log_fn is not None:
-                m.setParam("logfile", path_to_string(log_fn))
+            return Solution(sol, dual, objective)
 
-            if warmstart_fn is not None:
-                m.read(path_to_string(warmstart_fn))
-            m.optimize()
-
-            if basis_fn is not None:
-                try:
-                    m.write(path_to_string(basis_fn))
-                except gurobipy.GurobiError as err:
-                    logger.info("No model basis stored. Raised error: %s", err)
-
-            if solution_fn is not None and solution_fn.suffix == ".sol":
-                try:
-                    m.write(path_to_string(solution_fn))
-                except gurobipy.GurobiError as err:
-                    logger.info("Unable to save solution file. Raised error: %s", err)
-
-            condition = m.status
-            termination_condition = CONDITION_MAP.get(condition, condition)
-            status = Status.from_termination_condition(termination_condition)
-            status.legacy_status = condition
-
-            def get_solver_solution() -> Solution:
-                objective = m.ObjVal
-
-                sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
-                sol = set_int_index(sol)
-
-                try:
-                    dual = pd.Series(
-                        {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
-                    )
-                    dual = set_int_index(dual)
-                except AttributeError:
-                    logger.warning("Dual values of MILP couldn't be parsed")
-                    dual = pd.Series(dtype=float)
-
-                return Solution(sol, dual, objective)
-
-            solution = self.safe_get_solution(status=status, func=get_solver_solution)
-            self.maybe_adjust_objective_sign(solution)
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+        solution = solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution, m)
 
@@ -831,12 +984,21 @@ class Cplex(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for Cplex")
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for Cplex"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -862,12 +1024,7 @@ class Cplex(Solver):
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
         }
-
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
 
         m = cplex.Cplex()
 
@@ -936,7 +1093,7 @@ class Cplex(Solver):
             return Solution(solution, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution, m)
 
@@ -956,12 +1113,21 @@ class SCIP(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for SCIP")
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for SCIP"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -983,11 +1149,7 @@ class SCIP(Solver):
         """
         CONDITION_MAP: dict[str, str] = {}
 
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
 
         m = scip.Model()
         m.readProblem(path_to_string(problem_fn))
@@ -1056,7 +1218,7 @@ class SCIP(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution, m)
 
@@ -1079,12 +1241,21 @@ class Xpress(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for Xpress")
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for Xpress"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
@@ -1117,11 +1288,7 @@ class Xpress(Solver):
             "mip_unbounded": "unbounded",
         }
 
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
 
         m = xpress.problem()
 
@@ -1173,7 +1340,7 @@ class Xpress(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution, m)
 
@@ -1206,14 +1373,66 @@ class Mosek(Solver):
     ):
         super().__init__(**solver_options)
 
-    def solve_problem(
+    def solve_problem_from_model(
         self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        with contextlib.ExitStack() as stack:
+            if env is None:
+                env_ = stack.enter_context(mosek.Env())
+
+            with env_.Task() as m:
+                m = model.to_mosek(m)
+
+                return self._solve(m)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        with contextlib.ExitStack() as stack:
+            if env is None:
+                env_ = stack.enter_context(mosek.Env())
+
+            with env_.Task() as m:
+                # read sense and io_api from problem file
+                sense = read_sense_from_problem_file(problem_fn)
+                io_api = read_io_api_from_problem_file(problem_fn)
+                # for Mosek solver, the path needs to be a string
+                problem_fn_ = path_to_string(problem_fn)
+                m.readdata(problem_fn_)
+
+                return self._solve(
+                    m,
+                    problem_fn=problem_fn,
+                    solution_fn=solution_fn,
+                    log_fn=log_fn,
+                    warmstart_fn=warmstart_fn,
+                    basis_fn=basis_fn,
+                    sense=sense,
+                    io_api=io_api,
+                )
+
+    def _solve(
+        self,
+        m: mosek.Task,
         problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: mosek.Task | None = None,
+        sense: str | None = None,
+        io_api: str | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MOSEK solver. Both 'direct' mode, mps and
@@ -1236,186 +1455,159 @@ class Mosek(Solver):
             "solsta.dual_infeas_cer": "infeasible_or_unbounded",
         }
 
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env = stack.enter_context(mosek.Env())
+        for k, v in self.solver_options.items():
+            m.putparam(k, str(v))
 
-            with env.Task() as m:
-                if self.model is not None:
-                    self.model.to_mosek(m)
-                elif problem_fn is None:
-                    raise ValueError(
-                        "No problem file specified. Please specify problem file or"
-                        "set model via 'set_direct_model(model=<your_linopy_model>)' method for direct API."
-                    )
-                else:
-                    # read sense and io_api from problem file
-                    self.read_from_problem_file(problem_fn)
-                    # for Mosek solver, the path needs to be a string
-                    problem_fn_ = path_to_string(problem_fn)
-                    m.readdata(problem_fn_)
+        if log_fn is not None:
+            m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
+        else:
+            m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
-                for k, v in self.solver_options.items():
-                    m.putparam(k, str(v))
+        if warmstart_fn is not None:
+            m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+            skx = [mosek.stakey.low] * m.getnumvar()
+            skc = [mosek.stakey.bas] * m.getnumcon()
 
-                if log_fn is not None:
-                    m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
-                else:
-                    m.set_Stream(mosek.streamtype.log, sys.stdout.write)
+            with open(path_to_string(warmstart_fn)) as f:
+                for line in f:
+                    if line.startswith("NAME "):
+                        break
 
-                if warmstart_fn is not None:
-                    m.putintparam(
-                        mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys
-                    )
-                    skx = [mosek.stakey.low] * m.getnumvar()
-                    skc = [mosek.stakey.bas] * m.getnumcon()
+                for line in f:
+                    if line.startswith("ENDATA"):
+                        break
 
-                    with open(path_to_string(warmstart_fn)) as f:
-                        for line in f:
-                            if line.startswith("NAME "):
-                                break
+                    o = mosek_bas_re.match(line)
+                    if o is not None:
+                        if o.group(1) is not None:
+                            key = o.group(1)
+                            try:
+                                skx[m.getvarnameindex(o.group(2))] = mosek.stakey.basis
+                            except:  # noqa: E722
+                                pass
+                            try:
+                                skc[m.getvarnameindex(o.group(3))] = (
+                                    mosek.stakey.low if key == "XL" else "XU"
+                                )
+                            except:  # noqa: E722
+                                pass
+                        else:
+                            key = o.group(4)
+                            name = o.group(5)
+                            stakey = (
+                                mosek.stakey.low
+                                if key == "LL"
+                                else (
+                                    mosek.stakey.upr
+                                    if key == "UL"
+                                    else mosek.stakey.bas
+                                )
+                            )
 
-                        for line in f:
-                            if line.startswith("ENDATA"):
-                                break
+                            try:
+                                skx[m.getvarnameindex(name)] = stakey
+                            except:  # noqa: E722
+                                try:
+                                    skc[m.getvarnameindex(name)] = stakey
+                                except:  # noqa: E722
+                                    pass
+            m.putskc(mosek.soltype.bas, skc)
+            m.putskx(mosek.soltype.bas, skx)
+        m.optimize()
 
-                            o = mosek_bas_re.match(line)
-                            if o is not None:
-                                if o.group(1) is not None:
-                                    key = o.group(1)
-                                    try:
-                                        skx[m.getvarnameindex(o.group(2))] = (
-                                            mosek.stakey.basis
-                                        )
-                                    except:  # noqa: E722
-                                        pass
-                                    try:
-                                        skc[m.getvarnameindex(o.group(3))] = (
-                                            mosek.stakey.low if key == "XL" else "XU"
-                                        )
-                                    except:  # noqa: E722
-                                        pass
-                                else:
-                                    key = o.group(4)
-                                    name = o.group(5)
-                                    stakey = (
-                                        mosek.stakey.low
-                                        if key == "LL"
-                                        else (
-                                            mosek.stakey.upr
-                                            if key == "UL"
-                                            else mosek.stakey.bas
-                                        )
-                                    )
+        m.solutionsummary(mosek.streamtype.log)
 
-                                    try:
-                                        skx[m.getvarnameindex(name)] = stakey
-                                    except:  # noqa: E722
-                                        try:
-                                            skc[m.getvarnameindex(name)] = stakey
-                                        except:  # noqa: E722
-                                            pass
-                    m.putskc(mosek.soltype.bas, skc)
-                    m.putskx(mosek.soltype.bas, skx)
-                m.optimize()
+        if basis_fn is not None:
+            if m.solutiondef(mosek.soltype.bas):
+                with open(path_to_string(basis_fn), "w") as f:
+                    f.write(f"NAME {basis_fn}\n")
 
-                m.solutionsummary(mosek.streamtype.log)
+                    skc = [
+                        (0 if sk != mosek.stakey.bas else 1, i, sk)
+                        for (i, sk) in enumerate(m.getskc(mosek.soltype.bas))
+                    ]
+                    skx = [
+                        (0 if sk == mosek.stakey.bas else 1, j, sk)
+                        for (j, sk) in enumerate(m.getskx(mosek.soltype.bas))
+                    ]
+                    skc.sort()
+                    skc.reverse()
+                    skx.sort()
+                    skx.reverse()
+                    while skx and skc and skx[-1][0] == 0 and skc[-1][0] == 0:
+                        (_, i, kc) = skc.pop()
+                        (_, j, kx) = skx.pop()
 
-                if basis_fn is not None:
-                    if m.solutiondef(mosek.soltype.bas):
-                        with open(path_to_string(basis_fn), "w") as f:
-                            f.write(f"NAME {basis_fn}\n")
+                        namex = m.getvarname(j)
+                        namec = m.getconname(i)
 
-                            skc = [
-                                (0 if sk != mosek.stakey.bas else 1, i, sk)
-                                for (i, sk) in enumerate(m.getskc(mosek.soltype.bas))
-                            ]
-                            skx = [
-                                (0 if sk == mosek.stakey.bas else 1, j, sk)
-                                for (j, sk) in enumerate(m.getskx(mosek.soltype.bas))
-                            ]
-                            skc.sort()
-                            skc.reverse()
-                            skx.sort()
-                            skx.reverse()
-                            while skx and skc and skx[-1][0] == 0 and skc[-1][0] == 0:
-                                (_, i, kc) = skc.pop()
-                                (_, j, kx) = skx.pop()
+                        if kc in [mosek.stakey.low, mosek.stakey.fix]:
+                            f.write(f" XL {namex} {namec}\n")
+                        else:
+                            f.write(f" XU {namex} {namec}\n")
+                    while skc and skc[-1][0] == 0:
+                        (_, i, kc) = skc.pop()
+                        namec = m.getconname(i)
+                        if kc in [mosek.stakey.low, mosek.stakey.fix]:
+                            f.write(f" LL {namex}\n")
+                        else:
+                            f.write(f" UL {namex}\n")
+                    while skx:
+                        (_, j, kx) = skx.pop()
+                        namex = m.getvarname(j)
+                        if kx == mosek.stakey.bas:
+                            f.write(f" BS {namex}\n")
+                        elif kx in [mosek.stakey.low, mosek.stakey.fix]:
+                            f.write(f" LL {namex}\n")
+                        elif kx == mosek.stakey.upr:
+                            f.write(f" UL {namex}\n")
+                    f.write("ENDATA\n")
 
-                                namex = m.getvarname(j)
-                                namec = m.getconname(i)
+        soltype = None
+        possible_soltypes = [
+            mosek.soltype.bas,
+            mosek.soltype.itr,
+            mosek.soltype.itg,
+        ]
+        for possible_soltype in possible_soltypes:
+            try:
+                if m.solutiondef(possible_soltype):
+                    soltype = possible_soltype
+            except mosek.Error:
+                pass
 
-                                if kc in [mosek.stakey.low, mosek.stakey.fix]:
-                                    f.write(f" XL {namex} {namec}\n")
-                                else:
-                                    f.write(f" XU {namex} {namec}\n")
-                            while skc and skc[-1][0] == 0:
-                                (_, i, kc) = skc.pop()
-                                namec = m.getconname(i)
-                                if kc in [mosek.stakey.low, mosek.stakey.fix]:
-                                    f.write(f" LL {namex}\n")
-                                else:
-                                    f.write(f" UL {namex}\n")
-                            while skx:
-                                (_, j, kx) = skx.pop()
-                                namex = m.getvarname(j)
-                                if kx == mosek.stakey.bas:
-                                    f.write(f" BS {namex}\n")
-                                elif kx in [mosek.stakey.low, mosek.stakey.fix]:
-                                    f.write(f" LL {namex}\n")
-                                elif kx == mosek.stakey.upr:
-                                    f.write(f" UL {namex}\n")
-                            f.write("ENDATA\n")
+        if solution_fn is not None:
+            try:
+                m.writesolution(mosek.soltype.bas, path_to_string(solution_fn))
+            except mosek.Error as err:
+                logger.info("Unable to save solution file. Raised error: %s", err)
 
-                soltype = None
-                possible_soltypes = [
-                    mosek.soltype.bas,
-                    mosek.soltype.itr,
-                    mosek.soltype.itg,
-                ]
-                for possible_soltype in possible_soltypes:
-                    try:
-                        if m.solutiondef(possible_soltype):
-                            soltype = possible_soltype
-                    except mosek.Error:
-                        pass
+        condition = str(m.getsolsta(soltype))
+        termination_condition = CONDITION_MAP.get(condition, condition)
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = condition
 
-                if solution_fn is not None:
-                    try:
-                        m.writesolution(mosek.soltype.bas, path_to_string(solution_fn))
-                    except mosek.Error as err:
-                        logger.info(
-                            "Unable to save solution file. Raised error: %s", err
-                        )
+        def get_solver_solution() -> Solution:
+            objective = m.getprimalobj(soltype)
 
-                condition = str(m.getsolsta(soltype))
-                termination_condition = CONDITION_MAP.get(condition, condition)
-                status = Status.from_termination_condition(termination_condition)
-                status.legacy_status = condition
+            sol = m.getxx(soltype)
+            sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
+            sol = pd.Series(sol, dtype=float)
+            sol = set_int_index(sol)
 
-                def get_solver_solution() -> Solution:
-                    objective = m.getprimalobj(soltype)
+            try:
+                dual = m.gety(soltype)
+                dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
+                dual = pd.Series(dual, dtype=float)
+                dual = set_int_index(dual)
+            except (mosek.Error, AttributeError):
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = pd.Series(dtype=float)
 
-                    sol = m.getxx(soltype)
-                    sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
-                    sol = pd.Series(sol, dtype=float)
-                    sol = set_int_index(sol)
+            return Solution(sol, dual, objective)
 
-                    try:
-                        dual = m.gety(soltype)
-                        dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
-                        dual = pd.Series(dual, dtype=float)
-                        dual = set_int_index(dual)
-                    except (mosek.Error, AttributeError):
-                        logger.warning("Dual values of MILP couldn't be parsed")
-                        dual = pd.Series(dtype=float)
-
-                    return Solution(sol, dual, objective)
-
-                solution = self.safe_get_solution(
-                    status=status, func=get_solver_solution
-                )
-                self.maybe_adjust_objective_sign(solution)
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
         return Result(status, solution)
 
@@ -1440,29 +1632,48 @@ class COPT(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for COPT")
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: coptpy.Envr = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for COPT"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the COPT solver.
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
-        env                 The coptpy Environment
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path
+            Path to the solution file. This is necessary for solving with CBC.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
         """
         # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
         CONDITION_MAP = {
@@ -1479,16 +1690,12 @@ class COPT(Solver):
             10: "interrupted",
         }
 
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
 
         if env is None:
-            env = coptpy.Envr()
+            env_ = coptpy.Envr()
 
-        m = env.createModel()
+        m = env_.createModel()
 
         m.read(path_to_string(problem_fn))
 
@@ -1515,21 +1722,25 @@ class COPT(Solver):
             except coptpy.CoptError as err:
                 logger.info("No model solution stored. Raised error: %s", err)
 
-        if self.model is not None:
-            condition = m.LpStatus if self.model.type in ["LP", "QP"] else m.MipStatus
-        else:
-            # TODO: check if this suffices
-            condition = m.MipStatus if m.ismip else m.LpStatus
+        # TODO: This is never reached
+        # if model is not None:
+        #     condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
+        # else:
+
+        # TODO: check if this suffices
+        condition = m.MipStatus if m.ismip else m.LpStatus
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            if self.model is not None:
-                objective = m.LpObjval if self.model.type in ["LP", "QP"] else m.BestObj
-            else:
-                # TODO: check if this suffices
-                objective = m.BestObj if m.ismip else m.LpObjVal
+            # TODO: This is never reached
+            # if model is not None:
+            #     objective = m.LpObjval if model.type in ["LP", "QP"] else m.BestObj
+            # else:
+
+            # TODO: check if this suffices
+            objective = m.BestObj if m.ismip else m.LpObjVal
 
             sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
             sol = set_int_index(sol)
@@ -1544,9 +1755,9 @@ class COPT(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
-        env.close()
+        env_.close()
 
         return Result(status, solution, m)
 
@@ -1571,39 +1782,49 @@ class MindOpt(Solver):
     ):
         super().__init__(**solver_options)
 
-    def set_direct_model(self, model: Model):
-        raise NotImplementedError("Direct API not implemented for MindOpt")
-
-    def read_from_problem_file(self, problem_fn: Path):
-        self.sense = read_sense_from_problem_file(problem_fn)
-        self.io_api = read_io_api_from_problem_file(problem_fn)
-        if self.io_api == "lp":
-            # for model type "QP", lp file with have "[" and "]" in objective function
-            if "[" in open(problem_fn).read() and "]" in open(problem_fn).read():
-                raise ValueError(
-                    "MindOpt does not support QP problems in LP format. Use MPS file format instead."
-                )
-
-    def solve_problem(
+    def solve_problem_from_model(
         self,
-        problem_fn: Path | None = None,
+        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: mindoptpy.Env | None = None,
+        env: None = None,
+    ) -> Result:
+        msg = "Direct API not implemented for MindOpt"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MindOpt solver.
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
-        env                 The mindoptpy Environment
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path
+            Path to the solution file. This is necessary for solving with CBC.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
+
         """
         CONDITION_MAP = {
             -1: "error",
@@ -1614,18 +1835,23 @@ class MindOpt(Solver):
             4: "infeasible_or_unbounded",
             5: "suboptimal",
         }
+        io_api = read_io_api_from_problem_file(problem_fn)
 
-        if problem_fn is None:
-            raise ValueError("No problem file specified.")
-        else:
-            # read sense and io_api from problem file
-            self.read_from_problem_file(problem_fn)
+        if io_api == "lp":
+            # for model type "QP", lp file with have "[" and "]" in objective function
+            if "[" in open(problem_fn).read() and "]" in open(problem_fn).read():
+                msg = (
+                    "MindOpt does not support QP problems in LP format. Use MPS file "
+                    "format instead."
+                )
+                raise ValueError(msg)
 
         if env is None:
-            env = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
-        env.start()
+            env_ = mindoptpy.Env(path_to_string(log_fn) if log_fn else "")
 
-        m = mindoptpy.read(path_to_string(problem_fn), env)
+        env_.start()
+
+        m = mindoptpy.read(path_to_string(problem_fn), env_)
 
         for k, v in self.solver_options.items():
             m.setParam(k, v)
@@ -1671,9 +1897,9 @@ class MindOpt(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        self.maybe_adjust_objective_sign(solution)
+        solution = maybe_adjust_objective_sign(solution, io_api)
 
-        env.dispose()
+        env_.dispose()
 
         return Result(status, solution, m)
 
@@ -1688,4 +1914,5 @@ class PIPS(Solver):
         **solver_options,
     ):
         super().__init__(**solver_options)
-        raise NotImplementedError("The PIPS++ solver interface is not yet implemented.")
+        msg = "The PIPS solver interface is not yet implemented."
+        raise NotImplementedError(msg)

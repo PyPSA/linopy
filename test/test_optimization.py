@@ -684,10 +684,9 @@ def test_model_resolve(model, solver, io_api):
 
 @pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" not in p])
 def test_solver_classes_from_problem_file(model, solver, io_api):
-    # first test initialization of super class. Should not be able to call solve_problem method
-    with pytest.raises(NotImplementedError):
-        solver_super = solvers.Solver()
-        solver_super.solve_problem()
+    # first test initialization of super class. Should not be possible to initialize
+    with pytest.raises(TypeError):
+        solver_super = solvers.Solver()  # noqa F841
 
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
@@ -720,8 +719,7 @@ def test_solver_classes_direct(model, solver, io_api):
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
     solver_ = solver_class()
-    solver_.set_direct_model(model=model)
-    result = solver_.solve_problem()
+    result = solver_.solve_problem(model=model)
     assert result.status.status.value == "ok"
     # x = -0.1, y = 1.7
     assert np.isclose(result.solution.objective, 3.3)
