@@ -208,7 +208,7 @@ class Result:
 
     status: Status
     solution: Union[Solution, None] = None
-    solver_model: Union[Any, None] = None
+    solver_model: Any = None
 
     def __repr__(self) -> str:
         solver_model_string = (

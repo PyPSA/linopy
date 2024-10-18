@@ -72,7 +72,7 @@ solvers = [
     "cplex; platform_system != 'Darwin' and python_version < '3.12'",
     "mosek",
     "mindoptpy; python_version < '3.12'",
-    "coptpy",
+    "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
