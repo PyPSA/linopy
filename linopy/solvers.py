@@ -179,7 +179,9 @@ def read_io_api_from_problem_file(problem_fn: Path | str):
         return problem_fn.split(".")[-1]
 
 
-def maybe_adjust_objective_sign(solution: Solution, io_api: str | None, sense: str | None) -> Solution:
+def maybe_adjust_objective_sign(
+    solution: Solution, io_api: str | None, sense: str | None
+) -> Solution:
     if sense == "min":
         return solution
     if np.isnan(solution.objective):
