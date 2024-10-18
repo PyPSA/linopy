@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+import numpy as np
 import pandas as pd
 from pandas.core.series import Series
 
@@ -178,7 +179,11 @@ def read_io_api_from_problem_file(problem_fn: Path | str):
         return problem_fn.split(".")[-1]
 
 
-def maybe_adjust_objective_sign(solution: Solution, io_api: str | None) -> Solution:
+def maybe_adjust_objective_sign(solution: Solution, io_api: str | None, sense: str | None) -> Solution:
+    if sense == "min":
+        return solution
+    if np.isnan(solution.objective):
+        return solution
     if io_api == "mps" and not _new_highspy_mps_layout:
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
@@ -301,7 +306,8 @@ class CBC(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -446,7 +452,7 @@ class CBC(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution)
 
@@ -457,7 +463,8 @@ class GLPK(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -512,6 +519,10 @@ class GLPK(Solver):
             Path to the basis file.
         env : None, optional
             Environment for the solver
+
+        Returns
+        -------
+        Result
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
@@ -614,7 +625,7 @@ class GLPK(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
         return Result(status, solution)
 
 
@@ -634,7 +645,8 @@ class Highs(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -652,6 +664,31 @@ class Highs(Solver):
         basis_fn: Path | None = None,
         env: None = None,
     ) -> Result:
+        """
+        Solve a linear problem directly from a linopy model using the Highs solver.
+        Reads a linear problem file and passes it to the highs solver.
+        If the solution is feasible the function returns the
+        objective, solution and dual constraint variables.
+
+        Parameters
+        ----------
+        model : linopy.model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
+        """
         # check for Highs solver compatibility
         if self.solver_options.get("solver") in [
             "simplex",
@@ -679,6 +716,7 @@ class Highs(Solver):
             basis_fn,
             model=model,
             io_api="direct",
+            sense=model.sense,
         )
 
     def solve_problem_from_file(
@@ -698,21 +736,22 @@ class Highs(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
 
         Returns
         -------
-        status : string,
-            SolverStatus.ok or SolverStatus.warning
-        termination_condition : string,
-            Contains "optimal", "infeasible",
-        variables_sol : series
-        constraints_dual : series
-        objective : float
+        Result
         """
 
         problem_fn_ = path_to_string(problem_fn)
@@ -726,6 +765,7 @@ class Highs(Solver):
             warmstart_fn,
             basis_fn,
             io_api=read_io_api_from_problem_file(problem_fn),
+            sense=read_sense_from_problem_file(problem_fn),
         )
 
     def _solve(
@@ -737,17 +777,30 @@ class Highs(Solver):
         basis_fn: Path | None = None,
         model: Model | None = None,
         io_api: str | None = None,
+        sense: str | None = None,
     ) -> Result:
         """
         Solve a linear problem from a Highs object.
 
+
         Parameters
         ----------
-        h                   Highs object
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        h : highspy.Highs
+            Highs object.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        model : linopy.model, optional
+            Linopy model for the problem.
+        io_api: str
+            io_api of the problem. For direct API from linopy model this is "direct".
+        sense: str
+            "min" or "max"
 
         Returns
         -------
@@ -798,7 +851,7 @@ class Highs(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, h)
 
@@ -809,7 +862,8 @@ class Gurobi(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -827,6 +881,30 @@ class Gurobi(Solver):
         basis_fn: Path | None = None,
         env: None = None,
     ) -> Result:
+        """
+        Solve a linear problem directly from a linopy model using the Gurobi solver.
+        Reads a problem file and passes it to the Gurobi solver.
+        This function communicates with gurobi using the gurobipy package.
+
+        Parameters
+        ----------
+        model : linopy.model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Gurobi environment for the solver
+
+        Returns
+        -------
+        Result
+        """
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
@@ -835,7 +913,7 @@ class Gurobi(Solver):
 
             m = model.to_gurobipy(env=env_)
 
-            return self.__solve(
+            return self._solve(
                 m,
                 solution_fn=solution_fn,
                 log_fn=log_fn,
@@ -854,6 +932,30 @@ class Gurobi(Solver):
         basis_fn: Path | None = None,
         env: None = None,
     ) -> Result:
+        """
+        Solve a linear problem from a problem file using the Gurobi solver.
+        Reads a problem file and passes it to the Gurobi solver.
+        This function communicates with gurobi using the gurobipy package.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Gurobi environment for the solver
+
+        Returns
+        -------
+        Result
+        """
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)
@@ -866,37 +968,50 @@ class Gurobi(Solver):
 
             m = gurobipy.read(problem_fn_, env=env_)
 
-            return self.__solve(
+            return self._solve(
                 m,
                 solution_fn=solution_fn,
                 log_fn=log_fn,
                 warmstart_fn=warmstart_fn,
                 basis_fn=basis_fn,
-                sense=sense,
                 io_api=io_api,
+                sense=sense,
             )
 
-    def __solve(
+    def _solve(
         self,
         m,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        sense: str | None = None,
         io_api: str | None = None,
+        sense: str | None = None,
     ) -> Result:
         """
-        Solve a linear problem from a problem file using the Gurobi solver.
-        Reads a problem file and passes it to the Gurobi solver.
-        This function communicates with gurobi using the gurobipy package.
+        Solve a linear problem from a Gurobi object.
+
 
         Parameters
         ----------
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        m
+            Gurobi object.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        io_api: str
+            io_api of the problem. For direct API from linopy model this is "direct".
+        sense: str
+            "min" or "max"
+
+        Returns
+        -------
+        Result
         """
         # see https://www.gurobi.com/documentation/10.0/refman/optimization_status_codes.html
         CONDITION_MAP = {
@@ -964,7 +1079,7 @@ class Gurobi(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -979,7 +1094,8 @@ class Cplex(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1018,17 +1134,29 @@ class Cplex(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
         """
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
         m = cplex.Cplex()
 
@@ -1097,7 +1225,7 @@ class Cplex(Solver):
             return Solution(solution, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -1108,7 +1236,8 @@ class SCIP(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1145,15 +1274,27 @@ class SCIP(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
         """
         CONDITION_MAP: dict[str, str] = {}
 
         io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
         m = scip.Model()
         m.readProblem(path_to_string(problem_fn))
@@ -1222,7 +1363,7 @@ class SCIP(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -1236,7 +1377,8 @@ class Xpress(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1276,11 +1418,22 @@ class Xpress(Solver):
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
         """
         CONDITION_MAP = {
             "lp_optimal": "optimal",
@@ -1293,6 +1446,7 @@ class Xpress(Solver):
         }
 
         io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
         m = xpress.problem()
 
@@ -1344,7 +1498,7 @@ class Xpress(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -1368,7 +1522,8 @@ class Mosek(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1386,6 +1541,28 @@ class Mosek(Solver):
         basis_fn: Path | None = None,
         env: None = None,
     ) -> Result:
+        """
+        Solve a linear problem directly from a linopy model using the MOSEK solver.
+
+        Parameters
+        ----------
+        model : linopy.model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Gurobi environment for the solver
+
+        Returns
+        -------
+        Result
+        """
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(mosek.Env())
@@ -1393,7 +1570,15 @@ class Mosek(Solver):
             with env_.Task() as m:
                 m = model.to_mosek(m)
 
-                return self._solve(m)
+                return self._solve(
+                    m,
+                    solution_fn=solution_fn,
+                    log_fn=log_fn,
+                    warmstart_fn=warmstart_fn,
+                    basis_fn=basis_fn,
+                    io_api="direct",
+                    sense=model.sense,
+                )
 
     def solve_problem_from_file(
         self,
@@ -1404,6 +1589,29 @@ class Mosek(Solver):
         basis_fn: Path | None = None,
         env: None = None,
     ) -> Result:
+        """
+        Solve a linear problem from a problem file using the MOSEK solver. Both mps and
+        lp files are supported; MPS does not support quadratic terms.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Mosek environment for the solver
+
+        Returns
+        -------
+        Result
+        """
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(mosek.Env())
@@ -1418,38 +1626,47 @@ class Mosek(Solver):
 
                 return self._solve(
                     m,
-                    problem_fn=problem_fn,
                     solution_fn=solution_fn,
                     log_fn=log_fn,
                     warmstart_fn=warmstart_fn,
                     basis_fn=basis_fn,
-                    sense=sense,
                     io_api=io_api,
+                    sense=sense,
                 )
 
     def _solve(
         self,
         m: mosek.Task,
-        problem_fn: Path | None = None,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        sense: str | None = None,
         io_api: str | None = None,
+        sense: str | None = None,
     ) -> Result:
         """
-        Solve a linear problem from a problem file using the MOSEK solver. Both 'direct' mode, mps and
-        lp mode are supported; MPS mode does not support quadratic terms.
+        Solve a linear problem from a Mosek task object.
 
         Parameters
         ----------
-        problem_fn          problem file name
-        solution_fn         solution file name (optional)
-        log_fn              log file name (optional)
-        warmstart_fn        warmstart file name (optional)
-        basis_fn            basis file name (optional)
-        env                 The mosek Task environment
+        m : mosek.Task
+            Mosek task object.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        io_api: str
+            io_api of the problem. For direct API from linopy model this is "direct".
+        sense: str
+            "min" or "max"
+
+        Returns
+        -------
+        Result
         """
         CONDITION_MAP = {
             "solsta.unknown": "unknown",
@@ -1611,7 +1828,7 @@ class Mosek(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution)
 
@@ -1627,7 +1844,8 @@ class COPT(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1664,8 +1882,8 @@ class COPT(Solver):
         ----------
         problem_fn : Path
             Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with CBC.
+        solution_fn : Path, optional
+            Path to the solution file.
         log_fn : Path, optional
             Path to the log file.
         warmstart_fn : Path, optional
@@ -1673,7 +1891,7 @@ class COPT(Solver):
         basis_fn : Path, optional
             Path to the basis file.
         env : None, optional
-            Environment for the solver
+            COPT environment for the solver
 
         Returns
         -------
@@ -1695,6 +1913,7 @@ class COPT(Solver):
         }
 
         io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
         if env is None:
             env_ = coptpy.Envr()
@@ -1726,11 +1945,6 @@ class COPT(Solver):
             except coptpy.CoptError as err:
                 logger.info("No model solution stored. Raised error: %s", err)
 
-        # TODO: This is never reached
-        # if model is not None:
-        #     condition = m.LpStatus if model.type in ["LP", "QP"] else m.MipStatus
-        # else:
-
         # TODO: check if this suffices
         condition = m.MipStatus if m.ismip else m.LpStatus
         termination_condition = CONDITION_MAP.get(condition, condition)
@@ -1738,11 +1952,6 @@ class COPT(Solver):
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            # TODO: This is never reached
-            # if model is not None:
-            #     objective = m.LpObjval if model.type in ["LP", "QP"] else m.BestObj
-            # else:
-
             # TODO: check if this suffices
             objective = m.BestObj if m.ismip else m.LpObjVal
 
@@ -1759,7 +1968,7 @@ class COPT(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         env_.close()
 
@@ -1777,7 +1986,8 @@ class MindOpt(Solver):
 
     Attributes
     ----------
-    **solver_options    options for the given solver
+    **solver_options
+        options for the given solver
     """
 
     def __init__(
@@ -1814,8 +2024,8 @@ class MindOpt(Solver):
         ----------
         problem_fn : Path
             Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with CBC.
+        solution_fn : Path, optional
+            Path to the solution file.
         log_fn : Path, optional
             Path to the log file.
         warmstart_fn : Path, optional
@@ -1823,7 +2033,7 @@ class MindOpt(Solver):
         basis_fn : Path, optional
             Path to the basis file.
         env : None, optional
-            Environment for the solver
+            MindOpt environment for the solver
 
         Returns
         -------
@@ -1840,6 +2050,7 @@ class MindOpt(Solver):
             5: "suboptimal",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
 
         if io_api == "lp":
             # for model type "QP", lp file with have "[" and "]" in objective function
@@ -1901,7 +2112,7 @@ class MindOpt(Solver):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = maybe_adjust_objective_sign(solution, io_api)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         env_.dispose()
 
