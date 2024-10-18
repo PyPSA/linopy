@@ -28,13 +28,12 @@ if "highs" in available_solvers:
 
 params = [(name, io_api) for name in available_solvers for io_api in io_apis]
 
-if "gurobi" in available_solvers:
-    params.append(("gurobi", "direct"))
-if "highs" in available_solvers:
-    params.append(("highs", "direct"))
+direct_solvers = ["gurobi", "highs", "mosek"]
+for solver in direct_solvers:
+    if solver in available_solvers:
+        params.append((solver, "direct"))
 
 if "mosek" in available_solvers:
-    params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
 
 
@@ -714,19 +713,23 @@ def test_solver_classes_from_problem_file(model, solver, io_api):
         solver_.solve_problem(problem_fn=solution_fn)
 
 
-@pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" in p])
+@pytest.mark.parametrize("solver,io_api", params)
 def test_solver_classes_direct(model, solver, io_api):
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
     solver_ = solver_class()
-    result = solver_.solve_problem(model=model)
-    assert result.status.status.value == "ok"
-    # x = -0.1, y = 1.7
-    assert np.isclose(result.solution.objective, 3.3)
-    # test for Value error message if direct is tried without giving model
-    with pytest.raises(ValueError):
-        solver_.model = None
-        solver_.solve_problem()
+    if io_api == "direct":
+        result = solver_.solve_problem(model=model)
+        assert result.status.status.value == "ok"
+        # x = -0.1, y = 1.7
+        assert np.isclose(result.solution.objective, 3.3)
+        # test for Value error message if direct is tried without giving model
+        with pytest.raises(ValueError):
+            solver_.model = None
+            solver_.solve_problem()
+    elif solver not in direct_solvers:
+        with pytest.raises(NotImplementedError):
+            solver_.solve_problem(model=model)
 
 
 # def init_model_large():
