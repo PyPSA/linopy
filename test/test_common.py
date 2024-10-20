@@ -11,7 +11,12 @@ import pytest
 import xarray as xr
 from xarray import DataArray
 
-from linopy.common import as_dataarray, assign_multiindex_safe, best_int
+from linopy.common import (
+    as_dataarray,
+    assign_multiindex_safe,
+    best_int,
+    iterate_slices,
+)
 
 
 def test_as_dataarray_with_series_dims_default():
@@ -453,3 +458,74 @@ def test_assign_multiindex_safe():
     assert "value" in result
     assert result["humidity"].equals(data)
     assert result["pressure"].equals(data)
+
+
+def test_iterate_slices_basic():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=20))
+    assert len(slices) == 5
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)
+
+
+def test_iterate_slices_with_exclude_dims():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=20, slice_dims=["x"]))
+    assert len(slices) == 5
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)
+
+
+def test_iterate_slices_large_max_size():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=200))
+    assert len(slices) == 1
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)
+
+
+def test_iterate_slices_small_max_size():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=8, slice_dims=[]))
+    assert len(slices) == 10
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)
+
+
+def test_iterate_slices_slice_size_none():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=None))
+    assert len(slices) == 1
+    for s in slices:
+        assert ds.equals(s)
+
+
+def test_iterate_slices_no_slice_dims():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=50, slice_dims=[]))
+    assert len(slices) == 2
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)

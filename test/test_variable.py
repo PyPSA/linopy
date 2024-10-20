@@ -286,3 +286,10 @@ def test_variable_sanitize(x):
     x = x.sanitize()
     assert isinstance(x, linopy.variables.Variable)
     assert x.labels[9] == -1
+
+
+def test_variable_iterate_slices(x):
+    slices = x.iterate_slices(slice_size=2)
+    for s in slices:
+        assert isinstance(s, linopy.variables.Variable)
+        assert s.size <= 2

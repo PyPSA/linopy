@@ -127,7 +127,11 @@ def objective_to_file(
 
 
 def constraints_to_file(
-    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 50000
+    m: Model,
+    f: TextIOWrapper,
+    log: bool = False,
+    batch_size: int = 50_000,
+    slice_size: int = 100_000,
 ) -> None:
     if not len(m.constraints):
         return
@@ -143,54 +147,60 @@ def constraints_to_file(
 
     batch = []
     for name in names:
-        df = m.constraints[name].flat
+        con = m.constraints[name]
+        for con_slice in con.iterate_slices(slice_size):
+            df = con_slice.flat
 
-        labels = df.labels.values
-        vars = df.vars.values
-        coeffs = df.coeffs.values
-        rhs = df.rhs.values
-        sign = df.sign.values
+            labels = df.labels.values
+            vars = df.vars.values
+            coeffs = df.coeffs.values
+            rhs = df.rhs.values
+            sign = df.sign.values
 
-        len_df = len(df)  # compute length once
-        if not len_df:
-            continue
+            len_df = len(df)  # compute length once
+            if not len_df:
+                continue
 
-        # write out the start to enable a fast loop afterwards
-        idx = 0
-        label = labels[idx]
-        coeff = coeffs[idx]
-        var = vars[idx]
-        batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
-        prev_label = label
-        prev_sign = sign[idx]
-        prev_rhs = rhs[idx]
-
-        for idx in range(1, len_df):
+            # write out the start to enable a fast loop afterwards
+            idx = 0
             label = labels[idx]
             coeff = coeffs[idx]
             var = vars[idx]
-
-            if label != prev_label:
-                batch.append(
-                    f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
-                )
-                prev_sign = sign[idx]
-                prev_rhs = rhs[idx]
-            else:
-                batch.append(f"{coeff:+.12g} x{var}\n")
-
-            batch = handle_batch(batch, f, batch_size)
-
+            batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
             prev_label = label
+            prev_sign = sign[idx]
+            prev_rhs = rhs[idx]
 
-        batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
+            for idx in range(1, len_df):
+                label = labels[idx]
+                coeff = coeffs[idx]
+                var = vars[idx]
+
+                if label != prev_label:
+                    batch.append(
+                        f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
+                    )
+                    prev_sign = sign[idx]
+                    prev_rhs = rhs[idx]
+                else:
+                    batch.append(f"{coeff:+.12g} x{var}\n")
+
+                batch = handle_batch(batch, f, batch_size)
+
+                prev_label = label
+
+            batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
 
     if batch:  # write the remaining lines
         f.writelines(batch)
 
 
 def bounds_to_file(
-    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+    m: Model,
+    f: TextIOWrapper,
+    log: bool = False,
+    batch_size: int = 10000,
+    slice_size: int = 100_000,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -209,25 +219,31 @@ def bounds_to_file(
 
     batch = []  # to store batch of lines
     for name in names:
-        df = m.variables[name].flat
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.flat
 
-        labels = df.labels.values
-        lowers = df.lower.values
-        uppers = df.upper.values
+            labels = df.labels.values
+            lowers = df.lower.values
+            uppers = df.upper.values
 
-        for idx in range(len(df)):
-            label = labels[idx]
-            lower = lowers[idx]
-            upper = uppers[idx]
-            batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
-            batch = handle_batch(batch, f, batch_size)
+            for idx in range(len(df)):
+                label = labels[idx]
+                lower = lowers[idx]
+                upper = uppers[idx]
+                batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
+                batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
 
 
 def binaries_to_file(
-    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 1000
+    m: Model,
+    f: TextIOWrapper,
+    log: bool = False,
+    batch_size: int = 1000,
+    slice_size: int = 100_000,
 ) -> None:
     """
     Write out binaries of a model to a lp file.
@@ -246,11 +262,13 @@ def binaries_to_file(
 
     batch = []  # to store batch of lines
     for name in names:
-        df = m.variables[name].flat
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.flat
 
-        for label in df.labels.values:
-            batch.append(f"x{label}\n")
-            batch = handle_batch(batch, f, batch_size)
+            for label in df.labels.values:
+                batch.append(f"x{label}\n")
+                batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
@@ -261,6 +279,7 @@ def integers_to_file(
     f: TextIOWrapper,
     log: bool = False,
     batch_size: int = 1000,
+    slice_size: int = 100_000,
     integer_label: str = "general",
 ) -> None:
     """
@@ -280,17 +299,19 @@ def integers_to_file(
 
     batch = []  # to store batch of lines
     for name in names:
-        df = m.variables[name].flat
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.flat
 
-        for label in df.labels.values:
-            batch.append(f"x{label}\n")
-            batch = handle_batch(batch, f, batch_size)
+            for label in df.labels.values:
+                batch.append(f"x{label}\n")
+                batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
         f.writelines(batch)
 
 
-def to_lp_file(m, fn, integer_label):
+def to_lp_file(m: Model, fn: Path, integer_label: str, slice_size: int = 10_000_000):
     log = m._xCounter > 10_000
 
     batch_size = 5000
@@ -302,11 +323,18 @@ def to_lp_file(m, fn, integer_label):
             raise ValueError("File not found.")
 
         objective_to_file(m, f, log=log)
-        constraints_to_file(m, f=f, log=log, batch_size=batch_size)
-        bounds_to_file(m, f=f, log=log, batch_size=batch_size)
-        binaries_to_file(m, f=f, log=log, batch_size=batch_size)
+        constraints_to_file(
+            m, f=f, log=log, batch_size=batch_size, slice_size=slice_size
+        )
+        bounds_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
+        binaries_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
         integers_to_file(
-            m, integer_label=integer_label, f=f, log=log, batch_size=batch_size
+            m,
+            integer_label=integer_label,
+            f=f,
+            log=log,
+            batch_size=batch_size,
+            slice_size=slice_size,
         )
         f.write("end\n")
 
@@ -371,7 +399,7 @@ def objective_to_file_polars(m, f, log=False):
         objective_write_quadratic_terms_polars(f, quads)
 
 
-def bounds_to_file_polars(m, f, log=False):
+def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
     """
     Write out variables of a model to a lp file.
     """
@@ -388,26 +416,28 @@ def bounds_to_file_polars(m, f, log=False):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
 
-        columns = [
-            pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-            pl.col("lower").cast(pl.String),
-            pl.lit(" <= x"),
-            pl.col("labels").cast(pl.String),
-            pl.lit(" <= "),
-            pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-            pl.col("upper").cast(pl.String),
-        ]
+            columns = [
+                pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+                pl.col("lower").cast(pl.String),
+                pl.lit(" <= x"),
+                pl.col("labels").cast(pl.String),
+                pl.lit(" <= "),
+                pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+                pl.col("upper").cast(pl.String),
+            ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+            kwargs = dict(
+                separator=" ", null_value="", quote_style="never", include_header=False
+            )
+            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+            formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(m, f, log=False):
+def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
     """
     Write out binaries of a model to a lp file.
     """
@@ -424,21 +454,25 @@ def binaries_to_file_polars(m, f, log=False):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
 
-        columns = [
-            pl.lit("x"),
-            pl.col("labels").cast(pl.String),
-        ]
+            columns = [
+                pl.lit("x"),
+                pl.col("labels").cast(pl.String),
+            ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+            kwargs = dict(
+                separator=" ", null_value="", quote_style="never", include_header=False
+            )
+            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+            formatted.write_csv(f, **kwargs)
 
 
-def integers_to_file_polars(m, f, log=False, integer_label="general"):
+def integers_to_file_polars(
+    m, f, log=False, integer_label="general", slice_size=2_000_000
+):
     """
     Write out integers of a model to a lp file.
     """
@@ -455,21 +489,23 @@ def integers_to_file_polars(m, f, log=False, integer_label="general"):
         )
 
     for name in names:
-        df = m.variables[name].to_polars()
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
 
-        columns = [
-            pl.lit("x"),
-            pl.col("labels").cast(pl.String),
-        ]
+            columns = [
+                pl.lit("x"),
+                pl.col("labels").cast(pl.String),
+            ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+            kwargs = dict(
+                separator=" ", null_value="", quote_style="never", include_header=False
+            )
+            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+            formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(m, f, log=False, lazy=False):
+def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000):
     if not len(m.constraints):
         return
 
@@ -485,53 +521,57 @@ def constraints_to_file_polars(m, f, log=False, lazy=False):
     # to make this even faster, we can use polars expression
     # https://docs.pola.rs/user-guide/expressions/plugins/#output-data-types
     for name in names:
-        df = m.constraints[name].to_polars()
+        con = m.constraints[name]
+        for con_slice in con.iterate_slices(slice_size):
+            df = con_slice.to_polars()
 
-        # df = df.lazy()
-        # filter out repeated label values
-        df = df.with_columns(
-            pl.when(pl.col("labels").is_first_distinct())
-            .then(pl.col("labels"))
-            .otherwise(pl.lit(None))
-            .alias("labels")
-        )
+            # df = df.lazy()
+            # filter out repeated label values
+            df = df.with_columns(
+                pl.when(pl.col("labels").is_first_distinct())
+                .then(pl.col("labels"))
+                .otherwise(pl.lit(None))
+                .alias("labels")
+            )
 
-        columns = [
-            pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
-            pl.col("labels").cast(pl.String),
-            pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
-            pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
-            pl.col("coeffs").cast(pl.String),
-            pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
-            pl.col("vars").cast(pl.String),
-            "sign",
-            pl.lit(" "),
-            pl.col("rhs").cast(pl.String),
-        ]
+            columns = [
+                pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
+                pl.col("labels").cast(pl.String),
+                pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+                pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
+                pl.col("coeffs").cast(pl.String),
+                pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
+                pl.col("vars").cast(pl.String),
+                "sign",
+                pl.lit(" "),
+                pl.col("rhs").cast(pl.String),
+            ]
 
-        kwargs = dict(
-            separator=" ", null_value="", quote_style="never", include_header=False
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-        formatted.write_csv(f, **kwargs)
+            kwargs = dict(
+                separator=" ", null_value="", quote_style="never", include_header=False
+            )
+            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+            formatted.write_csv(f, **kwargs)
 
-        # in the future, we could use lazy dataframes when they support appending
-        # tp existent files
-        # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
-        # formatted.sink_csv(f,  **kwargs)
+            # in the future, we could use lazy dataframes when they support appending
+            # tp existent files
+            # formatted = df.lazy().select(pl.concat_str(columns, ignore_nulls=True))
+            # formatted.sink_csv(f,  **kwargs)
 
 
-def to_lp_file_polars(m, fn, integer_label="general"):
+def to_lp_file_polars(m, fn, integer_label="general", slice_size=2_000_000):
     log = m._xCounter > 10_000
 
     with open(fn, mode="wb") as f:
         start = time.time()
 
         objective_to_file_polars(m, f, log=log)
-        constraints_to_file_polars(m, f=f, log=log)
-        bounds_to_file_polars(m, f=f, log=log)
-        binaries_to_file_polars(m, f=f, log=log)
-        integers_to_file_polars(m, integer_label=integer_label, f=f, log=log)
+        constraints_to_file_polars(m, f=f, log=log, slice_size=slice_size)
+        bounds_to_file_polars(m, f=f, log=log, slice_size=slice_size)
+        binaries_to_file_polars(m, f=f, log=log, slice_size=slice_size)
+        integers_to_file_polars(
+            m, integer_label=integer_label, f=f, log=log, slice_size=slice_size
+        )
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
@@ -539,15 +579,18 @@ def to_lp_file_polars(m, fn, integer_label="general"):
 
 def to_file(
     m: Model,
-    fn: Path | None,
+    fn: Path | str | None,
     io_api: str | None = None,
     integer_label: str = "general",
+    slice_size: int = 2_000_000,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
     """
     if fn is None:
         fn = Path(m.get_problem_file())
+    if isinstance(fn, str):
+        fn = Path(fn)
     if fn.exists():
         fn.unlink()
 
@@ -555,9 +598,9 @@ def to_file(
         io_api = fn.suffix[1:]
 
     if io_api == "lp":
-        to_lp_file(m, fn, integer_label)
+        to_lp_file(m, fn, integer_label, slice_size=slice_size)
     elif io_api == "lp-polars":
-        to_lp_file_polars(m, fn, integer_label)
+        to_lp_file_polars(m, fn, integer_label, slice_size=slice_size)
 
     elif io_api == "mps":
         if "highs" not in solvers.available_solvers:

@@ -380,6 +380,12 @@ def test_constraint_flat(c):
     assert isinstance(c.flat, pd.DataFrame)
 
 
+def test_iterate_slices(c):
+    for i in c.iterate_slices(slice_size=2):
+        assert isinstance(i, Constraint)
+        assert c.coord_dims == i.coord_dims
+
+
 def test_constraint_to_polars(c):
     assert isinstance(c.to_polars(), pl.DataFrame)
 

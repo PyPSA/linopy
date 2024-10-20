@@ -52,6 +52,7 @@ from linopy.common import (
     get_index_map,
     group_terms_polars,
     has_optimized_model,
+    iterate_slices,
     print_single_expression,
     to_dataframe,
     to_polars,
@@ -1456,6 +1457,8 @@ class LinearExpression:
     roll = exprwrap(Dataset.roll)
 
     stack = exprwrap(Dataset.stack)
+
+    iterate_slices = iterate_slices
 
 
 class QuadraticExpression(LinearExpression):

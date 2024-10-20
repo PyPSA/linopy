@@ -953,6 +953,7 @@ class Model:
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,
+        slice_size: int = 2_000_000,
         remote: None = None,
         **solver_options,
     ) -> tuple[str, str]:
@@ -1002,6 +1003,10 @@ class Model:
             Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
+        slice_size : int, optional
+            Size of the slice to use for writing the lp file. The slice size
+            is used to split large variables and constraints into smaller
+            chunks to avoid memory issues. The default is 2_000_000.
         remote : linopy.remote.RemoteHandler
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
