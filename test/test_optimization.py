@@ -14,13 +14,14 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
+import linopy
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
 
-io_apis = ["lp", "lp-polars"]
+io_apis = ["lp"]
 
 if "highs" in available_solvers:
     # mps io is only supported via highspy
@@ -427,6 +428,11 @@ def test_solver_options(model, solver, io_api):
     assert status == "ok"
 
 
+def test_deprecated_io_api(model):
+    with pytest.warns(DeprecationWarning):
+        model.solve(linopy.available_solvers[0], io_api="lp-polars")
+
+
 @pytest.mark.parametrize("solver,io_api", params)
 def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
@@ -553,7 +559,7 @@ def test_milp_model_r(milp_model_r, solver, io_api):
 
 @pytest.mark.parametrize(
     "solver,io_api",
-    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [p for p in params if p != ("mindopt", "lp")],
 )
 def test_quadratic_model(quadratic_model, solver, io_api):
     if solver in feasible_quadratic_solvers:
@@ -569,7 +575,7 @@ def test_quadratic_model(quadratic_model, solver, io_api):
 
 @pytest.mark.parametrize(
     "solver,io_api",
-    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [p for p in params if p != ("mindopt", "lp")],
 )
 def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
     if solver in feasible_quadratic_solvers:
@@ -585,7 +591,7 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
 
 @pytest.mark.parametrize(
     "solver,io_api",
-    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [p for p in params if p != ("mindopt", "lp")],
 )
 def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
     quadratic_model.constraints.remove("con0")
@@ -601,7 +607,7 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
 
 @pytest.mark.parametrize(
     "solver,io_api",
-    [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [p for p in params if p != ("mindopt", "lp")],
 )
 def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
     if solver in feasible_quadratic_solvers:

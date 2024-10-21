@@ -8,8 +8,7 @@ from __future__ import annotations
 import logging
 import shutil
 import time
-from collections.abc import Iterable
-from io import TextIOWrapper
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
@@ -18,8 +17,8 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
+from deprecation import deprecated
 from numpy import ones_like, zeros_like
-from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
 from tqdm import tqdm
 
@@ -42,306 +41,7 @@ concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[str]:
-    """
-    Write out a batch to a file and reset the batch.
-    """
-    if len(batch) >= batch_size:
-        f.writelines(batch)  # write out a batch
-        batch = []  # reset batch
-    return batch
-
-
-def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int
-) -> list[str | Any]:
-    """
-    Write the linear terms of the objective to a file.
-    """
-    coeffs = df.coeffs.values
-    vars = df.vars.values
-    for idx in range(len(coeffs)):
-        coeff = coeffs[idx]
-        var = vars[idx]
-        batch.append(f"{coeff:+.12g} x{var}\n")
-        batch = handle_batch(batch, f, batch_size)
-    return batch
-
-
-def objective_write_quad_terms(
-    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int
-) -> list[str]:
-    """
-    Write the cross terms of the objective to a file.
-    """
-    coeffs = quadratic.coeffs.values
-    vars1 = quadratic.vars1.values
-    vars2 = quadratic.vars2.values
-    for idx in range(len(coeffs)):
-        coeff = coeffs[idx]
-        var1 = vars1[idx]
-        var2 = vars2[idx]
-        batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
-        batch = handle_batch(batch, f, batch_size)
-    return batch
-
-
-def objective_to_file(
-    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
-) -> None:
-    """
-    Write out the objective of a model to a lp file.
-    """
-    if log:
-        logger.info("Writing objective.")
-
-    sense = m.objective.sense
-    f.write(f"{sense}\n\nobj:\n\n")
-    df = m.objective.flat
-
-    if np.isnan(df.coeffs).any():
-        logger.warning(
-            "Objective coefficients are missing (nan) where variables are not (-1)."
-        )
-
-    if m.is_linear:
-        batch = objective_write_linear_terms(df, f, [], batch_size)
-
-    elif m.is_quadratic:
-        is_linear = (df.vars1 == -1) | (df.vars2 == -1)
-        linear = df[is_linear]
-        linear = linear.assign(
-            vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
-        )
-        batch = objective_write_linear_terms(linear, f, [], batch_size)
-
-        if not is_linear.all():
-            batch.append("+ [\n")
-            quadratic = df[~is_linear]
-            quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
-            batch.append("] / 2\n")
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def constraints_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    log: bool = False,
-    batch_size: int = 50_000,
-    slice_size: int = 100_000,
-) -> None:
-    if not len(m.constraints):
-        return
-
-    f.write("\n\ns.t.\n\n")
-    names: Iterable = m.constraints
-    if log:
-        names = tqdm(
-            list(names),
-            desc="Writing constraints.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []
-    for name in names:
-        con = m.constraints[name]
-        for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.flat
-
-            labels = df.labels.values
-            vars = df.vars.values
-            coeffs = df.coeffs.values
-            rhs = df.rhs.values
-            sign = df.sign.values
-
-            len_df = len(df)  # compute length once
-            if not len_df:
-                continue
-
-            # write out the start to enable a fast loop afterwards
-            idx = 0
-            label = labels[idx]
-            coeff = coeffs[idx]
-            var = vars[idx]
-            batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
-            prev_label = label
-            prev_sign = sign[idx]
-            prev_rhs = rhs[idx]
-
-            for idx in range(1, len_df):
-                label = labels[idx]
-                coeff = coeffs[idx]
-                var = vars[idx]
-
-                if label != prev_label:
-                    batch.append(
-                        f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
-                    )
-                    prev_sign = sign[idx]
-                    prev_rhs = rhs[idx]
-                else:
-                    batch.append(f"{coeff:+.12g} x{var}\n")
-
-                batch = handle_batch(batch, f, batch_size)
-
-                prev_label = label
-
-            batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def bounds_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    log: bool = False,
-    batch_size: int = 10000,
-    slice_size: int = 100_000,
-) -> None:
-    """
-    Write out variables of a model to a lp file.
-    """
-    names: Iterable = list(m.variables.continuous) + list(m.variables.integers)
-    if not len(list(names)):
-        return
-
-    f.write("\n\nbounds\n\n")
-    if log:
-        names = tqdm(
-            list(names),
-            desc="Writing continuous variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            labels = df.labels.values
-            lowers = df.lower.values
-            uppers = df.upper.values
-
-            for idx in range(len(df)):
-                label = labels[idx]
-                lower = lowers[idx]
-                upper = uppers[idx]
-                batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def binaries_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    log: bool = False,
-    batch_size: int = 1000,
-    slice_size: int = 100_000,
-) -> None:
-    """
-    Write out binaries of a model to a lp file.
-    """
-    names: Iterable = m.variables.binaries
-    if not len(list(names)):
-        return
-
-    f.write("\n\nbinary\n\n")
-    if log:
-        names = tqdm(
-            list(names),
-            desc="Writing binary variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            for label in df.labels.values:
-                batch.append(f"x{label}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def integers_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    log: bool = False,
-    batch_size: int = 1000,
-    slice_size: int = 100_000,
-    integer_label: str = "general",
-) -> None:
-    """
-    Write out integers of a model to a lp file.
-    """
-    names: Iterable = m.variables.integers
-    if not len(list(names)):
-        return
-
-    f.write(f"\n\n{integer_label}\n\n")
-    if log:
-        names = tqdm(
-            list(names),
-            desc="Writing integer variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            for label in df.labels.values:
-                batch.append(f"x{label}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def to_lp_file(m: Model, fn: Path, integer_label: str, slice_size: int = 10_000_000):
-    log = m._xCounter > 10_000
-
-    batch_size = 5000
-
-    with open(fn, mode="w") as f:
-        start = time.time()
-
-        if isinstance(f, int):
-            raise ValueError("File not found.")
-
-        objective_to_file(m, f, log=log)
-        constraints_to_file(
-            m, f=f, log=log, batch_size=batch_size, slice_size=slice_size
-        )
-        bounds_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
-        binaries_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
-        integers_to_file(
-            m,
-            integer_label=integer_label,
-            f=f,
-            log=log,
-            batch_size=batch_size,
-            slice_size=slice_size,
-        )
-        f.write("end\n")
-
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
-
-
-def objective_write_linear_terms_polars(f, df):
+def objective_write_linear_terms(f, df):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").cast(pl.String),
@@ -354,7 +54,7 @@ def objective_write_linear_terms_polars(f, df):
     )
 
 
-def objective_write_quadratic_terms_polars(f, df):
+def objective_write_quadratic_terms(f, df):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").mul(2).cast(pl.String),
@@ -371,7 +71,7 @@ def objective_write_quadratic_terms_polars(f, df):
     f.write(b"] / 2\n")
 
 
-def objective_to_file_polars(m, f, log=False):
+def objective_to_file(m, f, log=False):
     """
     Write out the objective of a model to a lp file.
     """
@@ -383,7 +83,7 @@ def objective_to_file_polars(m, f, log=False):
     df = m.objective.to_polars()
 
     if m.is_linear:
-        objective_write_linear_terms_polars(f, df)
+        objective_write_linear_terms(f, df)
 
     elif m.is_quadratic:
         lins = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
@@ -393,13 +93,13 @@ def objective_to_file_polars(m, f, log=False):
             .otherwise(pl.col("vars1"))
             .alias("vars")
         )
-        objective_write_linear_terms_polars(f, lins)
+        objective_write_linear_terms(f, lins)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
-        objective_write_quadratic_terms_polars(f, quads)
+        objective_write_quadratic_terms(f, quads)
 
 
-def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
+def bounds_to_file(m, f, log=False, slice_size=2_000_000):
     """
     Write out variables of a model to a lp file.
     """
@@ -437,7 +137,7 @@ def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
             formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
+def binaries_to_file(m, f, log=False, slice_size=2_000_000):
     """
     Write out binaries of a model to a lp file.
     """
@@ -470,9 +170,7 @@ def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
             formatted.write_csv(f, **kwargs)
 
 
-def integers_to_file_polars(
-    m, f, log=False, integer_label="general", slice_size=2_000_000
-):
+def integers_to_file(m, f, log=False, integer_label="general", slice_size=2_000_000):
     """
     Write out integers of a model to a lp file.
     """
@@ -505,7 +203,7 @@ def integers_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000):
+def constraints_to_file(m, f, log=False, lazy=False, slice_size=2_000_000):
     if not len(m.constraints):
         return
 
@@ -559,22 +257,66 @@ def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000
             # formatted.sink_csv(f,  **kwargs)
 
 
-def to_lp_file_polars(m, fn, integer_label="general", slice_size=2_000_000):
+def to_lp_file(m, fn, integer_label="general", slice_size=2_000_000):
     log = m._xCounter > 10_000
 
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        objective_to_file_polars(m, f, log=log)
-        constraints_to_file_polars(m, f=f, log=log, slice_size=slice_size)
-        bounds_to_file_polars(m, f=f, log=log, slice_size=slice_size)
-        binaries_to_file_polars(m, f=f, log=log, slice_size=slice_size)
-        integers_to_file_polars(
+        objective_to_file(m, f, log=log)
+        constraints_to_file(m, f=f, log=log, slice_size=slice_size)
+        bounds_to_file(m, f=f, log=log, slice_size=slice_size)
+        binaries_to_file(m, f=f, log=log, slice_size=slice_size)
+        integers_to_file(
             m, integer_label=integer_label, f=f, log=log, slice_size=slice_size
         )
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+
+
+@deprecated("Use `objective_write_linear_terms` instead.")
+def objective_write_linear_terms_polars(f, df):
+    return objective_write_linear_terms(f, df)
+
+
+@deprecated("Use `objective_write_quadratic_terms` instead.")
+def objective_write_quadratic_terms_polars(f, df):
+    return objective_write_quadratic_terms(f, df)
+
+
+@deprecated("Use `objective_to_file` instead.")
+def objective_to_file_polars(m, f, log=False):
+    return objective_to_file(m, f, log=log)
+
+
+@deprecated("Use `bounds_to_file` instead.")
+def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
+    return bounds_to_file(m, f, log=log, slice_size=slice_size)
+
+
+@deprecated("Use `binaries_to_file` instead.")
+def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
+    return binaries_to_file(m, f, log=log, slice_size=slice_size)
+
+
+@deprecated("Use `integers_to_file` instead.")
+def integers_to_file_polars(
+    m, f, log=False, integer_label="general", slice_size=2_000_000
+):
+    return integers_to_file(
+        m, f, log=log, integer_label=integer_label, slice_size=slice_size
+    )
+
+
+@deprecated("Use `constraints_to_file` instead.")
+def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000):
+    return constraints_to_file(m, f, log=log, lazy=lazy, slice_size=slice_size)
+
+
+@deprecated("Use `to_lp_file` instead.")
+def to_lp_file_polars(m, fn, integer_label="general", slice_size=2_000_000):
+    return to_lp_file(m, fn, integer_label=integer_label, slice_size=slice_size)
 
 
 def to_file(
@@ -597,10 +339,15 @@ def to_file(
     if io_api is None:
         io_api = fn.suffix[1:]
 
+    if io_api == "lp-polars":
+        warnings.warn(
+            "Setting io_api to `lp-polars` is deprecated, as it is the new standard for writing LP files. "
+            "Please use `lp` instead.",
+            DeprecationWarning,
+        )
+        io_api = "lp"
     if io_api == "lp":
         to_lp_file(m, fn, integer_label, slice_size=slice_size)
-    elif io_api == "lp-polars":
-        to_lp_file_polars(m, fn, integer_label, slice_size=slice_size)
 
     elif io_api == "mps":
         if "highs" not in solvers.available_solvers:

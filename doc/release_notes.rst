@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * When writing out an LP file, large variables and constraints are now chunked to avoid memory issues. This is especially useful for large models with constraints with many terms. The chunk size can be set with the `slice_size` argument in the `solve` function.
+* To achieve better performance, the LP file writing is now using the `polars` package per default. Setting `io_api` to `lp-polars` is therefore deprecated, as the standard `io_api=lp` uses the `polars` package. The user should see no difference from this change but faster lp file writing. The previous `pandas` based implementation was removed.
 
 Version 0.3.15
 --------------

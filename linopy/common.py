@@ -340,13 +340,24 @@ def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
 
     Raises:
     ------
-        ValueError: If the DataFrame contains null values,
-        a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
+        ValueError: If the DataFrame contains null values or NaN values,
+        a ValueError is raised with a message indicating the name of the constraint and the fields containing nulls.
     """
-    has_nulls = df.select(pl.col("*").is_null().any())
-    null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
+    null_check = df.select(
+        [
+            (
+                pl.col(col).is_null()
+                | (pl.col(col).is_nan() if dtype == pl.Float64 else False)
+            )
+            .any()
+            .alias(col)
+            for col, dtype in zip(df.columns, df.dtypes)
+        ]
+    )
+
+    null_columns = [col for col in null_check.columns if null_check[col][0]]
     if null_columns:
-        raise ValueError(f"{name} contains nan's in field(s) {null_columns}")
+        raise ValueError(f"{name} contains null/nan values in field(s) {null_columns}")
 
 
 def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
