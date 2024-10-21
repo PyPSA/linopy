@@ -49,7 +49,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.solvers import available_solvers, quadratic_solvers
+from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -78,6 +78,9 @@ class Model:
     The model supports different solvers (see `linopy.available_solvers`) for
     the optimization process.
     """
+
+    solver_model: Any
+    solver_name: str
 
     __slots__ = (
         # containers
@@ -1015,6 +1018,12 @@ class Model:
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
+        # check io_api
+        if io_api is not None and io_api not in IO_APIS:
+            raise ValueError(
+                f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
+            )
+
         if remote:
             solved = remote.solve_on_remote(
                 self,
@@ -1075,19 +1084,32 @@ class Model:
             )
 
         try:
-            func = getattr(solvers, f"run_{solver_name}")
-            result = func(
-                self,
-                io_api=io_api,
-                problem_fn=to_path(problem_fn),
-                solution_fn=to_path(solution_fn),
-                log_fn=to_path(log_fn),
-                warmstart_fn=to_path(warmstart_fn),
-                basis_fn=to_path(basis_fn),
-                keep_files=keep_files,
-                env=env,
+            solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
+            # initialize the solver as object of solver subclass <solver_class>
+            solver = solver_class(
                 **solver_options,
             )
+            if io_api == "direct":
+                # no problem file written and direct model is set for solver
+                result = solver.solve_problem_from_model(
+                    model=self,
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
+                )
+            else:
+                problem_fn = self.to_file(to_path(problem_fn), io_api)
+                result = solver.solve_problem_from_file(
+                    problem_fn=to_path(problem_fn),
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
+                )
+
         finally:
             for fn in (problem_fn, solution_fn):
                 if fn is not None and (os.path.exists(fn) and not keep_files):
