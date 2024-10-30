@@ -4,15 +4,22 @@ Created on Sun Feb 13 21:34:55 2022.
 
 @author: fabian
 """
-
+import gzip
+import json
 import logging
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
+from pathlib import Path
+
+from google.cloud import storage
+from google.cloud.storage import Client, Bucket, Blob
+from google.oauth2 import service_account
 from requests import Response, post, get
 from time import sleep
-from typing import Callable, Union
+from typing import Callable, Union, Dict, TextIO
 
+from linopy.constants import SolverStatus, TerminationCondition
 from linopy.io import read_netcdf
 
 paramiko_present = True
@@ -240,12 +247,20 @@ class RemoteHandler:
 
         return solved
 
-# TODO perhaps we make RemoteHandler an abstract base class, and rename the class above as SshHandler, and have that and OetCloudHandler inherit from RemoteHandler?
 
+# TODO perhaps we make RemoteHandler an abstract base class, and rename the class above as SshHandler,
+#  and have that and OetCloudHandler inherit from RemoteHandler?
 class OetCloudHandler:
 
     def __init__(self):
         self.oetc_url = os.environ.get('OETC_URL', 'http://127.0.0.1:5000')
+        # TODO: Temporary solution, in the future read service key from auth API
+        with open(
+            os.environ["GCP_SERVICE_KEY_PATH"], "r"
+        ) as service_key_file:
+            self.gcp_service_key = json.load(service_key_file)
+        # TODO: Temporary solution, in the future use auth login to obtain the JWT
+        self.jwt = os.environ["OETC_JWT"]
 
     def solve_on_remote(self, model, **kwargs):
         """
@@ -259,48 +274,53 @@ class OetCloudHandler:
 
         Returns
         -------
-        linopy.model.Model
-            Solved model.
+        linopy.remote.OetcLpSolution
+            Solution results.
         """
         logger.warning(f'Ignoring these kwargs for now: {kwargs}')  # TODO
 
-        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
-            model.to_netcdf(fn.name)
+        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".lp") as fn:
+            model.to_file(Path(fn.name))
             logger.info(f'Model written to: {fn.name}')
-            solved_file = fn.name[:-3] + '.sol.nc'
+            input_file_name = self._upload_file_to_gcp(fn.name)
 
-            job_uuid = self._submit_job(fn.name)
+            job_uuid = self._submit_job(input_file_name)
             job_data = self._wait_and_get_job_data(job_uuid)
 
-            out_file_url = job_data['output_files'][0]['download_url']
-            self._download_result(out_file_url, solved_file)
+            out_file_name = job_data['output_files'][0]['name']
+            out_file_name_path = self._download_file_from_gcp(out_file_name)
 
-            solved = read_netcdf(solved_file)
-            logger.info(f'OETC result: {solved.status}, {solved.termination_condition}, Objective: {solved.objective.value:.2e}')
-            os.remove(solved_file)
-            return solved
+            with open(out_file_name_path, 'r') as solution_file:
+                solution = OetcLpSolution.parse_lp_solution(solution_file)
+            logger.info(
+                f'OETC result: {solution.status}, {solution.termination_condition}, Objective: {solution.objective:.2e}'
+            )
+
+            return solution
 
     def _submit_job(self, input_file_name):
         logger.info('Calling OETC...')
-        with open(input_file_name, "rb") as nc_file:
-            response: Response = post(
-                f"{self.oetc_url}/compute-job/create",
-                files={"nc_file": nc_file},
-            ) # TODO add content type?
-        if not response.ok:
-            raise ValueError(f'OETC Error: {response.text}')
+        response: Response = post(
+            f"{self.oetc_url}/compute-job/create",
+            headers={"Authorization": f"Bearer {self.jwt}"},
+            json={
+                "input_file_name": input_file_name,
+            },
+        )
+        response.raise_for_status()
         content = response.json()
-        if not "uuid" in content:
-            raise ValueError(f'Unexpected response: {response.text}')
         logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
         return content['uuid']
 
-    def _wait_and_get_job_data(self, uuid: str, retries=4*60, retry_every_s=15):
+    def _wait_and_get_job_data(self, uuid: str, retries=4*60, retry_every_s=15) -> dict:
         """Waits for job completion upto `retries` times, waiting `retry_every_s` seconds
         in between retries; returns job data including output file download links."""
         for _ in range(retries):
             logger.info('Checking job status...')
-            response: Response = get(f"{self.oetc_url}/compute-job/{uuid}")
+            response: Response = get(
+                f"{self.oetc_url}/compute-job/{uuid}",
+                headers={"Authorization": f"Bearer {self.jwt}"},
+            )
             if not response.ok:
                 raise ValueError(f'OETC Error: {response.text}')
             content = response.json()
@@ -314,14 +334,143 @@ class OetCloudHandler:
             logger.info('OETC still crunching...')
             sleep(retry_every_s)
         raise TimeoutError('Timed out waiting for OETC. Pleae check the status manually.')
-            
 
-    def _download_result(self, output_file_url, output_file_path):
-        response: Response = get(output_file_url)
-        if not response.ok:
-            raise ValueError(f'OETC Error: {response.text}')
-        with open(output_file_path, 'wb') as f:
-            f.write(response.content)
-        logger.info(f'Saved job result to: {output_file_path}')
-        return
+    def _gzip_compress(self, source_path: str) -> str:
+        output_path = source_path + ".gz"
+        chunk_size = 1024 * 1024
 
+        with open(source_path, "rb") as f_in:
+            with gzip.open(output_path, "wb", compresslevel=9) as f_out:
+                while True:
+                    chunk = f_in.read(chunk_size)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+
+        return output_path
+
+    def _gzip_decompress(self, input_path: str) -> str:
+        output_path = str(Path(input_path).with_suffix(""))
+
+        chunk_size = 1024 * 1024
+
+        with gzip.open(input_path, "rb") as f_in:
+            with open(output_path, "wb") as f_out:
+                while True:
+                    chunk = f_in.read(chunk_size)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+
+        return output_path
+
+    def _upload_file_to_gcp(self, file_path: str) -> str:
+        logger.info(f'Compressing model...')
+        compressed_lp_path = self._gzip_compress(file_path)
+        logger.info(f'Model compressed to: {compressed_lp_path}')
+        compressed_lp_file_name = os.path.basename(compressed_lp_path)
+
+        credentials = service_account.Credentials.from_service_account_info(
+            self.gcp_service_key,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+
+        storage_client: Client = storage.Client(credentials=credentials)
+        bucket: Bucket = storage_client.bucket(
+            "oetc_files"  # TODO: Make bucket name dynamic if necessary
+        )
+        blob: Blob = bucket.blob(compressed_lp_file_name)
+
+        logger.info(f"Uploading model from {compressed_lp_path}...")
+        blob.upload_from_filename(compressed_lp_path)
+        logger.info(f"Uploaded {compressed_lp_file_name}")
+
+        return compressed_lp_file_name
+
+    def _download_file_from_gcp(self, file_name: str) -> str:
+        credentials = service_account.Credentials.from_service_account_info(
+            self.gcp_service_key,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+
+        storage_client: Client = storage.Client(credentials=credentials)
+        bucket: Bucket = storage_client.bucket(
+            "oetc_files"
+        )  # TODO: Make bucket name dynamic if necessary
+        blob: Blob = bucket.blob(file_name)
+
+        file_path: str = f"/tmp/{file_name}"
+
+        logger.info(f"Downloading model {file_name}")
+        blob.download_to_filename(file_path)
+        logger.info(f"Model saved at {file_path}")
+
+        logger.info(f"Decompressing .gz file {file_name}")
+        decompressed_file_path = self._gzip_decompress(file_path)
+        logger.info(f"Decompressed input file: {decompressed_file_path}")
+
+        return decompressed_file_path
+
+
+@dataclass
+class OetcLpSolution:
+    objective: float
+    variables: Dict[str, float] = field(default_factory=dict)
+    constraints: Dict[str, float] = field(default_factory=dict)
+    status: SolverStatus = SolverStatus.unknown
+    termination_condition: TerminationCondition = TerminationCondition.unknown
+
+    @staticmethod
+    def parse_lp_solution(file_stream: TextIO) -> "OetcLpSolution":
+        """
+        Parse LP solution file stream, line by line and return an LPSolution object.
+
+        Parameters
+        ----------
+        file_stream : TextIO
+            Input file stream containing the LP solution
+
+        Returns
+        -------
+        LPSolution
+            Parsed solution object containing objective, variables, constraints and status
+        """
+        solution = OetcLpSolution(objective=0.0)
+        current_section = None
+
+        for line in file_stream:
+            line = line.strip()
+
+            if line == "Model status":
+                status_line = next(file_stream).strip()
+                solution.termination_condition = TerminationCondition.process(status_line.lower())
+                solution.status = SolverStatus.from_termination_condition(solution.termination_condition)
+
+            elif line.startswith("Objective"):
+                try:
+                    solution.objective = float(line.split()[1])
+                except (IndexError, ValueError) as e:
+                    raise ValueError(f"Invalid objective line format: {line}") from e
+
+            # TODO: Refactor this part once we conclude how we need to parse this in order to reconstruct the model
+            elif line == "# Primal solution values":
+                current_section = "primal"
+
+            elif line == "# Dual solution values":
+                current_section = "dual"
+
+            elif current_section == "primal" and line.startswith('x'):
+                try:
+                    name, value = line.split(maxsplit=1)
+                    solution.variables[name] = float(value)
+                except (ValueError, IndexError) as e:
+                    raise ValueError(f"Invalid variable line format: {line}") from e
+
+            elif current_section == "dual" and line.startswith('c'):
+                try:
+                    name, value = line.split(maxsplit=1)
+                    solution.constraints[name] = float(value)
+                except (ValueError, IndexError) as e:
+                    raise ValueError(f"Invalid constraint line format: {line}") from e
+
+        return solution
