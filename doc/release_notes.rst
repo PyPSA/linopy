@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * When writing out an LP file, large variables and constraints are now chunked to avoid memory issues. This is especially useful for large models with constraints with many terms. The chunk size can be set with the `slice_size` argument in the `solve` function.
+* Constraints which of the form `<= infinity` and `>= -infinity` are now automatically filtered out when solving. The `solve` function now has a new argument `sanitize_infinities` to control this feature. Default is set to `True`.
 
 Version 0.3.15
 --------------
