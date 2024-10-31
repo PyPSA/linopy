@@ -51,7 +51,14 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    SIGNS_pretty,
+)
 from linopy.types import ConstantLike
 
 if TYPE_CHECKING:
@@ -851,17 +858,17 @@ class Constraints:
         """
         return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
 
-    def sanitize_zeros(self):
+    def sanitize_zeros(self) -> None:
         """
         Filter out terms with zero and close-to-zero coefficient.
         """
-        for name in list(self):
+        for name in self:
             not_zero = abs(self[name].coeffs) > 1e-10
             constraint = self[name]
             constraint.vars = self[name].vars.where(not_zero, -1)
             constraint.coeffs = self[name].coeffs.where(not_zero)
 
-    def sanitize_missings(self):
+    def sanitize_missings(self) -> None:
         """
         Set constraints labels to -1 where all variables in the lhs are
         missing.
@@ -870,6 +877,27 @@ class Constraints:
             contains_non_missing = (self[name].vars != -1).any(self[name].term_dim)
             self[name].data["labels"] = self[name].labels.where(
                 contains_non_missing, -1
+            )
+
+    def sanitize_infinities(self) -> None:
+        """
+        Replace infinite values in the constraints with a large value.
+        """
+        for name in self:
+            constraint = self[name]
+            invalid_infinity_values = (
+                (constraint.sign == LESS_EQUAL) & (constraint.rhs == -np.inf)
+            ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == np.inf))
+            if invalid_infinity_values.any():
+                raise ValueError(
+                    f"Constraint {name} contains incorrect infinite values."
+                )
+
+            valid_infinity_values = (
+                (constraint.sign == LESS_EQUAL) & (constraint.rhs == np.inf)
+            ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == -np.inf))
+            self[name].data["labels"] = self[name].labels.where(
+                ~valid_infinity_values, -1
             )
 
     def get_name_by_label(self, label: Union[int, float]) -> str:

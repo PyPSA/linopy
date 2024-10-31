@@ -953,6 +953,7 @@ class Model:
         keep_files: bool = False,
         env: None = None,
         sanitize_zeros: bool = True,
+        sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: None = None,
         **solver_options,
@@ -1003,6 +1004,8 @@ class Model:
             Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
+        sanitize_infinities : bool, optional
+            Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
         slice_size : int, optional
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
@@ -1082,6 +1085,9 @@ class Model:
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
+
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
 
         if self.is_quadratic and solver_name not in quadratic_solvers:
             raise ValueError(
