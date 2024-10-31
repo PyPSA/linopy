@@ -864,9 +864,9 @@ class Constraints:
         """
         for name in self:
             not_zero = abs(self[name].coeffs) > 1e-10
-            constraint = self[name]
-            constraint.vars = self[name].vars.where(not_zero, -1)
-            constraint.coeffs = self[name].coeffs.where(not_zero)
+            con = self[name]
+            con.vars = self[name].vars.where(not_zero, -1)
+            con.coeffs = self[name].coeffs.where(not_zero)
 
     def sanitize_missings(self) -> None:
         """
@@ -874,23 +874,22 @@ class Constraints:
         missing.
         """
         for name in self:
-            contains_non_missing = (self[name].vars != -1).any(self[name].term_dim)
-            self[name].data["labels"] = self[name].labels.where(
-                contains_non_missing, -1
-            )
+            con = self[name]
+            contains_non_missing = (con.vars != -1).any(con.term_dim)
+            labels = self[name].labels.where(contains_non_missing, -1)
+            con._data = assign_multiindex_safe(con.data, labels=labels)
 
     def sanitize_infinities(self) -> None:
         """
         Replace infinite values in the constraints with a large value.
         """
         for name in self:
-            constraint = self[name]
-            valid_infinity_values = (
-                (constraint.sign == LESS_EQUAL) & (constraint.rhs == np.inf)
-            ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == -np.inf))
-            self[name].data["labels"] = self[name].labels.where(
-                ~valid_infinity_values, -1
+            con = self[name]
+            valid_infinity_values = ((con.sign == LESS_EQUAL) & (con.rhs == np.inf)) | (
+                (con.sign == GREATER_EQUAL) & (con.rhs == -np.inf)
             )
+            labels = con.labels.where(~valid_infinity_values, -1)
+            con._data = assign_multiindex_safe(con.data, labels=labels)
 
     def get_name_by_label(self, label: Union[int, float]) -> str:
         """
