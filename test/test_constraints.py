@@ -199,7 +199,7 @@ def test_sanitize_infinities():
     assert (m.constraints["con_neg_inf"].labels == -1).all()
 
     # Test incorrect infinities
-    m.add_constraints(x >= np.inf, name="con_wrong_inf")
-    m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
     with pytest.raises(ValueError):
-        m.constraints.sanitize_infinities()
+        m.add_constraints(x >= np.inf, name="con_wrong_inf")
+    with pytest.raises(ValueError):
+        m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")

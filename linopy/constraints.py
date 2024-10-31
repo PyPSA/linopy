@@ -885,14 +885,6 @@ class Constraints:
         """
         for name in self:
             constraint = self[name]
-            invalid_infinity_values = (
-                (constraint.sign == LESS_EQUAL) & (constraint.rhs == -np.inf)
-            ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == np.inf))
-            if invalid_infinity_values.any():
-                raise ValueError(
-                    f"Constraint {name} contains incorrect infinite values."
-                )
-
             valid_infinity_values = (
                 (constraint.sign == LESS_EQUAL) & (constraint.rhs == np.inf)
             ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == -np.inf))

@@ -32,7 +32,14 @@ from linopy.common import (
     replace_by_map,
     to_path,
 )
-from linopy.constants import HELPER_DIMS, TERM_DIM, ModelStatus, TerminationCondition
+from linopy.constants import (
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    ModelStatus,
+    TerminationCondition,
+)
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 from linopy.expressions import (
     LinearExpression,
@@ -582,6 +589,12 @@ class Model:
             raise ValueError(
                 f"Invalid type of `lhs` ({type(lhs)}) or invalid combination of `lhs`, `sign` and `rhs`."
             )
+
+        invalid_infinity_values = (
+            (data.sign == LESS_EQUAL) & (data.rhs == -np.inf)
+        ) | ((data.sign == GREATER_EQUAL) & (data.rhs == np.inf))  # noqa: F821
+        if invalid_infinity_values.any():
+            raise ValueError(f"Constraint {name} contains incorrect infinite values.")
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
