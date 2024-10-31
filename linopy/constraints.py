@@ -548,6 +548,30 @@ class Constraint:
         data = lhs.data.assign(sign=sign, rhs=rhs)
         return cls(data, model=model)
 
+    def truncate_infs(self, value: float) -> None:
+        """
+        Truncate infinite values in constraint to a given value.
+
+        This might be needed for some solvers which do not support infinite
+        values.
+
+        Parameters
+        ----------
+        value : float
+            Value to replace infinite values with. Sign is preserved.
+
+        Returns
+        -------
+        None
+
+        """
+        self._data["rhs"] = xr.where(
+            self._data["rhs"] == np.inf, value, self._data["rhs"]
+        )
+        self._data["rhs"] = xr.where(
+            self._data["rhs"] == -np.inf, -value, self._data["rhs"]
+        )
+
     @property
     def flat(self):
         """
@@ -955,6 +979,26 @@ class Constraints:
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
             constraint.data["blocks"] = res
+
+    def truncate_infs(self, value: float) -> None:
+        """
+        Truncate infinite values in all constraints to a given value.
+
+        This might be needed for some solvers which do not support infinite
+        values.
+
+        Parameters
+        ----------
+        value : float
+            Value to replace infinite values with. Sign is preserved.
+
+        Returns
+        -------
+        None
+
+        """
+        for k in self:
+            self[k].truncate_infs(value)
 
     @property
     def flat(self) -> pd.DataFrame:

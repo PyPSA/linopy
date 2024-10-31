@@ -499,7 +499,7 @@ def test_infeasible_model(model, solver, io_api):
 
 
 @pytest.mark.parametrize(
-    "solver,io_api", [p for p in params if p[0] not in ["glpk", "cplex", "mindopt"]]
+    "solver,io_api", [p for p in params if p[0] not in ["glpk", "mindopt"]]
 )
 def test_model_with_inf(model_with_inf, solver, io_api):
     status, condition = model_with_inf.solve(solver, io_api=io_api)

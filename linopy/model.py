@@ -1105,6 +1105,9 @@ class Model:
                     env=env,
                 )
             else:
+                # CPLEX does not handle infs and truncates them to 1e20
+                if solver_name in ["cplex"]:
+                    self.constraints.truncate_infs(value=1e20)
                 problem_fn = self.to_file(to_path(problem_fn), io_api)
                 result = solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),
