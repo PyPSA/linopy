@@ -891,6 +891,19 @@ class Constraints:
             labels = con.labels.where(~valid_infinity_values, -1)
             con._data = assign_multiindex_safe(con.data, labels=labels)
 
+    def sanitize_infinities(self) -> None:
+        """
+        Replace infinite values in the constraints with a large value.
+        """
+        for name in self:
+            constraint = self[name]
+            valid_infinity_values = (
+                (constraint.sign == LESS_EQUAL) & (constraint.rhs == np.inf)
+            ) | ((constraint.sign == GREATER_EQUAL) & (constraint.rhs == -np.inf))
+            self[name].data["labels"] = self[name].labels.where(
+                ~valid_infinity_values, -1
+            )
+
     def get_name_by_label(self, label: Union[int, float]) -> str:
         """
         Get the constraint name of the constraint containing the passed label.
