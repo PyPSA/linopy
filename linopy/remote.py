@@ -8,7 +8,7 @@ import gzip
 import json
 import logging
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 from pathlib import Path
 
@@ -17,9 +17,9 @@ from google.cloud.storage import Client, Bucket, Blob
 from google.oauth2 import service_account
 from requests import Response, post, get
 from time import sleep
-from typing import Callable, Union, Dict, TextIO
+from typing import Callable, Union
 
-from linopy.constants import SolverStatus, TerminationCondition
+import linopy
 from linopy.io import read_netcdf
 
 paramiko_present = True
@@ -274,13 +274,13 @@ class OetCloudHandler:
 
         Returns
         -------
-        linopy.remote.OetcLpSolution
-            Solution results.
+        linopy.model.Model
+            Solved model.
         """
         logger.warning(f'Ignoring these kwargs for now: {kwargs}')  # TODO
 
-        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".lp") as fn:
-            model.to_file(Path(fn.name))
+        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+            model.to_netcdf(fn.name)
             logger.info(f'Model written to: {fn.name}')
             input_file_name = self._upload_file_to_gcp(fn.name)
 
@@ -290,10 +290,10 @@ class OetCloudHandler:
             out_file_name = job_data['output_files'][0]['name']
             out_file_name_path = self._download_file_from_gcp(out_file_name)
 
-            with open(out_file_name_path, 'r') as solution_file:
-                solution = OetcLpSolution.parse_lp_solution(solution_file)
+            solution = linopy.read_netcdf(out_file_name_path)
+            os.remove(out_file_name_path)
             logger.info(
-                f'OETC result: {solution.status}, {solution.termination_condition}, Objective: {solution.objective:.2e}'
+                f'OETC result: {solution.status}, {solution.termination_condition}, Objective: {solution.objective.value:.2e}'
             )
 
             return solution
@@ -366,9 +366,9 @@ class OetCloudHandler:
 
     def _upload_file_to_gcp(self, file_path: str) -> str:
         logger.info(f'Compressing model...')
-        compressed_lp_path = self._gzip_compress(file_path)
-        logger.info(f'Model compressed to: {compressed_lp_path}')
-        compressed_lp_file_name = os.path.basename(compressed_lp_path)
+        compressed_file_path = self._gzip_compress(file_path)
+        logger.info(f'Model compressed to: {compressed_file_path}')
+        compressed_file_name = os.path.basename(compressed_file_path)
 
         credentials = service_account.Credentials.from_service_account_info(
             self.gcp_service_key,
@@ -379,13 +379,13 @@ class OetCloudHandler:
         bucket: Bucket = storage_client.bucket(
             "oetc_files"  # TODO: Make bucket name dynamic if necessary
         )
-        blob: Blob = bucket.blob(compressed_lp_file_name)
+        blob: Blob = bucket.blob(compressed_file_name)
 
-        logger.info(f"Uploading model from {compressed_lp_path}...")
-        blob.upload_from_filename(compressed_lp_path)
-        logger.info(f"Uploaded {compressed_lp_file_name}")
+        logger.info(f"Uploading model from {compressed_file_path}...")
+        blob.upload_from_filename(compressed_file_path)
+        logger.info(f"Uploaded {compressed_file_name}")
 
-        return compressed_lp_file_name
+        return compressed_file_name
 
     def _download_file_from_gcp(self, file_name: str) -> str:
         credentials = service_account.Credentials.from_service_account_info(
@@ -410,67 +410,3 @@ class OetCloudHandler:
         logger.info(f"Decompressed input file: {decompressed_file_path}")
 
         return decompressed_file_path
-
-
-@dataclass
-class OetcLpSolution:
-    objective: float
-    variables: Dict[str, float] = field(default_factory=dict)
-    constraints: Dict[str, float] = field(default_factory=dict)
-    status: SolverStatus = SolverStatus.unknown
-    termination_condition: TerminationCondition = TerminationCondition.unknown
-
-    @staticmethod
-    def parse_lp_solution(file_stream: TextIO) -> "OetcLpSolution":
-        """
-        Parse LP solution file stream, line by line and return an LPSolution object.
-
-        Parameters
-        ----------
-        file_stream : TextIO
-            Input file stream containing the LP solution
-
-        Returns
-        -------
-        LPSolution
-            Parsed solution object containing objective, variables, constraints and status
-        """
-        solution = OetcLpSolution(objective=0.0)
-        current_section = None
-
-        for line in file_stream:
-            line = line.strip()
-
-            if line == "Model status":
-                status_line = next(file_stream).strip()
-                solution.termination_condition = TerminationCondition.process(status_line.lower())
-                solution.status = SolverStatus.from_termination_condition(solution.termination_condition)
-
-            elif line.startswith("Objective"):
-                try:
-                    solution.objective = float(line.split()[1])
-                except (IndexError, ValueError) as e:
-                    raise ValueError(f"Invalid objective line format: {line}") from e
-
-            # TODO: Refactor this part once we conclude how we need to parse this in order to reconstruct the model
-            elif line == "# Primal solution values":
-                current_section = "primal"
-
-            elif line == "# Dual solution values":
-                current_section = "dual"
-
-            elif current_section == "primal" and line.startswith('x'):
-                try:
-                    name, value = line.split(maxsplit=1)
-                    solution.variables[name] = float(value)
-                except (ValueError, IndexError) as e:
-                    raise ValueError(f"Invalid variable line format: {line}") from e
-
-            elif current_section == "dual" and line.startswith('c'):
-                try:
-                    name, value = line.split(maxsplit=1)
-                    solution.constraints[name] = float(value)
-                except (ValueError, IndexError) as e:
-                    raise ValueError(f"Invalid constraint line format: {line}") from e
-
-        return solution

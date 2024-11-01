@@ -1035,21 +1035,14 @@ class Model:
                 **solver_options,
             )
 
-            if isinstance(remote, OetCloudHandler):
-                self.objective.set_value(solved.objective)
-                self.status = solved.status.name
-                self.termination_condition = solved.termination_condition.name
-                # TODO: Map variables and constraints
-
-            else:
-                self.objective.set_value(solved.objective.value)
-                self.status = solved.status
-                self.termination_condition = solved.termination_condition
-                for k, v in self.variables.items():
-                    v.solution = solved.variables[k].solution
-                for k, c in self.constraints.items():
-                    if "dual" in solved.constraints[k]:
-                        c.dual = solved.constraints[k].dual
+            self.objective.set_value(solved.objective.value)
+            self.status = solved.status
+            self.termination_condition = solved.termination_condition
+            for k, v in self.variables.items():
+                v.solution = solved.variables[k].solution
+            for k, c in self.constraints.items():
+                if "dual" in solved.constraints[k]:
+                    c.dual = solved.constraints[k].dual
 
             return self.status, self.termination_condition
 
