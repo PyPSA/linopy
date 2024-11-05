@@ -39,6 +39,7 @@ from linopy.common import (
     filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
+    get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
     is_constant,
@@ -50,7 +51,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import TERM_DIM
+from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.solvers import set_int_index
 from linopy.types import NotImplementedType
 
@@ -321,7 +322,8 @@ class Variable:
         Print the variable arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.sizes.keys())
+        dims = list(self.sizes)
+        dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
         lines = []
@@ -343,7 +345,7 @@ class Variable:
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             lines.insert(
                 0,
@@ -662,6 +664,21 @@ class Variable:
             return "Binary Variable"
         else:
             return "Continuous Variable"
+
+    @property
+    def coord_dims(self) -> tuple[Hashable, ...]:
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
+
+    @property
+    def coord_sizes(self) -> dict[Hashable, int]:
+        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        """
+        Get the names of the coordinates.
+        """
+        return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
     def range(self) -> tuple[int, int]:
@@ -1089,8 +1106,6 @@ class AtIndexer:
         keys = keys if isinstance(keys, tuple) else (keys,)
         object = self.object
 
-        if not all(map(pd.api.types.is_scalar, keys)):
-            raise ValueError("Only scalar keys are allowed.")
         # return single scalar
         if not object.labels.ndim:
             return ScalarVariable(object.labels.item(), object.model)

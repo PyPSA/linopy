@@ -15,6 +15,7 @@ from linopy.common import (
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    get_dims_with_index_levels,
     iterate_slices,
 )
 
@@ -529,3 +530,77 @@ def test_iterate_slices_no_slice_dims():
     for s in slices:
         assert isinstance(s, xr.Dataset)
         assert set(s.dims) == set(ds.dims)
+
+
+def test_get_dims_with_index_levels():
+    # Create test data
+
+    # Case 1: Simple dataset with regular dimensions
+    ds1 = xr.Dataset(
+        {"temp": (("time", "lat"), np.random.rand(3, 2))},  # noqa: NPY002
+        coords={"time": pd.date_range("2024-01-01", periods=3), "lat": [0, 1]},
+    )
+
+    # Case 2: Dataset with a multi-index dimension
+    stations_index = pd.MultiIndex.from_product(
+        [["USA", "Canada"], ["NYC", "Toronto"]], names=["country", "city"]
+    )
+    stations_coords = xr.Coordinates.from_pandas_multiindex(stations_index, "station")
+    ds2 = xr.Dataset(
+        {"temp": (("time", "station"), np.random.rand(3, 4))},  # noqa: NPY002
+        coords={"time": pd.date_range("2024-01-01", periods=3), **stations_coords},
+    )
+
+    # Case 3: Dataset with unnamed multi-index levels
+    unnamed_stations_index = pd.MultiIndex.from_product(
+        [["USA", "Canada"], ["NYC", "Toronto"]]
+    )
+    unnamed_stations_coords = xr.Coordinates.from_pandas_multiindex(
+        unnamed_stations_index, "station"
+    )
+    ds3 = xr.Dataset(
+        {"temp": (("time", "station"), np.random.rand(3, 4))},  # noqa: NPY002
+        coords={
+            "time": pd.date_range("2024-01-01", periods=3),
+            **unnamed_stations_coords,
+        },
+    )
+
+    # Case 4: Dataset with multiple multi-indexed dimensions
+    locations_index = pd.MultiIndex.from_product(
+        [["North", "South"], ["A", "B"]], names=["region", "site"]
+    )
+    locations_coords = xr.Coordinates.from_pandas_multiindex(
+        locations_index, "location"
+    )
+
+    ds4 = xr.Dataset(
+        {"temp": (("time", "station", "location"), np.random.rand(2, 4, 4))},  # noqa: NPY002
+        coords={
+            "time": pd.date_range("2024-01-01", periods=2),
+            **stations_coords,
+            **locations_coords,
+        },
+    )
+
+    # Run tests
+
+    # Test case 1: Regular dimensions
+    assert get_dims_with_index_levels(ds1) == ["time", "lat"]
+
+    # Test case 2: Named multi-index
+    assert get_dims_with_index_levels(ds2) == ["time", "station (country, city)"]
+
+    # Test case 3: Unnamed multi-index
+    assert get_dims_with_index_levels(ds3) == [
+        "time",
+        "station (station_level_0, station_level_1)",
+    ]
+
+    # Test case 4: Multiple multi-indices
+    expected = ["time", "station (country, city)", "location (region, site)"]
+    assert get_dims_with_index_levels(ds4) == expected
+
+    # Test case 5: Empty dataset
+    ds5 = xr.Dataset()
+    assert get_dims_with_index_levels(ds5) == []

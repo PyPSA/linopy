@@ -6,7 +6,7 @@ This module contains implementations for the Constraint{s} class.
 
 import functools
 import warnings
-from collections.abc import ItemsView, Iterator
+from collections.abc import Hashable, ItemsView, Iterator
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -35,6 +35,7 @@ from linopy.common import (
     filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
+    get_dims_with_index_levels,
     get_label_position,
     group_terms_polars,
     has_optimized_model,
@@ -255,12 +256,19 @@ class Constraint:
         return self.attrs["name"]
 
     @property
-    def coord_dims(self):
+    def coord_dims(self) -> tuple[Hashable, ...]:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
-    def coord_sizes(self):
+    def coord_sizes(self) -> dict[Hashable, int]:
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        """
+        Get the names of the coordinates.
+        """
+        return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
     def is_assigned(self):
@@ -273,6 +281,7 @@ class Constraint:
         max_lines = options["display_max_rows"]
         dims = list(self.coord_sizes.keys())
         ndim = len(dims)
+        dim_names = self.coord_names
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = (~self.mask).sum().values if self.mask is not None else 0
@@ -297,16 +306,16 @@ class Constraint:
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = f"{print_coord(coord)}: {expr} {sign} {rhs}"
+                        line = print_coord(coord) + f": {expr} {sign} {rhs}"
                     else:
-                        line = f"{print_coord(coord)}: None"
+                        line = print_coord(coord) + ": None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
-            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
             expr = print_single_expression(self.coeffs, self.vars, 0, self.model)
             lines.append(
