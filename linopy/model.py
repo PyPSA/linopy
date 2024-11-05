@@ -1043,6 +1043,7 @@ class Model:
             for k, c in self.constraints.items():
                 if "dual" in solved.constraints[k]:
                     c.dual = solved.constraints[k].dual
+
             return self.status, self.termination_condition
 
         if len(available_solvers) == 0:

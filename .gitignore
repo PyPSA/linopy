@@ -13,6 +13,7 @@ doc/_build
 doc/generated
 doc/api
 .vscode
+.idea
 Highs.log
 paper/
 monkeytype.sqlite3
