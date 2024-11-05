@@ -36,6 +36,7 @@ sign_replace_dict = {
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
 GROUPED_TERM_DIM = "_grouped_term"
+GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
 HELPER_DIMS = [TERM_DIM, STACKED_TERM_DIM, GROUPED_TERM_DIM, FACTOR_DIM, CONCAT_DIM]
