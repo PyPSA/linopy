@@ -64,6 +64,7 @@ from linopy.constants import (
     EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
+    GROUP_DIM,
     GROUPED_TERM_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
@@ -220,42 +221,43 @@ class LinearExpressionGroupby:
             group: pd.Series | pd.DataFrame | xr.DataArray = self.group
             if isinstance(group, pd.DataFrame):
                 # dataframes do not have a name, so we need to set it
-                group_name = "group"
+                final_group_name = "group"
             else:
-                group_name = getattr(group, "name", "group") or "group"
+                final_group_name = getattr(group, "name", "group") or "group"
 
             if isinstance(group, DataArray):
                 group = group.to_pandas()
 
             int_map = None
             if isinstance(group, pd.DataFrame):
+                index_name = group.index.name
                 group = group.reindex(self.data.indexes[group.index.name])
+                group.index.name = index_name  # ensure name for multiindex
                 int_map = get_index_map(*group.values.T)
                 orig_group = group
                 group = group.apply(tuple, axis=1).map(int_map)
 
             group_dim = group.index.name
-            if group_name == group_dim:
-                raise ValueError(
-                    "Group name cannot be the same as group dimension in non-fallback mode."
-                )
 
             arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(
-                arrays, names=[group_name, GROUPED_TERM_DIM]
-            )
-            coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            ds = self.data.assign_coords(coords)
+            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
+            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
+            coords = self.data.indexes[group_dim]
+            names_to_drop = [coords.name]
+            if isinstance(coords, pd.MultiIndex):
+                names_to_drop += list(coords.names)
+            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
 
             if int_map is not None:
-                index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
+                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
                 index.names = [str(col) for col in orig_group.columns]
-                index.name = group_name
-                coords = Coordinates.from_pandas_multiindex(index, group_name)
-                ds = xr.Dataset(ds.assign_coords(coords))
+                index.name = GROUP_DIM
+                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
+                ds = xr.Dataset(ds.assign_coords(new_coords))
 
+            ds = ds.rename({GROUP_DIM: final_group_name})
             return LinearExpression(ds, self.model)
 
         def func(ds):
@@ -1435,6 +1437,8 @@ class LinearExpression:
 
     drop = exprwrap(Dataset.drop)
 
+    drop_vars = exprwrap(Dataset.drop_vars)
+
     drop_sel = exprwrap(Dataset.drop_sel)
 
     drop_isel = exprwrap(Dataset.drop_isel)
@@ -1458,6 +1462,8 @@ class LinearExpression:
     reindex_like = exprwrap(Dataset.reindex_like, fill_value=_fill_value)
 
     rename = exprwrap(Dataset.rename)
+
+    reset_index = exprwrap(Dataset.reset_index)
 
     rename_dims = exprwrap(Dataset.rename_dims)
 
