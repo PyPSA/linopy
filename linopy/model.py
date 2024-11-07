@@ -969,6 +969,7 @@ class Model:
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: None = None,
+        progress: bool | None = None,
         **solver_options,
     ) -> tuple[str, str]:
         """
@@ -1027,6 +1028,10 @@ class Model:
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
             linopy.remote.RemoteHandler for more details.
+        progress : bool, optional
+            Whether to show a progress bar of writing the lp file. The default is
+            None, which means that the progress bar is shown if the model has more
+            than 10000 variables and constraints.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1124,7 +1129,9 @@ class Model:
                     env=env,
                 )
             else:
-                problem_fn = self.to_file(to_path(problem_fn), io_api)
+                problem_fn = self.to_file(
+                    to_path(problem_fn), io_api, progress=progress
+                )
                 result = solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),
                     solution_fn=to_path(solution_fn),
