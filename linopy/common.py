@@ -613,6 +613,33 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]):
     return formatted_lines
 
 
+def get_dims_with_index_levels(
+    ds: Dataset, dims: list[Hashable] | tuple[Hashable, ...] | None = None
+) -> list[str]:
+    """
+    Get the dimensions of a Dataset with their index levels.
+
+    Example usage with a dataset that has:
+    - regular dimension 'time'
+    - multi-indexed dimension 'station' with levels ['country', 'city']
+    The output would be: ['time', 'station (country, city)']
+    """
+    dims_with_levels = []
+    if dims is None:
+        dims = list(ds.dims)
+
+    for dim in dims:
+        if isinstance(ds.indexes[dim], pd.MultiIndex):
+            # For multi-indexed dimensions, format as "dim (level0, level1, ...)"
+            names = ds.indexes[dim].names
+            dims_with_levels.append(f"{dim} ({', '.join(names)})")
+        else:
+            # For regular dimensions, just add the dimension name
+            dims_with_levels.append(str(dim))
+
+    return dims_with_levels
+
+
 def get_label_position(
     obj, values: int | np.ndarray
 ) -> (
@@ -658,10 +685,42 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord):
-    if isinstance(coord, dict):
-        coord = coord.values()
-    return "[" + ", ".join([str(c) for c in coord]) + "]" if len(coord) else ""
+def print_coord(coord: dict | Iterable) -> str:
+    """
+    Format coordinates into a string representation.
+
+    Args:
+        coord: Dictionary or iterable containing coordinate values.
+              Values can be numbers, strings, or nested iterables.
+
+    Returns:
+        Formatted string representation of coordinates in brackets,
+        with nested coordinates grouped in parentheses.
+
+    Examples:
+        >>> print_coord({"x": 1, "y": 2})
+        '[1, 2]'
+        >>> print_coord([1, 2, 3])
+        '[1, 2, 3]'
+        >>> print_coord([(1, 2), (3, 4)])
+        '[(1, 2), (3, 4)]'
+    """
+    # Handle empty input
+    if not coord:
+        return ""
+
+    # Extract values if input is dictionary
+    values = coord.values() if isinstance(coord, dict) else coord
+
+    # Convert each coordinate component to string
+    formatted = []
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            formatted.append(f"({', '.join(str(x) for x in value)})")
+        else:
+            formatted.append(str(value))
+
+    return f"[{', '.join(formatted)}]"
 
 
 def print_single_variable(model, label):

@@ -49,10 +49,12 @@ from linopy.common import (
     filter_nulls_polars,
     forward_as_properties,
     generate_indices_for_printout,
+    get_dims_with_index_levels,
     get_index_map,
     group_terms_polars,
     has_optimized_model,
     iterate_slices,
+    print_coord,
     print_single_expression,
     to_dataframe,
     to_polars,
@@ -406,7 +408,8 @@ class LinearExpression:
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes.keys())
+        dims = list(self.coord_sizes)
+        dim_names = self.coord_names
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
@@ -420,10 +423,9 @@ class LinearExpression:
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord_values = ", ".join(
-                        str(self.data.indexes[dims[i]][ind])
-                        for i, ind in enumerate(indices)
-                    )
+                    coord = [
+                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
+                    ]
                     if self.mask is None or self.mask.values[indices]:
                         expr = print_single_expression(
                             self.coeffs.values[indices],
@@ -431,15 +433,16 @@ class LinearExpression:
                             self.const.values[indices],
                             self.model,
                         )
-                        line = f"[{coord_values}]: {expr}"
+
+                        line = print_coord(coord) + f": {expr}"
                     else:
-                        line = f"[{coord_values}]: None"
+                        line = print_coord(coord) + ": None"
                     lines.append(line)
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
-            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
             expr = print_single_expression(
                 self.coeffs, self.vars, self.const, self.model
@@ -737,8 +740,12 @@ class LinearExpression:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
-    def coord_sizes(self) -> dict[str, int]:
+    def coord_sizes(self) -> dict[Hashable, int]:
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
     def vars(self):
