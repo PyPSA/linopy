@@ -312,10 +312,10 @@ class OetCloudHandler:
         logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
         return content['uuid']
 
-    def _wait_and_get_job_data(self, uuid: str, retries=4*60, retry_every_s=15) -> dict:
-        """Waits for job completion upto `retries` times, waiting `retry_every_s` seconds
-        in between retries; returns job data including output file download links."""
-        for _ in range(retries):
+    def _wait_and_get_job_data(self, uuid: str, retry_every_s=60) -> dict:
+        """Waits for job completion until it completes or an error occurs,
+        waiting `retry_every_s` seconds in between retries; returns job data including output file download links."""
+        while True:
             logger.info('Checking job status...')
             response: Response = get(
                 f"{self.oetc_url}/compute-job/{uuid}",
@@ -333,7 +333,6 @@ class OetCloudHandler:
                 raise ValueError(f"Unexpected status: {content['status']}")
             logger.info('OETC still crunching...')
             sleep(retry_every_s)
-        raise TimeoutError('Timed out waiting for OETC. Pleae check the status manually.')
 
     def _gzip_compress(self, source_path: str) -> str:
         output_path = source_path + ".gz"
