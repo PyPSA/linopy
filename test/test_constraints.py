@@ -181,3 +181,25 @@ def test_constraints_flat():
 
     assert isinstance(m.constraints.flat, pd.DataFrame)
     assert not m.constraints.flat.empty
+
+
+def test_sanitize_infinities():
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    # Test correct infinities
+    m.add_constraints(x <= np.inf, name="con_inf")
+    m.add_constraints(y >= -np.inf, name="con_neg_inf")
+    m.constraints.sanitize_infinities()
+    assert (m.constraints["con_inf"].labels == -1).all()
+    assert (m.constraints["con_neg_inf"].labels == -1).all()
+
+    # Test incorrect infinities
+    with pytest.raises(ValueError):
+        m.add_constraints(x >= np.inf, name="con_wrong_inf")
+    with pytest.raises(ValueError):
+        m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")

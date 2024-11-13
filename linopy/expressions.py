@@ -49,9 +49,12 @@ from linopy.common import (
     filter_nulls_polars,
     forward_as_properties,
     generate_indices_for_printout,
+    get_dims_with_index_levels,
     get_index_map,
     group_terms_polars,
     has_optimized_model,
+    iterate_slices,
+    print_coord,
     print_single_expression,
     to_dataframe,
     to_polars,
@@ -61,6 +64,7 @@ from linopy.constants import (
     EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
+    GROUP_DIM,
     GROUPED_TERM_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
@@ -217,42 +221,43 @@ class LinearExpressionGroupby:
             group: pd.Series | pd.DataFrame | xr.DataArray = self.group
             if isinstance(group, pd.DataFrame):
                 # dataframes do not have a name, so we need to set it
-                group_name = "group"
+                final_group_name = "group"
             else:
-                group_name = getattr(group, "name", "group") or "group"
+                final_group_name = getattr(group, "name", "group") or "group"
 
             if isinstance(group, DataArray):
                 group = group.to_pandas()
 
             int_map = None
             if isinstance(group, pd.DataFrame):
+                index_name = group.index.name
                 group = group.reindex(self.data.indexes[group.index.name])
+                group.index.name = index_name  # ensure name for multiindex
                 int_map = get_index_map(*group.values.T)
                 orig_group = group
                 group = group.apply(tuple, axis=1).map(int_map)
 
             group_dim = group.index.name
-            if group_name == group_dim:
-                raise ValueError(
-                    "Group name cannot be the same as group dimension in non-fallback mode."
-                )
 
             arrays = [group, group.groupby(group).cumcount()]
-            idx = pd.MultiIndex.from_arrays(
-                arrays, names=[group_name, GROUPED_TERM_DIM]
-            )
-            coords = Coordinates.from_pandas_multiindex(idx, group_dim)
-            ds = self.data.assign_coords(coords)
+            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
+            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
+            coords = self.data.indexes[group_dim]
+            names_to_drop = [coords.name]
+            if isinstance(coords, pd.MultiIndex):
+                names_to_drop += list(coords.names)
+            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
             ds = ds.unstack(group_dim, fill_value=LinearExpression._fill_value)
             ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
 
             if int_map is not None:
-                index = ds.indexes["group"].map({v: k for k, v in int_map.items()})
+                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
                 index.names = [str(col) for col in orig_group.columns]
-                index.name = group_name
-                coords = Coordinates.from_pandas_multiindex(index, group_name)
-                ds = xr.Dataset(ds.assign_coords(coords))
+                index.name = GROUP_DIM
+                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
+                ds = xr.Dataset(ds.assign_coords(new_coords))
 
+            ds = ds.rename({GROUP_DIM: final_group_name})
             return LinearExpression(ds, self.model)
 
         def func(ds):
@@ -403,7 +408,8 @@ class LinearExpression:
         Print the expression arrays.
         """
         max_lines = options["display_max_rows"]
-        dims = list(self.coord_sizes.keys())
+        dims = list(self.coord_sizes)
+        dim_names = self.coord_names
         ndim = len(dims)
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
@@ -417,10 +423,9 @@ class LinearExpression:
                 if indices is None:
                     lines.append("\t\t...")
                 else:
-                    coord_values = ", ".join(
-                        str(self.data.indexes[dims[i]][ind])
-                        for i, ind in enumerate(indices)
-                    )
+                    coord = [
+                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
+                    ]
                     if self.mask is None or self.mask.values[indices]:
                         expr = print_single_expression(
                             self.coeffs.values[indices],
@@ -428,15 +433,16 @@ class LinearExpression:
                             self.const.values[indices],
                             self.model,
                         )
-                        line = f"[{coord_values}]: {expr}"
+
+                        line = print_coord(coord) + f": {expr}"
                     else:
-                        line = f"[{coord_values}]: None"
+                        line = print_coord(coord) + ": None"
                     lines.append(line)
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
-            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
             expr = print_single_expression(
                 self.coeffs, self.vars, self.const, self.model
@@ -734,8 +740,12 @@ class LinearExpression:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
-    def coord_sizes(self) -> dict[str, int]:
+    def coord_sizes(self) -> dict[Hashable, int]:
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
     def vars(self):
@@ -1427,6 +1437,8 @@ class LinearExpression:
 
     drop = exprwrap(Dataset.drop)
 
+    drop_vars = exprwrap(Dataset.drop_vars)
+
     drop_sel = exprwrap(Dataset.drop_sel)
 
     drop_isel = exprwrap(Dataset.drop_isel)
@@ -1451,11 +1463,15 @@ class LinearExpression:
 
     rename = exprwrap(Dataset.rename)
 
+    reset_index = exprwrap(Dataset.reset_index)
+
     rename_dims = exprwrap(Dataset.rename_dims)
 
     roll = exprwrap(Dataset.roll)
 
     stack = exprwrap(Dataset.stack)
+
+    iterate_slices = iterate_slices
 
 
 class QuadraticExpression(LinearExpression):
