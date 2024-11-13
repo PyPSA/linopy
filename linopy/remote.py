@@ -15,7 +15,7 @@ from pathlib import Path
 from google.cloud import storage
 from google.cloud.storage import Client, Bucket, Blob
 from google.oauth2 import service_account
-from requests import Response, post, get
+from requests import Response, post, get, HTTPError
 from time import sleep
 from typing import Callable, Union
 
@@ -252,8 +252,11 @@ class RemoteHandler:
 #  and have that and OetCloudHandler inherit from RemoteHandler?
 class OetCloudHandler:
 
-    def __init__(self):
-        self.oetc_url = os.environ.get('OETC_URL', 'http://127.0.0.1:5000')
+    def __init__(self, settings: dict):
+        self.oetc_url = settings.get("url", "http://127.0.0.1:5000")
+        self.cpu_cores = settings.get("cpu_cores", 2)
+        self.ram_amount_gb = settings.get("ram_amount_gb", 4)
+        self.disk_space_gb = settings.get("disk_space_gb", 10)
         # TODO: Temporary solution, in the future read service key from auth API
         with open(
             os.environ["GCP_SERVICE_KEY_PATH"], "r"
@@ -300,22 +303,29 @@ class OetCloudHandler:
 
     def _submit_job(self, input_file_name):
         logger.info('Calling OETC...')
-        response: Response = post(
-            f"{self.oetc_url}/compute-job/create",
-            headers={"Authorization": f"Bearer {self.jwt}"},
-            json={
-                "input_file_name": input_file_name,
-            },
-        )
-        response.raise_for_status()
-        content = response.json()
-        logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
-        return content['uuid']
+        try:
+            response: Response = post(
+                f"{self.oetc_url}/compute-job/create",
+                headers={"Authorization": f"Bearer {self.jwt}"},
+                json={
+                    "cpu_cores": self.cpu_cores,
+                    "ram_amount_gb": self.ram_amount_gb,
+                    "disk_space_gb": self.disk_space_gb,
+                    "input_file_name": input_file_name,
+                },
+            )
+            response.raise_for_status()
+            content = response.json()
+            logger.info(f'OETC job submitted successfully. ID: {content["uuid"]}')
+            return content['uuid']
+        except HTTPError as e:
+            logger.error(e.response.json())
+            raise
 
-    def _wait_and_get_job_data(self, uuid: str, retries=4*60, retry_every_s=15) -> dict:
-        """Waits for job completion upto `retries` times, waiting `retry_every_s` seconds
-        in between retries; returns job data including output file download links."""
-        for _ in range(retries):
+    def _wait_and_get_job_data(self, uuid: str, retry_every_s=60) -> dict:
+        """Waits for job completion until it completes or an error occurs,
+        waiting `retry_every_s` seconds in between retries; returns job data including output file download links."""
+        while True:
             logger.info('Checking job status...')
             response: Response = get(
                 f"{self.oetc_url}/compute-job/{uuid}",
@@ -333,7 +343,6 @@ class OetCloudHandler:
                 raise ValueError(f"Unexpected status: {content['status']}")
             logger.info('OETC still crunching...')
             sleep(retry_every_s)
-        raise TimeoutError('Timed out waiting for OETC. Pleae check the status manually.')
 
     def _gzip_compress(self, source_path: str) -> str:
         output_path = source_path + ".gz"

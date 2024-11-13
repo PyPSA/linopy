@@ -952,6 +952,7 @@ class Model:
         env: None = None,
         sanitize_zeros: bool = True,
         remote: None = None,
+        remote_settings: dict = None,
         **solver_options,
     ) -> tuple[str, str]:
         """
@@ -1004,6 +1005,8 @@ class Model:
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
             linopy.remote.RemoteHandler for more details.
+        remote_settings : dict, optional
+            Settings for the remote handler
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1016,8 +1019,8 @@ class Model:
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
-        if remote == "oet-cloud":
-            remote = OetCloudHandler()
+        if remote_settings:
+            remote = OetCloudHandler(settings=remote_settings["oetc"])
             # TODO for consistency should we change the way the SSH remote handler is used to be to pass a similar string argument?
 
         if remote:
