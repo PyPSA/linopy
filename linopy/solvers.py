@@ -6,6 +6,7 @@ Linopy module for solving lp files with different solvers.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import enum
 import io
 import logging
@@ -301,6 +302,15 @@ class Solver(ABC):
             msg = "No problem file or model specified."
             raise ValueError(msg)
 
+    def check_solver_installation(self, package_name: str):
+        """
+        Check for the solver to be initialized whether the package is installed or not.
+        Gives an ImportError if that is not the case.
+        """
+        if importlib.util.find_spec(package_name) is None:
+            msg = f"Solver package '{package_name}' is not installed. Please install first to initialize solver instance."
+            raise ImportError(msg)
+
 
 class CBC(Solver):
     """
@@ -312,11 +322,19 @@ class CBC(Solver):
         options for the given solver
     """
 
+    package_name = "coin-or-cbc"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
+
+    def check_solver_installation(self, package_name):
+        if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode != 0:
+            msg = f"Solver package '{package_name}' is not installed. Please install first to initialize solver instance."
+            raise ImportError(msg)
 
     def solve_problem_from_model(
         self,
@@ -469,11 +487,19 @@ class GLPK(Solver):
         options for the given solver
     """
 
+    package_name = "glpk"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
+
+    def check_solver_installation(self, package_name):
+        if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode != 0:
+            msg = f"Solver package '{package_name}' is not installed. Please install first to initialize solver instance."
+            raise ImportError(msg)
 
     def solve_problem_from_model(
         self,
@@ -651,10 +677,13 @@ class Highs(Solver):
         options for the given solver
     """
 
+    package_name = "highspy"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -868,10 +897,13 @@ class Gurobi(Solver):
         options for the given solver
     """
 
+    package_name = "gurobipy"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1100,10 +1132,13 @@ class Cplex(Solver):
         options for the given solver
     """
 
+    package_name = "cplex"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1242,10 +1277,13 @@ class SCIP(Solver):
         options for the given solver
     """
 
+    package_name = "pyscipopt"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1383,10 +1421,13 @@ class Xpress(Solver):
         options for the given solver
     """
 
+    package_name = "xpress"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1528,10 +1569,13 @@ class Mosek(Solver):
         options for the given solver
     """
 
+    package_name = "mosek"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1850,10 +1894,13 @@ class COPT(Solver):
         options for the given solver
     """
 
+    package_name = "coptpy"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1992,10 +2039,13 @@ class MindOpt(Solver):
         options for the given solver
     """
 
+    package_name = "mindoptpy"
+
     def __init__(
         self,
         **solver_options,
     ):
+        self.check_solver_installation(self.package_name)
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
