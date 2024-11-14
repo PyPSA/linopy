@@ -6,8 +6,8 @@ Linopy module for solving lp files with different solvers.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import enum
+import importlib.util
 import io
 import logging
 import os
@@ -332,7 +332,10 @@ class CBC(Solver):
         super().__init__(**solver_options)
 
     def check_solver_installation(self, package_name):
-        if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode != 0:
+        if (
+            sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode
+            != 0
+        ):
             msg = f"Solver package '{package_name}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
@@ -497,7 +500,10 @@ class GLPK(Solver):
         super().__init__(**solver_options)
 
     def check_solver_installation(self, package_name):
-        if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode != 0:
+        if (
+            sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode
+            != 0
+        ):
             msg = f"Solver package '{package_name}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
