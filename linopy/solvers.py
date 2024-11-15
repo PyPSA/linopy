@@ -211,7 +211,7 @@ class Solver(ABC):
 
         # Check for the solver to be initialized whether the package is installed or not.
         if self.solver_name.value not in available_solvers:
-            msg = f"Solver package for '{self.get_name_str()}' is not installed. Please install first to initialize solver instance."
+            msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
