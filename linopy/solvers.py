@@ -210,7 +210,7 @@ class Solver(ABC):
         self.solver_options = solver_options
 
         # Check for the solver to be initialized whether the package is installed or not.
-        if self.get_name_str() not in available_solvers:
+        if self.solver_name.value not in available_solvers:
             msg = f"Solver package for '{self.get_name_str()}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
@@ -306,8 +306,9 @@ class Solver(ABC):
             msg = "No problem file or model specified."
             raise ValueError(msg)
 
-    def get_name_str(self):
-        return SolverName[self.__class__.__name__].value
+    @property
+    def solver_name(self) -> SolverName:
+        return SolverName[self.__class__.__name__]
 
 
 class CBC(Solver):
