@@ -1,8 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* Fix the `slice_size` argument in the `solve` function. The argument was not properly passed to the `to_file` function.
 
 Version 0.4.0
 --------------
