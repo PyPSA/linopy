@@ -506,6 +506,11 @@ def iterate_slices(
     if slice_dims is None:
         slice_dims = list(getattr(ds, "coord_dims", ds.dims))
 
+    if not set(slice_dims).issubset(ds.dims):
+        raise ValueError(
+            "Invalid slice dimensions. Must be a subset of the dataset dimensions."
+        )
+
     # Calculate the total number of elements in the dataset
     size = np.prod([ds.sizes[dim] for dim in ds.dims], dtype=int)
 
@@ -517,7 +522,8 @@ def iterate_slices(
     n_slices = max(size // slice_size, 1)
 
     # leading dimension (the dimension with the largest size)
-    leading_dim = max(ds.sizes, key=ds.sizes.get)  # type: ignore
+    sizes = {dim: ds.sizes[dim] for dim in slice_dims}
+    leading_dim = max(sizes, key=sizes.get)  # type: ignore
     size_of_leading_dim = ds.sizes[leading_dim]
 
     if size_of_leading_dim < n_slices:
