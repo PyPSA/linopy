@@ -209,6 +209,11 @@ class Solver(ABC):
     ):
         self.solver_options = solver_options
 
+        # Check for the solver to be initialized whether the package is installed or not.
+        if self.solver_name.value not in available_solvers:
+            msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
+            raise ImportError(msg)
+
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
         Get solution from function call, if status is unknown still try to run it.
@@ -300,6 +305,10 @@ class Solver(ABC):
         else:
             msg = "No problem file or model specified."
             raise ValueError(msg)
+
+    @property
+    def solver_name(self) -> SolverName:
+        return SolverName[self.__class__.__name__]
 
 
 class CBC(Solver):
