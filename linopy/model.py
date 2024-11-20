@@ -1035,6 +1035,7 @@ class Model:
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
                 sanitize_zeros=sanitize_zeros,
+                structured_solver_options=solver_options,  # TODO: When unifying remote handlers we should send solver options only once
                 **solver_options,
             )
 

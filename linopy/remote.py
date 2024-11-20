@@ -287,7 +287,7 @@ class OetCloudHandler:
             logger.info(f'Model written to: {fn.name}')
             input_file_name = self._upload_file_to_gcp(fn.name)
 
-            job_uuid = self._submit_job(input_file_name)
+            job_uuid = self._submit_job(input_file_name, kwargs["solver_name"], kwargs["structured_solver_options"])
             job_data = self._wait_and_get_job_data(job_uuid)
 
             out_file_name = job_data['output_files'][0]['name']
@@ -301,13 +301,15 @@ class OetCloudHandler:
 
             return solution
 
-    def _submit_job(self, input_file_name):
+    def _submit_job(self, input_file_name, solver_name, solver_options):
         logger.info('Calling OETC...')
         try:
             response: Response = post(
                 f"{self.oetc_url}/compute-job/create",
                 headers={"Authorization": f"Bearer {self.jwt}"},
                 json={
+                    "solver": solver_name,
+                    "solver_options": solver_options,
                     "cpu_cores": self.cpu_cores,
                     "ram_amount_gb": self.ram_amount_gb,
                     "disk_space_gb": self.disk_space_gb,
