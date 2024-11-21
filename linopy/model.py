@@ -1130,7 +1130,7 @@ class Model:
                 )
             else:
                 problem_fn = self.to_file(
-                    to_path(problem_fn), io_api, progress=progress
+                    to_path(problem_fn), io_api, slice_size, progress=progress
                 )
                 result = solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),

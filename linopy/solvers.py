@@ -162,10 +162,12 @@ def path_to_string(path: Path) -> str:
 
 
 def read_sense_from_problem_file(problem_fn: Path | str):
-    f = open(problem_fn).read()
-    if read_io_api_from_problem_file(problem_fn) == "lp":
+    with open(problem_fn) as file:
+        f = file.read()
+    file_format = read_io_api_from_problem_file(problem_fn)
+    if file_format == "lp":
         return "min" if "min" in f.lower() else "max"
-    elif read_io_api_from_problem_file(problem_fn) == "mps":
+    elif file_format == "mps":
         return "max" if "OBJSENSE\n  MAX\n" in f else "min"
     else:
         msg = "Unsupported problem file format."
@@ -208,6 +210,11 @@ class Solver(ABC):
         **solver_options,
     ):
         self.solver_options = solver_options
+
+        # Check for the solver to be initialized whether the package is installed or not.
+        if self.solver_name.value not in available_solvers:
+            msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
+            raise ImportError(msg)
 
     def safe_get_solution(self, status: Status, func: Callable) -> Solution:
         """
@@ -300,6 +307,10 @@ class Solver(ABC):
         else:
             msg = "No problem file or model specified."
             raise ValueError(msg)
+
+    @property
+    def solver_name(self) -> SolverName:
+        return SolverName[self.__class__.__name__]
 
 
 class CBC(Solver):

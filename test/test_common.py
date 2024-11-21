@@ -475,11 +475,11 @@ def test_iterate_slices_basic():
 
 def test_iterate_slices_with_exclude_dims():
     ds = xr.Dataset(
-        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
-        coords={"x": np.arange(10), "y": np.arange(10)},
+        {"var": (("x", "y"), np.random.rand(10, 20))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(20)},
     )
     slices = list(iterate_slices(ds, slice_size=20, slice_dims=["x"]))
-    assert len(slices) == 5
+    assert len(slices) == 10
     for s in slices:
         assert isinstance(s, xr.Dataset)
         assert set(s.dims) == set(ds.dims)
@@ -499,11 +499,13 @@ def test_iterate_slices_large_max_size():
 
 def test_iterate_slices_small_max_size():
     ds = xr.Dataset(
-        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
-        coords={"x": np.arange(10), "y": np.arange(10)},
+        {"var": (("x", "y"), np.random.rand(10, 20))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(20)},
     )
-    slices = list(iterate_slices(ds, slice_size=8, slice_dims=[]))
-    assert len(slices) == 10
+    slices = list(iterate_slices(ds, slice_size=8, slice_dims=["x"]))
+    assert (
+        len(slices) == 10
+    )  # goes to the smallest slice possible which is 1 for the x dimension
     for s in slices:
         assert isinstance(s, xr.Dataset)
         assert set(s.dims) == set(ds.dims)
@@ -520,16 +522,16 @@ def test_iterate_slices_slice_size_none():
         assert ds.equals(s)
 
 
-def test_iterate_slices_no_slice_dims():
+def test_iterate_slices_invalid_slice_dims():
     ds = xr.Dataset(
         {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
         coords={"x": np.arange(10), "y": np.arange(10)},
     )
-    slices = list(iterate_slices(ds, slice_size=50, slice_dims=[]))
-    assert len(slices) == 2
-    for s in slices:
-        assert isinstance(s, xr.Dataset)
-        assert set(s.dims) == set(ds.dims)
+    with pytest.raises(ValueError):
+        list(iterate_slices(ds, slice_size=50, slice_dims=[]))
+
+    with pytest.raises(ValueError):
+        list(iterate_slices(ds, slice_size=50, slice_dims=["z"]))
 
 
 def test_get_dims_with_index_levels():
