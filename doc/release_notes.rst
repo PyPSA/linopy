@@ -1,8 +1,16 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+Version 0.4.2
+--------------
+
+* Fix the file handler to properly close the file when reading the sense from a problem file.
+
+Version 0.4.1
+--------------
 
 * Fix the `slice_size` argument in the `solve` function. The argument was not properly passed to the `to_file` function.
 * Fix the slicing of constraints in case the term dimension is larger than the leading constraint coordinate dimension.
