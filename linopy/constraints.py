@@ -6,7 +6,7 @@ This module contains implementations for the Constraint{s} class.
 
 import functools
 import warnings
-from collections.abc import ItemsView, Iterator
+from collections.abc import Hashable, ItemsView, Iterator
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -35,11 +35,13 @@ from linopy.common import (
     filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
+    get_dims_with_index_levels,
     get_label_position,
     group_terms_polars,
     has_optimized_model,
     infer_schema_polars,
     is_constant,
+    iterate_slices,
     maybe_replace_signs,
     print_coord,
     print_single_constraint,
@@ -50,7 +52,14 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import EQUAL, HELPER_DIMS, TERM_DIM, SIGNS_pretty
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    HELPER_DIMS,
+    LESS_EQUAL,
+    TERM_DIM,
+    SIGNS_pretty,
+)
 from linopy.types import ConstantLike
 
 if TYPE_CHECKING:
@@ -184,7 +193,7 @@ class Constraint:
             "The `.values` attribute is deprecated. Use `.labels.values` instead.",
             DeprecationWarning,
         )
-        return self.labels.values if self.is_assigned else None  # type: ignore
+        return self.labels.values if self.is_assigned else None
 
     @property
     def nterm(self):
@@ -247,12 +256,19 @@ class Constraint:
         return self.attrs["name"]
 
     @property
-    def coord_dims(self):
+    def coord_dims(self) -> tuple[Hashable, ...]:
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
-    def coord_sizes(self):
+    def coord_sizes(self) -> dict[Hashable, int]:
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        """
+        Get the names of the coordinates.
+        """
+        return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
     def is_assigned(self):
@@ -265,6 +281,7 @@ class Constraint:
         max_lines = options["display_max_rows"]
         dims = list(self.coord_sizes.keys())
         ndim = len(dims)
+        dim_names = self.coord_names
         dim_sizes = list(self.coord_sizes.values())
         size = np.prod(dim_sizes)  # that the number of theoretical printouts
         masked_entries = (~self.mask).sum().values if self.mask is not None else 0
@@ -289,16 +306,16 @@ class Constraint:
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = f"{print_coord(coord)}: {expr} {sign} {rhs}"
+                        line = print_coord(coord) + f": {expr} {sign} {rhs}"
                     else:
-                        line = f"{print_coord(coord)}: None"
+                        line = print_coord(coord) + ": None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dims, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
-            lines.insert(0, f"{header_string} ({shape_str}){mask_str}:\n{underscore}")
+            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
             expr = print_single_expression(self.coeffs, self.vars, 0, self.model)
             lines.append(
@@ -658,6 +675,8 @@ class Constraint:
 
     stack = conwrap(Dataset.stack)
 
+    iterate_slices = iterate_slices
+
 
 @dataclass(repr=False)
 class Constraints:
@@ -767,7 +786,7 @@ class Constraints:
         """
         return save_join(
             *[v.labels.rename(k) for k, v in self.items()],
-            integer_dtype=True,  # type: ignore
+            integer_dtype=True,
         )
 
     @property
@@ -848,26 +867,38 @@ class Constraints:
         """
         return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
 
-    def sanitize_zeros(self):
+    def sanitize_zeros(self) -> None:
         """
         Filter out terms with zero and close-to-zero coefficient.
         """
-        for name in list(self):
+        for name in self:
             not_zero = abs(self[name].coeffs) > 1e-10
-            constraint = self[name]
-            constraint.vars = self[name].vars.where(not_zero, -1)
-            constraint.coeffs = self[name].coeffs.where(not_zero)
+            con = self[name]
+            con.vars = self[name].vars.where(not_zero, -1)
+            con.coeffs = self[name].coeffs.where(not_zero)
 
-    def sanitize_missings(self):
+    def sanitize_missings(self) -> None:
         """
         Set constraints labels to -1 where all variables in the lhs are
         missing.
         """
         for name in self:
-            contains_non_missing = (self[name].vars != -1).any(self[name].term_dim)
-            self[name].data["labels"] = self[name].labels.where(
-                contains_non_missing, -1
+            con = self[name]
+            contains_non_missing = (con.vars != -1).any(con.term_dim)
+            labels = self[name].labels.where(contains_non_missing, -1)
+            con._data = assign_multiindex_safe(con.data, labels=labels)
+
+    def sanitize_infinities(self) -> None:
+        """
+        Replace infinite values in the constraints with a large value.
+        """
+        for name in self:
+            con = self[name]
+            valid_infinity_values = ((con.sign == LESS_EQUAL) & (con.rhs == np.inf)) | (
+                (con.sign == GREATER_EQUAL) & (con.rhs == -np.inf)
             )
+            labels = con.labels.where(~valid_infinity_values, -1)
+            con._data = assign_multiindex_safe(con.data, labels=labels)
 
     def get_name_by_label(self, label: Union[int, float]) -> str:
         """

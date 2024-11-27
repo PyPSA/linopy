@@ -13,15 +13,15 @@ types = pd.Index(list("abcdefgh"), name="types")
 
 u = m.add_variables(0, upper, name="u")
 v = m.add_variables(lower, upper, name="v")
-x = m.add_variables(lower, 10, coords=[lower.index], name="x")  # type: ignore
+x = m.add_variables(lower, 10, coords=[lower.index], name="x")
 y = m.add_variables(0, 10, name="y")
 z = m.add_variables(name="z", binary=True)
-a = m.add_variables(coords=[lower.index], name="a", binary=True)  # type: ignore
-b = m.add_variables(coords=[lower.index], name="b", integer=True)  # type: ignore
+a = m.add_variables(coords=[lower.index], name="a", binary=True)
+b = m.add_variables(coords=[lower.index], name="b", integer=True)
 c_mask = xr.DataArray(False, coords=upper.axes)
 c_mask[:, 5:] = True
 c = m.add_variables(lower, upper, name="c", mask=c_mask)
-d = m.add_variables(0, 10, coords=[types], name="d")  # type: ignore
+d = m.add_variables(0, 10, coords=[types], name="d")
 
 # new behavior in v0.2, variable with dimension name and other
 # coordinates are added without a warning
@@ -31,6 +31,11 @@ f_mask = np.full_like(upper[:5], True, dtype=bool)
 f_mask[:3] = False
 f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
+
+multiindex = pd.MultiIndex.from_product(
+    [list("asdfhjkg"), list("asdfghj")], names=["level_0", "level_1"]
+)
+g = m.add_variables(coords=[multiindex], name="g")
 
 # create linear expression for each variable
 lu = 1 * u
@@ -47,6 +52,7 @@ luc = 1 * v + 10
 lq = x * x
 lq2 = x * x + 1 * x
 lq3 = x * x + 1 * x + 1 + 1 * y + 1 * z
+lg = 1 * g
 
 # create anonymous constraint for linear expression
 cu_ = lu >= 0
@@ -60,6 +66,7 @@ cc_ = lc >= 0
 cd_ = ld >= 0
 cav_ = lav >= 0
 cuc_ = luc >= 0
+cg_ = lg >= 0
 
 # add constraint for each variable
 cu = m.add_constraints(cu_, name="cu")
@@ -74,12 +81,12 @@ cd = m.add_constraints(cd_, name="cd")
 cav = m.add_constraints(cav_, name="cav")
 cuc = m.add_constraints(cuc_, name="cuc")
 cu_masked = m.add_constraints(cu_, name="cu_masked", mask=xr.full_like(u.labels, False))
+cg = m.add_constraints(cg_, name="cg")
 
-
-variables = [u, v, x, y, z, a, b, c, d, e, f]
-expressions = [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc, lq, lq2, lq3]
-anonymous_constraints = [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_]
-constraints = [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked]
+variables = [u, v, x, y, z, a, b, c, d, e, f, g]
+expressions = [lu, lv, lx, ly, lz, la, lb, lc, ld, lav, luc, lq, lq2, lq3, lg]
+anonymous_constraints = [cu_, cv_, cx_, cy_, cz_, ca_, cb_, cc_, cd_, cav_, cuc_, cg_]
+constraints = [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked, cg]
 
 
 @pytest.mark.parametrize("var", variables)

@@ -19,6 +19,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
+    "Typing :: Typed",
     "Operating System :: OS Independent",
 ]
 
@@ -57,8 +58,9 @@ docs = [
 dev = [
     "pytest",
     "pytest-cov",
-    "netcdf4",
+    'mypy',
     "pre-commit",
+    "netcdf4",
     "paramiko",
     "types-paramiko",
     "gurobipy",
@@ -71,7 +73,7 @@ solvers = [
     "cplex; platform_system != 'Darwin' and python_version < '3.12'",
     "mosek",
     "mindoptpy; python_version < '3.12'",
-    "coptpy",
+    "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
 ]
@@ -79,17 +81,34 @@ solvers = [
 [tool.setuptools.packages.find]
 include = ["linopy"]
 
+[tool.setuptools.package-data]
+"linopy" = ["py.typed"]
+
 [tool.setuptools_scm]
 write_to = "linopy/version.py"
+version_scheme = "no-guess-dev"
 
 [tool.coverage.run]
 branch = true
 source = ["linopy"]
 omit = ["test/*"]
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
 
 [tool.mypy]
+exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
 ignore_missing_imports = true
-# namespace_packages = true
+no_implicit_optional = true
+warn_unused_ignores = true
+show_error_code_links = true
+# disallow_any_generics = true
+# warn_return_any = true
+
+# [[tool.mypy.overrides]]
+# module = "linopy.*"
+# disallow_untyped_defs = true
 
 [tool.ruff]
 extend-include = ['*.ipynb']

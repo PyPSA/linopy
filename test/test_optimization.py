@@ -14,7 +14,8 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
+from linopy.common import to_path
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
@@ -27,13 +28,12 @@ if "highs" in available_solvers:
 
 params = [(name, io_api) for name in available_solvers for io_api in io_apis]
 
-if "gurobi" in available_solvers:
-    params.append(("gurobi", "direct"))
-if "highs" in available_solvers:
-    params.append(("highs", "direct"))
+direct_solvers = ["gurobi", "highs", "mosek"]
+for solver in direct_solvers:
+    if solver in available_solvers:
+        params.append((solver, "direct"))
 
 if "mosek" in available_solvers:
-    params.append(("mosek", "direct"))
     params.append(("mosek", "lp"))
 
 
@@ -401,6 +401,15 @@ def test_default_settings_chunked(model_chunked, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
+def test_default_settings_small_slices(model, solver, io_api):
+    assert model.objective.sense == "min"
+    status, condition = model.solve(solver, io_api=io_api, slice_size=2)
+    assert status == "ok"
+    assert np.isclose(model.objective.value, 3.3)
+    assert model.solver_name == solver
+
+
+@pytest.mark.parametrize("solver,io_api", params)
 def test_solver_options(model, solver, io_api):
     time_limit_option = {
         "cbc": {"sec": 1},
@@ -489,9 +498,7 @@ def test_infeasible_model(model, solver, io_api):
             model.compute_infeasibilities()
 
 
-@pytest.mark.parametrize(
-    "solver,io_api", [p for p in params if p[0] not in ["glpk", "cplex", "mindopt"]]
-)
+@pytest.mark.parametrize("solver,io_api", params)
 def test_model_with_inf(model_with_inf, solver, io_api):
     status, condition = model_with_inf.solve(solver, io_api=io_api)
     assert condition == "optimal"
@@ -679,6 +686,57 @@ def test_model_resolve(model, solver, io_api):
     assert status == "ok"
     # x = -0.75, y = 3.0
     assert np.isclose(model.objective.value, 5.25)
+
+
+@pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" not in p])
+def test_solver_classes_from_problem_file(model, solver, io_api):
+    # first test initialization of super class. Should not be possible to initialize
+    with pytest.raises(TypeError):
+        solver_super = solvers.Solver()  # noqa F841
+
+    # initialize the solver as object of solver subclass <solver_class>
+    solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
+    solver_ = solver_class()
+    # get problem file for testing
+    problem_fn = model.get_problem_file(io_api=io_api)
+    model.to_file(to_path(problem_fn), io_api)
+    solution_fn = model.get_solution_file() if solver in ["glpk", "cbc"] else None
+    result = solver_.solve_problem(problem_fn=problem_fn, solution_fn=solution_fn)
+    assert result.status.status.value == "ok"
+    # x = -0.1, y = 1.7
+    assert np.isclose(result.solution.objective, 3.3)
+
+    # test for Value error message if no problem file is given
+    with pytest.raises(ValueError):
+        solver_.solve_problem(solution_fn=solution_fn)
+
+    # test for Value error message if no solution file is passed to glpk or cbc
+    if solver in ["glpk", "cbc"]:
+        with pytest.raises(ValueError):
+            solver_.solve_problem(problem_fn=problem_fn)
+
+    # test for Value error message if invalid problem file format is given
+    with pytest.raises(ValueError):
+        solver_.solve_problem(problem_fn=solution_fn)
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solver_classes_direct(model, solver, io_api):
+    # initialize the solver as object of solver subclass <solver_class>
+    solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
+    solver_ = solver_class()
+    if io_api == "direct":
+        result = solver_.solve_problem(model=model)
+        assert result.status.status.value == "ok"
+        # x = -0.1, y = 1.7
+        assert np.isclose(result.solution.objective, 3.3)
+        # test for Value error message if direct is tried without giving model
+        with pytest.raises(ValueError):
+            solver_.model = None
+            solver_.solve_problem()
+    elif solver not in direct_solvers:
+        with pytest.raises(NotImplementedError):
+            solver_.solve_problem(model=model)
 
 
 # def init_model_large():

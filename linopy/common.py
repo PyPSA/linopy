@@ -5,12 +5,14 @@ Linopy common module.
 This module contains commonly used functions.
 """
 
+from __future__ import annotations
+
 import operator
 import os
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
 from functools import reduce, wraps
 from pathlib import Path
-from typing import Any, Callable, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, overload
 from warnings import warn
 
 import numpy as np
@@ -29,6 +31,11 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
+
+if TYPE_CHECKING:
+    from linopy.constraints import Constraint
+    from linopy.expressions import LinearExpression
+    from linopy.variables import Variable
 
 
 def maybe_replace_sign(sign: str) -> str:
@@ -86,7 +93,7 @@ def format_string_as_variable_name(name: Hashable):
     return str(name).replace(" ", "_").replace("-", "_")
 
 
-def get_from_iterable(lst: Union[str, Iterable[Hashable], None], index: int):
+def get_from_iterable(lst: str | Iterable[Hashable] | None, index: int):
     """
     Returns the element at the specified index of the list, or None if the index
     is out of bounds.
@@ -99,9 +106,9 @@ def get_from_iterable(lst: Union[str, Iterable[Hashable], None], index: int):
 
 
 def pandas_to_dataarray(
-    arr: Union[pd.DataFrame, pd.Series],
-    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
-    dims: Union[Iterable[Hashable], None] = None,
+    arr: pd.DataFrame | pd.Series,
+    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+    dims: Iterable[Hashable] | None = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -156,8 +163,8 @@ def pandas_to_dataarray(
 
 def numpy_to_dataarray(
     arr: np.ndarray,
-    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
-    dims: Union[str, Iterable[Hashable], None] = None,
+    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+    dims: str | Iterable[Hashable] | None = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -195,8 +202,8 @@ def numpy_to_dataarray(
 
 def as_dataarray(
     arr,
-    coords: Union[Sequence[Union[Sequence, pd.Index, DataArray]], Mapping, None] = None,
-    dims: Union[str, Iterable[Hashable], None] = None,
+    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+    dims: str | Iterable[Hashable] | None = None,
     **kwargs,
 ) -> DataArray:
     """
@@ -242,11 +249,11 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
-    return arr  # type: ignore
+    return arr
 
 
 # TODO: rename to to_pandas_dataframe
-def to_dataframe(ds: Dataset, mask_func: Union[Callable, None] = None):
+def to_dataframe(ds: Dataset, mask_func: Callable | None = None):
     """
     Convert an xarray Dataset to a pandas DataFrame.
 
@@ -467,6 +474,71 @@ def fill_missing_coords(ds, fill_helper_dims: bool = False):
     return ds
 
 
+def iterate_slices(
+    ds: Dataset | Variable | LinearExpression | Constraint,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[Dataset | Variable | LinearExpression | Constraint, None, None]:
+    """
+    Generate slices of an xarray Dataset or DataArray with a specified soft maximum size.
+
+    The slicing is performed on the largest dimension of the input object.
+    If the maximum size is larger than the total size of the object, the function yields
+    the original object.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset or xarray.DataArray
+        The input xarray Dataset or DataArray to be sliced.
+    slice_size : int
+        The maximum number of elements in each slice. If the maximum size is too small to accommodate any slice,
+        the function splits the largest dimension.
+    slice_dims : list, optional
+        The dimensions to slice along. If None, all dimensions in `coord_dims` are used if
+        `coord_dims` is an attribute of the input object. Otherwise, all dimensions are used.
+
+    Yields
+    ------
+    xarray.Dataset or xarray.DataArray
+        A slice of the input Dataset or DataArray.
+
+    """
+    if slice_dims is None:
+        slice_dims = list(getattr(ds, "coord_dims", ds.dims))
+
+    if not set(slice_dims).issubset(ds.dims):
+        raise ValueError(
+            "Invalid slice dimensions. Must be a subset of the dataset dimensions."
+        )
+
+    # Calculate the total number of elements in the dataset
+    size = np.prod([ds.sizes[dim] for dim in ds.dims], dtype=int)
+
+    if slice_size is None or size <= slice_size:
+        yield ds
+        return
+
+    # number of slices
+    n_slices = max(size // slice_size, 1)
+
+    # leading dimension (the dimension with the largest size)
+    sizes = {dim: ds.sizes[dim] for dim in slice_dims}
+    leading_dim = max(sizes, key=sizes.get)  # type: ignore
+    size_of_leading_dim = ds.sizes[leading_dim]
+
+    if size_of_leading_dim < n_slices:
+        n_slices = size_of_leading_dim
+
+    chunk_size = ds.sizes[leading_dim] // n_slices
+
+    # Iterate over the Cartesian product of slice indices
+    for i in range(n_slices):
+        start = i * chunk_size
+        end = start + chunk_size
+        slice_dict = {leading_dim: slice(start, end)}
+        yield ds.isel(slice_dict)
+
+
 def _remap(array, mapping):
     return mapping[array.ravel()].reshape(array.shape)
 
@@ -484,7 +556,7 @@ def replace_by_map(ds, mapping):
     )
 
 
-def to_path(path: Union[str, Path, None]) -> Union[Path, None]:
+def to_path(path: str | Path | None) -> Path | None:
     """
     Convert a string to a Path object.
     """
@@ -496,7 +568,7 @@ def best_int(max_value: int) -> type:
     Get the minimal int dtype for storing values <= max_value.
     """
     for t in (np.int8, np.int16, np.int32, np.int64):
-        if max_value <= np.iinfo(t).max:  # type: ignore
+        if max_value <= np.iinfo(t).max:
             return t
     raise ValueError(f"Value {max_value} is too large for int64.")
 
@@ -526,7 +598,7 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
-def align_lines_by_delimiter(lines: list[str], delimiter: Union[str, list[str]]):
+def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]):
     # Determine the maximum position of the delimiter
     if isinstance(delimiter, str):
         delimiter = [delimiter]
@@ -547,18 +619,46 @@ def align_lines_by_delimiter(lines: list[str], delimiter: Union[str, list[str]])
     return formatted_lines
 
 
+def get_dims_with_index_levels(
+    ds: Dataset, dims: list[Hashable] | tuple[Hashable, ...] | None = None
+) -> list[str]:
+    """
+    Get the dimensions of a Dataset with their index levels.
+
+    Example usage with a dataset that has:
+    - regular dimension 'time'
+    - multi-indexed dimension 'station' with levels ['country', 'city']
+    The output would be: ['time', 'station (country, city)']
+    """
+    dims_with_levels = []
+    if dims is None:
+        dims = list(ds.dims)
+
+    for dim in dims:
+        if isinstance(ds.indexes[dim], pd.MultiIndex):
+            # For multi-indexed dimensions, format as "dim (level0, level1, ...)"
+            names = ds.indexes[dim].names
+            dims_with_levels.append(f"{dim} ({', '.join(names)})")
+        else:
+            # For regular dimensions, just add the dimension name
+            dims_with_levels.append(str(dim))
+
+    return dims_with_levels
+
+
 def get_label_position(
-    obj, values: Union[int, np.ndarray]
-) -> Union[
-    Union[tuple[str, dict], tuple[None, None]],
-    list[Union[tuple[str, dict], tuple[None, None]]],
-    list[list[Union[tuple[str, dict], tuple[None, None]]]],
-]:
+    obj, values: int | np.ndarray
+) -> (
+    tuple[str, dict]
+    | tuple[None, None]
+    | list[tuple[str, dict] | tuple[None, None]]
+    | list[list[tuple[str, dict] | tuple[None, None]]]
+):
     """
     Get tuple of name and coordinate for variable labels.
     """
 
-    def find_single(value: int) -> Union[tuple[str, dict], tuple[None, None]]:
+    def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
         if value == -1:
             return None, None
         for name, val in obj.items():
@@ -591,10 +691,42 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord):
-    if isinstance(coord, dict):
-        coord = coord.values()
-    return "[" + ", ".join([str(c) for c in coord]) + "]" if len(coord) else ""
+def print_coord(coord: dict | Iterable) -> str:
+    """
+    Format coordinates into a string representation.
+
+    Args:
+        coord: Dictionary or iterable containing coordinate values.
+              Values can be numbers, strings, or nested iterables.
+
+    Returns:
+        Formatted string representation of coordinates in brackets,
+        with nested coordinates grouped in parentheses.
+
+    Examples:
+        >>> print_coord({"x": 1, "y": 2})
+        '[1, 2]'
+        >>> print_coord([1, 2, 3])
+        '[1, 2, 3]'
+        >>> print_coord([(1, 2), (3, 4)])
+        '[(1, 2), (3, 4)]'
+    """
+    # Handle empty input
+    if not coord:
+        return ""
+
+    # Extract values if input is dictionary
+    values = coord.values() if isinstance(coord, dict) else coord
+
+    # Convert each coordinate component to string
+    formatted = []
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            formatted.append(f"({', '.join(str(x) for x in value)})")
+        else:
+            formatted.append(str(value))
+
+    return f"[{', '.join(formatted)}]"
 
 
 def print_single_variable(model, label):

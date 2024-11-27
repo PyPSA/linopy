@@ -4,6 +4,35 @@ Release Notes
 Upcoming Version
 ----------------
 
+* The method :meth:`model.to_file <linopy.model.Model.to_file>` now includes a progress argument to enable or disable the progress bar while writing.
+
+
+Version 0.4.2
+--------------
+
+* Fix the file handler to properly close the file when reading the sense from a problem file.
+
+Version 0.4.1
+--------------
+
+* Fix the `slice_size` argument in the `solve` function. The argument was not properly passed to the `to_file` function.
+* Fix the slicing of constraints in case the term dimension is larger than the leading constraint coordinate dimension.
+
+Version 0.4.0
+--------------
+
+* When writing out an LP file, large variables and constraints are now chunked to avoid memory issues. This is especially useful for large models with constraints with many terms. The chunk size can be set with the `slice_size` argument in the `solve` function.
+* Constraints which of the form `<= infinity` and `>= -infinity` are now automatically filtered out when solving. The `solve` function now has a new argument `sanitize_infinities` to control this feature. Default is set to `True`.
+* The representation of linopy objects with multiindexed coordinates was improved to be more readable.
+* Grouping expressions is now supported on dimensions called "group" and dimensions that have the same name as the grouping object.
+* Grouping dimensions which have multiindexed coordinates is now supported.
+* See full list of changes `here <https://github.com/PyPSA/linopy/releases/tag/v0.4.0>`__.
+
+Version 0.3.15
+--------------
+
+* The group dimension when grouping by a pandas dataframe is now always `group`. This fixes the case that the dataframe contains a column named `name`.
+
 Version 0.3.14
 --------------
 
