@@ -344,6 +344,7 @@ class LinearExpression:
     __slots__ = ("_data", "_model")
     __array_ufunc__ = None
     __array_priority__ = 10000
+    __pandas_priority__ = 10000
 
     _fill_value = FILL_VALUE
 
@@ -1485,6 +1486,7 @@ class QuadraticExpression(LinearExpression):
     __slots__ = ("_data", "_model")
     __array_ufunc__ = None
     __array_priority__ = 10000
+    __pandas_priority__ = 10000
 
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
