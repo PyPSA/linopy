@@ -87,12 +87,12 @@ def objective_write_quad_terms(
 
 
 def objective_to_file(
-    m: Model, f: TextIOWrapper, log: bool = False, batch_size: int = 10000
+    m: Model, f: TextIOWrapper, progress: bool = False, batch_size: int = 10000
 ) -> None:
     """
     Write out the objective of a model to a lp file.
     """
-    if log:
+    if progress:
         logger.info("Writing objective.")
 
     sense = m.objective.sense
@@ -129,7 +129,7 @@ def objective_to_file(
 def constraints_to_file(
     m: Model,
     f: TextIOWrapper,
-    log: bool = False,
+    progress: bool = False,
     batch_size: int = 50_000,
     slice_size: int = 100_000,
 ) -> None:
@@ -138,7 +138,7 @@ def constraints_to_file(
 
     f.write("\n\ns.t.\n\n")
     names: Iterable = m.constraints
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing constraints.",
@@ -198,7 +198,7 @@ def constraints_to_file(
 def bounds_to_file(
     m: Model,
     f: TextIOWrapper,
-    log: bool = False,
+    progress: bool = False,
     batch_size: int = 10000,
     slice_size: int = 100_000,
 ) -> None:
@@ -210,7 +210,7 @@ def bounds_to_file(
         return
 
     f.write("\n\nbounds\n\n")
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing continuous variables.",
@@ -241,7 +241,7 @@ def bounds_to_file(
 def binaries_to_file(
     m: Model,
     f: TextIOWrapper,
-    log: bool = False,
+    progress: bool = False,
     batch_size: int = 1000,
     slice_size: int = 100_000,
 ) -> None:
@@ -253,7 +253,7 @@ def binaries_to_file(
         return
 
     f.write("\n\nbinary\n\n")
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing binary variables.",
@@ -277,7 +277,7 @@ def binaries_to_file(
 def integers_to_file(
     m: Model,
     f: TextIOWrapper,
-    log: bool = False,
+    progress: bool = False,
     batch_size: int = 1000,
     slice_size: int = 100_000,
     integer_label: str = "general",
@@ -290,7 +290,7 @@ def integers_to_file(
         return
 
     f.write(f"\n\n{integer_label}\n\n")
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing integer variables.",
@@ -311,9 +311,13 @@ def integers_to_file(
         f.writelines(batch)
 
 
-def to_lp_file(m: Model, fn: Path, integer_label: str, slice_size: int = 10_000_000):
-    log = m._xCounter > 10_000
-
+def to_lp_file(
+    m: Model,
+    fn: Path,
+    integer_label: str,
+    slice_size: int = 10_000_000,
+    progress: bool = True,
+) -> None:
     batch_size = 5000
 
     with open(fn, mode="w") as f:
@@ -322,17 +326,21 @@ def to_lp_file(m: Model, fn: Path, integer_label: str, slice_size: int = 10_000_
         if isinstance(f, int):
             raise ValueError("File not found.")
 
-        objective_to_file(m, f, log=log)
+        objective_to_file(m, f, progress=progress)
         constraints_to_file(
-            m, f=f, log=log, batch_size=batch_size, slice_size=slice_size
+            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
         )
-        bounds_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
-        binaries_to_file(m, f=f, log=log, batch_size=batch_size, slice_size=slice_size)
+        bounds_to_file(
+            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
+        )
+        binaries_to_file(
+            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
+        )
         integers_to_file(
             m,
             integer_label=integer_label,
             f=f,
-            log=log,
+            progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
         )
@@ -371,11 +379,11 @@ def objective_write_quadratic_terms_polars(f, df):
     f.write(b"] / 2\n")
 
 
-def objective_to_file_polars(m, f, log=False):
+def objective_to_file_polars(m, f, progress=False):
     """
     Write out the objective of a model to a lp file.
     """
-    if log:
+    if progress:
         logger.info("Writing objective.")
 
     sense = m.objective.sense
@@ -399,7 +407,7 @@ def objective_to_file_polars(m, f, log=False):
         objective_write_quadratic_terms_polars(f, quads)
 
 
-def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
+def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000):
     """
     Write out variables of a model to a lp file.
     """
@@ -408,7 +416,7 @@ def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
         return
 
     f.write(b"\n\nbounds\n\n")
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing continuous variables.",
@@ -437,7 +445,7 @@ def bounds_to_file_polars(m, f, log=False, slice_size=2_000_000):
             formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
+def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000):
     """
     Write out binaries of a model to a lp file.
     """
@@ -446,7 +454,7 @@ def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
         return
 
     f.write(b"\n\nbinary\n\n")
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing binary variables.",
@@ -471,7 +479,7 @@ def binaries_to_file_polars(m, f, log=False, slice_size=2_000_000):
 
 
 def integers_to_file_polars(
-    m, f, log=False, integer_label="general", slice_size=2_000_000
+    m, f, progress=False, integer_label="general", slice_size=2_000_000
 ):
     """
     Write out integers of a model to a lp file.
@@ -481,7 +489,7 @@ def integers_to_file_polars(
         return
 
     f.write(f"\n\n{integer_label}\n\n".encode())
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing integer variables.",
@@ -505,13 +513,13 @@ def integers_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000):
+def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_000_000):
     if not len(m.constraints):
         return
 
     f.write(b"\n\ns.t.\n\n")
     names = m.constraints
-    if log:
+    if progress:
         names = tqdm(
             list(names),
             desc="Writing constraints.",
@@ -559,18 +567,22 @@ def constraints_to_file_polars(m, f, log=False, lazy=False, slice_size=2_000_000
             # formatted.sink_csv(f,  **kwargs)
 
 
-def to_lp_file_polars(m, fn, integer_label="general", slice_size=2_000_000):
-    log = m._xCounter > 10_000
-
+def to_lp_file_polars(
+    m, fn, integer_label="general", slice_size=2_000_000, progress: bool = True
+):
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        objective_to_file_polars(m, f, log=log)
-        constraints_to_file_polars(m, f=f, log=log, slice_size=slice_size)
-        bounds_to_file_polars(m, f=f, log=log, slice_size=slice_size)
-        binaries_to_file_polars(m, f=f, log=log, slice_size=slice_size)
+        objective_to_file_polars(m, f, progress=progress)
+        constraints_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
+        bounds_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
+        binaries_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
         integers_to_file_polars(
-            m, integer_label=integer_label, f=f, log=log, slice_size=slice_size
+            m,
+            integer_label=integer_label,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
         )
         f.write(b"end\n")
 
@@ -583,6 +595,7 @@ def to_file(
     io_api: str | None = None,
     integer_label: str = "general",
     slice_size: int = 2_000_000,
+    progress: bool | None = None,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
@@ -597,10 +610,15 @@ def to_file(
     if io_api is None:
         io_api = fn.suffix[1:]
 
+    if progress is None:
+        progress = m._xCounter > 10_000
+
     if io_api == "lp":
-        to_lp_file(m, fn, integer_label, slice_size=slice_size)
+        to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress)
     elif io_api == "lp-polars":
-        to_lp_file_polars(m, fn, integer_label, slice_size=slice_size)
+        to_lp_file_polars(
+            m, fn, integer_label, slice_size=slice_size, progress=progress
+        )
 
     elif io_api == "mps":
         if "highs" not in solvers.available_solvers:

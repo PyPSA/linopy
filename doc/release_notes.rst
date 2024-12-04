@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * Added a pandas priority attribute. With this change, the operation with pandas objects is now prioritizing linopy objects over pandas objects. This is useful when the using linopy objects in arithmetic operations with pandas objects, e.g. `a * x` where `a` is a pandas Series/DataFrame and `x` is a linopy variable.
+* The method :meth:`model.to_file <linopy.model.Model.to_file>` now includes a progress argument to enable or disable the progress bar while writing.
 
 Version 0.4.2
 --------------
