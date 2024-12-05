@@ -1,8 +1,11 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+Version 0.4.3
+--------------
 
 * When creating slices for variables and constraints (important for the `solve` function), the slicing is now fixed in case now dimension to slice is available.
 * Added a pandas priority attribute. With this change, the operation with pandas objects is now prioritizing linopy objects over pandas objects. This is useful when the using linopy objects in arithmetic operations with pandas objects, e.g. `a * x` where `a` is a pandas Series/DataFrame and `x` is a linopy variable.
