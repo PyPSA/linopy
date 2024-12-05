@@ -523,6 +523,10 @@ def iterate_slices(
 
     # leading dimension (the dimension with the largest size)
     sizes = {dim: ds.sizes[dim] for dim in slice_dims}
+    if not sizes:
+        yield ds
+        return
+
     leading_dim = max(sizes, key=sizes.get)  # type: ignore
     size_of_leading_dim = ds.sizes[leading_dim]
 

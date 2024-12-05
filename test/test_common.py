@@ -522,14 +522,22 @@ def test_iterate_slices_slice_size_none():
         assert ds.equals(s)
 
 
+def test_iterate_slices_empty_slice_dims():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
+        coords={"x": np.arange(10), "y": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=50, slice_dims=[]))
+    assert len(slices) == 1
+    for s in slices:
+        assert ds.equals(s)
+
+
 def test_iterate_slices_invalid_slice_dims():
     ds = xr.Dataset(
         {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
         coords={"x": np.arange(10), "y": np.arange(10)},
     )
-    with pytest.raises(ValueError):
-        list(iterate_slices(ds, slice_size=50, slice_dims=[]))
-
     with pytest.raises(ValueError):
         list(iterate_slices(ds, slice_size=50, slice_dims=["z"]))
 
