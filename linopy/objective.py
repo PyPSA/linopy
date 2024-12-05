@@ -53,6 +53,7 @@ class Objective:
     __slots__ = ("_expression", "_model", "_sense", "_value")
     __array_ufunc__ = None
     __array_priority__ = 10000
+    __pandas_priority__ = 10000
 
     _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
 

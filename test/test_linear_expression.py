@@ -199,6 +199,9 @@ def test_linear_expression_with_multiplication(x):
     expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
     assert isinstance(expr, LinearExpression)
 
+    expr = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0")) * x
+    assert isinstance(expr, LinearExpression)
+
 
 def test_linear_expression_with_addition(m, x, y):
     expr = 10 * x + y
