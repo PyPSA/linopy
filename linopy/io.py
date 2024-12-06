@@ -69,25 +69,30 @@ def print_coord(coord):
     coord = print_coord(coord).translate(coord_sanitizer)
     return coord
 
-
-def print_variable(variables, var):
-    name, coord = variables.get_label_position(var)
-    name = clean_name(name)
-    return f"{name}{print_coord(coord)}"
-
-
-def print_constraint(constraints, var):
-    name, coord = constraints.get_label_position(var)
-    name = clean_name(name)
-    return f"{name}{print_coord(coord)}"
-
-
+def get_print(m: Model, anonymously: bool = True):
+    if anonymously:
+        def print_variable_anonymous(var):
+            return f"x{var}"
+        def print_constraint_anonymous(cons):
+            return f"c{cons}"
+        return print_variable_anonymous, print_constraint_anonynous
+    else:
+        def print_variable(var):
+            name, coord = m.variables.get_label_position(var)
+            name = clean_name(name)
+            return f"{name}{print_coord(coord)}"
+        def print_constraint(constraints, cons):
+            name, coord = m.constraints.get_label_position(cons)
+            name = clean_name(name)
+            return f"{name}{print_coord(coord)}"
+        return print_variable, print_constraint
+        
 def objective_write_linear_terms(
     df: DataFrame,
     f: TextIOWrapper,
     batch: list[Any],
     batch_size: int,
-    variables: Variables,
+    print_variable
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -97,7 +102,7 @@ def objective_write_linear_terms(
     for idx in range(len(coeffs)):
         coeff = coeffs[idx]
         var = vars[idx]
-        name = print_variable(variables, var)
+        name = print_variable(var)
         batch.append(f"{coeff:+.12g} {name}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
@@ -108,7 +113,7 @@ def objective_write_quad_terms(
     f: TextIOWrapper,
     batch: list[str],
     batch_size: int,
-    variables: Variables,
+    print_variable
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -120,8 +125,8 @@ def objective_write_quad_terms(
         coeff = coeffs[idx]
         var1 = vars1[idx]
         var2 = vars2[idx]
-        name1 = print_variable(variables, var1)
-        name2 = print_variable(variables, var2)
+        name1 = print_variable(var1)
+        name2 = print_variable(var2)
         batch.append(f"{coeff:+.12g} {name1} * {name2}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
