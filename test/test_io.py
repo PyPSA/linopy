@@ -131,7 +131,7 @@ def test_to_file_lp_debug(model, tmp_path):
     import gurobipy
 
     fn = tmp_path / "test.lp"
-    model.to_file(fn, io_api='lp-debug')
+    model.to_file(fn, io_api="lp-debug")
 
     gurobipy.read(str(fn))
 

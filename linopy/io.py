@@ -710,7 +710,14 @@ def to_file(
     if io_api == "lp":
         to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress)
     elif io_api == "lp-debug":
-            to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress, anonymously=False)
+        to_lp_file(
+            m,
+            fn,
+            integer_label,
+            slice_size=slice_size,
+            progress=progress,
+            anonymously=False,
+        )
     elif io_api == "lp-polars":
         to_lp_file_polars(
             m, fn, integer_label, slice_size=slice_size, progress=progress
