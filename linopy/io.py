@@ -52,29 +52,42 @@ def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[st
         batch = []  # reset batch
     return batch
 
-name_sanitizer = str.maketrans('-+*^[] ', '_______')
+
+name_sanitizer = str.maketrans("-+*^[] ", "_______")
+
+
 def clean_name(name):
     return name.translate(name_sanitizer)
 
-coord_sanitizer = str.maketrans('[,]', '(,)', ' ')
+
+coord_sanitizer = str.maketrans("[,]", "(,)", " ")
+
+
 def print_coord(coord):
     from linopy.common import print_coord
+
     coord = print_coord(coord).translate(coord_sanitizer)
     return coord
+
 
 def print_variable(variables, var):
     name, coord = variables.get_label_position(var)
     name = clean_name(name)
-    return f'{name}{print_coord(coord)}'
+    return f"{name}{print_coord(coord)}"
+
 
 def print_constraint(constraints, var):
     name, coord = constraints.get_label_position(var)
     name = clean_name(name)
-    return f'{name}{print_coord(coord)}'
+    return f"{name}{print_coord(coord)}"
 
 
 def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, variables: Variables
+    df: DataFrame,
+    f: TextIOWrapper,
+    batch: list[Any],
+    batch_size: int,
+    variables: Variables,
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -91,7 +104,11 @@ def objective_write_linear_terms(
 
 
 def objective_write_quad_terms(
-    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int, variables: Variables
+    quadratic: DataFrame,
+    f: TextIOWrapper,
+    batch: list[str],
+    batch_size: int,
+    variables: Variables,
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -143,7 +160,9 @@ def objective_to_file(
             batch.append("+ [\n")
             quadratic = df[~is_linear]
             quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_quad_terms(quadratic, f, batch, batch_size, m.variables)
+            batch = objective_write_quad_terms(
+                quadratic, f, batch, batch_size, m.variables
+            )
             batch.append("] / 2\n")
 
     if batch:  # write the remaining lines
