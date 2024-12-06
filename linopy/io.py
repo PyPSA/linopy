@@ -26,6 +26,7 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
+from linopy.variables import Variables
 
 if TYPE_CHECKING:
     from highspy.highs import Highs
@@ -51,9 +52,29 @@ def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[st
         batch = []  # reset batch
     return batch
 
+name_sanitizer = str.maketrans('-+*^[] ', '_______')
+def clean_name(name):
+    return name.translate(name_sanitizer)
+
+coord_sanitizer = str.maketrans('[,]', '(,)', ' ')
+def print_coord(coord):
+    from linopy.common import print_coord
+    coord = print_coord(coord).translate(coord_sanitizer)
+    return coord
+
+def print_variable(variables, var):
+    name, coord = variables.get_label_position(var)
+    name = clean_name(name)
+    return f'{name}{print_coord(coord)}'
+
+def print_constraint(constraints, var):
+    name, coord = constraints.get_label_position(var)
+    name = clean_name(name)
+    return f'{name}{print_coord(coord)}'
+
 
 def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int
+    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, variables: Variables
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -63,13 +84,14 @@ def objective_write_linear_terms(
     for idx in range(len(coeffs)):
         coeff = coeffs[idx]
         var = vars[idx]
-        batch.append(f"{coeff:+.12g} x{var}\n")
+        name = print_variable(variables, var)
+        batch.append(f"{coeff:+.12g} {name}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
 
 
 def objective_write_quad_terms(
-    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int
+    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int, variables: Variables
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -81,7 +103,9 @@ def objective_write_quad_terms(
         coeff = coeffs[idx]
         var1 = vars1[idx]
         var2 = vars2[idx]
-        batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
+        name1 = print_variable(variables, var1)
+        name2 = print_variable(variables, var2)
+        batch.append(f"{coeff:+.12g} {name1} * {name2}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
 
@@ -105,7 +129,7 @@ def objective_to_file(
         )
 
     if m.is_linear:
-        batch = objective_write_linear_terms(df, f, [], batch_size)
+        batch = objective_write_linear_terms(df, f, [], batch_size, m.variables)
 
     elif m.is_quadratic:
         is_linear = (df.vars1 == -1) | (df.vars2 == -1)
@@ -113,13 +137,13 @@ def objective_to_file(
         linear = linear.assign(
             vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
         )
-        batch = objective_write_linear_terms(linear, f, [], batch_size)
+        batch = objective_write_linear_terms(linear, f, [], batch_size, m.variables)
 
         if not is_linear.all():
             batch.append("+ [\n")
             quadratic = df[~is_linear]
             quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
+            batch = objective_write_quad_terms(quadratic, f, batch, batch_size, m.variables)
             batch.append("] / 2\n")
 
     if batch:  # write the remaining lines
@@ -166,7 +190,9 @@ def constraints_to_file(
             label = labels[idx]
             coeff = coeffs[idx]
             var = vars[idx]
-            batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
+            name = print_variable(m.variables, var)
+            cname = print_variable(m.constraints, label)
+            batch.append(f"{cname}:\n{coeff:+.12g} {name}\n")
             prev_label = label
             prev_sign = sign[idx]
             prev_rhs = rhs[idx]
@@ -175,15 +201,17 @@ def constraints_to_file(
                 label = labels[idx]
                 coeff = coeffs[idx]
                 var = vars[idx]
+                name = print_variable(m.variables, var)
 
                 if label != prev_label:
+                    cname = print_variable(m.constraints, label)
                     batch.append(
-                        f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
+                        f"{prev_sign} {prev_rhs:+.12g}\n\n{cname}:\n{coeff:+.12g} {name}\n"
                     )
                     prev_sign = sign[idx]
                     prev_rhs = rhs[idx]
                 else:
-                    batch.append(f"{coeff:+.12g} x{var}\n")
+                    batch.append(f"{coeff:+.12g} {name}\n")
 
                 batch = handle_batch(batch, f, batch_size)
 
@@ -231,7 +259,8 @@ def bounds_to_file(
                 label = labels[idx]
                 lower = lowers[idx]
                 upper = uppers[idx]
-                batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
+                name = print_variable(m.variables, label)
+                batch.append(f"{lower:+.12g} <= {name} <= {upper:+.12g}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
@@ -267,7 +296,8 @@ def binaries_to_file(
             df = var_slice.flat
 
             for label in df.labels.values:
-                batch.append(f"x{label}\n")
+                name = print_variable(m.variables, label)
+                batch.append(f"{name}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
@@ -304,7 +334,8 @@ def integers_to_file(
             df = var_slice.flat
 
             for label in df.labels.values:
-                batch.append(f"x{label}\n")
+                name = print_variable(m.variables, label)
+                batch.append(f"{name}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
