@@ -78,7 +78,7 @@ def get_print(m: Model, anonymously: bool = True):
         def print_constraint_anonymous(cons):
             return f"c{cons}"
 
-        return print_variable_anonymous, print_constraint_anonynous
+        return print_variable_anonymous, print_constraint_anonymous
     else:
 
         def print_variable(var):
@@ -86,7 +86,7 @@ def get_print(m: Model, anonymously: bool = True):
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
 
-        def print_constraint(constraints, cons):
+        def print_constraint(cons):
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
@@ -709,6 +709,8 @@ def to_file(
 
     if io_api == "lp":
         to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress)
+    elif io_api == "lp-debug":
+            to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress, anonymously=False)
     elif io_api == "lp-polars":
         to_lp_file_polars(
             m, fn, integer_label, slice_size=slice_size, progress=progress
@@ -726,7 +728,7 @@ def to_file(
         h.writeModel(str(fn))
     else:
         raise ValueError(
-            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
+            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-debug', 'lp-polars' or 'mps'."
         )
 
     return fn

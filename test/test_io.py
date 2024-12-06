@@ -127,6 +127,16 @@ def test_to_file_lp(model, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_lp_debug(model, tmp_path):
+    import gurobipy
+
+    fn = tmp_path / "test.lp"
+    model.to_file(fn, io_api='lp-debug')
+
+    gurobipy.read(str(fn))
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_file_lp_None(model):
     import gurobipy
 

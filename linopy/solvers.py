@@ -43,7 +43,7 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
-FILE_IO_APIS = ["lp", "lp-polars", "mps"]
+FILE_IO_APIS = ["lp", "lp-debug", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
 available_solvers = []
