@@ -26,7 +26,6 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
-from linopy.variables import Variables
 
 if TYPE_CHECKING:
     from highspy.highs import Highs
@@ -69,30 +68,34 @@ def print_coord(coord):
     coord = print_coord(coord).translate(coord_sanitizer)
     return coord
 
+
 def get_print(m: Model, anonymously: bool = True):
     if anonymously:
+
         def print_variable_anonymous(var):
             return f"x{var}"
+
         def print_constraint_anonymous(cons):
             return f"c{cons}"
+
         return print_variable_anonymous, print_constraint_anonynous
     else:
+
         def print_variable(var):
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
+
         def print_constraint(constraints, cons):
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
+
         return print_variable, print_constraint
-        
+
+
 def objective_write_linear_terms(
-    df: DataFrame,
-    f: TextIOWrapper,
-    batch: list[Any],
-    batch_size: int,
-    print_variable
+    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, print_variable
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -113,7 +116,7 @@ def objective_write_quad_terms(
     f: TextIOWrapper,
     batch: list[str],
     batch_size: int,
-    print_variable
+    print_variable,
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -133,14 +136,18 @@ def objective_write_quad_terms(
 
 
 def objective_to_file(
-    m: Model, f: TextIOWrapper, progress: bool = False, batch_size: int = 10000, printers=None
+    m: Model,
+    f: TextIOWrapper,
+    progress: bool = False,
+    batch_size: int = 10000,
+    printers=None,
 ) -> None:
     """
     Write out the objective of a model to a lp file.
     """
     if progress:
         logger.info("Writing objective.")
-        
+
     print_variable, _ = printers
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n")
@@ -181,11 +188,11 @@ def constraints_to_file(
     progress: bool = False,
     batch_size: int = 50_000,
     slice_size: int = 100_000,
-    printers=None
+    printers=None,
 ) -> None:
     if not len(m.constraints):
         return
-        
+
     print_variable, print_constraint = printers
 
     f.write("\n\ns.t.\n\n")
@@ -257,7 +264,7 @@ def bounds_to_file(
     progress: bool = False,
     batch_size: int = 10000,
     slice_size: int = 100_000,
-    printers=None
+    printers=None,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -265,7 +272,7 @@ def bounds_to_file(
     names: Iterable = list(m.variables.continuous) + list(m.variables.integers)
     if not len(list(names)):
         return
-        
+
     print_variable, _ = printers
 
     f.write("\n\nbounds\n\n")
@@ -304,7 +311,7 @@ def binaries_to_file(
     progress: bool = False,
     batch_size: int = 1000,
     slice_size: int = 100_000,
-    printers=None
+    printers=None,
 ) -> None:
     """
     Write out binaries of a model to a lp file.
@@ -312,7 +319,7 @@ def binaries_to_file(
     names: Iterable = m.variables.binaries
     if not len(list(names)):
         return
-        
+
     print_variable, _ = printers
 
     f.write("\n\nbinary\n\n")
@@ -345,7 +352,7 @@ def integers_to_file(
     batch_size: int = 1000,
     slice_size: int = 100_000,
     integer_label: str = "general",
-    printers=None
+    printers=None,
 ) -> None:
     """
     Write out integers of a model to a lp file.
@@ -353,7 +360,7 @@ def integers_to_file(
     names: Iterable = m.variables.integers
     if not len(list(names)):
         return
-    
+
     print_variable, _ = printers
 
     f.write(f"\n\n{integer_label}\n\n")
@@ -388,7 +395,7 @@ def to_lp_file(
     anonymously: bool = True,
 ) -> None:
     batch_size = 5000
-    
+
     printers = get_print(m, anonymously)
 
     with open(fn, mode="w") as f:
@@ -399,13 +406,28 @@ def to_lp_file(
 
         objective_to_file(m, f, progress=progress, printers=printers)
         constraints_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         bounds_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         binaries_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         integers_to_file(
             m,
