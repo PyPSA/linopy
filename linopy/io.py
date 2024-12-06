@@ -26,7 +26,6 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
-from linopy.variables import Variables
 
 if TYPE_CHECKING:
     from highspy.highs import Highs
@@ -69,30 +68,34 @@ def print_coord(coord):
     coord = print_coord(coord).translate(coord_sanitizer)
     return coord
 
+
 def get_print(m: Model, anonymously: bool = True):
     if anonymously:
+
         def print_variable_anonymous(var):
             return f"x{var}"
+
         def print_constraint_anonymous(cons):
             return f"c{cons}"
+
         return print_variable_anonymous, print_constraint_anonynous
     else:
+
         def print_variable(var):
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
+
         def print_constraint(constraints, cons):
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}"
+
         return print_variable, print_constraint
-        
+
+
 def objective_write_linear_terms(
-    df: DataFrame,
-    f: TextIOWrapper,
-    batch: list[Any],
-    batch_size: int,
-    print_variable
+    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, print_variable
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -113,7 +116,7 @@ def objective_write_quad_terms(
     f: TextIOWrapper,
     batch: list[str],
     batch_size: int,
-    print_variable
+    print_variable,
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
