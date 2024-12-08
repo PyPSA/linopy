@@ -382,8 +382,6 @@ class Model:
                 "Added data contains unsupported dimension names. "
                 "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign' or 'rhs'."
             )
-        else:
-            return
 
     def add_variables(
         self,
