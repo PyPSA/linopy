@@ -357,7 +357,7 @@ class Model:
         else:
             return
 
-    def check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
+    def _check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
         """
         Ensure that the added data does not lead to a naming conflict.
 
