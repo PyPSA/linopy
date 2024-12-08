@@ -490,7 +490,7 @@ class Model:
         )
         (data,) = xr.broadcast(data)
         self.check_force_dim_names(data)
-        self.check_valid_dim_names(data)
+        self._check_valid_dim_names(data)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
