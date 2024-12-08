@@ -377,10 +377,7 @@ class Model:
         None.
         """
         unsupported_dim_names = ["labels", "coeffs", "vars", "sign", "rhs"]
-        contains_unsupported_dim_names = any(
-            dim in unsupported_dim_names for dim in list(ds.dims)
-        )
-        if contains_unsupported_dim_names:
+        if any(dim in unsupported_dim_names for dim in ds.dims):
             raise ValueError(
                 "Added data contains unsupported dimension names. "
                 "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign' or 'rhs'."
