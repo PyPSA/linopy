@@ -16,6 +16,8 @@ import linopy
 import linopy.variables
 from linopy import Model
 
+idx = pd.IndexSlice
+
 
 @pytest.fixture
 def m():
@@ -23,6 +25,10 @@ def m():
     m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
     m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
     m.add_variables(0, 10, name="z")
+    multiindex = pd.MultiIndex.from_product(
+        [[1, 2, 3], [1, 2, 3]], names=["first", "second"]
+    )
+    m.add_variables(coords=[multiindex], name="w")
     return m
 
 
@@ -34,6 +40,16 @@ def x(m):
 @pytest.fixture
 def z(m):
     return m.variables["z"]
+
+
+@pytest.fixture
+def y(m):
+    return m.variables["y"]
+
+
+@pytest.fixture
+def w(m):
+    return m.variables["w"]
 
 
 def test_variable_repr(x):
@@ -102,6 +118,51 @@ def test_variable_getter_invalid_shape(x):
 
 def test_variable_loc(x):
     assert isinstance(x.loc[[1, 2, 3]], linopy.Variable)
+
+
+def test_variable_loc_with_slice(x):
+    res = x.loc[1:3]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 3
+
+
+def test_variable_loc_with_step(x):
+    res = x.loc[1:3:2]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 2
+
+
+def test_variable_multiindex(w):
+    """
+    Test the linopy.Variable.loc method with a multiindex.
+
+    For now, have to pass a explicit tuple to the loc method.
+    Otherwise, the method will interpret the tuple a set of indices
+    for individual dimensions.
+
+    TODO: Point out if we can this in the future.
+    """
+    res = w.loc[idx[1, 1],]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 1
+
+
+def test_variable_multiindex_with_slice(w):
+    res = w.loc[idx[1, 1:3],]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 3
+
+
+def test_variable_multiindex_with_step(w):
+    res = w.loc[idx[1, 1:3:2],]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 2
+
+
+def test_variable_multiindex_select_second_level(w):
+    res = w.loc[idx[:, 1],]
+    assert isinstance(res, linopy.Variable)
+    assert res.size == 3
 
 
 def test_variable_sel(x):
