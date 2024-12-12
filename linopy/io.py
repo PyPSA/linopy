@@ -52,8 +52,50 @@ def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[st
     return batch
 
 
+name_sanitizer = str.maketrans("-+*^[] ", "_______")
+
+
+def clean_name(name):
+    return name.translate(name_sanitizer)
+
+
+coord_sanitizer = str.maketrans("[,]", "(,)", " ")
+
+
+def print_coord(coord):
+    from linopy.common import print_coord
+
+    coord = print_coord(coord).translate(coord_sanitizer)
+    return coord
+
+
+def get_print(m: Model, anonymously: bool = True):
+    if anonymously:
+
+        def print_variable_anonymous(var):
+            return f"x{var}"
+
+        def print_constraint_anonymous(cons):
+            return f"c{cons}"
+
+        return print_variable_anonymous, print_constraint_anonymous
+    else:
+
+        def print_variable(var):
+            name, coord = m.variables.get_label_position(var)
+            name = clean_name(name)
+            return f"{name}{print_coord(coord)}"
+
+        def print_constraint(cons):
+            name, coord = m.constraints.get_label_position(cons)
+            name = clean_name(name)
+            return f"{name}{print_coord(coord)}"
+
+        return print_variable, print_constraint
+
+
 def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int
+    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, print_variable
 ) -> list[str | Any]:
     """
     Write the linear terms of the objective to a file.
@@ -63,13 +105,18 @@ def objective_write_linear_terms(
     for idx in range(len(coeffs)):
         coeff = coeffs[idx]
         var = vars[idx]
-        batch.append(f"{coeff:+.12g} x{var}\n")
+        name = print_variable(var)
+        batch.append(f"{coeff:+.12g} {name}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
 
 
 def objective_write_quad_terms(
-    quadratic: DataFrame, f: TextIOWrapper, batch: list[str], batch_size: int
+    quadratic: DataFrame,
+    f: TextIOWrapper,
+    batch: list[str],
+    batch_size: int,
+    print_variable,
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -81,13 +128,19 @@ def objective_write_quad_terms(
         coeff = coeffs[idx]
         var1 = vars1[idx]
         var2 = vars2[idx]
-        batch.append(f"{coeff:+.12g} x{var1} * x{var2}\n")
+        name1 = print_variable(var1)
+        name2 = print_variable(var2)
+        batch.append(f"{coeff:+.12g} {name1} * {name2}\n")
         batch = handle_batch(batch, f, batch_size)
     return batch
 
 
 def objective_to_file(
-    m: Model, f: TextIOWrapper, progress: bool = False, batch_size: int = 10000
+    m: Model,
+    f: TextIOWrapper,
+    progress: bool = False,
+    batch_size: int = 10000,
+    printers=None,
 ) -> None:
     """
     Write out the objective of a model to a lp file.
@@ -95,6 +148,7 @@ def objective_to_file(
     if progress:
         logger.info("Writing objective.")
 
+    print_variable, _ = printers
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n")
     df = m.objective.flat
@@ -105,7 +159,7 @@ def objective_to_file(
         )
 
     if m.is_linear:
-        batch = objective_write_linear_terms(df, f, [], batch_size)
+        batch = objective_write_linear_terms(df, f, [], batch_size, print_variable)
 
     elif m.is_quadratic:
         is_linear = (df.vars1 == -1) | (df.vars2 == -1)
@@ -113,13 +167,15 @@ def objective_to_file(
         linear = linear.assign(
             vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
         )
-        batch = objective_write_linear_terms(linear, f, [], batch_size)
+        batch = objective_write_linear_terms(linear, f, [], batch_size, print_variable)
 
         if not is_linear.all():
             batch.append("+ [\n")
             quadratic = df[~is_linear]
             quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_quad_terms(quadratic, f, batch, batch_size)
+            batch = objective_write_quad_terms(
+                quadratic, f, batch, batch_size, print_variable
+            )
             batch.append("] / 2\n")
 
     if batch:  # write the remaining lines
@@ -132,9 +188,12 @@ def constraints_to_file(
     progress: bool = False,
     batch_size: int = 50_000,
     slice_size: int = 100_000,
+    printers=None,
 ) -> None:
     if not len(m.constraints):
         return
+
+    print_variable, print_constraint = printers
 
     f.write("\n\ns.t.\n\n")
     names: Iterable = m.constraints
@@ -166,7 +225,9 @@ def constraints_to_file(
             label = labels[idx]
             coeff = coeffs[idx]
             var = vars[idx]
-            batch.append(f"c{label}:\n{coeff:+.12g} x{var}\n")
+            name = print_variable(var)
+            cname = print_constraint(label)
+            batch.append(f"{cname}:\n{coeff:+.12g} {name}\n")
             prev_label = label
             prev_sign = sign[idx]
             prev_rhs = rhs[idx]
@@ -175,15 +236,17 @@ def constraints_to_file(
                 label = labels[idx]
                 coeff = coeffs[idx]
                 var = vars[idx]
+                name = print_variable(var)
 
                 if label != prev_label:
+                    cname = print_constraint(label)
                     batch.append(
-                        f"{prev_sign} {prev_rhs:+.12g}\n\nc{label}:\n{coeff:+.12g} x{var}\n"
+                        f"{prev_sign} {prev_rhs:+.12g}\n\n{cname}:\n{coeff:+.12g} {name}\n"
                     )
                     prev_sign = sign[idx]
                     prev_rhs = rhs[idx]
                 else:
-                    batch.append(f"{coeff:+.12g} x{var}\n")
+                    batch.append(f"{coeff:+.12g} {name}\n")
 
                 batch = handle_batch(batch, f, batch_size)
 
@@ -201,6 +264,7 @@ def bounds_to_file(
     progress: bool = False,
     batch_size: int = 10000,
     slice_size: int = 100_000,
+    printers=None,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -208,6 +272,8 @@ def bounds_to_file(
     names: Iterable = list(m.variables.continuous) + list(m.variables.integers)
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write("\n\nbounds\n\n")
     if progress:
@@ -231,7 +297,8 @@ def bounds_to_file(
                 label = labels[idx]
                 lower = lowers[idx]
                 upper = uppers[idx]
-                batch.append(f"{lower:+.12g} <= x{label} <= {upper:+.12g}\n")
+                name = print_variable(label)
+                batch.append(f"{lower:+.12g} <= {name} <= {upper:+.12g}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
@@ -244,6 +311,7 @@ def binaries_to_file(
     progress: bool = False,
     batch_size: int = 1000,
     slice_size: int = 100_000,
+    printers=None,
 ) -> None:
     """
     Write out binaries of a model to a lp file.
@@ -251,6 +319,8 @@ def binaries_to_file(
     names: Iterable = m.variables.binaries
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write("\n\nbinary\n\n")
     if progress:
@@ -267,7 +337,8 @@ def binaries_to_file(
             df = var_slice.flat
 
             for label in df.labels.values:
-                batch.append(f"x{label}\n")
+                name = print_variable(label)
+                batch.append(f"{name}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
@@ -281,6 +352,7 @@ def integers_to_file(
     batch_size: int = 1000,
     slice_size: int = 100_000,
     integer_label: str = "general",
+    printers=None,
 ) -> None:
     """
     Write out integers of a model to a lp file.
@@ -288,6 +360,8 @@ def integers_to_file(
     names: Iterable = m.variables.integers
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write(f"\n\n{integer_label}\n\n")
     if progress:
@@ -304,7 +378,8 @@ def integers_to_file(
             df = var_slice.flat
 
             for label in df.labels.values:
-                batch.append(f"x{label}\n")
+                name = print_variable(label)
+                batch.append(f"{name}\n")
                 batch = handle_batch(batch, f, batch_size)
 
     if batch:  # write the remaining lines
@@ -317,8 +392,11 @@ def to_lp_file(
     integer_label: str,
     slice_size: int = 10_000_000,
     progress: bool = True,
+    anonymously: bool = True,
 ) -> None:
     batch_size = 5000
+
+    printers = get_print(m, anonymously)
 
     with open(fn, mode="w") as f:
         start = time.time()
@@ -326,15 +404,30 @@ def to_lp_file(
         if isinstance(f, int):
             raise ValueError("File not found.")
 
-        objective_to_file(m, f, progress=progress)
+        objective_to_file(m, f, progress=progress, printers=printers)
         constraints_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         bounds_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         binaries_to_file(
-            m, f=f, progress=progress, batch_size=batch_size, slice_size=slice_size
+            m,
+            f=f,
+            progress=progress,
+            batch_size=batch_size,
+            slice_size=slice_size,
+            printers=printers,
         )
         integers_to_file(
             m,
@@ -343,6 +436,7 @@ def to_lp_file(
             progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
+            printers=printers,
         )
         f.write("end\n")
 
@@ -615,6 +709,15 @@ def to_file(
 
     if io_api == "lp":
         to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress)
+    elif io_api == "lp-debug":
+        to_lp_file(
+            m,
+            fn,
+            integer_label,
+            slice_size=slice_size,
+            progress=progress,
+            anonymously=False,
+        )
     elif io_api == "lp-polars":
         to_lp_file_polars(
             m, fn, integer_label, slice_size=slice_size, progress=progress
@@ -632,7 +735,7 @@ def to_file(
         h.writeModel(str(fn))
     else:
         raise ValueError(
-            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
+            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-debug', 'lp-polars' or 'mps'."
         )
 
     return fn
