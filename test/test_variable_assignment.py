@@ -131,6 +131,15 @@ def test_variable_assignment_without_coords_and_dims_names():
     assert x.dims == ("i", "j")
 
 
+def test_variable_assignment_without_coords_and_invalid_dims_names():
+    # setting bounds without explicit coords
+    m = Model()
+    lower = np.zeros((10, 10))
+    upper = np.ones((10, 10))
+    with pytest.raises(ValueError):
+        m.add_variables(lower, upper, name="x", dims=["sign", "j"])
+
+
 def test_variable_assignment_without_coords_in_bounds():
     # setting bounds without explicit coords
     m = Model()
@@ -139,6 +148,15 @@ def test_variable_assignment_without_coords_in_bounds():
     x = m.add_variables(lower, upper, name="x")
     assert x.shape == target_shape
     assert x.dims == ("i", "j")
+
+
+def test_variable_assignment_without_coords_in_bounds_invalid_dims_names():
+    # setting bounds without explicit coords
+    m = Model()
+    lower = xr.DataArray(np.zeros((10, 10)), dims=["i", "sign"])
+    upper = xr.DataArray(np.ones((10, 10)), dims=["i", "sign"])
+    with pytest.raises(ValueError):
+        m.add_variables(lower, upper, name="x")
 
 
 def test_variable_assignment_without_coords_pandas_types():
