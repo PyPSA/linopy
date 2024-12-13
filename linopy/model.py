@@ -1137,7 +1137,9 @@ class Model:
                 )
             else:
                 if solver_name in ["glpk", "cbc"] and with_names:
-                    logger.warning(f"{solver_name} does not support writing names to lp files, disabling it.")
+                    logger.warning(
+                        f"{solver_name} does not support writing names to lp files, disabling it."
+                    )
                     with_names = False
                 problem_fn = self.to_file(
                     to_path(problem_fn),

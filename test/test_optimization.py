@@ -4,6 +4,7 @@ Created on Thu Mar 18 08:49:08 2021.
 
 @author: fabian
 """
+
 import itertools
 import logging
 import platform
@@ -30,9 +31,11 @@ if "highs" in available_solvers:
 
 params = [
     (name, io_api, with_names)
-        for (name, io_api, with_names) in list(itertools.product(available_solvers, io_apis, with_names))
-        if "lp" in io_api or with_names == False
-    ]
+    for (name, io_api, with_names) in list(
+        itertools.product(available_solvers, io_apis, with_names)
+    )
+    if "lp" in io_api or with_names == False
+]
 
 direct_solvers = ["gurobi", "highs", "mosek"]
 for solver in direct_solvers:
@@ -376,8 +379,12 @@ def test_default_setting_expression_sol_accessor(model, solver, io_api, with_nam
 
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
-def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api, with_names):
-    status, condition = model_anonymous_constraint.solve(solver, io_api=io_api, with_names=with_names)
+def test_anonymous_constraint(
+    model, model_anonymous_constraint, solver, io_api, with_names
+):
+    status, condition = model_anonymous_constraint.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert status == "ok"
     assert np.isclose(model_anonymous_constraint.objective.value, 3.3)
 
@@ -402,7 +409,9 @@ def test_model_maximization(model_maximization, solver, io_api, with_names):
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
 def test_default_settings_chunked(model_chunked, solver, io_api, with_names):
-    status, condition = model_chunked.solve(solver, io_api=io_api, with_names=with_names)
+    status, condition = model_chunked.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert status == "ok"
     assert np.isclose(model_chunked.objective.value, 3.3)
 
@@ -410,7 +419,9 @@ def test_default_settings_chunked(model_chunked, solver, io_api, with_names):
 @pytest.mark.parametrize("solver,io_api,with_names", params)
 def test_default_settings_small_slices(model, solver, io_api, with_names):
     assert model.objective.sense == "min"
-    status, condition = model.solve(solver, io_api=io_api, with_names=with_names, slice_size=2)
+    status, condition = model.solve(
+        solver, io_api=io_api, with_names=with_names, slice_size=2
+    )
     assert status == "ok"
     assert np.isclose(model.objective.value, 3.3)
     assert model.solver_name == solver
@@ -430,20 +441,30 @@ def test_solver_options(model, solver, io_api, with_names):
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }
-    status, condition = model.solve(solver, io_api=io_api, with_names=with_names, **time_limit_option[solver])
+    status, condition = model.solve(
+        solver, io_api=io_api, with_names=with_names, **time_limit_option[solver]
+    )
     assert status == "ok"
 
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
-def test_duplicated_variables(model_with_duplicated_variables, solver, io_api, with_names):
-    status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api, with_names=with_names)
+def test_duplicated_variables(
+    model_with_duplicated_variables, solver, io_api, with_names
+):
+    status, condition = model_with_duplicated_variables.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert status == "ok"
     assert all(model_with_duplicated_variables.solution["x"] == 5)
 
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
-def test_non_aligned_variables(model_with_non_aligned_variables, solver, io_api, with_names):
-    status, condition = model_with_non_aligned_variables.solve(solver, io_api=io_api, with_names=with_names)
+def test_non_aligned_variables(
+    model_with_non_aligned_variables, solver, io_api, with_names
+):
+    status, condition = model_with_non_aligned_variables.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert status == "ok"
     with pytest.warns(UserWarning):
         assert model_with_non_aligned_variables.solution["x"][0] == 0
@@ -509,7 +530,9 @@ def test_infeasible_model(model, solver, io_api, with_names):
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
 def test_model_with_inf(model_with_inf, solver, io_api, with_names):
-    status, condition = model_with_inf.solve(solver, io_api=io_api, with_names=with_names)
+    status, condition = model_with_inf.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert condition == "optimal"
     assert (model_with_inf.solution.x == 0).all()
     assert (model_with_inf.solution.y == 10).all()
@@ -519,7 +542,9 @@ def test_model_with_inf(model_with_inf, solver, io_api, with_names):
     "solver,io_api,with_names", [p for p in params if p[0] not in ["mindopt"]]
 )
 def test_milp_binary_model(milp_binary_model, solver, io_api, with_names):
-    status, condition = milp_binary_model.solve(solver, io_api=io_api, with_names=with_names)
+    status, condition = milp_binary_model.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert condition == "optimal"
     assert (
         (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
@@ -530,7 +555,9 @@ def test_milp_binary_model(milp_binary_model, solver, io_api, with_names):
     "solver,io_api,with_names", [p for p in params if p[0] not in ["mindopt"]]
 )
 def test_milp_binary_model_r(milp_binary_model_r, solver, io_api, with_names):
-    status, condition = milp_binary_model_r.solve(solver, io_api=io_api, with_names=with_names)
+    status, condition = milp_binary_model_r.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert condition == "optimal"
     assert (
         (milp_binary_model_r.solution.x == 1) | (milp_binary_model_r.solution.x == 0)
@@ -553,18 +580,26 @@ def test_milp_model_r(milp_model_r, solver, io_api, with_names):
     # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
     # skip it
     if io_api != "mps":
-        status, condition = milp_model_r.solve(solver, io_api=io_api, with_names=with_names)
+        status, condition = milp_model_r.solve(
+            solver, io_api=io_api, with_names=with_names
+        )
         assert condition == "optimal"
         assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
 @pytest.mark.parametrize(
     "solver,io_api,with_names",
-    [p for p in params if (p[0],p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [
+        p
+        for p in params
+        if (p[0], p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]
+    ],
 )
 def test_quadratic_model(quadratic_model, solver, io_api, with_names):
     if solver in feasible_quadratic_solvers:
-        status, condition = quadratic_model.solve(solver, io_api=io_api, with_names=with_names)
+        status, condition = quadratic_model.solve(
+            solver, io_api=io_api, with_names=with_names
+        )
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
         assert (quadratic_model.solution.y.round(3) >= 10).all()
@@ -576,28 +611,44 @@ def test_quadratic_model(quadratic_model, solver, io_api, with_names):
 
 @pytest.mark.parametrize(
     "solver,io_api,with_names",
-    [p for p in params if (p[0],p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [
+        p
+        for p in params
+        if (p[0], p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]
+    ],
 )
-def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api, with_names):
+def test_quadratic_model_cross_terms(
+    quadratic_model_cross_terms, solver, io_api, with_names
+):
     if solver in feasible_quadratic_solvers:
-        status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api, with_names=with_names)
+        status, condition = quadratic_model_cross_terms.solve(
+            solver, io_api=io_api, with_names=with_names
+        )
         assert condition == "optimal"
         assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
         assert (quadratic_model_cross_terms.solution.y.round(3) == 8.5).all()
         assert round(quadratic_model_cross_terms.objective.value, 3) == 77.5
     else:
         with pytest.raises(ValueError):
-            quadratic_model_cross_terms.solve(solver, io_api=io_api, with_names=with_names)
+            quadratic_model_cross_terms.solve(
+                solver, io_api=io_api, with_names=with_names
+            )
 
 
 @pytest.mark.parametrize(
     "solver,io_api,with_names",
-    [p for p in params if (p[0],p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [
+        p
+        for p in params
+        if (p[0], p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]
+    ],
 )
 def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api, with_names):
     quadratic_model.constraints.remove("con0")
     if solver in feasible_quadratic_solvers:
-        status, condition = quadratic_model.solve(solver, io_api=io_api, with_names=with_names)
+        status, condition = quadratic_model.solve(
+            solver, io_api=io_api, with_names=with_names
+        )
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
         assert round(quadratic_model.objective.value, 3) == 0
@@ -608,22 +659,34 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api, with_nam
 
 @pytest.mark.parametrize(
     "solver,io_api,with_names",
-    [p for p in params if (p[0],p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
+    [
+        p
+        for p in params
+        if (p[0], p[1]) not in [("mindopt", "lp"), ("mindopt", "lp-polars")]
+    ],
 )
-def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api, with_names):
+def test_quadratic_model_unbounded(
+    quadratic_model_unbounded, solver, io_api, with_names
+):
     if solver in feasible_quadratic_solvers:
-        status, condition = quadratic_model_unbounded.solve(solver, io_api=io_api, with_names=with_names)
+        status, condition = quadratic_model_unbounded.solve(
+            solver, io_api=io_api, with_names=with_names
+        )
         assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
     else:
         with pytest.raises(ValueError):
-            quadratic_model_unbounded.solve(solver, io_api=io_api, with_names=with_names)
+            quadratic_model_unbounded.solve(
+                solver, io_api=io_api, with_names=with_names
+            )
 
 
 @pytest.mark.parametrize(
     "solver,io_api,with_names", [p for p in params if p[0] not in ["mindopt"]]
 )
 def test_modified_model(modified_model, solver, io_api, with_names):
-    status, condition = modified_model.solve(solver, io_api=io_api, with_names=with_names)
+    status, condition = modified_model.solve(
+        solver, io_api=io_api, with_names=with_names
+    )
     assert condition == "optimal"
     assert (modified_model.solution.x == 0).all()
     assert (modified_model.solution.y == 10).all()
@@ -657,9 +720,13 @@ def test_basis_and_warmstart(tmp_path, model, solver, io_api, with_names):
 
 
 @pytest.mark.parametrize("solver,io_api,with_names", params)
-def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, with_names, tmp_path):
+def test_solution_fn_parent_dir_doesnt_exist(
+    model, solver, io_api, with_names, tmp_path
+):
     solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
-    status, condition = model.solve(solver, io_api=io_api, with_names=with_names, solution_fn=solution_fn)
+    status, condition = model.solve(
+        solver, io_api=io_api, with_names=with_names, solution_fn=solution_fn
+    )
     assert status == "ok"
 
 
@@ -697,7 +764,9 @@ def test_model_resolve(model, solver, io_api, with_names):
     assert np.isclose(model.objective.value, 5.25)
 
 
-@pytest.mark.parametrize("solver,io_api,with_names", [p for p in params if "direct" not in p])
+@pytest.mark.parametrize(
+    "solver,io_api,with_names", [p for p in params if "direct" not in p]
+)
 def test_solver_classes_from_problem_file(model, solver, io_api, with_names):
     # first test initialization of super class. Should not be possible to initialize
     with pytest.raises(TypeError):

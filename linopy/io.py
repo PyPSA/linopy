@@ -71,6 +71,7 @@ def print_coord(coord):
 
 def get_printers(m: Model, for_polars: bool = False, with_names: bool = False):
     if with_names:
+
         def print_variable(var):
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
@@ -82,16 +83,21 @@ def get_printers(m: Model, for_polars: bool = False, with_names: bool = False):
             return f"{name}{print_coord(coord)}#{cons}"
 
         def print_variable_polars(series):
-            return pl.lit(" "), series.map_elements(print_variable, return_dtype=pl.String)
+            return pl.lit(" "), series.map_elements(
+                print_variable, return_dtype=pl.String
+            )
 
         def print_constraint_polars(series):
-            return pl.lit(None), series.map_elements(print_constraint, return_dtype=pl.String)
+            return pl.lit(None), series.map_elements(
+                print_constraint, return_dtype=pl.String
+            )
 
         if for_polars:
             return print_variable_polars, print_constraint_polars
         else:
             return print_variable, print_constraint
     else:
+
         def print_variable(var):
             return f"x{var}"
 
@@ -408,7 +414,7 @@ def to_lp_file(
     integer_label: str,
     slice_size: int = 10_000_000,
     progress: bool = True,
-    printers = None,
+    printers=None,
 ) -> None:
     batch_size = 5000
 
@@ -625,7 +631,9 @@ def integers_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_000_000, printers=None):
+def constraints_to_file_polars(
+    m, f, progress=False, lazy=False, slice_size=2_000_000, printers=None
+):
     if not len(m.constraints):
         return
 
@@ -695,16 +703,22 @@ def to_lp_file_polars(
         start = time.time()
 
         objective_to_file_polars(m, f, progress=progress, printers=printers)
-        constraints_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
-        bounds_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
-        binaries_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
+        constraints_to_file_polars(
+            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+        )
+        bounds_to_file_polars(
+            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+        )
+        binaries_to_file_polars(
+            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+        )
         integers_to_file_polars(
             m,
             integer_label=integer_label,
             f=f,
             progress=progress,
             slice_size=slice_size,
-            printers = printers,
+            printers=printers,
         )
         f.write(b"end\n")
 
@@ -736,13 +750,25 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
-    printers = get_printers(m, for_polars=io_api=="lp-polars", with_names=with_names)
+    printers = get_printers(m, for_polars=io_api == "lp-polars", with_names=with_names)
 
     if io_api == "lp":
-        to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress, printers=printers)
+        to_lp_file(
+            m,
+            fn,
+            integer_label,
+            slice_size=slice_size,
+            progress=progress,
+            printers=printers,
+        )
     elif io_api == "lp-polars":
         to_lp_file_polars(
-            m, fn, integer_label, slice_size=slice_size, progress=progress, printers=printers
+            m,
+            fn,
+            integer_label,
+            slice_size=slice_size,
+            progress=progress,
+            printers=printers,
         )
 
     elif io_api == "mps":
