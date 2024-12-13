@@ -1125,8 +1125,6 @@ class Model:
                 **solver_options,
             )
             if io_api == "direct":
-                if with_names:
-                    logger.warning("Passing variable and constraint names is only supported with lp files")
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,
@@ -1135,8 +1133,12 @@ class Model:
                     warmstart_fn=to_path(warmstart_fn),
                     basis_fn=to_path(basis_fn),
                     env=env,
+                    with_names=with_names,
                 )
             else:
+                if solver_name in ["glpk", "cbc"] and with_names:
+                    logger.warning(f"{solver_name} does not support writing names to lp files, disabling it.")
+                    with_names = False
                 problem_fn = self.to_file(
                     to_path(problem_fn),
                     io_api=io_api,

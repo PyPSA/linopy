@@ -69,48 +69,45 @@ def print_coord(coord):
     return coord
 
 
-def get_printers(m: Model, io_api: str, anonymously: bool = True):
-    if anonymously:
-        if io_api == "lp":
-            def print_variable_anonymous(var):
-                return f"x{var}"
-
-            def print_constraint_anonymous(cons):
-                return f"c{cons}"
-
-        elif io_api == "lp-polars":
-            def print_variable_anonymous(series):
-                return pl.lit(" x").alias("x"), series.cast(pl.String)
-
-            def print_constraint_anonymous(series):
-                return pl.lit("c").alias("c"), series.cast(pl.String)
-        else:
-            return None
-
-        return print_variable_anonymous, print_constraint_anonymous
-    else:
-        def print_variable_lp(var):
+def get_printers(m: Model, for_polars: bool = False, with_names: bool = False):
+    if with_names:
+        def print_variable(var):
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}#{var}"
 
-        def print_constraint_lp(cons):
+        def print_constraint(cons):
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}#{cons}"
 
         def print_variable_polars(series):
-            return pl.lit(" "), series.map_elements(print_variable_lp, return_dtype=pl.String)
+            return pl.lit(" "), series.map_elements(print_variable, return_dtype=pl.String)
 
         def print_constraint_polars(series):
-            return pl.lit(None), series.map_elements(print_constraint_lp, return_dtype=pl.String)
+            return pl.lit(None), series.map_elements(print_constraint, return_dtype=pl.String)
 
-        if io_api == "lp":
-            return print_variable_lp, print_constraint_lp
-        elif io_api == "lp-polars":
+        if for_polars:
             return print_variable_polars, print_constraint_polars
         else:
-            return None
+            return print_variable, print_constraint
+    else:
+        def print_variable(var):
+            return f"x{var}"
+
+        def print_constraint(cons):
+            return f"c{cons}"
+
+        def print_variable_polars(series):
+            return pl.lit(" x").alias("x"), series.cast(pl.String)
+
+        def print_constraint_polars(series):
+            return pl.lit("c").alias("c"), series.cast(pl.String)
+
+        if for_polars:
+            return print_variable_polars, print_constraint_polars
+        else:
+            return print_variable, print_constraint
 
 
 def objective_write_linear_terms(
@@ -739,9 +736,7 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
-    printers = get_printers(m, io_api, anonymously=not with_names)
-    if with_names and io_api not in ["lp", "lp-polars"]:
-        logger.warning("Debug names are only supported for LP files.")
+    printers = get_printers(m, for_polars=io_api=="lp-polars", with_names=with_names)
 
     if io_api == "lp":
         to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress, printers=printers)
@@ -758,7 +753,7 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy()
+        h = m.to_highspy(with_names=with_names)
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -768,7 +763,7 @@ def to_file(
     return fn
 
 
-def to_mosek(m: Model, task: Any | None = None) -> Any:
+def to_mosek(m: Model, task: Any | None = None, with_names: bool = False) -> Any:
     """
     Export model to MOSEK.
 
@@ -786,6 +781,8 @@ def to_mosek(m: Model, task: Any | None = None) -> Any:
 
     import mosek
 
+    print_variable, print_constraint = get_printers(m, with_names=with_names)
+
     if task is None:
         task = mosek.Task()
 
@@ -796,9 +793,9 @@ def to_mosek(m: Model, task: Any | None = None) -> Any:
     # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
     #    task.putvarname(j, n)
 
-    labels = M.vlabels.astype(str).astype(object)
+    labels = np.vectorize(print_variable)(M.vlabels).astype(object)
     task.generatevarnames(
-        np.arange(0, len(labels)), "x%0", [len(labels)], None, [0], list(labels)
+        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
     )
 
     ## Variables
@@ -835,7 +832,7 @@ def to_mosek(m: Model, task: Any | None = None) -> Any:
     ## Constraints
 
     if len(m.constraints) > 0:
-        names = "c" + M.clabels.astype(str).astype(object)
+        names = np.vectorize(print_constraint)(M.clabels).astype(object)
         for i, n in enumerate(names):
             task.putconname(i, n)
         bkc = [
@@ -874,7 +871,7 @@ def to_mosek(m: Model, task: Any | None = None) -> Any:
     return task
 
 
-def to_gurobipy(m: Model, env: Any | None = None) -> Any:
+def to_gurobipy(m: Model, env: Any | None = None, with_names: bool = False) -> Any:
     """
     Export the model to gurobipy.
 
@@ -893,12 +890,14 @@ def to_gurobipy(m: Model, env: Any | None = None) -> Any:
     """
     import gurobipy
 
+    print_variable, print_constraint = get_printers(m, with_names=with_names)
+
     m.constraints.sanitize_missings()
     model = gurobipy.Model(env=env)
 
     M = m.matrices
 
-    names = "x" + M.vlabels.astype(str).astype(object)
+    names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
     if len(m.binaries.labels) + len(m.integers.labels):
         kwargs["vtype"] = M.vtypes
@@ -913,7 +912,7 @@ def to_gurobipy(m: Model, env: Any | None = None) -> Any:
         model.ModelSense = -1
 
     if len(m.constraints):
-        names = "c" + M.clabels.astype(str).astype(object)
+        names = np.vectorize(print_constraint)(M.clabels).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         c.setAttr("ConstrName", list(names))  # type: ignore
 
@@ -921,7 +920,7 @@ def to_gurobipy(m: Model, env: Any | None = None) -> Any:
     return model
 
 
-def to_highspy(m: Model) -> Highs:
+def to_highspy(m: Model, with_names: bool = False) -> Highs:
     """
     Export the model to highspy.
 
@@ -939,6 +938,8 @@ def to_highspy(m: Model) -> Highs:
     model : highspy.Highs
     """
     import highspy
+
+    print_variable, print_constraint = get_printers(m, with_names=with_names)
 
     M = m.matrices
     h = highspy.Highs()
@@ -966,9 +967,9 @@ def to_highspy(m: Model) -> Highs:
         h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
 
     lp = h.getLp()
-    lp.col_names_ = "x" + M.vlabels.astype(str).astype(object)
+    lp.col_names_ = np.vectorize(print_variable)(M.vlabels).astype(object)
     if len(M.clabels):
-        lp.row_names_ = "c" + M.clabels.astype(str).astype(object)
+        lp.row_names_ = np.vectorize(print_constraint)(M.clabels).astype(object)
     h.passModel(lp)
 
     # quadrative objective
