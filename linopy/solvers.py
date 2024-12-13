@@ -103,7 +103,10 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import mindoptpy
 
-    available_solvers.append("mindopt")
+    with contextlib.suppress(mindoptpy.MindoptError):
+        mindoptpy.Env()
+
+        available_solvers.append("mindopt")
 
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
