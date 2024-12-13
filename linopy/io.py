@@ -69,29 +69,48 @@ def print_coord(coord):
     return coord
 
 
-def get_print(m: Model, anonymously: bool = True):
+def get_printers(m: Model, io_api: str, anonymously: bool = True):
     if anonymously:
+        if io_api == "lp":
+            def print_variable_anonymous(var):
+                return f"x{var}"
 
-        def print_variable_anonymous(var):
-            return f"x{var}"
+            def print_constraint_anonymous(cons):
+                return f"c{cons}"
 
-        def print_constraint_anonymous(cons):
-            return f"c{cons}"
+        elif io_api == "lp-polars":
+            def print_variable_anonymous(series):
+                return pl.lit(" x").alias("x"), series.cast(pl.String)
+
+            def print_constraint_anonymous(series):
+                return pl.lit("c").alias("c"), series.cast(pl.String)
+        else:
+            return None
 
         return print_variable_anonymous, print_constraint_anonymous
     else:
-
-        def print_variable(var):
+        def print_variable_lp(var):
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}"
+            return f"{name}{print_coord(coord)}#{var}"
 
-        def print_constraint(cons):
+        def print_constraint_lp(cons):
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}"
+            return f"{name}{print_coord(coord)}#{cons}"
 
-        return print_variable, print_constraint
+        def print_variable_polars(series):
+            return pl.lit(" "), series.map_elements(print_variable_lp, return_dtype=pl.String)
+
+        def print_constraint_polars(series):
+            return pl.lit(None), series.map_elements(print_constraint_lp, return_dtype=pl.String)
+
+        if io_api == "lp":
+            return print_variable_lp, print_constraint_lp
+        elif io_api == "lp-polars":
+            return print_variable_polars, print_constraint_polars
+        else:
+            return None
 
 
 def objective_write_linear_terms(
@@ -392,11 +411,9 @@ def to_lp_file(
     integer_label: str,
     slice_size: int = 10_000_000,
     progress: bool = True,
-    anonymously: bool = True,
+    printers = None,
 ) -> None:
     batch_size = 5000
-
-    printers = get_print(m, anonymously)
 
     with open(fn, mode="w") as f:
         start = time.time()
@@ -443,12 +460,11 @@ def to_lp_file(
         logger.info(f" Writing time: {round(time.time()-start, 2)}s")
 
 
-def objective_write_linear_terms_polars(f, df):
+def objective_write_linear_terms_polars(f, df, print_variable):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").cast(pl.String),
-        pl.lit(" x"),
-        pl.col("vars").cast(pl.String),
+        *print_variable(pl.col("vars")),
     ]
     df = df.select(pl.concat_str(cols, ignore_nulls=True))
     df.write_csv(
@@ -456,14 +472,13 @@ def objective_write_linear_terms_polars(f, df):
     )
 
 
-def objective_write_quadratic_terms_polars(f, df):
+def objective_write_quadratic_terms_polars(f, df, print_variable):
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").mul(2).cast(pl.String),
-        pl.lit(" x"),
-        pl.col("vars1").cast(pl.String),
-        pl.lit(" * x"),
-        pl.col("vars2").cast(pl.String),
+        *print_variable(pl.col("vars1")),
+        pl.lit(" *"),
+        *print_variable(pl.col("vars2")),
     ]
     f.write(b"+ [\n")
     df = df.select(pl.concat_str(cols, ignore_nulls=True))
@@ -473,7 +488,7 @@ def objective_write_quadratic_terms_polars(f, df):
     f.write(b"] / 2\n")
 
 
-def objective_to_file_polars(m, f, progress=False):
+def objective_to_file_polars(m, f, progress=False, printers=None):
     """
     Write out the objective of a model to a lp file.
     """
@@ -484,8 +499,10 @@ def objective_to_file_polars(m, f, progress=False):
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
 
+    print_variable, _ = printers
+
     if m.is_linear:
-        objective_write_linear_terms_polars(f, df)
+        objective_write_linear_terms_polars(f, df, print_variable)
 
     elif m.is_quadratic:
         lins = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
@@ -495,19 +512,21 @@ def objective_to_file_polars(m, f, progress=False):
             .otherwise(pl.col("vars1"))
             .alias("vars")
         )
-        objective_write_linear_terms_polars(f, lins)
+        objective_write_linear_terms_polars(f, lins, print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
-        objective_write_quadratic_terms_polars(f, quads)
+        objective_write_quadratic_terms_polars(f, quads, print_variable)
 
 
-def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000):
+def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers=None):
     """
     Write out variables of a model to a lp file.
     """
     names = list(m.variables.continuous) + list(m.variables.integers)
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write(b"\n\nbounds\n\n")
     if progress:
@@ -525,8 +544,8 @@ def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000):
             columns = [
                 pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
                 pl.col("lower").cast(pl.String),
-                pl.lit(" <= x"),
-                pl.col("labels").cast(pl.String),
+                pl.lit(" <= "),
+                *print_variable(pl.col("labels")),
                 pl.lit(" <= "),
                 pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
                 pl.col("upper").cast(pl.String),
@@ -539,13 +558,15 @@ def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000):
             formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000):
+def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers=None):
     """
     Write out binaries of a model to a lp file.
     """
     names = m.variables.binaries
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write(b"\n\nbinary\n\n")
     if progress:
@@ -561,8 +582,7 @@ def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000):
             df = var_slice.to_polars()
 
             columns = [
-                pl.lit("x"),
-                pl.col("labels").cast(pl.String),
+                *print_variable(pl.col("labels")),
             ]
 
             kwargs = dict(
@@ -573,7 +593,7 @@ def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000):
 
 
 def integers_to_file_polars(
-    m, f, progress=False, integer_label="general", slice_size=2_000_000
+    m, f, progress=False, integer_label="general", slice_size=2_000_000, printers=None
 ):
     """
     Write out integers of a model to a lp file.
@@ -581,6 +601,8 @@ def integers_to_file_polars(
     names = m.variables.integers
     if not len(list(names)):
         return
+
+    print_variable, _ = printers
 
     f.write(f"\n\n{integer_label}\n\n".encode())
     if progress:
@@ -596,8 +618,7 @@ def integers_to_file_polars(
             df = var_slice.to_polars()
 
             columns = [
-                pl.lit("x"),
-                pl.col("labels").cast(pl.String),
+                *print_variable(pl.col("labels")),
             ]
 
             kwargs = dict(
@@ -607,9 +628,11 @@ def integers_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_000_000):
+def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_000_000, printers=None):
     if not len(m.constraints):
         return
+
+    print_variable, print_constraint = printers
 
     f.write(b"\n\ns.t.\n\n")
     names = m.constraints
@@ -636,14 +659,16 @@ def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_00
                 .alias("labels")
             )
 
+            row_labels = print_constraint(pl.col("labels"))
+            col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels").is_not_null()).then(pl.lit("c")).alias("c"),
-                pl.col("labels").cast(pl.String),
+                pl.when(pl.col("labels").is_not_null()).then(row_labels[0]),
+                pl.when(pl.col("labels").is_not_null()).then(row_labels[1]),
                 pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
                 pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
                 pl.col("coeffs").cast(pl.String),
-                pl.when(pl.col("vars").is_not_null()).then(pl.lit(" x")).alias("x"),
-                pl.col("vars").cast(pl.String),
+                pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
+                pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
                 "sign",
                 pl.lit(" "),
                 pl.col("rhs").cast(pl.String),
@@ -662,21 +687,27 @@ def constraints_to_file_polars(m, f, progress=False, lazy=False, slice_size=2_00
 
 
 def to_lp_file_polars(
-    m, fn, integer_label="general", slice_size=2_000_000, progress: bool = True
+    m,
+    fn,
+    integer_label="general",
+    slice_size=2_000_000,
+    progress: bool = True,
+    printers=None,
 ):
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        objective_to_file_polars(m, f, progress=progress)
-        constraints_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
-        bounds_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
-        binaries_to_file_polars(m, f=f, progress=progress, slice_size=slice_size)
+        objective_to_file_polars(m, f, progress=progress, printers=printers)
+        constraints_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
+        bounds_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
+        binaries_to_file_polars(m, f=f, progress=progress, slice_size=slice_size, printers=printers)
         integers_to_file_polars(
             m,
             integer_label=integer_label,
             f=f,
             progress=progress,
             slice_size=slice_size,
+            printers = printers,
         )
         f.write(b"end\n")
 
@@ -690,6 +721,7 @@ def to_file(
     integer_label: str = "general",
     slice_size: int = 2_000_000,
     progress: bool | None = None,
+    with_names: bool = True,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
@@ -707,20 +739,15 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
+    printers = get_printers(m, io_api, anonymously=not with_names)
+    if with_names and io_api not in ["lp", "lp-polars"]:
+        logger.warning("Debug names are only supported for LP files.")
+
     if io_api == "lp":
-        to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress)
-    elif io_api == "lp-debug":
-        to_lp_file(
-            m,
-            fn,
-            integer_label,
-            slice_size=slice_size,
-            progress=progress,
-            anonymously=False,
-        )
+        to_lp_file(m, fn, integer_label, slice_size=slice_size, progress=progress, printers=printers)
     elif io_api == "lp-polars":
         to_lp_file_polars(
-            m, fn, integer_label, slice_size=slice_size, progress=progress
+            m, fn, integer_label, slice_size=slice_size, progress=progress, printers=printers
         )
 
     elif io_api == "mps":
@@ -735,7 +762,7 @@ def to_file(
         h.writeModel(str(fn))
     else:
         raise ValueError(
-            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-debug', 'lp-polars' or 'mps'."
+            f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
         )
 
     return fn

@@ -43,7 +43,7 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
-FILE_IO_APIS = ["lp", "lp-debug", "lp-polars", "mps"]
+FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
 available_solvers = []
@@ -135,7 +135,10 @@ def set_int_index(series: Series) -> Series:
     """
     Convert string index to int index.
     """
-    series.index = series.index.str[1:].astype(int)
+    try:
+        series.index = series.index.str[1:].astype(int)
+    except:
+        series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
     return series
 
 

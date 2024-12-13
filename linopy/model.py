@@ -958,6 +958,7 @@ class Model:
         self,
         solver_name: str | None = None,
         io_api: str | None = None,
+        with_names: bool = False,
         problem_fn: str | Path | None = None,
         solution_fn: str | Path | None = None,
         log_fn: str | Path | None = None,
@@ -990,6 +991,11 @@ class Model:
             'direct' the problem is communicated to the solver via the solver
             specific API, e.g. gurobipy. This may lead to faster run times.
             The default is set to 'lp' if available.
+        with_names : bool, optional
+            If the Api to use for communicating with the solver is based on 'lp',
+            this option allows to keep the variable and constraint names in the
+            lp file. This may lead to slower run times.
+            The default is set to False.
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -1119,6 +1125,8 @@ class Model:
                 **solver_options,
             )
             if io_api == "direct":
+                if with_names:
+                    logger.warning("Passing variable and constraint names is only supported with lp files")
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,
@@ -1131,7 +1139,8 @@ class Model:
             else:
                 problem_fn = self.to_file(
                     to_path(problem_fn),
-                    io_api,
+                    io_api=io_api,
+                    with_names=with_names,
                     slice_size=slice_size,
                     progress=progress,
                 )
@@ -1212,10 +1221,16 @@ class Model:
         f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
         solver_model.write(f.name)
         labels = []
+        pattern = re.compile(r"^ [^:]+#([0-9]+):")
         for line in f.readlines():
             line_decoded = line.decode()
-            if line_decoded.startswith(" c"):
-                labels.append(int(line_decoded.split(":")[0][2:]))
+            try:
+                if line_decoded.startswith(" c"):
+                    labels.append(int(line_decoded.split(":")[0][2:]))
+            except ValueError as _:
+                match = pattern.match(line_decoded)
+                if match:
+                    labels.append(int(match.group(1)))
         return labels
 
     def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
