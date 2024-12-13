@@ -137,7 +137,7 @@ def set_int_index(series: Series) -> Series:
     """
     try:
         series.index = series.index.str[1:].astype(int)
-    except:
+    except ValueError as _:
         series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
     return series
 

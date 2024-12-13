@@ -29,13 +29,7 @@ if "highs" in available_solvers:
     # mps io is only supported via highspy
     io_apis.append("mps")
 
-params = [
-    (name, io_api, with_names)
-    for (name, io_api, with_names) in list(
-        itertools.product(available_solvers, io_apis, with_names)
-    )
-    if "lp" in io_api or with_names == False
-]
+params = list(itertools.product(available_solvers, io_apis, with_names))
 
 direct_solvers = ["gurobi", "highs", "mosek"]
 for solver in direct_solvers:
