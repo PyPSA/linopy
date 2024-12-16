@@ -25,7 +25,8 @@ classifiers = [
 
 requires-python = ">=3.9"
 dependencies = [
-    "numpy<2.0",
+    "numpy; sys_platform != 'win32'",
+    "numpy<2; sys_platform == 'win32'",
     "scipy",
     "bottleneck",
     "toolz",
