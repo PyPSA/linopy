@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 from pandas.core.series import Series
 
+from linopy.common import count_initial_letters
 from linopy.constants import (
     Result,
     Solution,
@@ -138,7 +139,9 @@ def set_int_index(series: Series) -> Series:
     """
     Convert string index to int index.
     """
-    series.index = series.index.str[1:].astype(int)
+    if not series.empty:
+        cutoff = count_initial_letters(str(series.index[0]))
+        series.index = series.index.str[cutoff:].astype(int)
     return series
 
 
