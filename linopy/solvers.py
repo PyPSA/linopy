@@ -112,8 +112,6 @@ with contextlib.suppress(ModuleNotFoundError):
     import coptpy
 
     with contextlib.suppress(coptpy.CoptError):
-        coptpy.Envr()
-
         available_solvers.append("copt")
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
