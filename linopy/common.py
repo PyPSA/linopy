@@ -547,6 +547,19 @@ def _remap(array, mapping):
     return mapping[array.ravel()].reshape(array.shape)
 
 
+def count_initial_letters(word: str):
+    """
+    Count the number of initial letters in a word.
+    """
+    count = 0
+    for char in word:
+        if char.isalpha():
+            count += 1
+        else:
+            break
+    return count
+
+
 def replace_by_map(ds, mapping):
     """
     Replace values in a DataArray by a one-dimensional mapping.
