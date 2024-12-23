@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+* IMPORTANT BUGFIX: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
 * Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
 
 Version 0.4.3

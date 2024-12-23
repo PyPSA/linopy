@@ -522,6 +522,20 @@ def test_iterate_slices_slice_size_none():
         assert ds.equals(s)
 
 
+def test_iterate_slices_includes_last_slice():
+    ds = xr.Dataset(
+        {"var": (("x"), np.random.rand(10))},  # noqa: NPY002
+        coords={"x": np.arange(10)},
+    )
+    slices = list(iterate_slices(ds, slice_size=3, slice_dims=["x"]))
+    assert len(slices) == 4  # 10 slices for dimension 'x' with size 10
+    total_elements = sum(s.sizes["x"] for s in slices)
+    assert total_elements == ds.sizes["x"]  # Ensure all elements are included
+    for s in slices:
+        assert isinstance(s, xr.Dataset)
+        assert set(s.dims) == set(ds.dims)
+
+
 def test_iterate_slices_empty_slice_dims():
     ds = xr.Dataset(
         {"var": (("x", "y"), np.random.rand(10, 10))},  # noqa: NPY002
@@ -540,6 +554,22 @@ def test_iterate_slices_invalid_slice_dims():
     )
     with pytest.raises(ValueError):
         list(iterate_slices(ds, slice_size=50, slice_dims=["z"]))
+
+
+def test_iterate_slices_empty_dataset():
+    ds = xr.Dataset(
+        {"var": (("x", "y"), np.array([]).reshape(0, 0))}, coords={"x": [], "y": []}
+    )
+    slices = list(iterate_slices(ds, slice_size=10, slice_dims=["x"]))
+    assert len(slices) == 1
+    assert ds.equals(slices[0])
+
+
+def test_iterate_slices_single_element():
+    ds = xr.Dataset({"var": (("x", "y"), np.array([[1]]))}, coords={"x": [0], "y": [0]})
+    slices = list(iterate_slices(ds, slice_size=1, slice_dims=["x"]))
+    assert len(slices) == 1
+    assert ds.equals(slices[0])
 
 
 def test_get_dims_with_index_levels():

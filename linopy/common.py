@@ -519,7 +519,7 @@ def iterate_slices(
         return
 
     # number of slices
-    n_slices = max(size // slice_size, 1)
+    n_slices = max((size + slice_size - 1) // slice_size, 1)
 
     # leading dimension (the dimension with the largest size)
     sizes = {dim: ds.sizes[dim] for dim in slice_dims}
@@ -533,12 +533,12 @@ def iterate_slices(
     if size_of_leading_dim < n_slices:
         n_slices = size_of_leading_dim
 
-    chunk_size = ds.sizes[leading_dim] // n_slices
+    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
 
     # Iterate over the Cartesian product of slice indices
     for i in range(n_slices):
         start = i * chunk_size
-        end = start + chunk_size
+        end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
         yield ds.isel(slice_dict)
 
