@@ -5,6 +5,7 @@ Test function defined in the Model class.
 
 from pathlib import Path
 from tempfile import gettempdir
+from typing import List, Tuple, Union
 
 import numpy as np
 import pytest
@@ -13,33 +14,33 @@ import xarray as xr
 from linopy import EQUAL, Model
 from linopy.testing import assert_model_equal
 
-target_shape = (10, 10)
+target_shape: Tuple[int, int] = (10, 10)
 
 
-def test_model_repr():
+def test_model_repr() -> None:
     m = Model()
     m.__repr__()
 
 
-def test_model_force_dims_names():
+def test_model_force_dims_names() -> None:
     m = Model(force_dim_names=True)
     with pytest.raises(ValueError):
         m.add_variables([-5], [10])
 
 
-def test_model_solver_dir():
+def test_model_solver_dir() -> None:
     d = gettempdir()
     m = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
 
 
-def test_model_variable_getitem():
+def test_model_variable_getitem() -> None:
     m = Model()
     x = m.add_variables(name="x")
     assert m["x"].labels == x.labels
 
 
-def test_coefficient_range():
+def test_coefficient_range() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -52,7 +53,7 @@ def test_coefficient_range():
     assert m.coefficientrange["max"].con0 == 10
 
 
-def test_objective():
+def test_objective() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -81,7 +82,7 @@ def test_objective():
         m.objective = m.objective + 3
 
 
-def test_remove_variable():
+def test_remove_variable() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -104,7 +105,7 @@ def test_remove_variable():
     assert not m.objective.vars.isin(x.labels).any()
 
 
-def test_remove_constraint():
+def test_remove_constraint() -> None:
     m = Model()
 
     x = m.add_variables()
@@ -113,7 +114,7 @@ def test_remove_constraint():
     assert not len(m.constraints.labels)
 
 
-def test_remove_constraints_with_list():
+def test_remove_constraints_with_list() -> None:
     m = Model()
 
     x = m.add_variables()
@@ -126,7 +127,7 @@ def test_remove_constraints_with_list():
     assert not len(m.constraints.labels)
 
 
-def test_remove_objective():
+def test_remove_objective() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])
@@ -139,7 +140,7 @@ def test_remove_objective():
     assert not len(m.objective.vars)
 
 
-def test_assert_model_equal():
+def test_assert_model_equal() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
