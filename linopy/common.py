@@ -12,13 +12,13 @@ import os
 from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
 from functools import reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, overload
+from typing import TYPE_CHECKING, Any, Callable, TypeVar, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import arange
+from numpy import arange, signedinteger
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
@@ -474,11 +474,46 @@ def fill_missing_coords(ds, fill_helper_dims: bool = False):
     return ds
 
 
+T = TypeVar("T", Dataset, Variable, LinearExpression, Constraint)
+
+
+@overload
 def iterate_slices(
-    ds: Dataset | Variable | LinearExpression | Constraint,
+    ds: Dataset,
     slice_size: int | None = 10_000,
     slice_dims: list | None = None,
-) -> Generator[Dataset | Variable | LinearExpression | Constraint, None, None]:
+) -> Generator[Dataset, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: Variable,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[Variable, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: LinearExpression,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[LinearExpression, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: Constraint,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[Constraint, None, None]: ...
+
+
+def iterate_slices(
+    ds: T,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[T, None, None]:
     """
     Generate slices of an xarray Dataset or DataArray with a specified soft maximum size.
 
@@ -547,7 +582,7 @@ def _remap(array, mapping):
     return mapping[array.ravel()].reshape(array.shape)
 
 
-def count_initial_letters(word: str):
+def count_initial_letters(word: str) -> int:
     """
     Count the number of initial letters in a word.
     """
@@ -560,7 +595,7 @@ def count_initial_letters(word: str):
     return count
 
 
-def replace_by_map(ds, mapping):
+def replace_by_map(ds: DataArray, mapping: np.ndarray) -> DataArray:
     """
     Replace values in a DataArray by a one-dimensional mapping.
     """
@@ -590,7 +625,7 @@ def best_int(max_value: int) -> type:
     raise ValueError(f"Value {max_value} is too large for int64.")
 
 
-def get_index_map(*arrays):
+def get_index_map(*arrays: Sequence[Hashable]) -> dict[tuple, int]:
     """
     Given arrays of hashable objects, create a map from unique combinations to unique integers.
     """
@@ -600,7 +635,9 @@ def get_index_map(*arrays):
     return {combination: i for i, combination in enumerate(unique_combinations)}
 
 
-def generate_indices_for_printout(dim_sizes, max_lines):
+def generate_indices_for_printout(
+    dim_sizes: Sequence[int], max_lines: int
+) -> Generator[tuple[int | signedinteger[Any], ...] | None, None, None]:
     total_lines = int(np.prod(dim_sizes))
     lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
     if lines_to_skip > 0:
@@ -615,7 +652,7 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
-def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]):
+def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> list[str]:
     # Determine the maximum position of the delimiter
     if isinstance(delimiter, str):
         delimiter = [delimiter]
@@ -708,7 +745,7 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord: dict | Iterable) -> str:
+def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     """
     Format coordinates into a string representation.
 
@@ -746,7 +783,7 @@ def print_coord(coord: dict | Iterable) -> str:
     return f"[{', '.join(formatted)}]"
 
 
-def print_single_variable(model, label):
+def print_single_variable(model: Any, label: int) -> str:
     if label == -1:
         return "None"
 
@@ -766,7 +803,12 @@ def print_single_variable(model, label):
     return f"{name}{print_coord(coord)}{bounds}"
 
 
-def print_single_expression(c, v, const, model):
+def print_single_expression(
+    c: np.ndarray | tuple[int | float, ...],
+    v: np.ndarray | tuple[int, ...],
+    const: float,
+    model: Any,
+) -> str:
     """
     Print a single linear expression based on the coefficients and variables.
     """
@@ -833,7 +875,7 @@ def print_single_expression(c, v, const, model):
     return print_line(expr, const)
 
 
-def print_single_constraint(model, label):
+def print_single_constraint(model: Any, label: int) -> str:
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -848,7 +890,7 @@ def print_single_constraint(model, label):
     return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
-def has_optimized_model(func):
+def has_optimized_model(func: Callable) -> Callable:
     """
     Check if a reference model is set.
     """
@@ -864,7 +906,7 @@ def has_optimized_model(func):
     return wrapper
 
 
-def is_constant(func):
+def is_constant(func: Callable) -> Callable:
     from linopy import expressions, variables
 
     @wraps(func)
@@ -883,7 +925,7 @@ def is_constant(func):
     return wrapper
 
 
-def forward_as_properties(**routes):
+def forward_as_properties(**routes: list[str]) -> Callable:
     #
     def add_accessor(cls, item, attr):
         @property
@@ -922,10 +964,12 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
 class LocIndexer:
     __slots__ = ("object",)
 
-    def __init__(self, obj):
+    def __init__(self, obj: Dataset | Variable | LinearExpression) -> None:
         self.object = obj
 
-    def __getitem__(self, key) -> Dataset:
+    def __getitem__(
+        self, key: dict[Hashable, Any] | tuple | slice | int | list
+    ) -> Dataset:
         if not is_dict_like(key):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)

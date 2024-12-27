@@ -7,107 +7,123 @@ import pytest
 from scipy.sparse import csc_matrix
 from xarray import DataArray
 
-from linopy import Model, merge
+from linopy import Model, Variable, merge
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import QuadraticExpression
 from linopy.testing import assert_quadequal
 
 
 @pytest.fixture
-def model():
+def model() -> Model:
     return Model()
 
 
 @pytest.fixture
-def x(model):
+def x(model: Model) -> Variable:
     return model.add_variables(pd.Series([0, 0]), 1, name="x")
 
 
 @pytest.fixture
-def y(model):
+def y(model: Model) -> Variable:
     return model.add_variables(4, pd.Series([8, 10]), name="y")
 
 
 @pytest.fixture
-def z(model):
+def z(model: Model) -> Variable:
     return model.add_variables(4, pd.Series([8, 10]), name="z")
 
 
-def test_quadratic_expression_from_variables_multiplication(x, y):
-    expr = x * y
-    assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
+def test_quadratic_expression_from_variables_multiplication(
+    x: Variable, y: Variable
+) -> None:
+    quad_expr = x * y
+    assert isinstance(quad_expr, QuadraticExpression)
+    assert quad_expr.data.sizes[FACTOR_DIM] == 2
 
 
-def test_quadratic_expression_from_variables_power(x):
-    expr = x**2
-    target = x * x
-    assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
-    assert_quadequal(expr, target)
+def test_quadratic_expression_from_variables_power(x: Variable) -> None:
+    power_expr = x**2
+    target: QuadraticExpression = x * x
+    assert isinstance(power_expr, QuadraticExpression)
+    assert power_expr.data.sizes[FACTOR_DIM] == 2
+    assert_quadequal(power_expr, target)
     assert_quadequal(x.pow(2), target)
 
 
-def test_quadratic_expression_from_linexpr_multiplication(x, y):
-    expr = (10 * x + y) * y
-    target = 10 * x * y + y * y
-    assert isinstance(expr, QuadraticExpression)
-    assert expr.data.sizes[FACTOR_DIM] == 2
-    assert expr.nterm == 2
-    assert_quadequal(expr, target)
+def test_quadratic_expression_from_linexpr_multiplication(
+    x: Variable, y: Variable
+) -> None:
+    mult_expr = (10 * x + y) * y
+    target: QuadraticExpression = 10 * x * y + y * y
+    assert isinstance(mult_expr, QuadraticExpression)
+    assert mult_expr.data.sizes[FACTOR_DIM] == 2
+    assert mult_expr.nterm == 2
+    assert_quadequal(mult_expr, target)
 
 
-def test_quadratic_expression_from_linexpr_power(x):
+def test_quadratic_expression_from_linexpr_power(x: Variable) -> None:
     expr = (10 * x) ** 2
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 1
 
 
-def test_quadratic_expression_from_linexpr_with_constant_power(x):
+def test_quadratic_expression_from_linexpr_with_constant_power(x: Variable) -> None:
     expr = (10 * x + 5) ** 2
-    target = 100 * x * x + 50 * x + 50 * x + 25
+    target: QuadraticExpression = 100 * x * x + 50 * x + 50 * x + 25
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
     assert_quadequal(expr, target)
 
 
-def test_quadratic_expression_from_linexpr_with_constant_multiplation(x, y):
-    expr = (10 * x + 5) * (y + 5)
-    target = 10 * x * y + 5 * y + 50 * x + 25
+def test_quadratic_expression_from_linexpr_with_constant_multiplation(
+    x: Variable, y: Variable
+) -> None:
+    expr: QuadraticExpression = (10 * x + 5) * (y + 5)
+    target: QuadraticExpression = 10 * x * y + 5 * y + 50 * x + 25
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
     assert_quadequal(expr, target)
 
 
-def test_quadratic_expression_from_linexpr_with_constant_dot(x, y):
-    expr = 10 * x @ y
+def test_quadratic_expression_scalar_mul_dot_right(x: Variable, y: Variable) -> None:
+    expr: QuadraticExpression = 10 * x @ y
     assert expr.nterm == 2
-    assert_quadequal(expr, (10 * x * y).sum())
+    target: QuadraticExpression = (10 * x * y).sum()
+    assert_quadequal(expr, target)
 
-    expr = y @ (10 * x)
+
+def test_quadratic_expression_scalar_mul_dot_left(x: Variable, y: Variable) -> None:
+    expr: QuadraticExpression = y @ (10 * x)
     assert expr.nterm == 2
-    assert_quadequal(expr, (y * 10 * x).sum())
+    target: QuadraticExpression = (y * 10 * x).sum()
+    assert_quadequal(expr, target)
 
-    assert_quadequal(x.dot(y), x @ y)
+
+def test_quadratic_expression_dot_method(x: Variable, y: Variable) -> None:
+    expr: QuadraticExpression = x.dot(y)
+    target: QuadraticExpression = x @ y
+    assert_quadequal(expr, target)
 
 
-def test_matmul_expr_and_expr(x, y, z):
-    expr = (2 * x + 5) @ (3 * y + 10)
-    target = 2 * 3 * x @ y + 5 * 3 * y.sum() + 2 * 10 * x.sum() + 5 * 10 * 2
+def test_matmul_expr_and_expr(x: Variable, y: Variable, z: Variable) -> None:
+    expr: QuadraticExpression = (2 * x + 5) @ (3 * y + 10)
+    target: QuadraticExpression = (
+        2 * 3 * x @ y + 5 * 3 * y.sum() + 2 * 10 * x.sum() + 5 * 10 * 2
+    )
     assert expr.nterm == 6
     assert_quadequal(expr, target)
 
 
-def test_quadratic_expression_dot_and_matmul(x, y):
-    expr1 = 10 * x @ y
-    expr2 = 10 * x.dot(y)
-    assert_quadequal(expr1, expr2)
+def test_quadratic_expression_dot_and_matmul(x: Variable, y: Variable) -> None:
+    matmul_expr: QuadraticExpression = 10 * x @ y
+    dot_expr: QuadraticExpression = 10 * x.dot(y)
+    assert_quadequal(matmul_expr, dot_expr)
 
 
-def test_quadratic_expression_wrong_assignment(x, y):
+def test_quadratic_expression_wrong_assignment(x: Variable, y: Variable) -> None:
     with pytest.raises(ValueError):
         QuadraticExpression((x + y).data, x.model)
 
@@ -115,106 +131,108 @@ def test_quadratic_expression_wrong_assignment(x, y):
         QuadraticExpression((x + y).data.expand_dims(FACTOR_DIM), x.model)
 
 
-def test_quadratic_expression_addition(model, x, y):
+def test_quadratic_expression_addition(model: Model, x: Variable, y: Variable) -> None:
     expr = x * y + x + 5
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == 5).all()
     assert expr.nterm == 2
 
 
-def test_quadratic_expression_raddition(x, y):
+def test_quadratic_expression_raddition(x: Variable, y: Variable) -> None:
     expr = x + x * y + 5
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == 5).all()
     assert expr.nterm == 2
 
     with pytest.raises(TypeError):
-        5 + x * y + x
+        5 + x * y + x  # type: ignore
 
 
-def test_quadratic_expression_subtraction(x, y):
+def test_quadratic_expression_subtraction(x: Variable, y: Variable) -> None:
     expr = x * y - x - 5
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == -5).all()
     assert expr.nterm == 2
 
 
-def test_quadratic_expression_rsubtraction(x, y):
+def test_quadratic_expression_rsubtraction(x: Variable, y: Variable) -> None:
     expr = x - x * y - 5
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == -5).all()
     assert expr.nterm == 2
 
 
-def test_quadratic_expression_sum(x, y):
-    expr = x * y + x + 5
+def test_quadratic_expression_sum(x: Variable, y: Variable) -> None:
+    base_expr = x * y + x + 5
 
-    summed_expr = expr.sum(dim="dim_0")
+    summed_expr = base_expr.sum(dim="dim_0")
     assert isinstance(summed_expr, QuadraticExpression)
     assert not summed_expr.coord_dims
 
-    summed_expr_all = expr.sum()
+    summed_expr_all = base_expr.sum()
     assert isinstance(summed_expr_all, QuadraticExpression)
     assert not summed_expr_all.coord_dims
 
 
-def test_quadratic_expression_sum_warn_using_dims(x):
+def test_quadratic_expression_sum_warn_using_dims(x: Variable) -> None:
     with pytest.warns(DeprecationWarning):
         (x**2).sum(dims="dim_0")
 
 
-def test_quadratic_expression_sum_warn_unknown_kwargs(x):
+def test_quadratic_expression_sum_warn_unknown_kwargs(x: Variable) -> None:
     with pytest.raises(ValueError):
         (x**2).sum(unknown_kwarg="dim_0")
 
 
-def test_quadratic_expression_wrong_multiplication(x, y):
+def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> None:
     with pytest.raises(TypeError):
         x * x * y
 
 
-def merge_raise_deprecation_warning(x, y):
-    expr = x * y
+def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
+    expr: QuadraticExpression = x * y
     with pytest.warns(DeprecationWarning):
-        merge(expr, expr)
+        merge(expr, expr)  # type: ignore
 
 
-def test_merge_linear_expression_and_quadratic_expression(x, y):
+def test_merge_linear_expression_and_quadratic_expression(
+    x: Variable, y: Variable
+) -> None:
     linexpr = 10 * x + y + 5
     quadexpr = x * y
 
     with pytest.raises(ValueError):
-        expr = merge([linexpr, quadexpr], cls=QuadraticExpression)
+        merge([linexpr, quadexpr], cls=QuadraticExpression)
         with pytest.warns(DeprecationWarning):
-            expr = merge(linexpr, quadexpr, cls=QuadraticExpression)
+            merge(linexpr, quadexpr, cls=QuadraticExpression)  # type: ignore
 
     linexpr = linexpr.to_quadexpr()
-    expr = merge([linexpr, quadexpr], cls=QuadraticExpression)
-    assert isinstance(expr, QuadraticExpression)
-    assert expr.nterm == 3
-    assert expr.const.sum() == 10
-    assert FACTOR_DIM not in expr.coeffs.dims
-    assert FACTOR_DIM not in expr.const.dims
+    merged_expr = merge([linexpr, quadexpr], cls=QuadraticExpression)
+    assert isinstance(merged_expr, QuadraticExpression)
+    assert merged_expr.nterm == 3
+    assert merged_expr.const.sum() == 10
+    assert FACTOR_DIM not in merged_expr.coeffs.dims
+    assert FACTOR_DIM not in merged_expr.const.dims
 
-    first_term = expr.data.isel({TERM_DIM: 0})
+    first_term = merged_expr.data.isel({TERM_DIM: 0})
     assert (first_term.vars.isel({FACTOR_DIM: 1}) == -1).all()
 
 
-def test_quadratic_expression_loc(x):
+def test_quadratic_expression_loc(x: Variable) -> None:
     expr = x * x
     assert expr.loc[0].size < expr.loc[:5].size
 
 
-def test_quadratic_expression_isnull(x):
-    expr = np.arange(2) * x * x
-    filter = (expr.coeffs > 0).any(TERM_DIM)
-    expr = expr.where(filter)
-    isnull = expr.isnull()
+def test_quadratic_expression_isnull(x: Variable) -> None:
+    test_expr = np.arange(2) * x * x
+    filter = (test_expr.coeffs > 0).any(TERM_DIM)
+    filtered_expr = test_expr.where(filter)
+    isnull = filtered_expr.isnull()
     assert isinstance(isnull, DataArray)
     assert isnull.sum() == 1
 
 
-def test_quadratic_expression_flat(x, y):
+def test_quadratic_expression_flat(x: Variable, y: Variable) -> None:
     expr = x * y + x + 5
     df = expr.flat
     assert isinstance(df, pd.DataFrame)
@@ -225,7 +243,7 @@ def test_quadratic_expression_flat(x, y):
     assert len(expr.flat) == 2
 
 
-def test_linear_expression_to_polars(x, y):
+def test_linear_expression_to_polars(x: Variable, y: Variable) -> None:
     expr = x * y + x + 5
     df = expr.to_polars()
     assert isinstance(df, pl.DataFrame)
@@ -234,15 +252,15 @@ def test_linear_expression_to_polars(x, y):
     assert len(df) == expr.nterm * 2
 
 
-def test_quadratic_expression_to_matrix(model, x, y):
-    expr = x * y + x + 5
+def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:
+    expr: QuadraticExpression = x * y + x + 5
 
     Q = expr.to_matrix()
     assert isinstance(Q, csc_matrix)
     assert Q.shape == (model.nvars, model.nvars)
 
 
-def test_matrices_matrix(model, x, y):
+def test_matrices_matrix(model: Model, x: Variable, y: Variable) -> None:
     expr = 10 * x * y
     model.objective = expr
 
@@ -251,9 +269,11 @@ def test_matrices_matrix(model, x, y):
     assert Q.shape == (model.nvars, model.nvars)
 
 
-def test_matrices_matrix_mixed_linear_and_quadratic(model, x, y):
-    expr = x * y + x
-    model.objective = expr + x
+def test_matrices_matrix_mixed_linear_and_quadratic(
+    model: Model, x: Variable, y: Variable
+) -> None:
+    quad_expr = x * y + x
+    model.objective = quad_expr + x
 
     Q = model.matrices.Q
     assert isinstance(Q, csc_matrix)
@@ -264,6 +284,6 @@ def test_matrices_matrix_mixed_linear_and_quadratic(model, x, y):
     assert c.shape == (model.nvars,)
 
 
-def test_quadratic_to_constraint(x, y):
+def test_quadratic_to_constraint(x: Variable, y: Variable) -> None:
     with pytest.raises(NotImplementedError):
         x * y <= 10

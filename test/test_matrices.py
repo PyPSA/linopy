@@ -12,7 +12,7 @@ import xarray as xr
 from linopy import EQUAL, GREATER_EQUAL, Model
 
 
-def test_basic_matrices():
+def test_basic_matrices() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -31,7 +31,7 @@ def test_basic_matrices():
     assert m.matrices.vlabels.shape == m.matrices.lb.shape
 
 
-def test_basic_matrices_masked():
+def test_basic_matrices_masked() -> None:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -51,7 +51,7 @@ def test_basic_matrices_masked():
     assert m.matrices.vlabels.shape == m.matrices.lb.shape
 
 
-def test_matrices_duplicated_variables():
+def test_matrices_duplicated_variables() -> None:
     m = Model()
 
     x = m.add_variables(pd.Series([0, 0]), 1, name="x")
@@ -64,7 +64,7 @@ def test_matrices_duplicated_variables():
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
-def test_matrices_float_c():
+def test_matrices_float_c() -> None:
     # https://github.com/PyPSA/linopy/issues/200
     m = Model()
 

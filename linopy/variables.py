@@ -53,7 +53,7 @@ from linopy.common import (
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.solvers import set_int_index
-from linopy.types import NotImplementedType
+from linopy.types import ConstantLike, NotImplementedType, SideLike
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -457,13 +457,13 @@ class Variable:
         """
         return self.to_linexpr() - other
 
-    def __le__(self, other: int) -> Constraint:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other: int) -> Constraint:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: float | int) -> Constraint:  # type: ignore
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other):
@@ -727,7 +727,7 @@ class Variable:
 
     @upper.setter
     @is_constant
-    def upper(self, value: DataArray):
+    def upper(self, value: ConstantLike):
         """
         Set the upper bounds of the variables.
 
@@ -751,7 +751,7 @@ class Variable:
 
     @lower.setter
     @is_constant
-    def lower(self, value):
+    def lower(self, value: ConstantLike):
         """
         Set the lower bounds of the variables.
 
@@ -775,7 +775,7 @@ class Variable:
         return self.data["solution"]
 
     @solution.setter
-    def solution(self, value):
+    def solution(self, value: ConstantLike):
         """
         Set the optimal values of the variable.
         """

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import (
@@ -605,13 +605,13 @@ class LinearExpression:
     ) -> LinearExpression | QuadraticExpression:
         return self.__div__(other)
 
-    def __le__(self, rhs: int) -> Constraint:
+    def __le__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: int | ndarray | DataArray) -> Constraint:
+    def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: LinearExpression | float | Variable | int) -> Constraint:  # type: ignore
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other):
@@ -1371,10 +1371,10 @@ class LinearExpression:
 
         return self
 
-    def equals(self, other: LinearExpression):
+    def equals(self, other: LinearExpression) -> bool:
         return self.data.equals(_expr_unwrap(other))
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Hashable]:
         return self.data.__iter__()
 
     @property
@@ -1638,7 +1638,7 @@ class QuadraticExpression(LinearExpression):
         check_has_nulls(df, name=self.type)
         return df
 
-    def to_polars(self, **kwargs):
+    def to_polars(self, **kwargs) -> pl.DataFrame:
         """
         Convert the expression to a polars DataFrame.
 
@@ -1891,7 +1891,7 @@ class ScalarLinearExpression:
         return NotImplemented
 
     @property
-    def nterm(self):
+    def nterm(self) -> int:
         return len(self.vars)
 
     def __sub__(

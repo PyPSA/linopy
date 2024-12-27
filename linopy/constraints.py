@@ -60,7 +60,7 @@ from linopy.constants import (
     TERM_DIM,
     SIGNS_pretty,
 )
-from linopy.types import ConstantLike
+from linopy.types import ConstantLike, ExpressionLike, SignLike, VariableLike
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -326,7 +326,7 @@ class Constraint:
 
         return "\n".join(lines)
 
-    def print(self, display_max_rows=20, display_max_terms=20):
+    def print(self, display_max_rows=20, display_max_terms=20) -> None:
         """
         Print the linear expression.
 
@@ -384,7 +384,7 @@ class Constraint:
         return None
 
     @property
-    def coeffs(self):
+    def coeffs(self) -> DataArray:
         """
         Get the left-hand-side coefficients of the constraint.
 
@@ -394,12 +394,12 @@ class Constraint:
         return self.data.coeffs
 
     @coeffs.setter
-    def coeffs(self, value):
+    def coeffs(self, value: ConstantLike):
         value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
         self._data = assign_multiindex_safe(self.data, coeffs=value)
 
     @property
-    def vars(self):
+    def vars(self) -> DataArray:
         """
         Get the left-hand-side variables of the constraint.
 
@@ -409,7 +409,7 @@ class Constraint:
         return self.data.vars
 
     @vars.setter
-    def vars(self, value):
+    def vars(self, value: variables.Variable | DataArray):
         if isinstance(value, variables.Variable):
             value = value.labels
         if not isinstance(value, DataArray):
@@ -418,7 +418,7 @@ class Constraint:
         self._data = assign_multiindex_safe(self.data, vars=value)
 
     @property
-    def lhs(self):
+    def lhs(self) -> ExpressionLike:
         """
         Get the left-hand-side linear expression of the constraint.
 
@@ -429,7 +429,7 @@ class Constraint:
         return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
-    def lhs(self, value):
+    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike):
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
@@ -438,7 +438,7 @@ class Constraint:
         )
 
     @property
-    def sign(self):
+    def sign(self) -> DataArray:
         """
         Get the signs of the constraint.
 
@@ -449,12 +449,12 @@ class Constraint:
 
     @sign.setter
     @is_constant
-    def sign(self, value):
+    def sign(self, value: SignLike):
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self.data["sign"] = value
 
     @property
-    def rhs(self):
+    def rhs(self) -> DataArray:
         """
         Get the right hand side constants of the constraint.
 
@@ -464,7 +464,7 @@ class Constraint:
         return self.data.rhs
 
     @rhs.setter
-    def rhs(self, value):
+    def rhs(self, value: ExpressionLike):
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )

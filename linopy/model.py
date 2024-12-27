@@ -526,7 +526,10 @@ class Model:
 
     def add_constraints(
         self,
-        lhs: VariableLike | ExpressionLike | ConstraintLike,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | list[tuple[ConstantLike, VariableLike | str]],
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
@@ -997,7 +1000,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: None = None,
         progress: bool | None = None,
-        **solver_options,
+        **solver_options: Any,
     ) -> tuple[str, str]:
         """
         Solve the model with possibly different solvers.
