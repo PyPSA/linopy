@@ -5,11 +5,14 @@ Created on Wed Mar 17 17:06:36 2021.
 @author: fabian
 """
 
+from typing import Any, List, Union
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from numpy.typing import NDArray
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, merge
@@ -18,7 +21,7 @@ from linopy.testing import assert_linequal
 
 
 @pytest.fixture
-def m():
+def m() -> Model:
     m = Model()
 
     m.add_variables(pd.Series([0, 0]), 1, name="x")
@@ -33,35 +36,35 @@ def m():
 
 
 @pytest.fixture
-def x(m):
+def x(m: Model) -> LinearExpression:
     return m.variables["x"]
 
 
 @pytest.fixture
-def y(m):
+def y(m: Model) -> LinearExpression:
     return m.variables["y"]
 
 
 @pytest.fixture
-def z(m):
+def z(m: Model) -> LinearExpression:
     return m.variables["z"]
 
 
 @pytest.fixture
-def v(m):
+def v(m: Model) -> LinearExpression:
     return m.variables["v"]
 
 
 @pytest.fixture
-def u(m):
+def u(m: Model) -> LinearExpression:
     return m.variables["u"]
 
 
-def test_empty_linexpr(m):
+def test_empty_linexpr(m: Model) -> None:
     LinearExpression(None, m)
 
 
-def test_linexpr_with_wrong_data(m):
+def test_linexpr_with_wrong_data(m: Model) -> None:
     with pytest.raises(ValueError):
         LinearExpression(xr.Dataset({"a": [1]}), m)
 
@@ -79,7 +82,7 @@ def test_linexpr_with_wrong_data(m):
         LinearExpression(data, None)
 
 
-def test_linexpr_with_helper_dims_as_coords(m):
+def test_linexpr_with_helper_dims_as_coords(m: Model) -> None:
     coords = [pd.Index([0], name="a"), pd.Index([1, 2], name=TERM_DIM)]
     coeffs = xr.DataArray(np.array([[1, 2]]), coords=coords)
     vars = xr.DataArray(np.array([[1, 2]]), coords=coords)
