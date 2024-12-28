@@ -142,8 +142,8 @@ def test_to_file_lp_None(model: Model) -> None:
     fn: Union[str, None] = None
     model.to_file(fn)
 
-    fn = model.get_problem_file()
-    gurobipy.read(str(fn))
+    fn_path = model.get_problem_file()
+    gurobipy.read(str(fn_path))
 
 
 @pytest.mark.skipif(

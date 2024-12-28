@@ -114,4 +114,4 @@ def test_variables_get_name_by_label(m: Model) -> None:
         m.variables.get_name_by_label(30)
 
     with pytest.raises(ValueError):
-        m.variables.get_name_by_label("anystring")
+        m.variables.get_name_by_label("anystring")  # type: ignore

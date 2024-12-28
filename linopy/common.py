@@ -12,7 +12,7 @@ import os
 from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
 from functools import reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -474,7 +474,7 @@ def fill_missing_coords(ds, fill_helper_dims: bool = False):
     return ds
 
 
-T = TypeVar("T", Dataset, Variable, LinearExpression, Constraint)
+T = TypeVar("T", Dataset, "Variable", "LinearExpression", "Constraint")
 
 
 @overload
@@ -804,15 +804,14 @@ def print_single_variable(model: Any, label: int) -> str:
 
 
 def print_single_expression(
-    c: np.ndarray | tuple[int | float, ...],
-    v: np.ndarray | tuple[int, ...],
+    c: np.ndarray,
+    v: np.ndarray,
     const: float,
     model: Any,
 ) -> str:
     """
     Print a single linear expression based on the coefficients and variables.
     """
-
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
@@ -961,15 +960,19 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
-class LocIndexer:
-    __slots__ = ("object",)
+LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")
 
-    def __init__(self, obj: Dataset | Variable | LinearExpression) -> None:
+
+class LocIndexer(Generic[LocT]):
+    __slots__ = ("object",)
+    object: LocT
+
+    def __init__(self, obj: LocT) -> None:
         self.object = obj
 
     def __getitem__(
         self, key: dict[Hashable, Any] | tuple | slice | int | list
-    ) -> Dataset:
+    ) -> LocT:
         if not is_dict_like(key):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)

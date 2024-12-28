@@ -12,23 +12,6 @@ __version__ = version("linopy")
 # Note: For intercepting multiplications between xarray dataarrays, Variables and Expressions
 # we need to extend their __mul__ functions with a quick special case
 import linopy.monkey_patch_xarray  # noqa: F401
-from linopy import (
-    common,
-    config,
-    constants,
-    constraints,
-    examples,
-    expressions,
-    io,
-    matrices,
-    model,
-    objective,
-    remote,
-    solvers,
-    testing,
-    types,
-    variables,
-)
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 from linopy.constraints import Constraint
@@ -53,19 +36,4 @@ __all__ = (
     "merge",
     "options",
     "read_netcdf",
-    "remote",
-    "types",
-    "constraints",
-    "expressions",
-    "variables",
-    "objective",
-    "io",
-    "config",
-    "constants",
-    "model",
-    "common",
-    "examples",
-    "matrices",
-    "solvers",
-    "testing",
 )

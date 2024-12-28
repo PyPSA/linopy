@@ -1011,16 +1011,16 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert res.sel(dim_1=0).vars[2].item() == -1
 
     with pytest.warns(DeprecationWarning):
-        merge(expr1, expr2)
+        merge(expr1, expr2)  # type: ignore
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:
     expr = x + y
-    expr2 = sum([x, y])
+    expr2: LinearExpression = sum([x, y])  # type: ignore
     assert_linequal(expr, expr2)
 
     expr = 1 * x + 2 * y
-    expr2 = sum([1 * x, 2 * y])
+    expr2: LinearExpression = sum([1 * x, 2 * y])  # type: ignore
     assert_linequal(expr, expr2)
 
     assert isinstance(expr.sum(), LinearExpression)
@@ -1045,6 +1045,6 @@ def test_cumsum(m: Model, multiple: float) -> None:
     cumsum.nterm == 2
 
     # Test cumsum on sum of variables
-    var = m.variables["x"] + m.variables["y"]
-    cumsum = (multiple * var).cumsum()
+    expr = m.variables["x"] + m.variables["y"]
+    cumsum = (multiple * expr).cumsum()
     cumsum.nterm == 2

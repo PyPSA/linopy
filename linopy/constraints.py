@@ -418,7 +418,7 @@ class Constraint:
         self._data = assign_multiindex_safe(self.data, vars=value)
 
     @property
-    def lhs(self) -> ExpressionLike:
+    def lhs(self) -> "expressions.LinearExpression":
         """
         Get the left-hand-side linear expression of the constraint.
 
@@ -1072,7 +1072,7 @@ class AnonymousScalarConstraint:
         Get the representation of the AnonymousScalarConstraint.
         """
         expr_string = print_single_expression(
-            self.lhs.coeffs, self.lhs.vars, 0, self.lhs.model
+            np.array(self.lhs.coeffs), np.array(self.lhs.vars), 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
 

@@ -25,6 +25,7 @@ def test_basic_matrices() -> None:
     obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
 
+    assert m.matrices.A is not None
     assert m.matrices.A.shape == (*m.matrices.clabels.shape, *m.matrices.vlabels.shape)
     assert m.matrices.clabels.shape == m.matrices.sense.shape
     assert m.matrices.vlabels.shape == m.matrices.ub.shape
@@ -45,6 +46,7 @@ def test_basic_matrices_masked() -> None:
 
     m.add_objective(2 * x + y)
 
+    assert m.matrices.A is not None
     assert m.matrices.A.shape == (*m.matrices.clabels.shape, *m.matrices.vlabels.shape)
     assert m.matrices.clabels.shape == m.matrices.sense.shape
     assert m.matrices.vlabels.shape == m.matrices.ub.shape
@@ -58,6 +60,8 @@ def test_matrices_duplicated_variables() -> None:
     y = m.add_variables(4, pd.Series([8, 10]), name="y")
     z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
     m.add_constraints(x + x + y + y + z + z == 0)
+
+    assert m.matrices.A is not None
 
     A = m.matrices.A.todense()
     assert A[0, 0] == 2

@@ -281,6 +281,7 @@ def test_constraint_from_rule_with_none_return(
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
     assert isinstance(con, Constraint)
+    assert isinstance(con.lhs.vars, xr.DataArray)
     assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
     assert (con.lhs.vars.loc[1, :] != -1).all()
@@ -308,7 +309,7 @@ def test_constraint_rhs_getter(c: linopy.constraints.Constraint) -> None:
 def test_constraint_vars_setter(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.vars = x
+    c.vars = x  # type: ignore
     assert_equal(c.vars, x.labels)
 
 
@@ -327,7 +328,7 @@ def test_constraint_vars_setter_invalid(
 
 
 def test_constraint_coeffs_setter(c: linopy.constraints.Constraint) -> None:
-    c.coeffs = 3
+    c.coeffs = 3  # type: ignore
     assert (c.coeffs == 3).all()
 
 
@@ -343,37 +344,37 @@ def test_constraint_lhs_setter(
 def test_constraint_lhs_setter_with_variable(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.lhs = x
+    c.lhs = x  # type: ignore
     assert c.lhs.nterm == 1
 
 
 def test_constraint_lhs_setter_with_constant(c: linopy.constraints.Constraint) -> None:
     sizes = c.sizes
-    c.lhs = 10
+    c.lhs = 10  # type: ignore
     assert (c.rhs == -10).all()
     assert c.lhs.nterm == 0
     assert c.sizes["first"] == sizes["first"]
 
 
 def test_constraint_sign_setter(c: linopy.constraints.Constraint) -> None:
-    c.sign = EQUAL
+    c.sign = EQUAL  # type: ignore
     assert (c.sign == EQUAL).all()
 
 
 def test_constraint_sign_setter_alternative(c: linopy.constraints.Constraint) -> None:
-    c.sign = long_EQUAL
+    c.sign = long_EQUAL  # type: ignore
     assert (c.sign == EQUAL).all()
 
 
 def test_constraint_sign_setter_invalid(c: linopy.constraints.Constraint) -> None:
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
-        c.sign = "asd"
+        c.sign = "asd"  # type: ignore
 
 
 def test_constraint_rhs_setter(c: linopy.constraints.Constraint) -> None:
     sizes = c.sizes
-    c.rhs = 2
+    c.rhs = 2  # type: ignore
     assert (c.rhs == 2).all()
     assert c.sizes == sizes
 
@@ -381,7 +382,7 @@ def test_constraint_rhs_setter(c: linopy.constraints.Constraint) -> None:
 def test_constraint_rhs_setter_with_variable(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.rhs = x
+    c.rhs = x  # type: ignore
     assert (c.rhs == 0).all()
     assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
     assert c.lhs.nterm == 2
@@ -390,7 +391,7 @@ def test_constraint_rhs_setter_with_variable(
 def test_constraint_rhs_setter_with_expression(
     c: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    c.rhs = x + y
+    c.rhs = x + y  # type: ignore
     assert (c.rhs == 0).all()
     assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
     assert c.lhs.nterm == 3
@@ -399,7 +400,7 @@ def test_constraint_rhs_setter_with_expression(
 def test_constraint_rhs_setter_with_expression_and_constant(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.rhs = x + 1
+    c.rhs = x + 1  # type: ignore
     assert (c.rhs == 1).all()
     assert (c.coeffs.sum(c.term_dim) == 0).all()
     assert c.lhs.nterm == 2
@@ -408,7 +409,7 @@ def test_constraint_rhs_setter_with_expression_and_constant(
 def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
     # Test that assigning labels raises FrozenInstanceError
     with pytest.raises(AttributeError):
-        c.labels = c.labels
+        c.labels = c.labels  # type: ignore
 
 
 def test_constraint_sel(c: linopy.constraints.Constraint) -> None:
@@ -644,7 +645,7 @@ def test_get_name_by_label() -> None:
         m.constraints.get_name_by_label(30)
 
     with pytest.raises(ValueError):
-        m.constraints.get_name_by_label("first")
+        m.constraints.get_name_by_label("first")  # type: ignore
 
 
 def test_constraints_inequalities(m: Model) -> None:

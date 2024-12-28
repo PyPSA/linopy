@@ -171,7 +171,7 @@ def test_truediv(quadratic_objective: Objective) -> None:
 
 def test_truediv_false(quadratic_objective: Objective) -> None:
     with pytest.raises(ValueError):
-        quadratic_objective / quadratic_objective  # type: ignore
+        quadratic_objective / quadratic_objective
 
 
 def test_repr(linear_objective: Objective, quadratic_objective: Objective) -> None:

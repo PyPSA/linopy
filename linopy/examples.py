@@ -71,8 +71,8 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
         naxis, maxis = [arange(n), arange(n)]
     else:
         naxis, maxis = [arange(n).astype(float), arange(n).astype(str)]
-    x = m.add_variables(coords=[naxis, maxis])  # type: ignore
-    y = m.add_variables(coords=[naxis, maxis])  # type: ignore
+    x = m.add_variables(coords=[naxis, maxis])
+    y = m.add_variables(coords=[naxis, maxis])
     m.add_constraints(x - y >= naxis)
     m.add_constraints(x + y >= 0)
     m.add_objective((2 * x).sum() + y.sum())

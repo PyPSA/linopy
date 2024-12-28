@@ -1847,7 +1847,9 @@ class ScalarLinearExpression:
         self._model = model
 
     def __repr__(self) -> str:
-        expr_string = print_single_expression(self.coeffs, self.vars, 0, self.model)
+        expr_string = print_single_expression(
+            np.array(self.coeffs), np.array(self.vars), 0, self.model
+        )
         return f"ScalarLinearExpression: {expr_string}"
 
     @property

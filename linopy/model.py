@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -529,7 +529,8 @@ class Model:
         lhs: VariableLike
         | ExpressionLike
         | ConstraintLike
-        | list[tuple[ConstantLike, VariableLike | str]],
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
@@ -662,7 +663,7 @@ class Model:
 
     def add_objective(
         self,
-        expr: list[tuple[int, Variable]] | LinearExpression | QuadraticExpression,
+        expr: Sequence[tuple[int, Variable]] | LinearExpression | QuadraticExpression,
         overwrite: bool = False,
         sense: str = "min",
     ) -> None:

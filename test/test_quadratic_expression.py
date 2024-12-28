@@ -43,7 +43,7 @@ def test_quadratic_expression_from_variables_multiplication(
 
 def test_quadratic_expression_from_variables_power(x: Variable) -> None:
     power_expr = x**2
-    target: QuadraticExpression = x * x
+    target: QuadraticExpression = x * x  # type: ignore
     assert isinstance(power_expr, QuadraticExpression)
     assert power_expr.data.sizes[FACTOR_DIM] == 2
     assert_quadequal(power_expr, target)
@@ -54,7 +54,7 @@ def test_quadratic_expression_from_linexpr_multiplication(
     x: Variable, y: Variable
 ) -> None:
     mult_expr = (10 * x + y) * y
-    target: QuadraticExpression = 10 * x * y + y * y
+    target: QuadraticExpression = 10 * x * y + y * y  # type: ignore
     assert isinstance(mult_expr, QuadraticExpression)
     assert mult_expr.data.sizes[FACTOR_DIM] == 2
     assert mult_expr.nterm == 2
@@ -70,7 +70,7 @@ def test_quadratic_expression_from_linexpr_power(x: Variable) -> None:
 
 def test_quadratic_expression_from_linexpr_with_constant_power(x: Variable) -> None:
     expr = (10 * x + 5) ** 2
-    target: QuadraticExpression = 100 * x * x + 50 * x + 50 * x + 25
+    target: QuadraticExpression = 100 * x * x + 50 * x + 50 * x + 25  # type: ignore
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
@@ -80,8 +80,8 @@ def test_quadratic_expression_from_linexpr_with_constant_power(x: Variable) -> N
 def test_quadratic_expression_from_linexpr_with_constant_multiplation(
     x: Variable, y: Variable
 ) -> None:
-    expr: QuadraticExpression = (10 * x + 5) * (y + 5)
-    target: QuadraticExpression = 10 * x * y + 5 * y + 50 * x + 25
+    expr: QuadraticExpression = (10 * x + 5) * (y + 5)  # type: ignore
+    target: QuadraticExpression = 10 * x * y + 5 * y + 50 * x + 25  # type: ignore
     assert isinstance(expr, QuadraticExpression)
     assert expr.data.sizes[FACTOR_DIM] == 2
     assert expr.nterm == 3
@@ -89,37 +89,37 @@ def test_quadratic_expression_from_linexpr_with_constant_multiplation(
 
 
 def test_quadratic_expression_scalar_mul_dot_right(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = 10 * x @ y
+    expr: QuadraticExpression = 10 * x @ y  # type: ignore
     assert expr.nterm == 2
-    target: QuadraticExpression = (10 * x * y).sum()
+    target: QuadraticExpression = (10 * x * y).sum()  # type: ignore
     assert_quadequal(expr, target)
 
 
 def test_quadratic_expression_scalar_mul_dot_left(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = y @ (10 * x)
+    expr: QuadraticExpression = y @ (10 * x)  # type: ignore
     assert expr.nterm == 2
-    target: QuadraticExpression = (y * 10 * x).sum()
+    target: QuadraticExpression = (y * 10 * x).sum()  # type: ignore
     assert_quadequal(expr, target)
 
 
 def test_quadratic_expression_dot_method(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = x.dot(y)
-    target: QuadraticExpression = x @ y
+    expr: QuadraticExpression = x.dot(y)  # type: ignore
+    target: QuadraticExpression = x @ y  # type: ignore
     assert_quadequal(expr, target)
 
 
 def test_matmul_expr_and_expr(x: Variable, y: Variable, z: Variable) -> None:
-    expr: QuadraticExpression = (2 * x + 5) @ (3 * y + 10)
+    expr: QuadraticExpression = (2 * x + 5) @ (3 * y + 10)  # type: ignore
     target: QuadraticExpression = (
-        2 * 3 * x @ y + 5 * 3 * y.sum() + 2 * 10 * x.sum() + 5 * 10 * 2
+        2 * 3 * x @ y + 5 * 3 * y.sum() + 2 * 10 * x.sum() + 5 * 10 * 2  # type: ignore
     )
     assert expr.nterm == 6
     assert_quadequal(expr, target)
 
 
 def test_quadratic_expression_dot_and_matmul(x: Variable, y: Variable) -> None:
-    matmul_expr: QuadraticExpression = 10 * x @ y
-    dot_expr: QuadraticExpression = 10 * x.dot(y)
+    matmul_expr: QuadraticExpression = 10 * x @ y  # type: ignore
+    dot_expr: QuadraticExpression = 10 * x.dot(y)  # type: ignore
     assert_quadequal(matmul_expr, dot_expr)
 
 
@@ -145,7 +145,7 @@ def test_quadratic_expression_raddition(x: Variable, y: Variable) -> None:
     assert expr.nterm == 2
 
     with pytest.raises(TypeError):
-        5 + x * y + x  # type: ignore
+        5 + x * y + x
 
 
 def test_quadratic_expression_subtraction(x: Variable, y: Variable) -> None:
@@ -190,7 +190,7 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
 
 
 def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = x * y
+    expr: QuadraticExpression = x * y  # type: ignore
     with pytest.warns(DeprecationWarning):
         merge(expr, expr)  # type: ignore
 
@@ -253,7 +253,7 @@ def test_linear_expression_to_polars(x: Variable, y: Variable) -> None:
 
 
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:
-    expr: QuadraticExpression = x * y + x + 5
+    expr: QuadraticExpression = x * y + x + 5  # type: ignore
 
     Q = expr.to_matrix()
     assert isinstance(Q, csc_matrix)
