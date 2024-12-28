@@ -149,7 +149,7 @@ class Variable:
     _fill_value = FILL_VALUE
 
     def __init__(
-        self, data: Dataset, model: Any, name: str, skip_broadcast: bool = False
+        self, data: Dataset, model: "Model", name: str, skip_broadcast: bool = False
     ) -> None:
         """
         Initialize the Variable.
@@ -190,7 +190,7 @@ class Variable:
 
     def __getitem__(
         self, selector: list[int] | int | slice | tuple[int64, str_]
-    ) -> Variable | ScalarVariable:
+    ) -> "Variable" | "ScalarVariable":
         keys = selector if isinstance(selector, tuple) else (selector,)
         if all(map(pd.api.types.is_scalar, keys)):
             warn(
@@ -287,7 +287,7 @@ class Variable:
     def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
-    def to_pandas(self):
+    def to_pandas(self) -> pd.Series:
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -651,7 +651,7 @@ class Variable:
         return self._model
 
     @property
-    def type(self):
+    def type(self) -> str:
         """
         Type of the variable.
 
@@ -1044,7 +1044,7 @@ class Variable:
         data = data.assign(labels=data.labels.astype(int))
         return self.__class__(data, self.model, self.name)
 
-    def sanitize(self) -> Variable:
+    def sanitize(self) -> "Variable":
         """
         Sanitize variable by ensuring int dtype with fill value of -1.
 
@@ -1057,7 +1057,7 @@ class Variable:
             return self.__class__(data, self.model, self.name)
         return self
 
-    def equals(self, other: Variable) -> bool:
+    def equals(self, other: "Variable") -> bool:
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1101,7 +1101,8 @@ class Variable:
 class AtIndexer:
     __slots__ = ("object",)
 
-    def __init__(self, obj: Variable) -> None:
+    def __init__(self, obj: "Variable") -> None:
+        """Initialize the AtIndexer."""
         self.object = obj
 
     def __getitem__(self, keys: Any) -> ScalarVariable:
@@ -1206,7 +1207,7 @@ class Variables:
         """
         return list(self)
 
-    def add(self, variable: Variable) -> None:
+    def add(self, variable: "Variable") -> None:
         """
         Add a variable to the variables container.
         """
@@ -1279,7 +1280,7 @@ class Variables:
         return len(self.flat.labels.unique())
 
     @property
-    def binaries(self) -> Variables:
+    def binaries(self) -> "Variables":
         """
         Get all binary variables.
         """
@@ -1289,7 +1290,7 @@ class Variables:
         )
 
     @property
-    def integers(self) -> Variables:
+    def integers(self) -> "Variables":
         """
         Get all integers variables.
         """
@@ -1299,7 +1300,7 @@ class Variables:
         )
 
     @property
-    def continuous(self) -> Variables:
+    def continuous(self) -> "Variables":
         """
         Get all continuous variables.
         """
