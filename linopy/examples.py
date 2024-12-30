@@ -68,9 +68,9 @@ def benchmark_model(n: int = 10, integerlabels: bool = False) -> Model:
     """
     m = Model()
     if integerlabels:
-        naxis, maxis = [arange(n), arange(n)]
+        naxis, maxis = [arange(n, dtype=int), arange(n, dtype=int)]
     else:
-        naxis, maxis = [arange(n).astype(float), arange(n).astype(str)]
+        naxis, maxis = [arange(n, dtype=float), arange(n).astype(str)]
     x = m.add_variables(coords=[naxis, maxis])
     y = m.add_variables(coords=[naxis, maxis])
     m.add_constraints(x - y >= naxis)

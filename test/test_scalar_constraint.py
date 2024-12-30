@@ -17,7 +17,7 @@ def m() -> Model:
 
 
 @pytest.fixture
-def x(m) -> Variable:
+def x(m: Model) -> Variable:
     return m.variables["x"]
 
 

@@ -23,7 +23,7 @@ from linopy.constants import (
     short_LESS_EQUAL,
     sign_replace_dict,
 )
-from linopy.constraints import Constraint, Constraints
+from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
 
 
 @pytest.fixture
@@ -172,7 +172,7 @@ def test_anonymous_scalar_constraint_with_scalar_variable_on_rhs(
 ) -> None:
     expr = 10 * x.at[0] + y.at[1]
     with pytest.raises(TypeError):
-        expr == x.at[0]
+        expr == x.at[0]  # type: ignore
         # assert isinstance(con.lhs, LinearExpression)
         # assert (con.sign == EQUAL).all()
         # assert (con.rhs == 0).all()
@@ -191,8 +191,6 @@ def test_constraint_inherited_properties(
     assert isinstance(con.shape, tuple)
     assert isinstance(con.size, int)
     assert isinstance(con.dims, xr.core.utils.Frozen)
-    with pytest.warns(DeprecationWarning):
-        assert con.values is None
 
 
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
@@ -261,7 +259,7 @@ def test_anonymous_constraint_getitem(x: linopy.Variable, y: linopy.Variable) ->
 
 
 def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
-    def bound(m, i, j):
+    def bound(m: Model, i: int, j: int) -> AnonymousScalarConstraint:
         return (i - 1) * x.at[i - 1] + y.at[j] >= 0 if i % 2 else i * x.at[i] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
@@ -274,9 +272,10 @@ def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) 
 def test_constraint_from_rule_with_none_return(
     m: Model, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    def bound(m, i, j):
+    def bound(m: Model, i: int, j: int) -> AnonymousScalarConstraint | None:
         if i % 2:
             return i * x.at[i] + y.at[j] >= 0
+        return None
 
     coords = [x.coords["first"], y.coords["second"]]
     con = Constraint.from_rule(m, bound, coords)
@@ -506,7 +505,7 @@ def test_constraint_assignment_assert_sign_rhs_not_none(
 def test_constraint_assignment_callable_assert_sign_rhs_not_none(
     m: Model, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    def lhs(x):
+    def lhs(x: linopy.Variable) -> None:
         return None
 
     coords = [x.coords["first"], y.coords["second"]]

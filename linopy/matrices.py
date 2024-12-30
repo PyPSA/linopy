@@ -48,7 +48,7 @@ class MatrixAccessor:
     def __init__(self, model: Model) -> None:
         self._parent = model
 
-    def clean_cached_properties(self):
+    def clean_cached_properties(self) -> None:
         """Clear the cache for all cached properties of an object"""
 
         for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
@@ -57,26 +57,26 @@ class MatrixAccessor:
                 delattr(self, cached_prop)
 
     @cached_property
-    def flat_vars(self):
+    def flat_vars(self) -> pd.DataFrame:
         m = self._parent
         return m.variables.flat
 
     @cached_property
-    def flat_cons(self):
+    def flat_cons(self) -> pd.DataFrame:
         m = self._parent
         return m.constraints.flat
 
     @property
     def vlabels(self) -> ndarray:
         """Vector of labels of all non-missing variables."""
-        df = self.flat_vars
+        df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.labels, -1)
 
     @property
     def vtypes(self) -> ndarray:
         """Vector of types of all non-missing variables."""
         m = self._parent
-        df = self.flat_vars
+        df: pd.DataFrame = self.flat_vars
         specs = []
         for name in m.variables:
             if name in m.binaries:
@@ -94,27 +94,27 @@ class MatrixAccessor:
     @property
     def lb(self) -> ndarray:
         """Vector of lower bounds of all non-missing variables."""
-        df = self.flat_vars
+        df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.lower)
 
     @cached_property
-    def sol(self):
+    def sol(self) -> ndarray:
         """Vector of solution values of all non-missing variables."""
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         if "solution" not in self.flat_vars:
             del self.flat_vars  # clear cache
-        df = self.flat_vars
+        df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.solution, fill_value=np.nan)
 
     @cached_property
-    def dual(self):
+    def dual(self) -> ndarray:
         """Vector of dual values of all non-missing constraints."""
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         if "dual" not in self.flat_cons:
             del self.flat_cons  # clear cache
-        df = self.flat_cons
+        df: pd.DataFrame = self.flat_cons
         if "dual" not in df:
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
@@ -124,13 +124,13 @@ class MatrixAccessor:
     @property
     def ub(self) -> ndarray:
         """Vector of upper bounds of all non-missing variables."""
-        df = self.flat_vars
+        df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.upper)
 
     @property
     def clabels(self) -> ndarray:
         """Vector of labels of all non-missing constraints."""
-        df = self.flat_cons
+        df: pd.DataFrame = self.flat_cons
         if df.empty:
             return np.array([], dtype=int)
         return create_vector(df.key, df.labels, fill_value=-1)
@@ -141,19 +141,19 @@ class MatrixAccessor:
         m = self._parent
         if not len(m.constraints):
             return None
-        A = m.constraints.to_matrix(filter_missings=False)
+        A: csc_matrix = m.constraints.to_matrix(filter_missings=False)
         return A[self.clabels][:, self.vlabels]
 
     @property
     def sense(self) -> ndarray:
         """Vector of senses of all non-missing constraints."""
-        df = self.flat_cons
+        df: pd.DataFrame = self.flat_cons
         return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
 
     @property
     def b(self) -> ndarray:
         """Vector of right-hand-sides of all non-missing constraints."""
-        df = self.flat_cons
+        df: pd.DataFrame = self.flat_cons
         return create_vector(df.key, df.rhs)
 
     @property
@@ -165,8 +165,8 @@ class MatrixAccessor:
             ds = ds[(ds.vars1 == -1) | (ds.vars2 == -1)]
             ds["vars"] = ds.vars1.where(ds.vars1 != -1, ds.vars2)
 
-        vars = ds.vars.map(self.flat_vars.set_index("labels").key)
-        shape = self.flat_vars.key.max() + 1
+        vars: pd.Series = ds.vars.map(self.flat_vars.set_index("labels").key)
+        shape: int = self.flat_vars.key.max() + 1
         return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
 
     @property

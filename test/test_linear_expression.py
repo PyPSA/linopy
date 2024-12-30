@@ -14,6 +14,7 @@ from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, Variable, merge
 from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal
 
 
@@ -76,7 +77,7 @@ def test_linexpr_with_wrong_data(m: Model) -> None:
     vars = xr.DataArray(np.array([1, 2]), dims=[TERM_DIM])
     data = xr.Dataset({"coeffs": coeffs, "vars": vars})
     with pytest.raises(ValueError):
-        LinearExpression(data, None)
+        LinearExpression(data, None)  # type: ignore
 
 
 def test_linexpr_with_helper_dims_as_coords(m: Model) -> None:
@@ -266,11 +267,11 @@ def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
         x / (1 * x)
 
     with pytest.raises(TypeError):
-        m.linexpr((10, x.labels), (1, "y"))
+        m.linexpr((10, x.labels), (1, "y"))  # type: ignore
 
 
 def test_linear_expression_from_rule(m: Model, x: Variable, y: Variable) -> None:
-    def bound(m, i):
+    def bound(m: Model, i: int) -> ScalarLinearExpression:
         return (
             (i - 1) * x.at[i - 1] + y.at[i] + 1 * x.at[i]
             if i == 1
@@ -287,9 +288,10 @@ def test_linear_expression_from_rule_with_return_none(
     m: Model, x: Variable, y: Variable
 ) -> None:
     # with return type None
-    def bound(m, i):
+    def bound(m: Model, i: int) -> ScalarLinearExpression | None:
         if i == 1:
             return (i - 1) * x.at[i - 1] + y.at[i]
+        return None
 
     expr = LinearExpression.from_rule(m, bound, x.coords)
     assert isinstance(expr, LinearExpression)

@@ -16,17 +16,17 @@ def m() -> Model:
 
 
 @pytest.fixture
-def x(m) -> Variable:
+def x(m: Model) -> Variable:
     return m.variables["x"]
 
 
 @pytest.fixture
-def y(m) -> Variable:
+def y(m: Model) -> Variable:
     return m.variables["y"]
 
 
 @pytest.fixture
-def z(m) -> Variable:
+def z(m: Model) -> Variable:
     return m.variables["z"]
 
 

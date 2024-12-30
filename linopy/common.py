@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Generator, Hashable, Iterable, Sequence
 from functools import reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
@@ -31,6 +31,7 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
+from linopy.types import Coords, Dims
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
@@ -78,7 +79,7 @@ def maybe_replace_signs(sign: DataArray) -> DataArray:
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def format_string_as_variable_name(name: Hashable):
+def format_string_as_variable_name(name: Hashable) -> str:
     """
     Format a string to a valid python variable name.
 
@@ -93,23 +94,25 @@ def format_string_as_variable_name(name: Hashable):
     return str(name).replace(" ", "_").replace("-", "_")
 
 
-def get_from_iterable(lst: str | Iterable[Hashable] | None, index: int):
+def get_from_iterable(lst: Dims, index: int) -> Any | None:
     """
     Returns the element at the specified index of the list, or None if the index
     is out of bounds.
     """
     if lst is None:
         return None
-    if not isinstance(lst, list):
+    if isinstance(lst, (Sequence, Iterable)):
         lst = list(lst)
+    else:
+        lst = [lst]
     return lst[index] if 0 <= index < len(lst) else None
 
 
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: Iterable[Hashable] | None = None,
-    **kwargs,
+    coords: Coords = None,
+    dims: Dims = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert a pandas DataFrame or Series to a DataArray.
@@ -162,10 +165,7 @@ def pandas_to_dataarray(
 
 
 def numpy_to_dataarray(
-    arr: np.ndarray,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: str | Iterable[Hashable] | None = None,
-    **kwargs,
+    arr: np.ndarray, coords: Coords = None, dims: Dims = None, **kwargs: Any
 ) -> DataArray:
     """
     Convert a numpy array to a DataArray.
@@ -187,24 +187,23 @@ def numpy_to_dataarray(
             The converted DataArray.
     """
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
-    if isinstance(dims, str):
+    if isinstance(dims, (Iterable, Sequence)):
+        dims = list(dims)
+    elif dims is not None:
         dims = [dims]
 
-    if dims is not None and len(list(dims)):
+    if dims is not None and len(dims):
         # fill up dims with default names to match the number of dimensions
         dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
-    if isinstance(coords, list) and dims is not None and len(list(dims)):
+    if isinstance(coords, list) and dims is not None and len(dims):
         coords = dict(zip(dims, coords))
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
 def as_dataarray(
-    arr,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: str | Iterable[Hashable] | None = None,
-    **kwargs,
+    arr: Any, coords: Coords = None, dims: Dims = None, **kwargs: Any
 ) -> DataArray:
     """
     Convert an object to a DataArray.
@@ -253,7 +252,10 @@ def as_dataarray(
 
 
 # TODO: rename to to_pandas_dataframe
-def to_dataframe(ds: Dataset, mask_func: Callable | None = None):
+def to_dataframe(
+    ds: Dataset,
+    mask_func: Callable[[dict[Hashable, np.ndarray]], pd.Series] | None = None,
+) -> pd.DataFrame:
     """
     Convert an xarray Dataset to a pandas DataFrame.
 
@@ -276,7 +278,7 @@ def to_dataframe(ds: Dataset, mask_func: Callable | None = None):
     return pd.DataFrame(datadict, copy=False)
 
 
-def check_has_nulls(df: pd.DataFrame, name: str):
+def check_has_nulls(df: pd.DataFrame, name: str) -> None:
     any_nan = df.isna().any()
     if any_nan.any():
         fields = ", ".join(df.columns[any_nan].to_list())
@@ -310,7 +312,7 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     return schema  # type: ignore
 
 
-def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
+def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
     """
     Convert an xarray Dataset to a polars DataFrame.
 
@@ -397,7 +399,7 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def save_join(*dataarrays: DataArray, integer_dtype: bool = False):
+def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
@@ -446,7 +448,9 @@ def fill_missing_coords(ds: DataArray, fill_helper_dims: bool = False) -> DataAr
 def fill_missing_coords(ds: Dataset, fill_helper_dims: bool = False) -> Dataset: ...
 
 
-def fill_missing_coords(ds, fill_helper_dims: bool = False):
+def fill_missing_coords(
+    ds: DataArray | Dataset, fill_helper_dims: bool = False
+) -> Dataset | DataArray:
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -578,7 +582,7 @@ def iterate_slices(
         yield ds.isel(slice_dict)
 
 
-def _remap(array, mapping):
+def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
     return mapping[array.ravel()].reshape(array.shape)
 
 
@@ -615,7 +619,7 @@ def to_path(path: str | Path | None) -> Path | None:
     return Path(path) if path is not None else None
 
 
-def best_int(max_value: int) -> type:
+def best_int(max_value: int) -> type[signedinteger[Any]]:
     """
     Get the minimal int dtype for storing values <= max_value.
     """
@@ -637,7 +641,7 @@ def get_index_map(*arrays: Sequence[Hashable]) -> dict[tuple, int]:
 
 def generate_indices_for_printout(
     dim_sizes: Sequence[int], max_lines: int
-) -> Generator[tuple[int | signedinteger[Any], ...] | None, None, None]:
+) -> Generator[tuple[int | np.signedinteger[Any], ...] | None, None, None]:
     total_lines = int(np.prod(dim_sizes))
     lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
     if lines_to_skip > 0:
@@ -674,7 +678,7 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> li
 
 
 def get_dims_with_index_levels(
-    ds: Dataset, dims: list[Hashable] | tuple[Hashable, ...] | None = None
+    ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
@@ -701,7 +705,7 @@ def get_dims_with_index_levels(
 
 
 def get_label_position(
-    obj, values: int | np.ndarray
+    obj: Any, values: int | np.ndarray
 ) -> (
     tuple[str, dict]
     | tuple[None, None]
@@ -815,7 +819,9 @@ def print_single_expression(
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
-    def print_line(expr, const):
+    def print_line(
+        expr: list[tuple[float, tuple[str, Any] | list[tuple[str, Any]]]], const: float
+    ) -> str:
         res = []
         for i, (coeff, var) in enumerate(expr):
             coeff_string = f"{coeff:+.4g}"
@@ -889,13 +895,13 @@ def print_single_constraint(model: Any, label: int) -> str:
     return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
-def has_optimized_model(func: Callable) -> Callable:
+def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Check if a reference model is set.
     """
 
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
         if self.model is None:
             raise AttributeError("No reference model set.")
         if self.model.status != "ok":
@@ -905,11 +911,11 @@ def has_optimized_model(func: Callable) -> Callable:
     return wrapper
 
 
-def is_constant(func: Callable) -> Callable:
+def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
     from linopy import expressions, variables
 
     @wraps(func)
-    def wrapper(self, arg):
+    def wrapper(self: Any, arg: Any) -> Any:
         if isinstance(
             arg,
             (
@@ -924,16 +930,15 @@ def is_constant(func: Callable) -> Callable:
     return wrapper
 
 
-def forward_as_properties(**routes: list[str]) -> Callable:
+def forward_as_properties(**routes: list[str]) -> Callable[[type], type]:
     #
-    def add_accessor(cls, item, attr):
-        @property
-        def get(self):
+    def add_accessor(cls: Any, item: str, attr: str) -> None:
+        def get(self: Any) -> Any:
             return getattr(getattr(self, item), attr)
 
-        setattr(cls, attr, get)
+        setattr(cls, attr, property(get))
 
-    def deco(cls):
+    def deco(cls: Any) -> Any:
         for item, attrs in routes.items():
             for attr in attrs:
                 add_accessor(cls, item, attr)
