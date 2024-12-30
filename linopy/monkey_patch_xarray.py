@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from functools import partialmethod, update_wrapper
-from types import NotImplementedType
 from typing import Any, Callable
 
 from xarray import DataArray
 
 from linopy import expressions, variables
+from linopy.types import NotImplementedType
 
 
 def monkey_patch(cls: type[DataArray], pass_unpatched_method: bool = False) -> Callable:
