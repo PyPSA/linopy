@@ -7,6 +7,12 @@ Created on Wed Mar 10 11:03:06 2021.
 
 from importlib.metadata import version
 
+raise ImportError(
+    "This version of linopy has a major bug that can lead to incorrect results. "
+    "Please update to the latest version of linopy (at least v0.4.4)."
+)
+
+
 __version__ = version("linopy")
 
 # Note: For intercepting multiplications between xarray dataarrays, Variables and Expressions
