@@ -9,6 +9,11 @@ from importlib.metadata import version
 
 __version__ = version("linopy")
 
+raise ImportError(
+    "This version of linopy has a major bug that can lead to incorrect results. "
+    "Please update to the latest version of linopy (at least v0.4.4)."
+)
+
 # Note: For intercepting multiplications between xarray dataarrays, Variables and Expressions
 # we need to extend their __mul__ functions with a quick special case
 import linopy.monkey_patch_xarray  # noqa: F401
