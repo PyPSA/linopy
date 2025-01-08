@@ -4,15 +4,16 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
-Version 0.4.3
+Version 0.4.4
 --------------
 
-* IMPORTANT BUGFIX: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
+* **IMPORTANT BUGFIX**: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
 * Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
 
 Version 0.4.3
 --------------
 
+* **Version 0.4.3 includes a major bug and can not be installed anymore.**
 * When creating slices for variables and constraints (important for the `solve` function), the slicing is now fixed in case no dimension to slice is available.
 * Added a pandas priority attribute. With this change, the operation with pandas objects is now prioritizing linopy objects over pandas objects. This is useful when the using linopy objects in arithmetic operations with pandas objects, e.g. `a * x` where `a` is a pandas Series/DataFrame and `x` is a linopy variable.
 * The method :meth:`model.to_file <linopy.model.Model.to_file>` now includes a progress argument to enable or disable the progress bar while writing.
@@ -20,6 +21,7 @@ Version 0.4.3
 Version 0.4.2
 --------------
 
+* **Version 0.4.2 includes a major bug and can not be installed anymore.**
 * Fix the file handler to properly close the file when reading the sense from a problem file.
 
 Version 0.4.1
