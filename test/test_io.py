@@ -5,6 +5,9 @@ Created on Thu Mar 18 09:03:35 2021.
 @author: fabian
 """
 
+from pathlib import Path
+from typing import Union
+
 import pandas as pd
 import pytest
 import xarray as xr
@@ -14,7 +17,7 @@ from linopy.testing import assert_model_equal
 
 
 @pytest.fixture
-def model():
+def model() -> Model:
     m = Model()
 
     x = m.add_variables(4, pd.Series([8, 10]), name="x")
@@ -30,7 +33,7 @@ def model():
 
 
 @pytest.fixture
-def model_with_dash_names():
+def model_with_dash_names() -> Model:
     m = Model()
 
     x = m.add_variables(4, pd.Series([8, 10]), name="x-var")
@@ -45,7 +48,7 @@ def model_with_dash_names():
 
 
 @pytest.fixture
-def model_with_multiindex():
+def model_with_multiindex() -> Model:
     m = Model()
 
     index = pd.MultiIndex.from_tuples(
@@ -63,7 +66,7 @@ def model_with_multiindex():
     return m
 
 
-def test_model_to_netcdf(model, tmp_path):
+def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     m = model
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
@@ -72,7 +75,7 @@ def test_model_to_netcdf(model, tmp_path):
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_with_sense(model, tmp_path):
+def test_model_to_netcdf_with_sense(model: Model, tmp_path: Path) -> None:
     m = model
     m.objective.sense = "max"
     fn = tmp_path / "test.nc"
@@ -82,7 +85,9 @@ def test_model_to_netcdf_with_sense(model, tmp_path):
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_with_dash_names(model_with_dash_names, tmp_path):
+def test_model_to_netcdf_with_dash_names(
+    model_with_dash_names: Model, tmp_path: Path
+) -> None:
     m = model_with_dash_names
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
@@ -91,7 +96,9 @@ def test_model_to_netcdf_with_dash_names(model_with_dash_names, tmp_path):
     assert_model_equal(m, p)
 
 
-def test_model_to_netcdf_with_status_and_condition(model_with_dash_names, tmp_path):
+def test_model_to_netcdf_with_status_and_condition(
+    model_with_dash_names: Model, tmp_path: Path
+) -> None:
     m = model_with_dash_names
     fn = tmp_path / "test.nc"
     m._status = "ok"
@@ -107,7 +114,9 @@ def test_model_to_netcdf_with_status_and_condition(model_with_dash_names, tmp_pa
     xr.__version__ in ["2024.1.0", "2024.1.1"],
     reason="xarray version 2024.1.0 has a bug with MultiIndex deserialize",
 )
-def test_model_to_netcdf_with_multiindex(model_with_multiindex, tmp_path):
+def test_model_to_netcdf_with_multiindex(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
     m = model_with_multiindex
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
@@ -117,7 +126,7 @@ def test_model_to_netcdf_with_multiindex(model_with_multiindex, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_lp(model, tmp_path):
+def test_to_file_lp(model: Model, tmp_path: Path) -> None:
     import gurobipy
 
     fn = tmp_path / "test.lp"
@@ -127,21 +136,21 @@ def test_to_file_lp(model, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_lp_None(model):
+def test_to_file_lp_None(model: Model) -> None:
     import gurobipy
 
-    fn = None
+    fn: Union[str, None] = None
     model.to_file(fn)
 
-    fn = model.get_problem_file()
-    gurobipy.read(str(fn))
+    fn_path = model.get_problem_file()
+    gurobipy.read(str(fn_path))
 
 
 @pytest.mark.skipif(
     not {"gurobi", "highs"}.issubset(available_solvers),
     reason="Gurobipy of highspy not installed",
 )
-def test_to_file_mps(model, tmp_path):
+def test_to_file_mps(model: Model, tmp_path: Path) -> None:
     import gurobipy
 
     fn = tmp_path / "test.mps"
@@ -151,28 +160,27 @@ def test_to_file_mps(model, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_invalid(model, tmp_path):
+def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         fn = tmp_path / "test.failedtype"
         model.to_file(fn)
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_gurobipy(model):
+def test_to_gurobipy(model: Model) -> None:
     model.to_gurobipy()
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_to_highspy(model):
+def test_to_highspy(model: Model) -> None:
     model.to_highspy()
 
 
-def test_to_blocks(tmp_path):
-    # This is currently broken and due to time-constraints not possible to fix
-    m = Model()
+def test_to_blocks(tmp_path: Path) -> None:
+    m: Model = Model()
 
-    lower = pd.Series(range(20))
-    upper = pd.Series(range(30, 50))
+    lower: pd.Series = pd.Series(range(20))
+    upper: pd.Series = pd.Series(range(30, 50))
     x = m.add_variables(lower, upper)
     y = m.add_variables(lower, upper)
 

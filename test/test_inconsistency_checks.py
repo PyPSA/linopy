@@ -11,8 +11,8 @@ import pytest
 from linopy import GREATER_EQUAL, Model
 
 
-def test_nan_in_variable_lower():
-    m = Model()
+def test_nan_in_variable_lower() -> None:
+    m: Model = Model()
 
     x = m.add_variables(lower=np.nan, name="x")
     y = m.add_variables(name="y")
@@ -26,8 +26,8 @@ def test_nan_in_variable_lower():
         m.solve()
 
 
-def test_nan_in_variable_upper():
-    m = Model()
+def test_nan_in_variable_upper() -> None:
+    m: Model = Model()
 
     x = m.add_variables(upper=np.nan, name="x")
     y = m.add_variables(name="y")
@@ -40,8 +40,8 @@ def test_nan_in_variable_upper():
         m.solve()
 
 
-def test_nan_in_constraint_sign():
-    m = Model()
+def test_nan_in_constraint_sign() -> None:
+    m: Model = Model()
 
     x = m.add_variables(name="x")
     y = m.add_variables(name="y")

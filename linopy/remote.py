@@ -8,9 +8,12 @@ Created on Sun Feb 13 21:34:55 2022.
 import logging
 import tempfile
 from dataclasses import dataclass
-from typing import Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 from linopy.io import read_netcdf
+
+if TYPE_CHECKING:
+    from linopy.model import Model
 
 paramiko_present = True
 try:
@@ -124,7 +127,7 @@ class RemoteHandler:
     model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert paramiko_present, "The required paramiko package is not installed."
 
         if self.client is None:
@@ -142,17 +145,17 @@ class RemoteHandler:
         logger.info("Open an SFTP session on the SSH server")
         self.sftp_client = self.client.open_sftp()
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.client is not None:
             self.client.close()
 
-    def write_python_file_on_remote(self, **solve_kwargs):
+    def write_python_file_on_remote(self, **solve_kwargs: Any) -> None:
         """
         Write the python file of the RemoteHandler on the remote machine under
         `self.python_file`.
         """
         logger.info(f"Saving python script at {self.python_file} on remote")
-        script_kwargs = dict(
+        script_kwargs: dict[str, str] = dict(
             model_unsolved_file=self.model_unsolved_file,
             solve_kwargs=f"**{solve_kwargs}",
             model_solved_file=self.model_solved_file,
@@ -160,7 +163,7 @@ class RemoteHandler:
         with self.sftp_client.open(self.python_file, "w") as fn:
             fn.write(self.python_script(**script_kwargs))
 
-    def write_model_on_remote(self, model):
+    def write_model_on_remote(self, model: "Model") -> None:
         """
         Write a model on the remote machine under `self.model_unsolved_file`.
         """
@@ -169,14 +172,14 @@ class RemoteHandler:
             model.to_netcdf(fn.name)
             self.sftp_client.put(fn.name, self.model_unsolved_file)
 
-    def execute(self, cmd):
+    def execute(self, cmd: str) -> None:
         """
         Execute a shell command on the remote machine.
         """
         cmd = cmd.strip("\n")
         self.stdin.write(cmd + "\n")
-        finish = "End of stdout. Exit Status"
-        echo_cmd = f"echo {finish} $?"
+        finish: str = "End of stdout. Exit Status"
+        echo_cmd: str = f"echo {finish} $?"
         self.stdin.write(echo_cmd + "\n")
         self.stdin.flush()
 
@@ -196,7 +199,7 @@ class RemoteHandler:
         if exit_status:
             raise OSError("Execution on remote raised an error, see above.")
 
-    def solve_on_remote(self, model, **kwargs):
+    def solve_on_remote(self, model: "Model", **kwargs: Any) -> "Model":
         """
         Solve a linopy model on the remote machine.
 

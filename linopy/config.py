@@ -7,13 +7,15 @@ Created on Fri Jan 13 12:57:45 2023.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class OptionSettings:
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: int) -> None:
         self._defaults = kwargs
         self._current_values = kwargs.copy()
 
-    def __call__(self, **kwargs) -> None:
+    def __call__(self, **kwargs: int) -> None:
         self.set_value(**kwargs)
 
     def __getitem__(self, key: str) -> int:
@@ -22,7 +24,7 @@ class OptionSettings:
     def __setitem__(self, key: str, value: int) -> None:
         return self.set_value(**{key: value})
 
-    def set_value(self, **kwargs) -> None:
+    def set_value(self, **kwargs: int) -> None:
         for k, v in kwargs.items():
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
@@ -40,7 +42,12 @@ class OptionSettings:
     def __enter__(self) -> OptionSettings:
         return self
 
-    def __exit__(self, exc_type: None, exc_val: None, exc_tb: None) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any | None,
+    ) -> None:
         self.reset()
 
     def __repr__(self) -> str:

@@ -11,7 +11,7 @@ from typing import Any, Union
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 EQUAL = "="
@@ -23,11 +23,11 @@ short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"
 
 
-SIGNS = {EQUAL, GREATER_EQUAL, LESS_EQUAL}
-SIGNS_alternative = {long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL}
-SIGNS_pretty = {EQUAL: "=", GREATER_EQUAL: "≥", LESS_EQUAL: "≤"}
+SIGNS: set[str] = {EQUAL, GREATER_EQUAL, LESS_EQUAL}
+SIGNS_alternative: set[str] = {long_EQUAL, short_GREATER_EQUAL, short_LESS_EQUAL}
+SIGNS_pretty: dict[str, str] = {EQUAL: "=", GREATER_EQUAL: "≥", LESS_EQUAL: "≤"}
 
-sign_replace_dict = {
+sign_replace_dict: dict[str, str] = {
     long_EQUAL: EQUAL,
     short_GREATER_EQUAL: GREATER_EQUAL,
     short_LESS_EQUAL: LESS_EQUAL,
@@ -39,7 +39,13 @@ GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
-HELPER_DIMS = [TERM_DIM, STACKED_TERM_DIM, GROUPED_TERM_DIM, FACTOR_DIM, CONCAT_DIM]
+HELPER_DIMS: list[str] = [
+    TERM_DIM,
+    STACKED_TERM_DIM,
+    GROUPED_TERM_DIM,
+    FACTOR_DIM,
+    CONCAT_DIM,
+]
 
 
 class ModelStatus(Enum):
@@ -128,7 +134,7 @@ class TerminationCondition(Enum):
             return cls("unknown")
 
 
-STATUS_TO_TERMINATION_CONDITION_MAP = {
+STATUS_TO_TERMINATION_CONDITION_MAP: dict[SolverStatus, list[TerminationCondition]] = {
     SolverStatus.ok: [
         TerminationCondition.optimal,
         TerminationCondition.iteration_limit,

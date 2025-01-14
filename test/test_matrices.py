@@ -12,7 +12,7 @@ import xarray as xr
 from linopy import EQUAL, GREATER_EQUAL, Model
 
 
-def test_basic_matrices():
+def test_basic_matrices() -> None:
     m = Model()
 
     lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
@@ -25,13 +25,14 @@ def test_basic_matrices():
     obj = (10 * x + 5 * y).sum()
     m.add_objective(obj)
 
+    assert m.matrices.A is not None
     assert m.matrices.A.shape == (*m.matrices.clabels.shape, *m.matrices.vlabels.shape)
     assert m.matrices.clabels.shape == m.matrices.sense.shape
     assert m.matrices.vlabels.shape == m.matrices.ub.shape
     assert m.matrices.vlabels.shape == m.matrices.lb.shape
 
 
-def test_basic_matrices_masked():
+def test_basic_matrices_masked() -> None:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -45,13 +46,14 @@ def test_basic_matrices_masked():
 
     m.add_objective(2 * x + y)
 
+    assert m.matrices.A is not None
     assert m.matrices.A.shape == (*m.matrices.clabels.shape, *m.matrices.vlabels.shape)
     assert m.matrices.clabels.shape == m.matrices.sense.shape
     assert m.matrices.vlabels.shape == m.matrices.ub.shape
     assert m.matrices.vlabels.shape == m.matrices.lb.shape
 
 
-def test_matrices_duplicated_variables():
+def test_matrices_duplicated_variables() -> None:
     m = Model()
 
     x = m.add_variables(pd.Series([0, 0]), 1, name="x")
@@ -59,12 +61,14 @@ def test_matrices_duplicated_variables():
     z = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
     m.add_constraints(x + x + y + y + z + z == 0)
 
+    assert m.matrices.A is not None
+
     A = m.matrices.A.todense()
     assert A[0, 0] == 2
     assert np.isin(np.unique(np.array(A)), [0.0, 2.0]).all()
 
 
-def test_matrices_float_c():
+def test_matrices_float_c() -> None:
     # https://github.com/PyPSA/linopy/issues/200
     m = Model()
 
