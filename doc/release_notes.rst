@@ -4,7 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
-* The internal handling of `Solution` objects was improved for more consistency. Solution objects created from solver calls now preserve the exact index names from the input file, ensuring consistent behavior across all solver functions.
+* The internal handling of `Solution` objects was improved for more consistency. Solution objects created from solver calls now preserve the exact index names from the input file.
 
 Version 0.4.4
 --------------
