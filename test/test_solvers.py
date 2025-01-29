@@ -15,10 +15,10 @@ from linopy import solvers
 free_mps_problem = """
 NAME        sample_mip
 ROWS
- N  obj     
- G  c1      
- L  c2      
- E  c3      
+ N  obj
+ G  c1
+ L  c2
+ E  c3
 COLUMNS
     col1        obj       5
     col1        c1        2
@@ -45,6 +45,7 @@ BOUNDS
 ENDATA
 """
 
+
 @pytest.mark.parametrize("solver", solvers.available_solvers)
 def test_free_mps_solution_parsing(solver):
     try:
@@ -59,7 +60,9 @@ def test_free_mps_solution_parsing(solver):
 
         s = solver_class()
         with NamedTemporaryFile(suffix=".sol") as sol_file:
-            result = s.solve_problem(problem_fn=Path(mps_file.name), solution_fn=Path(sol_file.name))
+            result = s.solve_problem(
+                problem_fn=Path(mps_file.name), solution_fn=Path(sol_file.name)
+            )
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
