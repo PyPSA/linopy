@@ -9,7 +9,7 @@ import pytest
 
 from linopy import solvers
 
-free_mps_problem = """NAME        sample_mip
+free_mps_problem = """NAME          sample_mip
 ROWS
  N  obj
  G  c1
@@ -42,7 +42,7 @@ ENDATA
 """
 
 
-@pytest.mark.parametrize("solver", solvers.available_solvers)
+@pytest.mark.parametrize("solver", set(solvers.available_solvers))
 def test_free_mps_solution_parsing(solver, tmp_path):
     try:
         solver_enum = solvers.SolverName(solver.lower())
