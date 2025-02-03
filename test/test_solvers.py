@@ -5,9 +5,6 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
-from pathlib import Path
-from tempfile import NamedTemporaryFile
-
 import pytest
 
 from linopy import solvers
@@ -46,22 +43,22 @@ ENDATA
 
 
 @pytest.mark.parametrize("solver", solvers.available_solvers)
-def test_free_mps_solution_parsing(solver):
+def test_free_mps_solution_parsing(solver, tmp_path):
     try:
         solver_enum = solvers.SolverName(solver.lower())
         solver_class = getattr(solvers, solver_enum.name)
     except ValueError:
         raise ValueError(f"Solver '{solver}' is not recognized")
 
-    with NamedTemporaryFile(mode="w", suffix=".mps", delete=False) as mps_file:
-        mps_file.write(free_mps_problem)
-        mps_file.close()
+    # Write the MPS file to the temporary directory
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
 
-        s = solver_class()
-        with NamedTemporaryFile(suffix=".sol") as sol_file:
-            result = s.solve_problem(
-                problem_fn=Path(mps_file.name), solution_fn=Path(sol_file.name)
-            )
+    # Create a solution file path in the temporary directory
+    sol_file = tmp_path / "solution.sol"
+
+    s = solver_class()
+    result = s.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
