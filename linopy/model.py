@@ -30,6 +30,7 @@ from linopy.common import (
     best_int,
     maybe_replace_signs,
     replace_by_map,
+    set_int_index,
     to_path,
 )
 from linopy.constants import (
@@ -1189,6 +1190,7 @@ class Model:
 
         # map solution and dual to original shape which includes missing values
         sol = result.solution.primal.copy()
+        sol = set_int_index(sol)
         sol.loc[-1] = nan
 
         for name, var in self.variables.items():
@@ -1201,6 +1203,7 @@ class Model:
 
         if not result.solution.dual.empty:
             dual = result.solution.dual.copy()
+            dual = set_int_index(dual)
             dual.loc[-1] = nan
 
             for name, con in self.constraints.items():

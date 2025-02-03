@@ -47,12 +47,12 @@ from linopy.common import (
     print_coord,
     print_single_variable,
     save_join,
+    set_int_index,
     to_dataframe,
     to_polars,
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.solvers import set_int_index
 from linopy.types import NotImplementedType
 
 if TYPE_CHECKING:
