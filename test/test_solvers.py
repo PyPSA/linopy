@@ -53,7 +53,7 @@ def test_free_mps_solution_parsing(solver):
     except ValueError:
         raise ValueError(f"Solver '{solver}' is not recognized")
 
-    with NamedTemporaryFile(mode="w", suffix=".mps") as mps_file:
+    with NamedTemporaryFile(mode="w", suffix=".mps", delete_on_close=False) as mps_file:
         mps_file.write(free_mps_problem)
         mps_file.close()
 
