@@ -351,11 +351,11 @@ class Variable:
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             lines.insert(
                 0,
-                f"Variable ({shape_str}){mask_str}\n{'-'* (len(shape_str) + len(mask_str) + 11)}",
+                f"Variable ({shape_str}){mask_str}\n{'-' * (len(shape_str) + len(mask_str) + 11)}",
             )
         else:
             lines.append(
-                f"Variable\n{'-'*8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -1111,9 +1111,9 @@ class AtIndexer:
         # return single scalar
         if not object.labels.ndim:
             return ScalarVariable(object.labels.item(), object.model)
-        assert object.labels.ndim == len(
-            keys
-        ), f"expected {object.labels.ndim} keys, got {len(keys)}."
+        assert object.labels.ndim == len(keys), (
+            f"expected {object.labels.ndim} keys, got {len(keys)}."
+        )
         key = dict(zip(object.labels.dims, keys))
         keys = [object.labels.get_index(k).get_loc(v) for k, v in key.items()]
         return ScalarVariable(object.labels.data[tuple(keys)], object.model)

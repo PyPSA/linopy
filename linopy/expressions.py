@@ -448,9 +448,9 @@ class LinearExpression:
             expr = print_single_expression(
                 self.coeffs, self.vars, self.const, self.model
             )
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n{expr}")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
         else:
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
 
@@ -1875,7 +1875,7 @@ class ScalarLinearExpression:
             return ScalarLinearExpression(coeffs, vars, self.model)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
-                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for +: {type(self)} and {type(other)}"
             )
 
         coeffs = self.coeffs + other.coeffs
@@ -1901,7 +1901,7 @@ class ScalarLinearExpression:
             other = other.to_scalar_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
-                "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for -: {type(self)} and {type(other)}"
             )
 
         return ScalarLinearExpression(
@@ -1918,7 +1918,7 @@ class ScalarLinearExpression:
     def __mul__(self, other: float | int) -> ScalarLinearExpression:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for *: {type(self)} and {type(other)}"
             )
 
         return ScalarLinearExpression(
@@ -1931,7 +1931,7 @@ class ScalarLinearExpression:
     def __div__(self, other: float | int) -> ScalarLinearExpression:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for /: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for /: {type(self)} and {type(other)}"
             )
         return self.__mul__(1 / other)
 
@@ -1941,7 +1941,7 @@ class ScalarLinearExpression:
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
@@ -1949,7 +1949,7 @@ class ScalarLinearExpression:
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
@@ -1957,7 +1957,7 @@ class ScalarLinearExpression:
     def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, EQUAL, other)

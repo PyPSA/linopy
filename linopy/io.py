@@ -346,7 +346,7 @@ def to_lp_file(
         )
         f.write("end\n")
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+        logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
 def objective_write_linear_terms_polars(f, df):
@@ -586,7 +586,7 @@ def to_lp_file_polars(
         )
         f.write(b"end\n")
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+        logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
 def to_file(
