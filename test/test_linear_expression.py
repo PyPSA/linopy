@@ -246,9 +246,14 @@ def test_linear_expression_with_constant(m, x, y):
 
 def test_linear_expression_with_constant_multiplication(m, x, y):
     expr = x + 1
-    expr = expr * 10
-    assert isinstance(expr, LinearExpression)
-    assert (expr.const == 10).all()
+
+    obs = expr * 10
+    assert isinstance(obs, LinearExpression)
+    assert (obs.const == 10).all()
+
+    obs = expr * pd.Series([1, 2, 3], index=pd.RangeIndex(3, name="new_dim"))
+    assert isinstance(obs, LinearExpression)
+    assert obs.shape == (2, 3, 1)
 
 
 def test_linear_expression_multi_indexed(u):
