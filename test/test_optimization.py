@@ -410,7 +410,7 @@ def test_default_settings_small_slices(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solver_options(model, solver, io_api):
+def test_solver_time_limit_options(model, solver, io_api):
     time_limit_option = {
         "cbc": {"sec": 1},
         "gurobi": {"TimeLimit": 1},
@@ -425,6 +425,17 @@ def test_solver_options(model, solver, io_api):
     }
     status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])
     assert status == "ok"
+
+
+@pytest.mark.parametrize("solver,io_api", params)
+def test_solver_method_options(model, solver, io_api):
+    method_options = {
+        "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
+    }
+    if solver in method_options:
+        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])
+        assert status == "ok"
+        assert np.isclose(model.objective.value, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
