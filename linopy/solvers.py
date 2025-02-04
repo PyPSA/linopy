@@ -551,7 +551,8 @@ class GLPK(Solver):
         Path(solution_fn).parent.mkdir(exist_ok=True)
 
         # TODO use --nopresol argument for non-optimal solution output
-        command = f"glpsol --{io_api} {problem_fn} --output {solution_fn} "
+        io_api_arg = "freemps" if io_api == "mps" else io_api
+        command = f"glpsol --{io_api_arg} {problem_fn} --output {solution_fn} "
         if log_fn is not None:
             command += f"--log {log_fn} "
         if warmstart_fn:
