@@ -217,9 +217,14 @@ class Solver(ABC):
         if status.is_ok:
             return func()
         elif status.status == SolverStatus.unknown:
-            with contextlib.suppress(Exception):
+            try:
                 logger.warning("Solution status unknown. Trying to parse solution.")
-                return func()
+                sol = func()
+                status.status = SolverStatus.ok
+                logger.warning("Solution parsed successfully.")
+                return sol
+            except Exception as e:
+                logger.error(f"Failed to parse solution: {e}")
         return Solution()
 
     @abstractmethod

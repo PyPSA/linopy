@@ -239,4 +239,4 @@ class Result:
             else:
                 logger.info(" Optimization successful: \n%s\n", self)
         else:
-            logger.warning("Optimization failed: \n%s\n", self)
+            logger.warning("Optimization potentially failed: \n%s\n", self)
