@@ -9,7 +9,7 @@ import pytest
 
 from linopy import solvers
 
-free_mps_problem = """NAME          sample_mip
+free_mps_problem = """NAME               sample_mip
 ROWS
  N  obj
  G  c1
