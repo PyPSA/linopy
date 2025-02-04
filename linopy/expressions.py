@@ -1472,6 +1472,8 @@ class LinearExpression:
 
     stack = exprwrap(Dataset.stack)
 
+    unstack = exprwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 

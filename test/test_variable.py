@@ -267,6 +267,12 @@ def test_variable_stack(x):
     assert result.dims == ("new",)
 
 
+def test_variable_unstack(x):
+    result = x.expand_dims("new_dim").stack(new=("new_dim", "first")).unstack("new")
+    assert isinstance(result, linopy.variables.Variable)
+    assert result.dims == ("new_dim", "first")
+
+
 def test_variable_flat(x):
     result = x.flat
     assert isinstance(result, pd.DataFrame)
