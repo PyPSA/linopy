@@ -11,6 +11,7 @@ Version 0.4.4
 
 * **IMPORTANT BUGFIX**: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
 * Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
+* GLPK solver is always called with the `--freemps` option instead of the `--mps` when using the Solver API to solve an external MPS file. `--mps` is for the older fixed-column MPS format that is rarely used nowadays. Almost all fixed MPS files can be parsed by the free MPS format.
 
 Version 0.4.3
 --------------
