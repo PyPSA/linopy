@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * The internal handling of `Solution` objects was improved for more consistency. Solution objects created from solver calls now preserve the exact index names from the input file.
+* Multiplication of a linear expression by a constant value may now introduce new dimensions.
 
 Version 0.4.4
 --------------
