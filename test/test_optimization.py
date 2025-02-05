@@ -5,8 +5,11 @@ Created on Thu Mar 18 08:49:08 2021.
 @author: fabian
 """
 
+from __future__ import annotations
+
 import logging
 import platform
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,15 +23,17 @@ from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic
 
 logger = logging.getLogger(__name__)
 
-io_apis = ["lp", "lp-polars"]
+io_apis: list[str] = ["lp", "lp-polars"]
 
 if "highs" in available_solvers:
     # mps io is only supported via highspy
     io_apis.append("mps")
 
-params = [(name, io_api) for name in available_solvers for io_api in io_apis]
+params: list[tuple[str, str]] = [
+    (name, io_api) for name in available_solvers for io_api in io_apis
+]
 
-direct_solvers = ["gurobi", "highs", "mosek"]
+direct_solvers: list[str] = ["gurobi", "highs", "mosek"]
 for solver in direct_solvers:
     if solver in available_solvers:
         params.append((solver, "direct"))
@@ -37,14 +42,14 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp"))
 
 
-feasible_quadratic_solvers = quadratic_solvers
+feasible_quadratic_solvers: list[str] = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
 if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
 
 
-def test_print_solvers(capsys):
+def test_print_solvers(capsys: Any) -> None:
     with capsys.disabled():
         print(
             f"\ntesting solvers: {', '.join(available_solvers)}\n"
@@ -53,7 +58,7 @@ def test_print_solvers(capsys):
 
 
 @pytest.fixture
-def model():
+def model() -> Model:
     m = Model(chunk=None)
 
     x = m.add_variables(name="x")
@@ -67,7 +72,7 @@ def model():
 
 
 @pytest.fixture
-def model_anonymous_constraint():
+def model_anonymous_constraint() -> Model:
     m = Model(chunk=None)
 
     x = m.add_variables(name="x")
@@ -81,7 +86,7 @@ def model_anonymous_constraint():
 
 
 @pytest.fixture
-def model_chunked():
+def model_chunked() -> Model:
     m = Model(chunk="auto")
 
     x = m.add_variables(name="x")
@@ -95,7 +100,7 @@ def model_chunked():
 
 
 @pytest.fixture
-def model_maximization():
+def model_maximization() -> Model:
     m = Model()
 
     x = m.add_variables(name="x")
@@ -109,7 +114,7 @@ def model_maximization():
 
 
 @pytest.fixture
-def model_with_inf():
+def model_with_inf() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -119,26 +124,26 @@ def model_with_inf():
     m.add_constraints(x + y, GREATER_EQUAL, 10)
     m.add_constraints(1 * x, "<=", np.inf)
 
-    m.objective = 2 * x + y
+    m.objective = 2 * x + y  # type: ignore
 
     return m
 
 
 @pytest.fixture
-def model_with_duplicated_variables():
+def model_with_duplicated_variables() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
     x = m.add_variables(coords=[lower.index], name="x")
 
     m.add_constraints(x + x, GREATER_EQUAL, 10)
-    m.objective = 1 * x
+    m.objective = 1 * x  # type: ignore
 
     return m
 
 
 @pytest.fixture
-def model_with_non_aligned_variables():
+def model_with_non_aligned_variables() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -147,13 +152,13 @@ def model_with_non_aligned_variables():
     y = m.add_variables(lower=lower, coords=[lower.index], name="y")
 
     m.add_constraints(x + y, GREATER_EQUAL, 10.5)
-    m.objective = 1 * x + 0.5 * y
+    m.objective = 1 * x + 0.5 * y  # type: ignore
 
     return m
 
 
 @pytest.fixture
-def milp_binary_model():
+def milp_binary_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -167,7 +172,7 @@ def milp_binary_model():
 
 
 @pytest.fixture
-def milp_binary_model_r():
+def milp_binary_model_r() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -181,7 +186,7 @@ def milp_binary_model_r():
 
 
 @pytest.fixture
-def milp_model():
+def milp_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -195,7 +200,7 @@ def milp_model():
 
 
 @pytest.fixture
-def milp_model_r():
+def milp_model_r() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -209,7 +214,7 @@ def milp_model_r():
 
 
 @pytest.fixture
-def quadratic_model():
+def quadratic_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -223,7 +228,7 @@ def quadratic_model():
 
 
 @pytest.fixture
-def quadratic_model_unbounded():
+def quadratic_model_unbounded() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -237,7 +242,7 @@ def quadratic_model_unbounded():
 
 
 @pytest.fixture
-def quadratic_model_cross_terms():
+def quadratic_model_cross_terms() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -251,7 +256,7 @@ def quadratic_model_cross_terms():
 
 
 @pytest.fixture
-def modified_model():
+def modified_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -260,15 +265,15 @@ def modified_model():
 
     c = m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    y.lower = 9
+    y.lower = 9  # type: ignore
     c.lhs = 2 * x + y
-    m.objective = 2 * x + y
+    m.objective = 2 * x + y  # type: ignore
 
     return m
 
 
 @pytest.fixture
-def masked_variable_model():
+def masked_variable_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -285,7 +290,7 @@ def masked_variable_model():
 
 
 @pytest.fixture
-def masked_constraint_model():
+def masked_constraint_model() -> Model:
     m = Model()
 
     lower = pd.Series(0, range(10))
@@ -302,19 +307,19 @@ def masked_constraint_model():
 
 
 def test_model_types(
-    model,
-    model_with_duplicated_variables,
-    milp_binary_model,
-    milp_binary_model_r,
-    milp_model,
-    milp_model_r,
-    quadratic_model,
-    quadratic_model_unbounded,
-    quadratic_model_cross_terms,
-    modified_model,
-    masked_variable_model,
-    masked_constraint_model,
-):
+    model: Model,
+    model_with_duplicated_variables: Model,
+    milp_binary_model: Model,
+    milp_binary_model_r: Model,
+    milp_model: Model,
+    milp_model_r: Model,
+    quadratic_model: Model,
+    quadratic_model_unbounded: Model,
+    quadratic_model_cross_terms: Model,
+    modified_model: Model,
+    masked_variable_model: Model,
+    masked_constraint_model: Model,
+) -> None:
     assert model.type == "LP"
     assert model_with_duplicated_variables.type == "LP"
     assert milp_binary_model.type == "MILP"
@@ -330,16 +335,18 @@ def test_model_types(
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_default_setting(model, solver, io_api):
+def test_default_setting(model: Model, solver: str, io_api: str) -> None:
     assert model.objective.sense == "min"
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model.objective.value, 3.3)
+    assert np.isclose(model.objective.value or 0, 3.3)
     assert model.solver_name == solver
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
+def test_default_setting_sol_and_dual_accessor(
+    model: Model, solver: str, io_api: str
+) -> None:
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     x = model["x"]
@@ -352,7 +359,9 @@ def test_default_setting_sol_and_dual_accessor(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_default_setting_expression_sol_accessor(model, solver, io_api):
+def test_default_setting_expression_sol_accessor(
+    model: Model, solver: str, io_api: str
+) -> None:
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     x = model["x"]
@@ -369,17 +378,21 @@ def test_default_setting_expression_sol_accessor(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_anonymous_constraint(model, model_anonymous_constraint, solver, io_api):
+def test_anonymous_constraint(
+    model: Model, model_anonymous_constraint: Model, solver: str, io_api: str
+) -> None:
     status, condition = model_anonymous_constraint.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model_anonymous_constraint.objective.value, 3.3)
+    assert np.isclose(model_anonymous_constraint.objective.value or 0, 3.3)
 
     model.solve(solver, io_api=io_api)
     assert_equal(model.solution, model_anonymous_constraint.solution)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_model_maximization(model_maximization, solver, io_api):
+def test_model_maximization(
+    model_maximization: Model, solver: str, io_api: str
+) -> None:
     m = model_maximization
     assert m.objective.sense == "max"
     assert m.objective.value is None
@@ -390,27 +403,29 @@ def test_model_maximization(model_maximization, solver, io_api):
     else:
         status, condition = m.solve(solver, io_api=io_api)
         assert status == "ok"
-        assert np.isclose(m.objective.value, 3.3)
+        assert np.isclose(m.objective.value or 0, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_default_settings_chunked(model_chunked, solver, io_api):
+def test_default_settings_chunked(
+    model_chunked: Model, solver: str, io_api: str
+) -> None:
     status, condition = model_chunked.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert np.isclose(model_chunked.objective.value, 3.3)
+    assert np.isclose(model_chunked.objective.value or 0, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_default_settings_small_slices(model, solver, io_api):
+def test_default_settings_small_slices(model: Model, solver: str, io_api: str) -> None:
     assert model.objective.sense == "min"
     status, condition = model.solve(solver, io_api=io_api, slice_size=2)
     assert status == "ok"
-    assert np.isclose(model.objective.value, 3.3)
+    assert np.isclose(model.objective.value or 0, 3.3)
     assert model.solver_name == solver
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solver_time_limit_options(model, solver, io_api):
+def test_solver_time_limit_options(model: Model, solver: str, io_api: str) -> None:
     time_limit_option = {
         "cbc": {"sec": 1},
         "gurobi": {"TimeLimit": 1},
@@ -423,30 +438,35 @@ def test_solver_time_limit_options(model, solver, io_api):
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
     }
-    status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])
+    status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])  # type: ignore
     assert status == "ok"
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solver_method_options(model, solver, io_api):
+def test_solver_method_options(model: Model, solver: str, io_api: str) -> None:
     method_options = {
         "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
     }
     if solver in method_options:
-        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])
+        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])  # type: ignore
         assert status == "ok"
-        assert np.isclose(model.objective.value, 3.3)
+        objective = model.objective.value or 0
+        assert np.isclose(objective, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_duplicated_variables(model_with_duplicated_variables, solver, io_api):
+def test_duplicated_variables(
+    model_with_duplicated_variables: Model, solver: str, io_api: str
+) -> None:
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
     assert all(model_with_duplicated_variables.solution["x"] == 5)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_non_aligned_variables(model_with_non_aligned_variables, solver, io_api):
+def test_non_aligned_variables(
+    model_with_non_aligned_variables: Model, solver: str, io_api: str
+) -> None:
     status, condition = model_with_non_aligned_variables.solve(solver, io_api=io_api)
     assert status == "ok"
     with pytest.warns(UserWarning):
@@ -460,7 +480,7 @@ def test_non_aligned_variables(model_with_non_aligned_variables, solver, io_api)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_set_files(tmp_path, model, solver, io_api):
+def test_set_files(tmp_path: Any, model: Model, solver: str, io_api: str) -> None:
     status, condition = model.solve(
         solver,
         io_api=io_api,
@@ -473,7 +493,9 @@ def test_set_files(tmp_path, model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_set_files_and_keep_files(tmp_path, model, solver, io_api):
+def test_set_files_and_keep_files(
+    tmp_path: Any, model: Model, solver: str, io_api: str
+) -> None:
     status, condition = model.solve(
         solver,
         io_api=io_api,
@@ -490,7 +512,7 @@ def test_set_files_and_keep_files(tmp_path, model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_infeasible_model(model, solver, io_api):
+def test_infeasible_model(model: Model, solver: str, io_api: str) -> None:
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 
@@ -510,7 +532,7 @@ def test_infeasible_model(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_model_with_inf(model_with_inf, solver, io_api):
+def test_model_with_inf(model_with_inf: Model, solver: str, io_api: str) -> None:
     status, condition = model_with_inf.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert (model_with_inf.solution.x == 0).all()
@@ -520,7 +542,7 @@ def test_model_with_inf(model_with_inf, solver, io_api):
 @pytest.mark.parametrize(
     "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
 )
-def test_milp_binary_model(milp_binary_model, solver, io_api):
+def test_milp_binary_model(milp_binary_model: Model, solver: str, io_api: str) -> None:
     status, condition = milp_binary_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert (
@@ -531,7 +553,9 @@ def test_milp_binary_model(milp_binary_model, solver, io_api):
 @pytest.mark.parametrize(
     "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
 )
-def test_milp_binary_model_r(milp_binary_model_r, solver, io_api):
+def test_milp_binary_model_r(
+    milp_binary_model_r: Model, solver: str, io_api: str
+) -> None:
     status, condition = milp_binary_model_r.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert (
@@ -542,7 +566,7 @@ def test_milp_binary_model_r(milp_binary_model_r, solver, io_api):
 @pytest.mark.parametrize(
     "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
 )
-def test_milp_model(milp_model, solver, io_api):
+def test_milp_model(milp_model: Model, solver: str, io_api: str) -> None:
     status, condition = milp_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
@@ -551,7 +575,7 @@ def test_milp_model(milp_model, solver, io_api):
 @pytest.mark.parametrize(
     "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
 )
-def test_milp_model_r(milp_model_r, solver, io_api):
+def test_milp_model_r(milp_model_r: Model, solver: str, io_api: str) -> None:
     # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
     # skip it
     if io_api != "mps":
@@ -564,13 +588,13 @@ def test_milp_model_r(milp_model_r, solver, io_api):
     "solver,io_api",
     [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
 )
-def test_quadratic_model(quadratic_model, solver, io_api):
+def test_quadratic_model(quadratic_model: Model, solver: str, io_api: str) -> None:
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
         assert (quadratic_model.solution.y.round(3) >= 10).all()
-        assert round(quadratic_model.objective.value, 3) == 0
+        assert round(quadratic_model.objective.value or 0, 3) == 0
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)
@@ -580,13 +604,15 @@ def test_quadratic_model(quadratic_model, solver, io_api):
     "solver,io_api",
     [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
 )
-def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api):
+def test_quadratic_model_cross_terms(
+    quadratic_model_cross_terms: Model, solver: str, io_api: str
+) -> None:
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_cross_terms.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model_cross_terms.solution.x.round(3) == 1.5).all()
         assert (quadratic_model_cross_terms.solution.y.round(3) == 8.5).all()
-        assert round(quadratic_model_cross_terms.objective.value, 3) == 77.5
+        assert round(quadratic_model_cross_terms.objective.value or 0, 3) == 77.5
     else:
         with pytest.raises(ValueError):
             quadratic_model_cross_terms.solve(solver, io_api=io_api)
@@ -596,13 +622,15 @@ def test_quadratic_model_cross_terms(quadratic_model_cross_terms, solver, io_api
     "solver,io_api",
     [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
 )
-def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
+def test_quadratic_model_wo_constraint(
+    quadratic_model: Model, solver: str, io_api: str
+) -> None:
     quadratic_model.constraints.remove("con0")
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model.solve(solver, io_api=io_api)
         assert condition == "optimal"
         assert (quadratic_model.solution.x.round(3) == 0).all()
-        assert round(quadratic_model.objective.value, 3) == 0
+        assert round(quadratic_model.objective.value or 0, 3) == 0
     else:
         with pytest.raises(ValueError):
             quadratic_model.solve(solver, io_api=io_api)
@@ -612,7 +640,9 @@ def test_quadratic_model_wo_constraint(quadratic_model, solver, io_api):
     "solver,io_api",
     [p for p in params if p not in [("mindopt", "lp"), ("mindopt", "lp-polars")]],
 )
-def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
+def test_quadratic_model_unbounded(
+    quadratic_model_unbounded: Model, solver: str, io_api: str
+) -> None:
     if solver in feasible_quadratic_solvers:
         status, condition = quadratic_model_unbounded.solve(solver, io_api=io_api)
         assert condition in ["unbounded", "unknown", "infeasible_or_unbounded"]
@@ -624,7 +654,7 @@ def test_quadratic_model_unbounded(quadratic_model_unbounded, solver, io_api):
 @pytest.mark.parametrize(
     "solver,io_api", [p for p in params if p[0] not in ["mindopt"]]
 )
-def test_modified_model(modified_model, solver, io_api):
+def test_modified_model(modified_model: Model, solver: str, io_api: str) -> None:
     status, condition = modified_model.solve(solver, io_api=io_api)
     assert condition == "optimal"
     assert (modified_model.solution.x == 0).all()
@@ -632,7 +662,9 @@ def test_modified_model(modified_model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_masked_variable_model(masked_variable_model, solver, io_api):
+def test_masked_variable_model(
+    masked_variable_model: Model, solver: str, io_api: str
+) -> None:
     masked_variable_model.solve(solver, io_api=io_api)
     x = masked_variable_model.variables.x
     y = masked_variable_model.variables.y
@@ -645,34 +677,40 @@ def test_masked_variable_model(masked_variable_model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_masked_constraint_model(masked_constraint_model, solver, io_api):
+def test_masked_constraint_model(
+    masked_constraint_model: Model, solver: str, io_api: str
+) -> None:
     masked_constraint_model.solve(solver, io_api=io_api)
     assert (masked_constraint_model.solution.y[:-2] == 10).all()
     assert (masked_constraint_model.solution.y[-2:] == 5).all()
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_basis_and_warmstart(tmp_path, model, solver, io_api):
+def test_basis_and_warmstart(
+    tmp_path: Any, model: Model, solver: str, io_api: str
+) -> None:
     basis_fn = tmp_path / "basis.bas"
     model.solve(solver, basis_fn=basis_fn)
     model.solve(solver, warmstart_fn=basis_fn)
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solution_fn_parent_dir_doesnt_exist(model, solver, io_api, tmp_path):
+def test_solution_fn_parent_dir_doesnt_exist(
+    model: Model, solver: str, io_api: str, tmp_path: Any
+) -> None:
     solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
     status, condition = model.solve(solver, io_api=io_api, solution_fn=solution_fn)
     assert status == "ok"
 
 
 @pytest.mark.parametrize("solver", available_solvers)
-def test_non_supported_solver_io(model, solver):
+def test_non_supported_solver_io(model: Model, solver: str) -> None:
     with pytest.raises(ValueError):
         model.solve(solver, io_api="non_supported")
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solver_attribute_getter(model, solver, io_api):
+def test_solver_attribute_getter(model: Model, solver: str, io_api: str) -> None:
     model.solve(solver)
     if solver != "gurobi":
         with pytest.raises(NotImplementedError):
@@ -684,11 +722,11 @@ def test_solver_attribute_getter(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_model_resolve(model, solver, io_api):
+def test_model_resolve(model: Model, solver: str, io_api: str) -> None:
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     # x = -0.1, y = 1.7
-    assert np.isclose(model.objective.value, 3.3)
+    assert np.isclose(model.objective.value or 0, 3.3)
 
     # add another constraint after solve
     model.add_constraints(model.variables.y >= 3)
@@ -696,14 +734,16 @@ def test_model_resolve(model, solver, io_api):
     status, condition = model.solve(solver, io_api=io_api)
     assert status == "ok"
     # x = -0.75, y = 3.0
-    assert np.isclose(model.objective.value, 5.25)
+    assert np.isclose(model.objective.value or 0, 5.25)
 
 
 @pytest.mark.parametrize("solver,io_api", [p for p in params if "direct" not in p])
-def test_solver_classes_from_problem_file(model, solver, io_api):
+def test_solver_classes_from_problem_file(
+    model: Model, solver: str, io_api: str
+) -> None:
     # first test initialization of super class. Should not be possible to initialize
     with pytest.raises(TypeError):
-        solver_super = solvers.Solver()  # noqa F841
+        solvers.Solver()  # type: ignore
 
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
@@ -732,7 +772,7 @@ def test_solver_classes_from_problem_file(model, solver, io_api):
 
 
 @pytest.mark.parametrize("solver,io_api", params)
-def test_solver_classes_direct(model, solver, io_api):
+def test_solver_classes_direct(model: Model, solver: str, io_api: str) -> None:
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")
     solver_ = solver_class()

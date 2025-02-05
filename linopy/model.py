@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -89,6 +89,23 @@ class Model:
 
     solver_model: Any
     solver_name: str
+    _variables: Variables
+    _constraints: Constraints
+    _objective: Objective
+    _parameters: Dataset
+    _solution: Dataset
+    _dual: Dataset
+    _status: str
+    _termination_condition: str
+    _xCounter: int
+    _cCounter: int
+    _varnameCounter: int
+    _connameCounter: int
+    _blocks: DataArray | None
+    _chunk: T_Chunks
+    _force_dim_names: bool
+    _solver_dir: Path
+    matrices: MatrixAccessor
 
     __slots__ = (
         # containers
@@ -181,14 +198,16 @@ class Model:
         return self._constraints
 
     @property
-    def objective(self):
+    def objective(self) -> Objective:
         """
         Objective assigned to the model.
         """
         return self._objective
 
     @objective.setter
-    def objective(self, obj) -> Objective:
+    def objective(
+        self, obj: Objective | LinearExpression | QuadraticExpression
+    ) -> Objective:
         if not isinstance(obj, Objective):
             obj = Objective(obj, self)
 
@@ -196,18 +215,18 @@ class Model:
         return self._objective
 
     @property
-    def sense(self):
+    def sense(self) -> str:
         """
         Sense of the objective function.
         """
         return self.objective.sense
 
     @sense.setter
-    def sense(self, value):
+    def sense(self, value: str) -> None:
         self.objective.sense = value
 
     @property
-    def parameters(self):
+    def parameters(self) -> Dataset:
         """
         Parameters assigned to the model.
 
@@ -217,7 +236,7 @@ class Model:
         return self._parameters
 
     @parameters.setter
-    def parameters(self, value):
+    def parameters(self, value: Dataset | Mapping) -> None:
         self._parameters = Dataset(value)
 
     @property
@@ -235,25 +254,25 @@ class Model:
         return self.constraints.dual
 
     @property
-    def status(self):
+    def status(self) -> str:
         """
         Status of the model.
         """
         return self._status
 
     @status.setter
-    def status(self, value):
+    def status(self, value: str) -> None:
         self._status = ModelStatus[value].value
 
     @property
-    def termination_condition(self):
+    def termination_condition(self) -> str:
         """
         Termination condition of the model.
         """
         return self._termination_condition
 
     @termination_condition.setter
-    def termination_condition(self, value):
+    def termination_condition(self, value: str) -> None:
         # TODO: remove if-clause, only kept for backward compatibility
         if value:
             self._termination_condition = TerminationCondition[value].value
@@ -261,18 +280,18 @@ class Model:
             self._termination_condition = value
 
     @property
-    def chunk(self):
+    def chunk(self) -> T_Chunks:
         """
         Chunk sizes of the model.
         """
         return self._chunk
 
     @chunk.setter
-    def chunk(self, value: T_Chunks):
+    def chunk(self, value: T_Chunks) -> None:
         self._chunk = value
 
     @property
-    def force_dim_names(self):
+    def force_dim_names(self) -> bool:
         """
         Whether assigned variables, constraints and data should always have
         custom dimension names, i.e. not matching dimension names "dim_0",
@@ -285,7 +304,7 @@ class Model:
         return self._force_dim_names
 
     @force_dim_names.setter
-    def force_dim_names(self, value):
+    def force_dim_names(self, value: bool) -> None:
         self._force_dim_names = bool(value)
 
     @property
@@ -296,7 +315,7 @@ class Model:
         return self._solver_dir
 
     @solver_dir.setter
-    def solver_dir(self, value):
+    def solver_dir(self, value: str | Path) -> None:
         if not isinstance(value, (str, Path)):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
@@ -403,7 +422,7 @@ class Model:
         mask: DataArray | ndarray | Series | None = None,
         binary: bool = False,
         integer: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> Variable:
         """
         Assign a new, possibly multi-dimensional array of variables to the
@@ -527,7 +546,11 @@ class Model:
 
     def add_constraints(
         self,
-        lhs: VariableLike | ExpressionLike | ConstraintLike,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
         sign: SignLike | None = None,
         rhs: ConstantLike | VariableLike | ExpressionLike | None = None,
         name: str | None = None,
@@ -660,7 +683,9 @@ class Model:
 
     def add_objective(
         self,
-        expr: list[tuple[int, Variable]] | LinearExpression | QuadraticExpression,
+        expr: LinearExpression
+        | QuadraticExpression
+        | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
     ) -> None:
@@ -684,7 +709,7 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-        self.objective.expression = expr
+        self.objective.expression = expr  # type: ignore[assignment]
         self.objective.sense = sense
 
     def remove_variables(self, name: str) -> None:
@@ -819,14 +844,14 @@ class Model:
         return (self._cCounter, self._xCounter)
 
     @property
-    def blocks(self):
+    def blocks(self) -> DataArray | None:
         """
         Blocks used as a basis to split the variables and constraint matrix.
         """
         return self._blocks
 
     @blocks.setter
-    def blocks(self, blocks: DataArray):
+    def blocks(self, blocks: DataArray) -> None:
         if not isinstance(blocks, DataArray):
             raise TypeError("Blocks must be of type DataArray")
         assert len(blocks.dims) == 1
@@ -845,7 +870,7 @@ class Model:
         """
         assert self.blocks is not None, "Blocks are not defined."
 
-        dtype = self.blocks.dtype
+        dtype = self.blocks.dtype.type
         self.variables.set_blocks(self.blocks)
         block_map = self.variables.get_blockmap(dtype)
         self.constraints.set_blocks(block_map)
@@ -853,7 +878,9 @@ class Model:
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
-    def linexpr(self, *args) -> LinearExpression:
+    def linexpr(
+        self, *args: tuple[ConstantLike, str | Variable | ScalarVariable] | Callable
+    ) -> LinearExpression:
         """
         Create a linopy.LinearExpression from argument list.
 
@@ -863,9 +890,6 @@ class Model:
                coordinates and a function
             If args is a collection of coefficients-variables-tuples, the resulting
             linear expression is built with the function LinearExpression.from_tuples.
-            In this case, each tuple represents on term in the linear expression,
-            which can span over multiple dimensions:
-
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
                 contains dimensions which do not appear in
@@ -927,13 +951,13 @@ class Model:
                 "containing a tuple or a single set of coords must be given."
             )
             rule, coords = args
-            return LinearExpression.from_rule(self, rule, coords)
+            return LinearExpression.from_rule(self, rule, coords)  # type: ignore
         if not isinstance(args, tuple):
             raise TypeError(f"Not supported type {args}.")
-        tuples = [
+        tuples = [  # type: ignore
             (c, self.variables[v]) if isinstance(v, str) else (c, v) for (c, v) in args
         ]
-        return LinearExpression.from_tuples(*tuples, chunk=self.chunk)
+        return LinearExpression.from_tuples(*tuples, model=self)
 
     @property
     def coefficientrange(self) -> DataFrame:
@@ -992,13 +1016,13 @@ class Model:
         basis_fn: str | Path | None = None,
         warmstart_fn: str | Path | None = None,
         keep_files: bool = False,
-        env: None = None,
+        env: Any = None,
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: None = None,
+        remote: Any = None,
         progress: bool | None = None,
-        **solver_options,
+        **solver_options: Any,
     ) -> tuple[str, str]:
         """
         Solve the model with possibly different solvers.
@@ -1225,7 +1249,7 @@ class Model:
 
         Returns
         -------
-        labels : list
+        labels : list[int]
             Labels of the infeasible constraints.
         """
         if "gurobi" not in available_solvers:

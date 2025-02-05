@@ -5,6 +5,8 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+from pathlib import Path
+
 import pytest
 
 from linopy import solvers
@@ -43,7 +45,7 @@ ENDATA
 
 
 @pytest.mark.parametrize("solver", set(solvers.available_solvers))
-def test_free_mps_solution_parsing(solver, tmp_path):
+def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     try:
         solver_enum = solvers.SolverName(solver.lower())
         solver_class = getattr(solvers, solver_enum.name)
