@@ -958,7 +958,7 @@ class Model:
         self,
         solver_name: str | None = None,
         io_api: str | None = None,
-        with_names: bool = False,
+        explicit_coordinate_names: bool = False,
         problem_fn: str | Path | None = None,
         solution_fn: str | Path | None = None,
         log_fn: str | Path | None = None,
@@ -991,7 +991,7 @@ class Model:
             'direct' the problem is communicated to the solver via the solver
             specific API, e.g. gurobipy. This may lead to faster run times.
             The default is set to 'lp' if available.
-        with_names : bool, optional
+        explicit_coordinate_names : bool, optional
             If the Api to use for communicating with the solver is based on 'lp',
             this option allows to keep the variable and constraint names in the
             lp file. This may lead to slower run times.
@@ -1133,18 +1133,18 @@ class Model:
                     warmstart_fn=to_path(warmstart_fn),
                     basis_fn=to_path(basis_fn),
                     env=env,
-                    with_names=with_names,
+                    explicit_coordinate_names=explicit_coordinate_names,
                 )
             else:
-                if solver_name in ["glpk", "cbc"] and with_names:
+                if solver_name in ["glpk", "cbc"] and explicit_coordinate_names:
                     logger.warning(
                         f"{solver_name} does not support writing names to lp files, disabling it."
                     )
-                    with_names = False
+                    explicit_coordinate_names = False
                 problem_fn = self.to_file(
                     to_path(problem_fn),
                     io_api=io_api,
-                    with_names=with_names,
+                    explicit_coordinate_names=explicit_coordinate_names,
                     slice_size=slice_size,
                     progress=progress,
                 )

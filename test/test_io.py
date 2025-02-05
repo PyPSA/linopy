@@ -127,11 +127,11 @@ def test_to_file_lp(model, tmp_path):
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
-def test_to_file_lp_with_names(model, tmp_path):
+def test_to_file_lp_explicit_coordinate_names(model, tmp_path):
     import gurobipy
 
     fn = tmp_path / "test.lp"
-    model.to_file(fn, io_api="lp", with_names=True)
+    model.to_file(fn, io_api="lp", explicit_coordinate_names=True)
 
     gurobipy.read(str(fn))
 

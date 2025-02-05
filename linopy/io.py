@@ -69,8 +69,10 @@ def print_coord(coord):
     return coord
 
 
-def get_printers(m: Model, for_polars: bool = False, with_names: bool = False):
-    if with_names:
+def get_printers(
+    m: Model, for_polars: bool = False, explicit_coordinate_names: bool = False
+):
+    if explicit_coordinate_names:
 
         def print_variable(var):
             name, coord = m.variables.get_label_position(var)
@@ -460,7 +462,7 @@ def to_lp_file(
         )
         f.write("end\n")
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+        logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
 def objective_write_linear_terms_polars(f, df, print_variable):
@@ -722,7 +724,7 @@ def to_lp_file_polars(
         )
         f.write(b"end\n")
 
-        logger.info(f" Writing time: {round(time.time()-start, 2)}s")
+        logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
 def to_file(
@@ -732,7 +734,7 @@ def to_file(
     integer_label: str = "general",
     slice_size: int = 2_000_000,
     progress: bool | None = None,
-    with_names: bool = True,
+    explicit_coordinate_names: bool = True,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
@@ -750,7 +752,11 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
-    printers = get_printers(m, for_polars=io_api == "lp-polars", with_names=with_names)
+    printers = get_printers(
+        m,
+        for_polars=io_api == "lp-polars",
+        explicit_coordinate_names=explicit_coordinate_names,
+    )
 
     if io_api == "lp":
         to_lp_file(
@@ -779,7 +785,7 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(with_names=with_names)
+        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -789,7 +795,9 @@ def to_file(
     return fn
 
 
-def to_mosek(m: Model, task: Any | None = None, with_names: bool = False) -> Any:
+def to_mosek(
+    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+) -> Any:
     """
     Export model to MOSEK.
 
@@ -807,7 +815,9 @@ def to_mosek(m: Model, task: Any | None = None, with_names: bool = False) -> Any
 
     import mosek
 
-    print_variable, print_constraint = get_printers(m, with_names=with_names)
+    print_variable, print_constraint = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     if task is None:
         task = mosek.Task()
@@ -897,7 +907,9 @@ def to_mosek(m: Model, task: Any | None = None, with_names: bool = False) -> Any
     return task
 
 
-def to_gurobipy(m: Model, env: Any | None = None, with_names: bool = False) -> Any:
+def to_gurobipy(
+    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+) -> Any:
     """
     Export the model to gurobipy.
 
@@ -916,7 +928,9 @@ def to_gurobipy(m: Model, env: Any | None = None, with_names: bool = False) -> A
     """
     import gurobipy
 
-    print_variable, print_constraint = get_printers(m, with_names=with_names)
+    print_variable, print_constraint = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     m.constraints.sanitize_missings()
     model = gurobipy.Model(env=env)
@@ -946,7 +960,7 @@ def to_gurobipy(m: Model, env: Any | None = None, with_names: bool = False) -> A
     return model
 
 
-def to_highspy(m: Model, with_names: bool = False) -> Highs:
+def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     """
     Export the model to highspy.
 
@@ -965,7 +979,9 @@ def to_highspy(m: Model, with_names: bool = False) -> Highs:
     """
     import highspy
 
-    print_variable, print_constraint = get_printers(m, with_names=with_names)
+    print_variable, print_constraint = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     M = m.matrices
     h = highspy.Highs()
