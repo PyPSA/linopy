@@ -688,7 +688,7 @@ class Constraints:
     """
 
     data: dict[str, Constraint]
-    model: Model  # Model is not defined due to circular imports
+    model: Model
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
