@@ -441,6 +441,7 @@ def test_solver_time_limit_options(model: Model, solver: str, io_api: str) -> No
     status, condition = model.solve(solver, io_api=io_api, **time_limit_option[solver])  # type: ignore
     assert status == "ok"
 
+
 def test_solver_method_options(model: Model, solver: str, io_api: str) -> None:
     method_options = {
         "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
