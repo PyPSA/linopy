@@ -533,7 +533,7 @@ class LinearExpression:
         elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
             other = other.to_linexpr()
 
-        if isinstance(other, LinearExpression | ScalarLinearExpression):
+        if isinstance(other, (LinearExpression, ScalarLinearExpression)):
             return self._multiply_by_linear_expression(other)
         else:
             return self._multiply_by_constant(other)
