@@ -820,7 +820,7 @@ class LinearExpression:
     def _sum(
         cls,
         expr: LinearExpression | Dataset,
-        dim: DimsLike = None,
+        dim: DimsLike | None = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
 
@@ -848,7 +848,7 @@ class LinearExpression:
 
     def sum(
         self,
-        dim: DimsLike = None,
+        dim: DimsLike | None = None,
         drop_zeros: bool = False,
         **kwargs: Any,
     ) -> LinearExpression:
@@ -888,7 +888,7 @@ class LinearExpression:
 
     def cumsum(
         self,
-        dim: DimsLike = None,
+        dim: DimsLike | None = None,
         *,
         skipna: bool | None = None,
         keep_attrs: bool | None = None,
@@ -1620,7 +1620,7 @@ class QuadraticExpression(LinearExpression):
     def _sum(
         cls,
         expr: Dataset | LinearExpression | QuadraticExpression,
-        dim: DimsLike = None,
+        dim: DimsLike | None = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
         dim = dim or list(set(data.dims) - set(HELPER_DIMS))

@@ -104,7 +104,7 @@ def format_string_as_variable_name(name: Hashable) -> str:
     return str(name).replace(" ", "_").replace("-", "_")
 
 
-def get_from_iterable(lst: DimsLike, index: int) -> Any | None:
+def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     """
     Returns the element at the specified index of the list, or None if the index
     is out of bounds.
@@ -120,8 +120,8 @@ def get_from_iterable(lst: DimsLike, index: int) -> Any | None:
 
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
-    coords: CoordsLike = None,
-    dims: DimsLike = None,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -175,7 +175,10 @@ def pandas_to_dataarray(
 
 
 def numpy_to_dataarray(
-    arr: np.ndarray, coords: CoordsLike = None, dims: DimsLike = None, **kwargs: Any
+    arr: np.ndarray,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert a numpy array to a DataArray.
@@ -213,7 +216,10 @@ def numpy_to_dataarray(
 
 
 def as_dataarray(
-    arr: Any, coords: CoordsLike = None, dims: DimsLike = None, **kwargs: Any
+    arr: Any,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert an object to a DataArray.

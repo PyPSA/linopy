@@ -32,9 +32,8 @@ CoordsLike: TypeAlias = (
     | Mapping
     | DataArrayCoordinates
     | DatasetCoordinates
-    | None
 )
-DimsLike: TypeAlias = str | Iterable[Hashable] | None
+DimsLike: TypeAlias = str | Iterable[Hashable]
 
 ConstantLike: TypeAlias = (
     int

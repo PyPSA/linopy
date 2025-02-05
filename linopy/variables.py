@@ -584,7 +584,7 @@ class Variable:
 
     def cumsum(
         self,
-        dim: DimsLike = None,
+        dim: DimsLike | None = None,
         *,
         skipna: bool | None = None,
         keep_attrs: bool | None = None,
