@@ -38,6 +38,16 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
+def set_int_index(series: pd.Series) -> pd.Series:
+    """
+    Convert string index to int index.
+    """
+    if not series.empty and not pd.api.types.is_integer_dtype(series.index):
+        cutoff = count_initial_letters(str(series.index[0]))
+        series.index = series.index.str[cutoff:].astype(int)
+    return series
+
+
 def maybe_replace_sign(sign: str) -> str:
     """
     Replace the sign with an alternative sign if available.
@@ -519,7 +529,7 @@ def iterate_slices(
         return
 
     # number of slices
-    n_slices = max(size // slice_size, 1)
+    n_slices = max((size + slice_size - 1) // slice_size, 1)
 
     # leading dimension (the dimension with the largest size)
     sizes = {dim: ds.sizes[dim] for dim in slice_dims}
@@ -533,18 +543,31 @@ def iterate_slices(
     if size_of_leading_dim < n_slices:
         n_slices = size_of_leading_dim
 
-    chunk_size = ds.sizes[leading_dim] // n_slices
+    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
 
     # Iterate over the Cartesian product of slice indices
     for i in range(n_slices):
         start = i * chunk_size
-        end = start + chunk_size
+        end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
         yield ds.isel(slice_dict)
 
 
 def _remap(array, mapping):
     return mapping[array.ravel()].reshape(array.shape)
+
+
+def count_initial_letters(word: str):
+    """
+    Count the number of initial letters in a word.
+    """
+    count = 0
+    for char in word:
+        if char.isalpha():
+            count += 1
+        else:
+            break
+    return count
 
 
 def replace_by_map(ds, mapping):

@@ -510,8 +510,8 @@ def objective_to_file_polars(m, f, progress=False, printers=None):
         objective_write_linear_terms_polars(f, df, print_variable)
 
     elif m.is_quadratic:
-        lins = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
-        lins = lins.with_columns(
+        linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
+        linear_terms = linear_terms.with_columns(
             pl.when(pl.col("vars1").eq(-1))
             .then(pl.col("vars2"))
             .otherwise(pl.col("vars1"))

@@ -1,8 +1,19 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+* The internal handling of `Solution` objects was improved for more consistency. Solution objects created from solver calls now preserve the exact index names from the input file.
+* Multiplication of a linear expression by a constant value may now introduce new dimensions.
+* Added method `unstack` to `LinearExpression`, `Variable` and `Constraint` to unstack a dimension.
+
+Version 0.4.4
+--------------
+
+* **IMPORTANT BUGFIX**: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
+* Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
+* GLPK solver is always called with the `--freemps` option instead of the `--mps` when using the Solver API to solve an external MPS file. `--mps` is for the older fixed-column MPS format that is rarely used nowadays. Almost all fixed MPS files can be parsed by the free MPS format.
 
 * Added extra argument in io methods `explicit_coordinate_names` to allow for export of
   variables and constraints with explicit coordinate names.
@@ -10,13 +21,15 @@ Release Notes
 Version 0.4.3
 --------------
 
-* When creating slices for variables and constraints (important for the `solve` function), the slicing is now fixed in case now dimension to slice is available.
+* **Version 0.4.3 includes a major bug and can not be installed anymore.**
+* When creating slices for variables and constraints (important for the `solve` function), the slicing is now fixed in case no dimension to slice is available.
 * Added a pandas priority attribute. With this change, the operation with pandas objects is now prioritizing linopy objects over pandas objects. This is useful when the using linopy objects in arithmetic operations with pandas objects, e.g. `a * x` where `a` is a pandas Series/DataFrame and `x` is a linopy variable.
 * The method :meth:`model.to_file <linopy.model.Model.to_file>` now includes a progress argument to enable or disable the progress bar while writing.
 
 Version 0.4.2
 --------------
 
+* **Version 0.4.2 includes a major bug and can not be installed anymore.**
 * Fix the file handler to properly close the file when reading the sense from a problem file.
 
 Version 0.4.1

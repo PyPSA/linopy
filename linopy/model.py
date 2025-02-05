@@ -30,6 +30,7 @@ from linopy.common import (
     best_int,
     maybe_replace_signs,
     replace_by_map,
+    set_int_index,
     to_path,
 )
 from linopy.constants import (
@@ -367,6 +368,32 @@ class Model:
         else:
             return
 
+    def _check_valid_dim_names(self, ds: DataArray | Dataset) -> None:
+        """
+        Ensure that the added data does not lead to a naming conflict.
+
+        Parameters
+        ----------
+        model : linopy.Model
+        ds : xr.DataArray/Variable/LinearExpression
+            Data that should be added to the model.
+
+        Raises
+        ------
+        ValueError
+            If broadcasted data leads to unsupported dimension names.
+
+        Returns
+        -------
+        None.
+        """
+        unsupported_dim_names = ["labels", "coeffs", "vars", "sign", "rhs"]
+        if any(dim in unsupported_dim_names for dim in ds.dims):
+            raise ValueError(
+                "Added data contains unsupported dimension names. "
+                "Dimensions cannot be named 'labels', 'coeffs', 'vars', 'sign' or 'rhs'."
+            )
+
     def add_variables(
         self,
         lower: Any = -inf,
@@ -474,6 +501,7 @@ class Model:
         )
         (data,) = xr.broadcast(data)
         self.check_force_dim_names(data)
+        self._check_valid_dim_names(data)
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
@@ -607,9 +635,9 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
             # TODO: simplify
-            assert set(mask.dims).issubset(
-                data.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
+            assert set(mask.dims).issubset(data.dims), (
+                "Dimensions of mask not a subset of resulting labels dimensions."
+            )
 
         self.check_force_dim_names(data)
 
@@ -1175,6 +1203,7 @@ class Model:
 
         # map solution and dual to original shape which includes missing values
         sol = result.solution.primal.copy()
+        sol = set_int_index(sol)
         sol.loc[-1] = nan
 
         for name, var in self.variables.items():
@@ -1187,6 +1216,7 @@ class Model:
 
         if not result.solution.dual.empty:
             dual = result.solution.dual.copy()
+            dual = set_int_index(dual)
             dual.loc[-1] = nan
 
             for name, con in self.constraints.items():

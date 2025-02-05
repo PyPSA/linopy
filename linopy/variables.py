@@ -47,12 +47,12 @@ from linopy.common import (
     print_coord,
     print_single_variable,
     save_join,
+    set_int_index,
     to_dataframe,
     to_polars,
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.solvers import set_int_index
 from linopy.types import NotImplementedType
 
 if TYPE_CHECKING:
@@ -351,11 +351,11 @@ class Variable:
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             lines.insert(
                 0,
-                f"Variable ({shape_str}){mask_str}\n{'-'* (len(shape_str) + len(mask_str) + 11)}",
+                f"Variable ({shape_str}){mask_str}\n{'-' * (len(shape_str) + len(mask_str) + 11)}",
             )
         else:
             lines.append(
-                f"Variable\n{'-'*8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -1095,6 +1095,8 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
+    unstack = varwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 
@@ -1111,9 +1113,9 @@ class AtIndexer:
         # return single scalar
         if not object.labels.ndim:
             return ScalarVariable(object.labels.item(), object.model)
-        assert object.labels.ndim == len(
-            keys
-        ), f"expected {object.labels.ndim} keys, got {len(keys)}."
+        assert object.labels.ndim == len(keys), (
+            f"expected {object.labels.ndim} keys, got {len(keys)}."
+        )
         key = dict(zip(object.labels.dims, keys))
         keys = [object.labels.get_index(k).get_loc(v) for k, v in key.items()]
         return ScalarVariable(object.labels.data[tuple(keys)], object.model)

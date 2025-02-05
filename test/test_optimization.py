@@ -478,6 +478,24 @@ def test_duplicated_variables(
     status, condition = model_with_duplicated_variables.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_solver_method_options(model, solver, io_api, explicit_coordinate_names):
+    method_options = {
+        "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
+    }
+    if solver in method_options:
+        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])
+        assert status == "ok"
+        assert np.isclose(model.objective.value, 3.3)
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_duplicated_variables(
+    model_with_duplicated_variables, solver, io_api, explicit_coordinate_names
+):
+    status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
     assert all(model_with_duplicated_variables.solution["x"] == 5)
 

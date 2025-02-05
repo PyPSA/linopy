@@ -15,11 +15,10 @@ import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import pandas as pd
-from pandas.core.series import Series
 
 from linopy.constants import (
     Result,
@@ -103,7 +102,10 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import mindoptpy
 
-    available_solvers.append("mindopt")
+    with contextlib.suppress(mindoptpy.MindoptError):
+        mindoptpy.Env()
+
+        available_solvers.append("mindopt")
 
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
@@ -226,9 +228,14 @@ class Solver(ABC):
         if status.is_ok:
             return func()
         elif status.status == SolverStatus.unknown:
-            with contextlib.suppress(Exception):
+            try:
                 logger.warning("Solution status unknown. Trying to parse solution.")
-                return func()
+                sol = func()
+                status.status = SolverStatus.ok
+                logger.warning("Solution parsed successfully.")
+                return sol
+            except Exception as e:
+                logger.error(f"Failed to parse solution: {e}")
         return Solution()
 
     @abstractmethod
@@ -467,8 +474,8 @@ class CBC(Solver):
             )
             variables_b = df.index.str[0] == "x"
 
-            sol = df[variables_b][2].pipe(set_int_index)
-            dual = df[~variables_b][3].pipe(set_int_index)
+            sol = df[variables_b][2]
+            dual = df[~variables_b][3]
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -565,7 +572,8 @@ class GLPK(Solver):
         Path(solution_fn).parent.mkdir(exist_ok=True)
 
         # TODO use --nopresol argument for non-optimal solution output
-        command = f"glpsol --{io_api} {problem_fn} --output {solution_fn} "
+        io_api_arg = "freemps" if io_api == "mps" else io_api
+        command = f"glpsol --{io_api_arg} {problem_fn} --output {solution_fn} "
         if log_fn is not None:
             command += f"--log {log_fn} "
         if warmstart_fn:
@@ -626,11 +634,7 @@ class GLPK(Solver):
             dual_io = io.StringIO("".join(read_until_break(f))[:-2])
             dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
             if "Marginal" in dual_:
-                dual = (
-                    pd.to_numeric(dual_["Marginal"], "coerce")
-                    .fillna(0)
-                    .pipe(set_int_index)
-                )
+                dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -640,7 +644,6 @@ class GLPK(Solver):
                 pd.read_fwf(sol_io)[1:]
                 .set_index("Column name")["Activity"]
                 .astype(float)
-                .pipe(set_int_index)
             )
             f.close()
             return Solution(sol, dual, objective)
@@ -865,12 +868,8 @@ class Highs(Solver):
                 sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
                 dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
             else:
-                sol = pd.Series(
-                    solution.col_value, h.getLp().col_names_, dtype=float
-                ).pipe(set_int_index)
-                dual = pd.Series(
-                    solution.row_dual, h.getLp().row_names_, dtype=float
-                ).pipe(set_int_index)
+                sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float)
+                dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -1094,13 +1093,11 @@ class Gurobi(Solver):
             objective = m.ObjVal
 
             sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = pd.Series(
                     {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
                 )
-                dual = set_int_index(dual)
             except AttributeError:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1240,7 +1237,6 @@ class Cplex(Solver):
             solution = pd.Series(
                 m.solution.get_values(), m.variables.get_names(), dtype=float
             )
-            solution = set_int_index(solution)
 
             if is_lp:
                 dual = pd.Series(
@@ -1248,7 +1244,6 @@ class Cplex(Solver):
                     m.linear_constraints.get_names(),
                     dtype=float,
                 )
-                dual = set_int_index(dual)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1378,7 +1373,6 @@ class SCIP(Solver):
             sol.drop(
                 ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
             )
-            sol = set_int_index(sol)
 
             cons = m.getConss()
             if len(cons) != 0:
@@ -1386,7 +1380,6 @@ class SCIP(Solver):
                 dual = dual[
                     dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
                 ]
-                dual = set_int_index(dual)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1517,12 +1510,10 @@ class Xpress(Solver):
             var = [str(v) for v in m.getVariable()]
 
             sol = pd.Series(m.getSolution(var), index=var, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual_ = [str(d) for d in m.getConstraint()]
                 dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
-                dual = set_int_index(dual)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1851,13 +1842,11 @@ class Mosek(Solver):
             sol = m.getxx(soltype)
             sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
             sol = pd.Series(sol, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = m.gety(soltype)
                 dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
                 dual = pd.Series(dual, dtype=float)
-                dual = set_int_index(dual)
             except (mosek.Error, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1994,11 +1983,9 @@ class COPT(Solver):
             objective = m.BestObj if m.ismip else m.LpObjVal
 
             sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
-                dual = set_int_index(dual)
             except (coptpy.CoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -2139,11 +2126,9 @@ class MindOpt(Solver):
             objective = m.objval
 
             sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
-                dual = set_int_index(dual)
             except (mindoptpy.MindoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)

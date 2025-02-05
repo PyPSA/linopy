@@ -246,9 +246,14 @@ def test_linear_expression_with_constant(m, x, y):
 
 def test_linear_expression_with_constant_multiplication(m, x, y):
     expr = x + 1
-    expr = expr * 10
-    assert isinstance(expr, LinearExpression)
-    assert (expr.const == 10).all()
+
+    obs = expr * 10
+    assert isinstance(obs, LinearExpression)
+    assert (obs.const == 10).all()
+
+    obs = expr * pd.Series([1, 2, 3], index=pd.RangeIndex(3, name="new_dim"))
+    assert isinstance(obs, LinearExpression)
+    assert obs.shape == (2, 3, 1)
 
 
 def test_linear_expression_multi_indexed(u):
@@ -662,6 +667,13 @@ def test_variable_stack(v):
     result = v.to_linexpr().expand_dims("new_dim").stack(new=("new_dim", "dim_2"))
     assert isinstance(result, LinearExpression)
     assert result.coord_dims == ("new",)
+
+
+def test_linear_expression_unstack(v):
+    result = v.to_linexpr().expand_dims("new_dim").stack(new=("new_dim", "dim_2"))
+    result = result.unstack("new")
+    assert isinstance(result, LinearExpression)
+    assert result.coord_dims == ("new_dim", "dim_2")
 
 
 def test_linear_expression_diff(v):
