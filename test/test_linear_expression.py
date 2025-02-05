@@ -5,6 +5,8 @@ Created on Wed Mar 17 17:06:36 2021.
 @author: fabian
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import polars as pl
