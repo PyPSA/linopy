@@ -517,7 +517,7 @@ def objective_to_file_polars(m, f, progress=False, printers=None):
             .otherwise(pl.col("vars1"))
             .alias("vars")
         )
-        objective_write_linear_terms_polars(f, lins, print_variable)
+        objective_write_linear_terms_polars(f, linear_terms, print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
         objective_write_quadratic_terms_polars(f, quads, print_variable)
