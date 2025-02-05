@@ -4,6 +4,9 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
+* Added extra argument in io methods `explicit_coordinate_names` to allow for export of
+  variables and constraints with explicit coordinate names.
+
 Version 0.4.3
 --------------
 
