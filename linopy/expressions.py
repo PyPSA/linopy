@@ -72,7 +72,7 @@ from linopy.constants import (
 )
 from linopy.types import (
     ConstantLike,
-    Dims,
+    DimsLike,
     EllipsisType,
     ExpressionLike,
     NotImplementedType,
@@ -723,7 +723,7 @@ class LinearExpression:
 
     @classmethod  # type: ignore
     @property
-    def fill_value(cls):
+    def fill_value(cls) -> dict[str, Any]:
         warn(
             "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead.",
             DeprecationWarning,
@@ -820,7 +820,7 @@ class LinearExpression:
     def _sum(
         cls,
         expr: LinearExpression | Dataset,
-        dim: Dims = None,
+        dim: DimsLike = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
 
@@ -848,7 +848,7 @@ class LinearExpression:
 
     def sum(
         self,
-        dim: Dims = None,
+        dim: DimsLike = None,
         drop_zeros: bool = False,
         **kwargs: Any,
     ) -> LinearExpression:
@@ -888,7 +888,7 @@ class LinearExpression:
 
     def cumsum(
         self,
-        dim: Dims = None,
+        dim: DimsLike = None,
         *,
         skipna: bool | None = None,
         keep_attrs: bool | None = None,
@@ -1620,7 +1620,7 @@ class QuadraticExpression(LinearExpression):
     def _sum(
         cls,
         expr: Dataset | LinearExpression | QuadraticExpression,
-        dim: Dims = None,
+        dim: DimsLike = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
         dim = dim or list(set(data.dims) - set(HELPER_DIMS))

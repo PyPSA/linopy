@@ -11,7 +11,7 @@ from typing import Any, Union
 import numpy as np
 import pandas as pd
 
-logger: logging.Logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 EQUAL = "="

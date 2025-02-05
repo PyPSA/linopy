@@ -63,7 +63,13 @@ from linopy.constants import (
     TERM_DIM,
     SIGNS_pretty,
 )
-from linopy.types import ConstantLike, Coords, ExpressionLike, SignLike, VariableLike
+from linopy.types import (
+    ConstantLike,
+    CoordsLike,
+    ExpressionLike,
+    SignLike,
+    VariableLike,
+)
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -498,7 +504,7 @@ class Constraint:
         self._data = assign_multiindex_safe(self.data, dual=value)
 
     @classmethod
-    def from_rule(cls, model: Model, rule: Callable, coords: Coords) -> Constraint:
+    def from_rule(cls, model: Model, rule: Callable, coords: CoordsLike) -> Constraint:
         """
         Create a constraint from a rule and a set of coordinates.
 

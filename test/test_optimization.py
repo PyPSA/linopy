@@ -447,9 +447,10 @@ def test_solver_method_options(model: Model, solver: str, io_api: str) -> None:
         "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
     }
     if solver in method_options:
-        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])
+        status, condition = model.solve(solver, io_api=io_api, **method_options[solver])  # type: ignore
         assert status == "ok"
-        assert np.isclose(model.objective.value, 3.3)
+        objective = model.objective.value or 0
+        assert np.isclose(objective, 3.3)
 
 
 @pytest.mark.parametrize("solver,io_api", params)

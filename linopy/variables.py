@@ -52,7 +52,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.types import ConstantLike, Dims, NotImplementedType, SideLike
+from linopy.types import ConstantLike, DimsLike, NotImplementedType, SideLike
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -584,7 +584,7 @@ class Variable:
 
     def cumsum(
         self,
-        dim: Dims = None,
+        dim: DimsLike = None,
         *,
         skipna: bool | None = None,
         keep_attrs: bool | None = None,
