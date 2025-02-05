@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias, Union
+from typing import TYPE_CHECKING, Union
 
 import numpy
 import numpy.typing
@@ -13,18 +13,15 @@ from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 if sys.version_info >= (3, 10):
     from types import EllipsisType, NotImplementedType
+    from typing import TypeAlias
 else:
     EllipsisType = type(Ellipsis)
     NotImplementedType = type(NotImplemented)
+    TypeAlias = type(Union)
+
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
-    from linopy.expressions import (
-        LinearExpression,
-        QuadraticExpression,
-        ScalarLinearExpression,
-    )
-    from linopy.variables import ScalarVariable, Variable
+    pass
 
 
 CoordsLike: TypeAlias = (
