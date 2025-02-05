@@ -1095,6 +1095,8 @@ class Variable:
 
     stack = varwrap(Dataset.stack)
 
+    unstack = varwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 

@@ -675,6 +675,8 @@ class Constraint:
 
     stack = conwrap(Dataset.stack)
 
+    unstack = conwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 
