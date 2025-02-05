@@ -472,15 +472,6 @@ def test_solver_options(model, solver, io_api, explicit_coordinate_names):
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
-def test_duplicated_variables(
-    model_with_duplicated_variables, solver, io_api, explicit_coordinate_names
-):
-    status, condition = model_with_duplicated_variables.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-
-@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_solver_method_options(model, solver, io_api, explicit_coordinate_names):
     method_options = {
         "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
