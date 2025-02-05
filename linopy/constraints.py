@@ -322,10 +322,10 @@ class Constraint:
                 self.coeffs.values, self.vars.values, 0, self.model
             )
             lines.append(
-                f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
+                f"{header_string}\n{'-' * len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
         else:
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
 
@@ -677,6 +677,8 @@ class Constraint:
     roll = conwrap(Dataset.roll)
 
     stack = conwrap(Dataset.stack)
+
+    unstack = conwrap(Dataset.unstack)
 
     iterate_slices = iterate_slices
 

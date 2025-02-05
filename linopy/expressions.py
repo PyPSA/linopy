@@ -458,9 +458,9 @@ class LinearExpression:
             expr = print_single_expression(
                 self.coeffs.values, self.vars.values, self.const.item(), self.model
             )
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n{expr}")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
         else:
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
 
@@ -566,7 +566,7 @@ class LinearExpression:
     def _multiply_by_constant(self, other: ConstantLike) -> LinearExpression:
         multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         coeffs = self.coeffs * multiplier
-        assert set(coeffs.shape) == set(self.coeffs.shape)
+        assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
         const = self.const * multiplier
         return self.assign(coeffs=coeffs, const=const)
 
@@ -1487,6 +1487,8 @@ class LinearExpression:
 
     stack = exprwrap(Dataset.stack)
 
+    unstack = exprwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 
@@ -1890,7 +1892,7 @@ class ScalarLinearExpression:
             return ScalarLinearExpression(coeffs, vars, self.model)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
-                "unsupported operand type(s) for +: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for +: {type(self)} and {type(other)}"
             )
 
         coeffs = self.coeffs + other.coeffs
@@ -1916,7 +1918,7 @@ class ScalarLinearExpression:
             other = other.to_scalar_linexpr(1)
         elif not isinstance(other, ScalarLinearExpression):
             raise TypeError(
-                "unsupported operand type(s) for -: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for -: {type(self)} and {type(other)}"
             )
 
         return ScalarLinearExpression(
@@ -1933,7 +1935,7 @@ class ScalarLinearExpression:
     def __mul__(self, other: float | int) -> ScalarLinearExpression:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for *: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for *: {type(self)} and {type(other)}"
             )
 
         return ScalarLinearExpression(
@@ -1946,7 +1948,7 @@ class ScalarLinearExpression:
     def __div__(self, other: float | int) -> ScalarLinearExpression:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for /: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for /: {type(self)} and {type(other)}"
             )
         return self.__mul__(1 / other)
 
@@ -1956,7 +1958,7 @@ class ScalarLinearExpression:
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for <=: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
@@ -1964,7 +1966,7 @@ class ScalarLinearExpression:
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for >=: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
@@ -1972,7 +1974,7 @@ class ScalarLinearExpression:
     def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
         if not isinstance(other, (int, float, np.number)):
             raise TypeError(
-                "unsupported operand type(s) for ==: " f"{type(self)} and {type(other)}"
+                f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
             )
 
         return constraints.AnonymousScalarConstraint(self, EQUAL, other)

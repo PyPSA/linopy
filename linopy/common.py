@@ -39,6 +39,16 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
+def set_int_index(series: pd.Series) -> pd.Series:
+    """
+    Convert string index to int index.
+    """
+    if not series.empty and not pd.api.types.is_integer_dtype(series.index):
+        cutoff = count_initial_letters(str(series.index[0]))
+        series.index = series.index.str[cutoff:].astype(int)
+    return series
+
+
 def maybe_replace_sign(sign: str) -> str:
     """
     Replace the sign with an alternative sign if available.

@@ -215,7 +215,7 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
     con.rename({"first": "new_labels"})
     con.rename_dims({"first": "new_labels"})
     con.roll({"first": 1})
-    con.stack(new_dim=("first", "second"))
+    con.stack(new_dim=("first", "second")).unstack("new_dim")
 
 
 def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> None:
