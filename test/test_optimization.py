@@ -442,6 +442,7 @@ def test_solver_time_limit_options(model: Model, solver: str, io_api: str) -> No
     assert status == "ok"
 
 
+@pytest.mark.parametrize("solver,io_api", params)
 def test_solver_method_options(model: Model, solver: str, io_api: str) -> None:
     method_options = {
         "highs": {"solver": "ipm", "run_crossover": "off", "parallel": "on"},
