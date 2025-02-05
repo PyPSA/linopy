@@ -8,9 +8,11 @@ This module contains definition related to objective expressions.
 from __future__ import annotations
 
 import functools
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
+import polars as pl
 from numpy import float64
 from pandas.core.frame import DataFrame
 from scipy.sparse._csc import csc_matrix
@@ -21,15 +23,18 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions
+from linopy.types import ConstantLike
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.model import Model
 
 
-def objwrap(method: Callable, *default_args, **new_default_kwargs) -> Callable:
+def objwrap(
+    method: Callable, *default_args: Any, **new_default_kwargs: Any
+) -> Callable:
     @functools.wraps(method)
-    def _objwrap(obj, *args, **kwargs):
+    def _objwrap(obj: Objective, *args: Any, **kwargs: Any) -> Objective:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return obj.__class__(
@@ -55,7 +60,7 @@ class Objective:
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
+    _fill_value: dict[str, float | int] = {"vars": -1, "coeffs": np.nan, "const": 0}
 
     def __init__(
         self,
@@ -63,11 +68,13 @@ class Objective:
         model: Model,
         sense: str = "min",
     ) -> None:
-        self._model = model
-        self._value = None
+        self._model: Model = model
+        self._value: float | None = None
 
-        self.sense = sense
-        self.expression = expression
+        self.sense: str = sense
+        self.expression: (
+            expressions.LinearExpression | expressions.QuadraticExpression
+        ) = expression
 
     def __repr__(self) -> str:
         sense_string = f"Sense: {self.sense}"
@@ -81,7 +88,7 @@ class Objective:
         return f"Objective:\n----------\n{expr_string}\n{sense_string}\n{value_string}"
 
     @property
-    def attrs(self) -> dict[Any, Any]:
+    def attrs(self) -> dict[str, Any]:
         """
         Returns the attributes of the objective.
         """
@@ -115,7 +122,7 @@ class Objective:
         """
         return self.expression.flat
 
-    def to_polars(self, **kwargs):
+    def to_polars(self, **kwargs: Any) -> pl.DataFrame:
         """
         Returns the objective as a polars DataFrame.
         """
@@ -150,14 +157,21 @@ class Objective:
         return self.expression.nterm
 
     @property
-    def expression(self):
+    def expression(
+        self,
+    ) -> expressions.LinearExpression | expressions.QuadraticExpression:
         """
         Returns the expression of the objective.
         """
         return self._expression
 
     @expression.setter
-    def expression(self, expr):
+    def expression(
+        self,
+        expr: expressions.LinearExpression
+        | expressions.QuadraticExpression
+        | Sequence[tuple],
+    ) -> None:
         """
         Sets the expression of the objective.
         """
@@ -188,14 +202,14 @@ class Objective:
         return self._model
 
     @property
-    def sense(self):
+    def sense(self) -> str:
         """
         Returns the sense of the objective.
         """
         return self._sense
 
     @sense.setter
-    def sense(self, sense):
+    def sense(self, sense: str) -> None:
         """
         Sets the sense of the objective.
         """
@@ -224,7 +238,7 @@ class Objective:
     def is_quadratic(self) -> bool:
         return type(self.expression) is expressions.QuadraticExpression
 
-    def to_matrix(self, *args, **kwargs) -> csc_matrix:
+    def to_matrix(self, *args: Any, **kwargs: Any) -> csc_matrix:
         """Wrapper for expression.to_matrix"""
         if not isinstance(self.expression, expressions.QuadraticExpression):
             raise ValueError("Cannot convert linear objective to matrix.")
@@ -247,7 +261,7 @@ class Objective:
             expr = Objective(expr, self.model)
         return Objective(self.expression - expr.expression, self.model, self.sense)
 
-    def __mul__(self, expr: int) -> Objective:
+    def __mul__(self, expr: ConstantLike) -> Objective:
         # only allow scalar multiplication
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for multiplication.")
@@ -256,7 +270,7 @@ class Objective:
     def __neg__(self) -> Objective:
         return Objective(-self.expression, self.model, self.sense)
 
-    def __truediv__(self, expr: int | Objective) -> Objective:
+    def __truediv__(self, expr: ConstantLike) -> Objective:
         # only allow scalar division
         if not isinstance(expr, (int, float, np.floating, np.integer)):
             raise ValueError("Invalid type for division.")

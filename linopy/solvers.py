@@ -14,8 +14,9 @@ import re
 import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -155,7 +156,7 @@ def path_to_string(path: Path) -> str:
     return str(path.resolve())
 
 
-def read_sense_from_problem_file(problem_fn: Path | str):
+def read_sense_from_problem_file(problem_fn: Path | str) -> str:
     with open(problem_fn) as file:
         f = file.read()
     file_format = read_io_api_from_problem_file(problem_fn)
@@ -168,7 +169,7 @@ def read_sense_from_problem_file(problem_fn: Path | str):
         raise ValueError(msg)
 
 
-def read_io_api_from_problem_file(problem_fn: Path | str):
+def read_io_api_from_problem_file(problem_fn: Path | str) -> str:
     if isinstance(problem_fn, Path):
         return problem_fn.suffix[1:]
     else:
@@ -201,8 +202,8 @@ class Solver(ABC):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         self.solver_options = solver_options
 
         # Check for the solver to be initialized whether the package is installed or not.
@@ -210,7 +211,9 @@ class Solver(ABC):
             msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
-    def safe_get_solution(self, status: Status, func: Callable) -> Solution:
+    def safe_get_solution(
+        self, status: Status, func: Callable[[], Solution]
+    ) -> Solution:
         """
         Get solution from function call, if status is unknown still try to run it.
         """
@@ -327,8 +330,8 @@ class CBC(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -340,7 +343,7 @@ class CBC(Solver):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
-    ):
+    ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
 
@@ -447,7 +450,7 @@ class CBC(Solver):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
         status.legacy_status = data
 
-        def get_solver_solution():
+        def get_solver_solution() -> Solution:
             objective = float(data[len("Optimal - objective value ") :])
 
             with open(solution_fn, "rb") as f:
@@ -483,10 +486,10 @@ class GLPK(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -603,7 +606,7 @@ class GLPK(Solver):
 
         f = open(solution_fn)
 
-        def read_until_break(f):
+        def read_until_break(f: io.TextIOWrapper) -> Generator[str, None, None]:
             while True:
                 line = f.readline()
                 if line in ["\n", ""]:
@@ -664,8 +667,8 @@ class Highs(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -880,8 +883,8 @@ class Gurobi(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -997,13 +1000,13 @@ class Gurobi(Solver):
 
     def _solve(
         self,
-        m,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        io_api: str | None = None,
-        sense: str | None = None,
+        m: gurobipy.Model,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Gurobi object.
@@ -1081,7 +1084,7 @@ class Gurobi(Solver):
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
-            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
 
             try:
                 dual = pd.Series(
@@ -1115,8 +1118,8 @@ class Cplex(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1256,8 +1259,8 @@ class SCIP(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1396,8 +1399,8 @@ class Xpress(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1540,8 +1543,8 @@ class Mosek(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1654,12 +1657,12 @@ class Mosek(Solver):
     def _solve(
         self,
         m: mosek.Task,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        io_api: str | None = None,
-        sense: str | None = None,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Mosek task object.
@@ -1863,10 +1866,10 @@ class COPT(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -2004,10 +2007,10 @@ class MindOpt(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -2139,8 +2142,8 @@ class PIPS(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)

@@ -3,6 +3,8 @@
 Test function defined in the Model class.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -13,37 +15,39 @@ import xarray as xr
 from linopy import EQUAL, Model
 from linopy.testing import assert_model_equal
 
-target_shape = (10, 10)
+target_shape: tuple[int, int] = (10, 10)
 
 
-def test_model_repr():
-    m = Model()
+def test_model_repr() -> None:
+    m: Model = Model()
     m.__repr__()
 
 
-def test_model_force_dims_names():
-    m = Model(force_dim_names=True)
+def test_model_force_dims_names() -> None:
+    m: Model = Model(force_dim_names=True)
     with pytest.raises(ValueError):
         m.add_variables([-5], [10])
 
 
-def test_model_solver_dir():
-    d = gettempdir()
-    m = Model(solver_dir=d)
+def test_model_solver_dir() -> None:
+    d: str = gettempdir()
+    m: Model = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
 
 
-def test_model_variable_getitem():
+def test_model_variable_getitem() -> None:
     m = Model()
     x = m.add_variables(name="x")
     assert m["x"].labels == x.labels
 
 
-def test_coefficient_range():
-    m = Model()
+def test_coefficient_range() -> None:
+    m: Model = Model()
 
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper)
     y = m.add_variables()
 
@@ -52,25 +56,27 @@ def test_coefficient_range():
     assert m.coefficientrange["max"].con0 == 10
 
 
-def test_objective():
-    m = Model()
+def test_objective() -> None:
+    m: Model = Model()
 
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(lower, upper, name="y")
 
-    obj = (10 * x + 5 * y).sum()
-    m.add_objective(obj)
+    obj1 = (10 * x + 5 * y).sum()
+    m.add_objective(obj1)
     assert m.objective.vars.size == 200
 
     # test overwriting
-    obj = (2 * x).sum()
-    m.add_objective(obj, overwrite=True)
+    obj2 = (2 * x).sum()
+    m.add_objective(obj2, overwrite=True)
 
     # test Tuple
-    obj = [(2, x)]
-    m.add_objective(obj, overwrite=True)
+    obj3 = [(2, x)]
+    m.add_objective(obj3, overwrite=True)
 
     # test objective range
     assert m.objectiverange.min() == 2
@@ -81,11 +87,13 @@ def test_objective():
         m.objective = m.objective + 3
 
 
-def test_remove_variable():
-    m = Model()
+def test_remove_variable() -> None:
+    m: Model = Model()
 
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 
@@ -104,8 +112,8 @@ def test_remove_variable():
     assert not m.objective.vars.isin(x.labels).any()
 
 
-def test_remove_constraint():
-    m = Model()
+def test_remove_constraint() -> None:
+    m: Model = Model()
 
     x = m.add_variables()
     m.add_constraints(x, EQUAL, 0, name="x")
@@ -113,8 +121,8 @@ def test_remove_constraint():
     assert not len(m.constraints.labels)
 
 
-def test_remove_constraints_with_list():
-    m = Model()
+def test_remove_constraints_with_list() -> None:
+    m: Model = Model()
 
     x = m.add_variables()
     y = m.add_variables()
@@ -126,11 +134,11 @@ def test_remove_constraints_with_list():
     assert not len(m.constraints.labels)
 
 
-def test_remove_objective():
-    m = Model()
+def test_remove_objective() -> None:
+    m: Model = Model()
 
-    lower = xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])
-    upper = xr.DataArray(np.ones((2, 2)), coords=[range(2), range(2)])
+    lower: xr.DataArray = xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])
+    upper: xr.DataArray = xr.DataArray(np.ones((2, 2)), coords=[range(2), range(2)])
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(lower, upper, name="y")
     obj = (10 * x + 5 * y).sum()
@@ -139,11 +147,13 @@ def test_remove_objective():
     assert not len(m.objective.vars)
 
 
-def test_assert_model_equal():
-    m = Model()
+def test_assert_model_equal() -> None:
+    m: Model = Model()
 
-    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
-    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
     x = m.add_variables(lower, upper, name="x")
     y = m.add_variables(name="y")
 

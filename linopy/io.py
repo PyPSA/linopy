@@ -9,7 +9,7 @@ import logging
 import shutil
 import time
 from collections.abc import Iterable
-from io import TextIOWrapper
+from io import BufferedWriter, TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
@@ -119,8 +119,12 @@ def get_printers(
 
 
 def objective_write_linear_terms(
-    df: DataFrame, f: TextIOWrapper, batch: list[Any], batch_size: int, print_variable
-) -> list[str | Any]:
+    df: DataFrame,
+    f: TextIOWrapper,
+    batch: list[str],
+    batch_size: int,
+    print_variable: bool,
+) -> list[str]:
     """
     Write the linear terms of the objective to a file.
     """
@@ -465,7 +469,9 @@ def to_lp_file(
         logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
-def objective_write_linear_terms_polars(f, df, print_variable):
+def objective_write_linear_terms_polars(
+    f: BufferedWriter, df: pl.DataFrame, print_variable: bool
+) -> None:
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").cast(pl.String),
@@ -477,7 +483,9 @@ def objective_write_linear_terms_polars(f, df, print_variable):
     )
 
 
-def objective_write_quadratic_terms_polars(f, df, print_variable):
+def objective_write_quadratic_terms_polars(
+    f: BufferedWriter, df: pl.DataFrame, print_variable: bool
+) -> None:
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
         pl.col("coeffs").mul(2).cast(pl.String),
@@ -523,7 +531,13 @@ def objective_to_file_polars(m, f, progress=False, printers=None):
         objective_write_quadratic_terms_polars(f, quads, print_variable)
 
 
-def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers=None):
+def bounds_to_file_polars(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    printers: callable | None = None,
+) -> None:
     """
     Write out variables of a model to a lp file.
     """
@@ -556,14 +570,20 @@ def bounds_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers=N
                 pl.col("upper").cast(pl.String),
             ]
 
-            kwargs = dict(
+            kwargs: Any = dict(
                 separator=" ", null_value="", quote_style="never", include_header=False
             )
             formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
             formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers=None):
+def binaries_to_file_polars(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    printers: callable | None = None,
+) -> None:
     """
     Write out binaries of a model to a lp file.
     """
@@ -590,7 +610,7 @@ def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs = dict(
+            kwargs: Any = dict(
                 separator=" ", null_value="", quote_style="never", include_header=False
             )
             formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
@@ -598,8 +618,13 @@ def binaries_to_file_polars(m, f, progress=False, slice_size=2_000_000, printers
 
 
 def integers_to_file_polars(
-    m, f, progress=False, integer_label="general", slice_size=2_000_000, printers=None
-):
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    integer_label: str = "general",
+    slice_size: int = 2_000_000,
+    printers: callable | None = None,
+) -> None:
     """
     Write out integers of a model to a lp file.
     """
@@ -626,7 +651,7 @@ def integers_to_file_polars(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs = dict(
+            kwargs: Any = dict(
                 separator=" ", null_value="", quote_style="never", include_header=False
             )
             formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
@@ -634,8 +659,13 @@ def integers_to_file_polars(
 
 
 def constraints_to_file_polars(
-    m, f, progress=False, lazy=False, slice_size=2_000_000, printers=None
-):
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    lazy: bool = False,
+    slice_size: int = 2_000_000,
+    printers: callable | None = None,
+) -> None:
     if not len(m.constraints):
         return
 
@@ -681,7 +711,7 @@ def constraints_to_file_polars(
                 pl.col("rhs").cast(pl.String),
             ]
 
-            kwargs = dict(
+            kwargs: Any = dict(
                 separator=" ", null_value="", quote_style="never", include_header=False
             )
             formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
@@ -694,13 +724,13 @@ def constraints_to_file_polars(
 
 
 def to_lp_file_polars(
-    m,
-    fn,
-    integer_label="general",
-    slice_size=2_000_000,
+    m: Model,
+    fn: Path,
+    integer_label: str = "general",
+    slice_size: int = 2_000_000,
     progress: bool = True,
-    printers=None,
-):
+    printers: callable | None = None,
+) -> None:
     with open(fn, mode="wb") as f:
         start = time.time()
 
@@ -1029,7 +1059,7 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     return h
 
 
-def to_block_files(m: Model, fn: Path):
+def to_block_files(m: Model, fn: Path) -> None:
     """
     Write out the linopy model to a block structured output.
 
@@ -1154,7 +1184,7 @@ def non_bool_dict(
     return {k: int(v) if isinstance(v, bool) else v for k, v in d.items()}
 
 
-def to_netcdf(m: Model, *args, **kwargs) -> None:
+def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     """
     Write out the model to a netcdf file.
 
@@ -1168,7 +1198,7 @@ def to_netcdf(m: Model, *args, **kwargs) -> None:
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
     """
 
-    def with_prefix(ds, prefix):
+    def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
         ds = ds.rename({d: f"{prefix}-{d}" for d in to_rename})
         ds.attrs = {f"{prefix}-{k}": v for k, v in ds.attrs.items()}
@@ -1208,7 +1238,7 @@ def to_netcdf(m: Model, *args, **kwargs) -> None:
     ds.to_netcdf(*args, **kwargs)
 
 
-def read_netcdf(path: Path | str, **kwargs) -> Model:
+def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     """
     Read in a model from a netcdf file.
 
@@ -1238,14 +1268,14 @@ def read_netcdf(path: Path | str, **kwargs) -> Model:
     m = Model()
     ds = xr.load_dataset(path, **kwargs)
 
-    def has_prefix(k, prefix):
+    def has_prefix(k: str, prefix: str) -> bool:
         return k.rsplit("-", 1)[0] == prefix
 
-    def remove_prefix(k, prefix):
+    def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
-    def get_prefix(ds, prefix):
-        ds = ds[[k for k in ds if has_prefix(k, prefix)]]
+    def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
+        ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
         multiindexes = []
         for dim in ds.dims:
             for name in ds.attrs.get(f"{dim}_multiindex", []):

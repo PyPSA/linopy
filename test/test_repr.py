@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
 from linopy import Model, options
+from linopy.constraints import Constraint
+from linopy.expressions import LinearExpression
+from linopy.variables import Variable
 
 m = Model()
 
@@ -90,104 +95,104 @@ constraints = [cu, cv, cx, cy, cz, ca, cb, cc, cd, cav, cuc, cu_masked, cg]
 
 
 @pytest.mark.parametrize("var", variables)
-def test_variable_repr(var):
+def test_variable_repr(var: Variable) -> None:
     repr(var)
 
 
 @pytest.mark.parametrize("var", variables)
-def test_scalar_variable_repr(var):
+def test_scalar_variable_repr(var: Variable) -> None:
     coord = tuple(var.indexes[c][0] for c in var.dims)
     repr(var.at[coord])
 
 
 @pytest.mark.parametrize("var", variables)
-def test_single_variable_repr(var):
+def test_single_variable_repr(var: Variable) -> None:
     coord = tuple(var.indexes[c][0] for c in var.dims)
     repr(var.loc[coord])
 
 
 @pytest.mark.parametrize("expr", expressions)
-def test_linear_expression_repr(expr):
+def test_linear_expression_repr(expr: LinearExpression) -> None:
     repr(expr)
 
 
-def test_linear_expression_long():
+def test_linear_expression_long() -> None:
     repr(x.sum())
 
 
 @pytest.mark.parametrize("var", variables)
-def test_scalar_linear_expression_repr(var):
+def test_scalar_linear_expression_repr(var: Variable) -> None:
     coord = tuple(var.indexes[c][0] for c in var.dims)
     repr(1 * var.at[coord])
 
 
 @pytest.mark.parametrize("var", variables)
-def test_single_linear_repr(var):
+def test_single_linear_repr(var: Variable) -> None:
     coord = tuple(var.indexes[c][0] for c in var.dims)
     repr(1 * var.loc[coord])
 
 
 @pytest.mark.parametrize("var", variables)
-def test_single_array_linear_repr(var):
+def test_single_array_linear_repr(var: Variable) -> None:
     coord = {c: [var.indexes[c][0]] for c in var.dims}
     repr(1 * var.sel(coord))
 
 
 @pytest.mark.parametrize("con", anonymous_constraints)
-def test_anonymous_constraint_repr(con):
+def test_anonymous_constraint_repr(con: Constraint) -> None:
     repr(con)
 
 
-def test_scalar_constraint_repr():
+def test_scalar_constraint_repr() -> None:
     repr(u.at[0, 0] >= 0)
 
 
 @pytest.mark.parametrize("var", variables)
-def test_single_constraint_repr(var):
+def test_single_constraint_repr(var: Variable) -> None:
     coord = tuple(var.indexes[c][0] for c in var.dims)
     repr(var.loc[coord] == 0)
     repr(1 * var.loc[coord] - var.loc[coord] == 0)
 
 
 @pytest.mark.parametrize("var", variables)
-def test_single_array_constraint_repr(var):
+def test_single_array_constraint_repr(var: Variable) -> None:
     coord = {c: [var.indexes[c][0]] for c in var.dims}
     repr(var.sel(coord) == 0)
     repr(1 * var.sel(coord) - var.sel(coord) == 0)
 
 
 @pytest.mark.parametrize("con", constraints)
-def test_constraint_repr(con):
+def test_constraint_repr(con: Constraint) -> None:
     repr(con)
 
 
-def test_empty_repr():
+def test_empty_repr() -> None:
     repr(u.loc[[]])
     repr(lu.sel(dim_0=[]))
     repr(lu.sel(dim_0=[]) >= 0)
 
 
 @pytest.mark.parametrize("obj", [v, lv, cv_, cv])
-def test_print_options(obj):
+def test_print_options(obj: Variable | LinearExpression | Constraint) -> None:
     default_repr = repr(obj)
     with options as opts:
         opts.set_value(display_max_rows=20)
         longer_repr = repr(obj)
     assert len(default_repr) < len(longer_repr)
 
-    longer_repr = obj.print(display_max_rows=20)
+    obj.print(display_max_rows=20)
 
 
-def test_print_labels():
+def test_print_labels() -> None:
     m.variables.print_labels([1, 2, 3])
     m.constraints.print_labels([1, 2, 3])
     m.constraints.print_labels([1, 2, 3], display_max_terms=10)
 
 
-def test_label_position_too_high():
+def test_label_position_too_high() -> None:
     with pytest.raises(ValueError):
         m.variables.print_labels([1000])
 
 
-def test_model_repr_empty():
+def test_model_repr_empty() -> None:
     repr(Model())
