@@ -15,7 +15,7 @@ import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import pandas as pd
@@ -131,17 +131,6 @@ io_structure = dict(
     },
     blocks={"pips"},
 )
-
-
-def set_int_index(series: Series) -> Series:
-    """
-    Convert string index to int index.
-    """
-    try:
-        series.index = series.index.str[1:].astype(int)
-    except ValueError as _:
-        series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
-    return series
 
 
 # using enum to match solver subclasses with names

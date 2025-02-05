@@ -42,9 +42,13 @@ def set_int_index(series: pd.Series) -> pd.Series:
     """
     Convert string index to int index.
     """
+
     if not series.empty and not pd.api.types.is_integer_dtype(series.index):
         cutoff = count_initial_letters(str(series.index[0]))
-        series.index = series.index.str[cutoff:].astype(int)
+        try:
+            series.index = series.index.str[cutoff:].astype(int)
+        except ValueError:
+            series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
     return series
 
 
