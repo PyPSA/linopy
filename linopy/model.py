@@ -635,9 +635,9 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
             # TODO: simplify
-            assert set(mask.dims).issubset(
-                data.dims
-            ), "Dimensions of mask not a subset of resulting labels dimensions."
+            assert set(mask.dims).issubset(data.dims), (
+                "Dimensions of mask not a subset of resulting labels dimensions."
+            )
 
         self.check_force_dim_names(data)
 
