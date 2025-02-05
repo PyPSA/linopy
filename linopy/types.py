@@ -17,7 +17,7 @@ if sys.version_info >= (3, 10):
 else:
     EllipsisType = type(Ellipsis)
     NotImplementedType = type(NotImplemented)
-    TypeAlias = type(Union)
+    TypeAlias = Union | str
 
 
 if TYPE_CHECKING:
