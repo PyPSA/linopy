@@ -15,6 +15,9 @@ Version 0.4.4
 * Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
 * GLPK solver is always called with the `--freemps` option instead of the `--mps` when using the Solver API to solve an external MPS file. `--mps` is for the older fixed-column MPS format that is rarely used nowadays. Almost all fixed MPS files can be parsed by the free MPS format.
 
+* Added extra argument in io methods `explicit_coordinate_names` to allow for export of
+  variables and constraints with explicit coordinate names.
+
 Version 0.4.3
 --------------
 
