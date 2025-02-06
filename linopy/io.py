@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from io import BufferedWriter, TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -55,14 +55,14 @@ def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[st
 name_sanitizer = str.maketrans("-+*^[] ", "_______")
 
 
-def clean_name(name):
+def clean_name(name: str) -> str:
     return name.translate(name_sanitizer)
 
 
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
-def print_coord(coord):
+def print_coord(coord: str) -> str:
     from linopy.common import print_coord
 
     coord = print_coord(coord).translate(coord_sanitizer)
@@ -70,52 +70,68 @@ def print_coord(coord):
 
 
 def get_printers(
-    m: Model, for_polars: bool = False, explicit_coordinate_names: bool = False
-):
+    m: Model, explicit_coordinate_names: bool = False
+) -> tuple[Callable, Callable]:
     if explicit_coordinate_names:
 
-        def print_variable(var):
+        def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{print_coord(coord)}#{var}"
 
-        def print_constraint(cons):
+        def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
-            name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{cons}"
+            name = clean_name(name)  # type: ignore
+            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
 
-        def print_variable_polars(series):
+        return print_variable, print_constraint
+    else:
+
+        def print_variable(var: Any) -> str:
+            return f"x{var}"
+
+        def print_constraint(cons: Any) -> str:
+            return f"c{cons}"
+
+        return print_variable, print_constraint
+
+
+def get_printers_polars(
+    m: Model, explicit_coordinate_names: bool = False
+) -> tuple[Callable, Callable]:
+    if explicit_coordinate_names:
+
+        def print_variable(var: Any) -> str:
+            name, coord = m.variables.get_label_position(var)
+            name = clean_name(name)
+            return f"{name}{print_coord(coord)}#{var}"
+
+        def print_constraint(cons: Any) -> str:
+            name, coord = m.constraints.get_label_position(cons)
+            name = clean_name(name)  # type: ignore
+            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+
+        def print_variable_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
                 print_variable, return_dtype=pl.String
             )
 
-        def print_constraint_polars(series):
+        def print_constraint_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(None), series.map_elements(
                 print_constraint, return_dtype=pl.String
             )
 
-        if for_polars:
-            return print_variable_polars, print_constraint_polars
-        else:
-            return print_variable, print_constraint
+        return print_variable_polars, print_constraint_polars
+
     else:
 
-        def print_variable(var):
-            return f"x{var}"
-
-        def print_constraint(cons):
-            return f"c{cons}"
-
-        def print_variable_polars(series):
+        def print_variable_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" x").alias("x"), series.cast(pl.String)
 
-        def print_constraint_polars(series):
+        def print_constraint_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit("c").alias("c"), series.cast(pl.String)
 
-        if for_polars:
-            return print_variable_polars, print_constraint_polars
-        else:
-            return print_variable, print_constraint
+        return print_variable_polars, print_constraint_polars
 
 
 def objective_write_linear_terms(
@@ -123,7 +139,7 @@ def objective_write_linear_terms(
     f: TextIOWrapper,
     batch: list[str],
     batch_size: int,
-    print_variable: bool,
+    print_variable: Callable,
 ) -> list[str]:
     """
     Write the linear terms of the objective to a file.
@@ -144,7 +160,7 @@ def objective_write_quad_terms(
     f: TextIOWrapper,
     batch: list[str],
     batch_size: int,
-    print_variable,
+    print_variable: Callable,
 ) -> list[str]:
     """
     Write the cross terms of the objective to a file.
@@ -168,7 +184,7 @@ def objective_to_file(
     f: TextIOWrapper,
     progress: bool = False,
     batch_size: int = 10000,
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out the objective of a model to a lp file.
@@ -176,7 +192,10 @@ def objective_to_file(
     if progress:
         logger.info("Writing objective.")
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n")
     df = m.objective.flat
@@ -216,12 +235,14 @@ def constraints_to_file(
     progress: bool = False,
     batch_size: int = 50_000,
     slice_size: int = 100_000,
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     if not len(m.constraints):
         return
 
-    print_variable, print_constraint = printers
+    print_variable, print_constraint = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write("\n\ns.t.\n\n")
     names: Iterable = m.constraints
@@ -292,7 +313,7 @@ def bounds_to_file(
     progress: bool = False,
     batch_size: int = 10000,
     slice_size: int = 100_000,
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -301,7 +322,9 @@ def bounds_to_file(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write("\n\nbounds\n\n")
     if progress:
@@ -339,7 +362,7 @@ def binaries_to_file(
     progress: bool = False,
     batch_size: int = 1000,
     slice_size: int = 100_000,
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out binaries of a model to a lp file.
@@ -348,7 +371,9 @@ def binaries_to_file(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write("\n\nbinary\n\n")
     if progress:
@@ -380,7 +405,7 @@ def integers_to_file(
     batch_size: int = 1000,
     slice_size: int = 100_000,
     integer_label: str = "general",
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out integers of a model to a lp file.
@@ -389,7 +414,9 @@ def integers_to_file(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write(f"\n\n{integer_label}\n\n")
     if progress:
@@ -420,7 +447,7 @@ def to_lp_file(
     integer_label: str,
     slice_size: int = 10_000_000,
     progress: bool = True,
-    printers=None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     batch_size = 5000
 
@@ -430,14 +457,16 @@ def to_lp_file(
         if isinstance(f, int):
             raise ValueError("File not found.")
 
-        objective_to_file(m, f, progress=progress, printers=printers)
+        objective_to_file(
+            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
+        )
         constraints_to_file(
             m,
             f=f,
             progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
             m,
@@ -445,7 +474,7 @@ def to_lp_file(
             progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         binaries_to_file(
             m,
@@ -453,7 +482,7 @@ def to_lp_file(
             progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         integers_to_file(
             m,
@@ -462,7 +491,7 @@ def to_lp_file(
             progress=progress,
             batch_size=batch_size,
             slice_size=slice_size,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         f.write("end\n")
 
@@ -470,7 +499,7 @@ def to_lp_file(
 
 
 def objective_write_linear_terms_polars(
-    f: BufferedWriter, df: pl.DataFrame, print_variable: bool
+    f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
@@ -484,7 +513,7 @@ def objective_write_linear_terms_polars(
 
 
 def objective_write_quadratic_terms_polars(
-    f: BufferedWriter, df: pl.DataFrame, print_variable: bool
+    f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
         pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
@@ -501,18 +530,25 @@ def objective_write_quadratic_terms_polars(
     f.write(b"] / 2\n")
 
 
-def objective_to_file_polars(m, f, progress=False, printers=None):
+def objective_to_file_polars(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    explicit_coordinate_names: bool = False,
+) -> None:
     """
     Write out the objective of a model to a lp file.
     """
     if progress:
         logger.info("Writing objective.")
 
+    print_variable, _ = get_printers_polars(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
-
-    print_variable, _ = printers
 
     if m.is_linear:
         objective_write_linear_terms_polars(f, df, print_variable)
@@ -536,7 +572,7 @@ def bounds_to_file_polars(
     f: BufferedWriter,
     progress: bool = False,
     slice_size: int = 2_000_000,
-    printers: callable | None = None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -545,7 +581,9 @@ def bounds_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers_polars(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write(b"\n\nbounds\n\n")
     if progress:
@@ -582,7 +620,7 @@ def binaries_to_file_polars(
     f: BufferedWriter,
     progress: bool = False,
     slice_size: int = 2_000_000,
-    printers: callable | None = None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out binaries of a model to a lp file.
@@ -591,7 +629,9 @@ def binaries_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers_polars(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write(b"\n\nbinary\n\n")
     if progress:
@@ -623,7 +663,7 @@ def integers_to_file_polars(
     progress: bool = False,
     integer_label: str = "general",
     slice_size: int = 2_000_000,
-    printers: callable | None = None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     """
     Write out integers of a model to a lp file.
@@ -632,7 +672,9 @@ def integers_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = printers
+    print_variable, _ = get_printers_polars(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write(f"\n\n{integer_label}\n\n".encode())
     if progress:
@@ -664,12 +706,14 @@ def constraints_to_file_polars(
     progress: bool = False,
     lazy: bool = False,
     slice_size: int = 2_000_000,
-    printers: callable | None = None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     if not len(m.constraints):
         return
 
-    print_variable, print_constraint = printers
+    print_variable, print_constraint = get_printers_polars(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
 
     f.write(b"\n\ns.t.\n\n")
     names = m.constraints
@@ -729,20 +773,34 @@ def to_lp_file_polars(
     integer_label: str = "general",
     slice_size: int = 2_000_000,
     progress: bool = True,
-    printers: callable | None = None,
+    explicit_coordinate_names: bool = False,
 ) -> None:
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        objective_to_file_polars(m, f, progress=progress, printers=printers)
+        objective_to_file_polars(
+            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
+        )
         constraints_to_file_polars(
-            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file_polars(
-            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         binaries_to_file_polars(
-            m, f=f, progress=progress, slice_size=slice_size, printers=printers
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         integers_to_file_polars(
             m,
@@ -750,7 +808,7 @@ def to_lp_file_polars(
             f=f,
             progress=progress,
             slice_size=slice_size,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
         f.write(b"end\n")
 
@@ -764,7 +822,7 @@ def to_file(
     integer_label: str = "general",
     slice_size: int = 2_000_000,
     progress: bool | None = None,
-    explicit_coordinate_names: bool = True,
+    explicit_coordinate_names: bool = False,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
@@ -782,12 +840,6 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
-    printers = get_printers(
-        m,
-        for_polars=io_api == "lp-polars",
-        explicit_coordinate_names=explicit_coordinate_names,
-    )
-
     if io_api == "lp":
         to_lp_file(
             m,
@@ -795,7 +847,7 @@ def to_file(
             integer_label,
             slice_size=slice_size,
             progress=progress,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
     elif io_api == "lp-polars":
         to_lp_file_polars(
@@ -804,7 +856,7 @@ def to_file(
             integer_label,
             slice_size=slice_size,
             progress=progress,
-            printers=printers,
+            explicit_coordinate_names=explicit_coordinate_names,
         )
 
     elif io_api == "mps":

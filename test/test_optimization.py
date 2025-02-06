@@ -480,7 +480,7 @@ def test_solver_time_limit_options(
         solver,
         io_api=io_api,
         explicit_coordinate_names=explicit_coordinate_names,
-        **time_limit_option[solver],
+        **time_limit_option[solver],  # type: ignore
     )
     assert status == "ok"
 
