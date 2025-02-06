@@ -1,12 +1,26 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
 
-* The internal handling of `Solution` objects was improved for more consistency. Solution objects created from solver calls now preserve the exact index names from the input file.
-* Multiplication of a linear expression by a constant value may now introduce new dimensions.
-* Added method `unstack` to `LinearExpression`, `Variable` and `Constraint` to unstack a dimension.
+Version 0.5.0
+--------------
+
+**Features**
+
+* Multiplication of a linear expression by a constant value may now introduce new
+  dimensions.
+* Added method `unstack` to `LinearExpression`, `Variable` and `Constraint` to unstack
+  a dimension.
+* Added extra argument in io methods `explicit_coordinate_names` to allow for export of
+  variables and constraints with explicit coordinate names.
+
+**Bug fixes**
+
+* The internal handling of `Solution` objects was improved for more consistency.
+  Solution objects created from solver calls now preserve the exact index names from
+  the input file.
 
 Version 0.4.4
 --------------
@@ -14,9 +28,6 @@ Version 0.4.4
 * **IMPORTANT BUGFIX**: The last slice of constraints was not correctly written to LP files in case the constraint size was not a multiple of the slice size. This is fixed now.
 * Solution files that following a different naming scheme of variables and constraints using more than on initial letter in the prefix (e.g. `col123`, `row456`) are now supported.
 * GLPK solver is always called with the `--freemps` option instead of the `--mps` when using the Solver API to solve an external MPS file. `--mps` is for the older fixed-column MPS format that is rarely used nowadays. Almost all fixed MPS files can be parsed by the free MPS format.
-
-* Added extra argument in io methods `explicit_coordinate_names` to allow for export of
-  variables and constraints with explicit coordinate names.
 
 Version 0.4.3
 --------------
@@ -46,7 +57,6 @@ Version 0.4.0
 * The representation of linopy objects with multiindexed coordinates was improved to be more readable.
 * Grouping expressions is now supported on dimensions called "group" and dimensions that have the same name as the grouping object.
 * Grouping dimensions which have multiindexed coordinates is now supported.
-* See full list of changes `here <https://github.com/PyPSA/linopy/releases/tag/v0.4.0>`__.
 
 Version 0.3.15
 --------------
