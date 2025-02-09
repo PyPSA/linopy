@@ -8,7 +8,6 @@ This module contains commonly used functions.
 from __future__ import annotations
 
 import operator
-import os
 from collections.abc import Generator, Hashable, Iterable, Sequence
 from functools import reduce, wraps
 from pathlib import Path
