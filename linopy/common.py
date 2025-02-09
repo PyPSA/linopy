@@ -320,7 +320,7 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     schema = {}
     for name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if os.name == "nt" else pl.Int64
+            schema[name] = pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[name] = pl.Float64  # type: ignore
         elif np.issubdtype(array.dtype, np.bool_):
