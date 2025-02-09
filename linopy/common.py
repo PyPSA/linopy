@@ -318,9 +318,11 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
+    np_major_version = int(np.__version__.split(".")[0])
+    use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if os.name == "nt" else pl.Int64
+            schema[name] = pl.Int32 if use_int32 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[name] = pl.Float64  # type: ignore
         elif np.issubdtype(array.dtype, np.bool_):
