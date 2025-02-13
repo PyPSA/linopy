@@ -314,7 +314,10 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        try:
+            coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        except TypeError:
+            return NotImplemented
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
