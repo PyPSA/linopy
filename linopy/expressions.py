@@ -542,7 +542,10 @@ class LinearExpression:
         if isinstance(other, (LinearExpression, ScalarLinearExpression)):
             return self._multiply_by_linear_expression(other)
         else:
-            return self._multiply_by_constant(other)
+            try:
+                return self._multiply_by_constant(other)
+            except TypeError:
+                return NotImplemented
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
