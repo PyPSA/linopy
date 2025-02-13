@@ -491,7 +491,10 @@ class LinearExpression:
         if np.isscalar(other):
             return self.assign(const=self.const + other)
 
-        other = as_expression(other, model=self.model, dims=self.coord_dims)
+        try:
+            other = as_expression(other, model=self.model, dims=self.coord_dims)
+        except TypeError:
+            return NotImplemented
         return merge([self, other], cls=self.__class__)
 
     def __radd__(self, other: int) -> LinearExpression | NotImplementedType:
@@ -508,7 +511,10 @@ class LinearExpression:
         if np.isscalar(other):
             return self.assign_multiindex_safe(const=self.const - other)
 
-        other = as_expression(other, model=self.model, dims=self.coord_dims)
+        try:
+            other = as_expression(other, model=self.model, dims=self.coord_dims)
+        except TypeError:
+            return NotImplemented
         return merge([self, -other], cls=self.__class__)
 
     def __neg__(self) -> LinearExpression | QuadraticExpression:
@@ -1560,7 +1566,10 @@ class QuadraticExpression(LinearExpression):
         if np.isscalar(other):
             return self.assign(const=self.const + other)
 
-        other = as_expression(other, model=self.model, dims=self.coord_dims)
+        try:
+            other = as_expression(other, model=self.model, dims=self.coord_dims)
+        except TypeError:
+            return NotImplemented
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge([self, other], cls=self.__class__)  # type: ignore
@@ -1588,8 +1597,10 @@ class QuadraticExpression(LinearExpression):
         """
         if np.isscalar(other):
             return self.assign(const=self.const - other)
-
-        other = as_expression(other, model=self.model, dims=self.coord_dims)
+        try:
+            other = as_expression(other, model=self.model, dims=self.coord_dims)
+        except TypeError:
+            return NotImplemented
         if type(other) is LinearExpression:
             other = other.to_quadexpr()
         return merge([self, -other], cls=self.__class__)  # type: ignore
