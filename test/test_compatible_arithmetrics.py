@@ -89,7 +89,8 @@ def m(request) -> Model:
 
 def test_arithmetric_operations_variable(m: Model) -> None:
     x = m.variables["x"]
-    data = xr.DataArray(np.random.Generator(*x.shape), coords=x.coords)
+    rng = np.random.default_rng()
+    data = xr.DataArray(rng.random(x.shape), coords=x.coords)
     other_datatype = SomeOtherDatatype(data.copy())
     assert_linequal(x + data, x + other_datatype)
     assert_linequal(x - data, x - other_datatype)
@@ -100,7 +101,8 @@ def test_arithmetric_operations_variable(m: Model) -> None:
 def test_arithmetric_operations_con(m: Model) -> None:
     c = m.constraints["c"]
     x = m.variables["x"]
-    data = xr.DataArray(np.random.Generator(*x.shape), coords=x.coords)
+    rng = np.random.default_rng()
+    data = xr.DataArray(rng.random(x.shape), coords=x.coords)
     other_datatype = SomeOtherDatatype(data.copy())
     assert_linequal(c.lhs + data, c.lhs + other_datatype)
     assert_linequal(c.lhs - data, c.lhs - other_datatype)
