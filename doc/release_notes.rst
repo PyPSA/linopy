@@ -4,6 +4,8 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
+.. * Added support for arithmetic operations with custom classes.
+
 Version 0.5.0
 --------------
 
