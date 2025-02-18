@@ -1,9 +1,11 @@
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model
+from linopy import LESS_EQUAL, Model, Variable
 from linopy.testing import assert_linequal
 
 
@@ -26,40 +28,40 @@ class SomeOtherDatatype:
     def active_data(self) -> xr.DataArray:
         return self.data1 if self.active == 1 else self.data2
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> xr.DataArray:
         return self.active_data + other
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> xr.DataArray:
         return self.active_data - other
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> xr.DataArray:
         return self.active_data * other
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> xr.DataArray:
         return self.active_data / other
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> Any:
         return other + self.active_data
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Any) -> Any:
         return other - self.active_data
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Any) -> Any:
         return other * self.active_data
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: Any) -> Any:
         return other / self.active_data
 
-    def __neg__(self):
+    def __neg__(self) -> xr.DataArray:
         return -self.active_data
 
-    def __pos__(self):
+    def __pos__(self) -> xr.DataArray:
         return +self.active_data
 
-    def __abs__(self):
+    def __abs__(self) -> xr.DataArray:
         return abs(self.active_data)
 
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):  # type: ignore
         # Ensure we always use the active_data when interacting with numpy/xarray operations
         new_inputs = [
             inp.active_data if isinstance(inp, SomeOtherDatatype) else inp
@@ -79,23 +81,23 @@ class SomeOtherDatatype:
     ],
     ids=["single_dim", "multi_dim"],
 )
-def m(request) -> Model:
+def m(request) -> Model:  # type: ignore
     m = Model()
-    m.add_variables(coords=request.param, name="x")
+    x = m.add_variables(coords=request.param, name="x")
     m.add_variables(0, 10, name="z")
-    m.add_constraints(m.variables["x"] >= 0, name="c")
+    m.add_constraints(x, LESS_EQUAL, 0, name="c")
     return m
 
 
 def test_arithmetric_operations_variable(m: Model) -> None:
-    x = m.variables["x"]
+    x: Variable = m.variables["x"]
     rng = np.random.default_rng()
     data = xr.DataArray(rng.random(x.shape), coords=x.coords)
     other_datatype = SomeOtherDatatype(data.copy())
-    assert_linequal(x + data, x + other_datatype)
-    assert_linequal(x - data, x - other_datatype)
-    assert_linequal(x * data, x * other_datatype)
-    assert_linequal(x / data, x / other_datatype)
+    assert_linequal(x + data, x + other_datatype)  # type: ignore
+    assert_linequal(x - data, x - other_datatype)  # type: ignore
+    assert_linequal(x * data, x * other_datatype)  # type: ignore
+    assert_linequal(x / data, x / other_datatype)  # type: ignore
 
 
 def test_arithmetric_operations_con(m: Model) -> None:
@@ -108,7 +110,7 @@ def test_arithmetric_operations_con(m: Model) -> None:
     assert_linequal(c.lhs - data, c.lhs - other_datatype)
     assert_linequal(c.lhs * data, c.lhs * other_datatype)
     assert_linequal(c.lhs / data, c.lhs / other_datatype)
-    assert_linequal(c.rhs + data, c.rhs + other_datatype)
-    assert_linequal(c.rhs - data, c.rhs - other_datatype)
-    assert_linequal(c.rhs * data, c.rhs * other_datatype)
-    assert_linequal(c.rhs / data, c.rhs / other_datatype)
+    assert_linequal(c.rhs + data, c.rhs + other_datatype)  # type: ignore
+    assert_linequal(c.rhs - data, c.rhs - other_datatype)  # type: ignore
+    assert_linequal(c.rhs * data, c.rhs * other_datatype)  # type: ignore
+    assert_linequal(c.rhs / data, c.rhs / other_datatype)  # type: ignore
