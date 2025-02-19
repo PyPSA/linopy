@@ -1,10 +1,10 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
 
-.. * Added support for arithmetic operations with custom classes.
+* Added support for arithmetic operations with custom classes.
 
 Version 0.5.0
 --------------
