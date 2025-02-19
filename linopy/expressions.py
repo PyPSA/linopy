@@ -608,15 +608,18 @@ class LinearExpression:
     def __div__(
         self, other: Variable | ConstantLike
     ) -> LinearExpression | QuadraticExpression:
-        if isinstance(
-            other, (LinearExpression, variables.Variable, variables.ScalarVariable)
-        ):
-            raise TypeError(
-                "unsupported operand type(s) for /: "
-                f"{type(self)} and {type(other)}"
-                "Non-linear expressions are not yet supported."
-            )
-        return self.__mul__(1 / other)
+        try:
+            if isinstance(
+                other, (LinearExpression, variables.Variable, variables.ScalarVariable)
+            ):
+                raise TypeError(
+                    "unsupported operand type(s) for /: "
+                    f"{type(self)} and {type(other)}"
+                    "Non-linear expressions are not yet supported."
+                )
+            return self.__mul__(1 / other)
+        except TypeError:
+            return NotImplemented
 
     def __truediv__(
         self, other: Variable | ConstantLike
