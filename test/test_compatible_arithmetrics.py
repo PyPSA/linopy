@@ -99,6 +99,12 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert_linequal(x * data, x * other_datatype)  # type: ignore
     assert_linequal(x / data, x / other_datatype)  # type: ignore
     assert_linequal(data * x, other_datatype * x)  # type: ignore
+    assert x.__add__(object()) is NotImplemented  # type: ignore
+    assert x.__sub__(object()) is NotImplemented  # type: ignore
+    assert x.__mul__(object()) is NotImplemented  # type: ignore
+    assert x.__truediv__(object()) is NotImplemented  # type: ignore
+    assert x.__pow__(object()) is NotImplemented  # type: ignore
+    assert x.__pow__(3) is NotImplemented  # type: ignore
 
 
 def test_arithmetric_operations_expr(m: Model) -> None:
@@ -111,6 +117,10 @@ def test_arithmetric_operations_expr(m: Model) -> None:
     assert_linequal(expr - data, expr - other_datatype)
     assert_linequal(expr * data, expr * other_datatype)
     assert_linequal(expr / data, expr / other_datatype)
+    assert expr.__add__(object()) is NotImplemented  # type: ignore
+    assert expr.__sub__(object()) is NotImplemented  # type: ignore
+    assert expr.__mul__(object()) is NotImplemented  # type: ignore
+    assert expr.__truediv__(object()) is NotImplemented  # type: ignore
 
 
 def test_arithmetric_operations_con(m: Model) -> None:
