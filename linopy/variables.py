@@ -388,9 +388,12 @@ class Variable:
         """
         Multiply variables with a coefficient.
         """
-        if isinstance(other, (expressions.LinearExpression, Variable, ScalarVariable)):
-            return self.to_linexpr() * other
         try:
+            if isinstance(
+                other, (expressions.LinearExpression, Variable, ScalarVariable)
+            ):
+                return self.to_linexpr() * other
+
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
@@ -399,10 +402,13 @@ class Variable:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
-        if not other == 2:
-            raise ValueError("Power must be 2.")
-        expr = self.to_linexpr()
-        return expr._multiply_by_linear_expression(expr)
+        try:
+            if not other == 2:
+                raise ValueError("Power must be 2.")
+            expr = self.to_linexpr()
+            return expr._multiply_by_linear_expression(expr)
+        except TypeError:
+            return NotImplemented
 
     def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
         """

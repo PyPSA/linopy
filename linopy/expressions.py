@@ -488,14 +488,14 @@ class LinearExpression:
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        if np.isscalar(other):
-            return self.assign(const=self.const + other)
-
         try:
+            if np.isscalar(other):
+                return self.assign(const=self.const + other)
+
             other = as_expression(other, model=self.model, dims=self.coord_dims)
+            return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
-        return merge([self, other], cls=self.__class__)
 
     def __radd__(self, other: int) -> LinearExpression | NotImplementedType:
         # This is needed for using python's sum function
@@ -508,14 +508,14 @@ class LinearExpression:
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        if np.isscalar(other):
-            return self.assign_multiindex_safe(const=self.const - other)
-
         try:
+            if np.isscalar(other):
+                return self.assign_multiindex_safe(const=self.const - other)
+
             other = as_expression(other, model=self.model, dims=self.coord_dims)
+            return merge([self, -other], cls=self.__class__)
         except TypeError:
             return NotImplemented
-        return merge([self, -other], cls=self.__class__)
 
     def __neg__(self) -> LinearExpression | QuadraticExpression:
         """
@@ -530,22 +530,22 @@ class LinearExpression:
         """
         Multiply the expr by a factor.
         """
-        if isinstance(other, QuadraticExpression):
-            raise TypeError(
-                "unsupported operand type(s) for *: "
-                f"{type(self)} and {type(other)}. "
-                "Higher order non-linear expressions are not yet supported."
-            )
-        elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
-            other = other.to_linexpr()
+        try:
+            if isinstance(other, QuadraticExpression):
+                raise TypeError(
+                    "unsupported operand type(s) for *: "
+                    f"{type(self)} and {type(other)}. "
+                    "Higher order non-linear expressions are not yet supported."
+                )
+            elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
+                other = other.to_linexpr()
 
-        if isinstance(other, (LinearExpression, ScalarLinearExpression)):
-            return self._multiply_by_linear_expression(other)
-        else:
-            try:
+            if isinstance(other, (LinearExpression, ScalarLinearExpression)):
+                return self._multiply_by_linear_expression(other)
+            else:
                 return self._multiply_by_constant(other)
-            except TypeError:
-                return NotImplemented
+        except TypeError:
+            return NotImplemented
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
@@ -1566,16 +1566,17 @@ class QuadraticExpression(LinearExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        if np.isscalar(other):
-            return self.assign(const=self.const + other)
-
         try:
+            if np.isscalar(other):
+                return self.assign(const=self.const + other)
+
             other = as_expression(other, model=self.model, dims=self.coord_dims)
+
+            if type(other) is LinearExpression:
+                other = other.to_quadexpr()
+            return merge([self, other], cls=self.__class__)  # type: ignore
         except TypeError:
             return NotImplemented
-        if type(other) is LinearExpression:
-            other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__)  # type: ignore
 
     def __radd__(
         self, other: LinearExpression | int
@@ -1598,15 +1599,16 @@ class QuadraticExpression(LinearExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        if np.isscalar(other):
-            return self.assign(const=self.const - other)
         try:
+            if np.isscalar(other):
+                return self.assign(const=self.const - other)
+
             other = as_expression(other, model=self.model, dims=self.coord_dims)
+            if type(other) is LinearExpression:
+                other = other.to_quadexpr()
+            return merge([self, -other], cls=self.__class__)  # type: ignore
         except TypeError:
             return NotImplemented
-        if type(other) is LinearExpression:
-            other = other.to_quadexpr()
-        return merge([self, -other], cls=self.__class__)  # type: ignore
 
     def __rsub__(self, other: LinearExpression) -> QuadraticExpression:
         """
