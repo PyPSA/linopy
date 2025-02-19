@@ -98,6 +98,7 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert_linequal(x - data, x - other_datatype)  # type: ignore
     assert_linequal(x * data, x * other_datatype)  # type: ignore
     assert_linequal(x / data, x / other_datatype)  # type: ignore
+    assert_linequal(data * x, other_datatype * x)  # type: ignore
 
 
 def test_arithmetric_operations_con(m: Model) -> None:
