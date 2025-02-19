@@ -402,13 +402,10 @@ class Variable:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
-        try:
-            if not other == 2:
-                raise ValueError("Power must be 2.")
-            expr = self.to_linexpr()
-            return expr._multiply_by_linear_expression(expr)
-        except TypeError:
-            return NotImplemented
+        if not other == 2:
+            raise ValueError("Power must be 2.")
+        expr = self.to_linexpr()
+        return expr._multiply_by_linear_expression(expr)
 
     def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
         """
