@@ -101,6 +101,18 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert_linequal(data * x, other_datatype * x)  # type: ignore
 
 
+def test_arithmetric_operations_expr(m: Model) -> None:
+    x = m.variables["x"]
+    expr = x + 3
+    rng = np.random.default_rng()
+    data = xr.DataArray(rng.random(x.shape), coords=x.coords)
+    other_datatype = SomeOtherDatatype(data.copy())
+    assert_linequal(expr + data, expr + other_datatype)
+    assert_linequal(expr - data, expr - other_datatype)
+    assert_linequal(expr * data, expr * other_datatype)
+    assert_linequal(expr / data, expr / other_datatype)
+
+
 def test_arithmetric_operations_con(m: Model) -> None:
     c = m.constraints["c"]
     x = m.variables["x"]
