@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Hashable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
 )
 from warnings import warn
 
@@ -1352,7 +1351,7 @@ class LinearExpression:
         """
         Get whether the linear expression is empty.
         """
-        return self.shape == (0,)
+        return not self.size
 
     def densify_terms(self) -> LinearExpression:
         """
