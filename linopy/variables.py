@@ -388,25 +388,33 @@ class Variable:
         """
         Multiply variables with a coefficient.
         """
-        if isinstance(other, (expressions.LinearExpression, Variable, ScalarVariable)):
-            return self.to_linexpr() * other
-        else:
+        try:
+            if isinstance(
+                other, (expressions.LinearExpression, Variable, ScalarVariable)
+            ):
+                return self.to_linexpr() * other
+
             return self.to_linexpr(other)
+        except TypeError:
+            return NotImplemented
 
     def __pow__(self, other: int) -> QuadraticExpression:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
-        if not other == 2:
-            raise ValueError("Power must be 2.")
-        expr = self.to_linexpr()
-        return expr._multiply_by_linear_expression(expr)
+        if isinstance(other, int) and other == 2:
+            expr = self.to_linexpr()
+            return expr._multiply_by_linear_expression(expr)
+        return NotImplemented
 
     def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
         """
         Right-multiply variables with a coefficient.
         """
-        return self.to_linexpr(other)
+        try:
+            return self.to_linexpr(other)
+        except TypeError:
+            return NotImplemented
 
     def __matmul__(
         self, other: LinearExpression | ndarray | Variable
@@ -436,7 +444,10 @@ class Variable:
         """
         True divide variables with a coefficient.
         """
-        return self.__div__(coefficient)
+        try:
+            return self.__div__(coefficient)
+        except TypeError:
+            return NotImplemented
 
     def __add__(
         self, other: int | QuadraticExpression | LinearExpression | Variable
@@ -444,7 +455,10 @@ class Variable:
         """
         Add variables to linear expressions or other variables.
         """
-        return self.to_linexpr() + other
+        try:
+            return self.to_linexpr() + other
+        except TypeError:
+            return NotImplemented
 
     def __radd__(self, other: int) -> Variable | NotImplementedType:
         # This is needed for using python's sum function
@@ -456,7 +470,10 @@ class Variable:
         """
         Subtract linear expressions or other variables from the variables.
         """
-        return self.to_linexpr() - other
+        try:
+            return self.to_linexpr() - other
+        except TypeError:
+            return NotImplemented
 
     def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)

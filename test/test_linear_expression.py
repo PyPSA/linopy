@@ -539,6 +539,12 @@ def test_linear_expression_loc(x: Variable, y: Variable) -> None:
     assert expr.loc[0].size < expr.loc[:5].size
 
 
+def test_linear_expression_empty(v: Variable) -> None:
+    expr = 7 * v
+    assert not expr.empty()
+    assert expr.loc[[]].empty()
+
+
 def test_linear_expression_isnull(v: Variable) -> None:
     expr = np.arange(20) * v
     filter = (expr.coeffs >= 10).any(TERM_DIM)
