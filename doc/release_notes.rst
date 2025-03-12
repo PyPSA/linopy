@@ -4,7 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+** Features **
+
 * Added support for arithmetic operations with custom classes.
+* Added `align` function as a wrapper around :func:`xr.align`.
 
 Version 0.5.0
 --------------
