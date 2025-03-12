@@ -9,10 +9,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -705,7 +705,7 @@ class Model:
             The objective function assigned to the model.
         """
         if not overwrite:
-            assert self.objective.expression.empty(), (
+            assert self.objective.expression.empty, (
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )

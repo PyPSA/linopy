@@ -1347,6 +1347,7 @@ class LinearExpression:
         """
         return self.vars.size
 
+    @property
     def empty(self) -> bool:
         """
         Get whether the linear expression is empty.
