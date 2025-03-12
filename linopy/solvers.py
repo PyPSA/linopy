@@ -108,8 +108,7 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
 
-    with contextlib.suppress(coptpy.CoptError):
-        available_solvers.append("copt")
+    available_solvers.append("copt")
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
