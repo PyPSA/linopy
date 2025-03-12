@@ -1026,10 +1026,10 @@ class EmptyDeprecationWrapper:
     def __bool__(self) -> bool:
         return self.value
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return repr(self.value)
 
-    def __call__(self):
+    def __call__(self) -> bool:
         warn(
             "Calling `.empty()` is deprecated, use `.empty` property instead",
             DeprecationWarning,
