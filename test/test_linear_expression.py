@@ -544,6 +544,9 @@ def test_linear_expression_empty(v: Variable) -> None:
     assert not expr.empty
     assert expr.loc[[]].empty
 
+    with pytest.warns(DeprecationWarning, match="use `.empty` property instead"):
+        assert expr.loc[[]].empty()
+
 
 def test_linear_expression_isnull(v: Variable) -> None:
     expr = np.arange(20) * v
