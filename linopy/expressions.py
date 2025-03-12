@@ -37,6 +37,7 @@ from xarray.core.utils import Frozen
 
 from linopy import constraints, variables
 from linopy.common import (
+    EmptyDeprecationWrapper,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
@@ -1347,11 +1348,16 @@ class LinearExpression:
         """
         return self.vars.size
 
-    def empty(self) -> bool:
+    @property
+    def empty(self) -> EmptyDeprecationWrapper:
         """
         Get whether the linear expression is empty.
+
+        .. versionchanged:: 0.5.1
+           Returns a EmptyDeprecationWrapper which behaves like a bool and emits
+           a DeprecationWarning when called.
         """
-        return not self.size
+        return EmptyDeprecationWrapper(not self.size)
 
     def densify_terms(self) -> LinearExpression:
         """
