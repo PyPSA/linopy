@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import xarray.core.indexes
+import xarray.core.utils
 
 import linopy
 from linopy import Model
@@ -14,7 +16,7 @@ from linopy.testing import assert_varequal
 
 
 @pytest.fixture
-def m():
+def m() -> Model:
     m = Model()
     m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
     m.add_variables(coords=[pd.Index([1, 2, 3], name="second")], name="y")
@@ -22,24 +24,24 @@ def m():
     return m
 
 
-def test_variables_repr(m):
+def test_variables_repr(m: Model) -> None:
     m.variables.__repr__()
 
 
-def test_variables_inherited_properties(m):
+def test_variables_inherited_properties(m: Model) -> None:
     assert isinstance(m.variables.attrs, dict)
     assert isinstance(m.variables.coords, xr.Coordinates)
-    assert isinstance(m.variables.indexes, xr.core.indexes.Indexes)
-    assert isinstance(m.variables.sizes, xr.core.utils.Frozen)
+    assert isinstance(m.variables.indexes, xarray.core.indexes.Indexes)
+    assert isinstance(m.variables.sizes, xarray.core.utils.Frozen)
 
 
-def test_variables_getattr_formatted():
+def test_variables_getattr_formatted() -> None:
     m = Model()
     m.add_variables(name="y-0")
     assert_varequal(m.variables.y_0, m.variables["y-0"])
 
 
-def test_variables_assignment_with_merge():
+def test_variables_assignment_with_merge() -> None:
     """
     Test the merger of a variables with same dimension name but with different
     lengths.
@@ -62,7 +64,7 @@ def test_variables_assignment_with_merge():
     assert_varequal(var1, m.variables.var1)
 
 
-def test_variables_assignment_with_reindex(m):
+def test_variables_assignment_with_reindex(m: Model) -> None:
     shuffled_coords = [pd.Index([2, 1, 3, 4, 6, 5, 7, 9, 8, 0], name="first")]
     m.add_variables(coords=shuffled_coords, name="a")
 
@@ -79,7 +81,7 @@ def test_variables_assignment_with_reindex(m):
             assert np.issubdtype(dtype, np.floating)
 
 
-def test_scalar_variables_name_counter():
+def test_scalar_variables_name_counter() -> None:
     m = Model()
     m.add_variables()
     m.add_variables()
@@ -87,15 +89,15 @@ def test_scalar_variables_name_counter():
     assert "var1" in m.variables
 
 
-def test_variables_binaries(m):
+def test_variables_binaries(m: Model) -> None:
     assert isinstance(m.binaries, linopy.variables.Variables)
 
 
-def test_variables_integers(m):
+def test_variables_integers(m: Model) -> None:
     assert isinstance(m.integers, linopy.variables.Variables)
 
 
-def test_variables_nvars(m):
+def test_variables_nvars(m: Model) -> None:
     assert m.variables.nvars == 14
 
     idx = pd.RangeIndex(10, name="first")
@@ -104,7 +106,7 @@ def test_variables_nvars(m):
     assert m.variables.nvars == 19
 
 
-def test_variables_get_name_by_label(m):
+def test_variables_get_name_by_label(m: Model) -> None:
     assert m.variables.get_name_by_label(4) == "x"
     assert m.variables.get_name_by_label(12) == "y"
 
@@ -112,4 +114,4 @@ def test_variables_get_name_by_label(m):
         m.variables.get_name_by_label(30)
 
     with pytest.raises(ValueError):
-        m.variables.get_name_by_label("anystring")
+        m.variables.get_name_by_label("anystring")  # type: ignore

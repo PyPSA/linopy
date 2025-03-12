@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Generator, Hashable, Iterable, Sequence
 from functools import reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import arange
+from numpy import arange, signedinteger
 from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
 from xarray.core import indexing
 from xarray.namedarray.utils import is_dict_like
@@ -31,11 +31,26 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
+from linopy.types import CoordsLike, DimsLike
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression
     from linopy.variables import Variable
+
+
+def set_int_index(series: pd.Series) -> pd.Series:
+    """
+    Convert string index to int index.
+    """
+
+    if not series.empty and not pd.api.types.is_integer_dtype(series.index):
+        cutoff = count_initial_letters(str(series.index[0]))
+        try:
+            series.index = series.index.str[cutoff:].astype(int)
+        except ValueError:
+            series.index = series.index.str.replace(".*#", "", regex=True).astype(int)
+    return series
 
 
 def maybe_replace_sign(sign: str) -> str:
@@ -78,7 +93,7 @@ def maybe_replace_signs(sign: DataArray) -> DataArray:
     return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
 
 
-def format_string_as_variable_name(name: Hashable):
+def format_string_as_variable_name(name: Hashable) -> str:
     """
     Format a string to a valid python variable name.
 
@@ -93,23 +108,25 @@ def format_string_as_variable_name(name: Hashable):
     return str(name).replace(" ", "_").replace("-", "_")
 
 
-def get_from_iterable(lst: str | Iterable[Hashable] | None, index: int):
+def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     """
     Returns the element at the specified index of the list, or None if the index
     is out of bounds.
     """
     if lst is None:
         return None
-    if not isinstance(lst, list):
+    if isinstance(lst, (Sequence, Iterable)):
         lst = list(lst)
+    else:
+        lst = [lst]
     return lst[index] if 0 <= index < len(lst) else None
 
 
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: Iterable[Hashable] | None = None,
-    **kwargs,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert a pandas DataFrame or Series to a DataArray.
@@ -163,9 +180,9 @@ def pandas_to_dataarray(
 
 def numpy_to_dataarray(
     arr: np.ndarray,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: str | Iterable[Hashable] | None = None,
-    **kwargs,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert a numpy array to a DataArray.
@@ -187,24 +204,26 @@ def numpy_to_dataarray(
             The converted DataArray.
     """
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
-    if isinstance(dims, str):
+    if isinstance(dims, (Iterable, Sequence)):
+        dims = list(dims)
+    elif dims is not None:
         dims = [dims]
 
-    if dims is not None and len(list(dims)):
+    if dims is not None and len(dims):
         # fill up dims with default names to match the number of dimensions
         dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
-    if isinstance(coords, list) and dims is not None and len(list(dims)):
+    if isinstance(coords, list) and dims is not None and len(dims):
         coords = dict(zip(dims, coords))
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
 def as_dataarray(
-    arr,
-    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
-    dims: str | Iterable[Hashable] | None = None,
-    **kwargs,
+    arr: Any,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
 ) -> DataArray:
     """
     Convert an object to a DataArray.
@@ -253,7 +272,10 @@ def as_dataarray(
 
 
 # TODO: rename to to_pandas_dataframe
-def to_dataframe(ds: Dataset, mask_func: Callable | None = None):
+def to_dataframe(
+    ds: Dataset,
+    mask_func: Callable[[dict[Hashable, np.ndarray]], pd.Series] | None = None,
+) -> pd.DataFrame:
     """
     Convert an xarray Dataset to a pandas DataFrame.
 
@@ -276,7 +298,7 @@ def to_dataframe(ds: Dataset, mask_func: Callable | None = None):
     return pd.DataFrame(datadict, copy=False)
 
 
-def check_has_nulls(df: pd.DataFrame, name: str):
+def check_has_nulls(df: pd.DataFrame, name: str) -> None:
     any_nan = df.isna().any()
     if any_nan.any():
         fields = ", ".join(df.columns[any_nan].to_list())
@@ -296,9 +318,11 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
+    np_major_version = int(np.__version__.split(".")[0])
+    use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if os.name == "nt" else pl.Int64
+            schema[name] = pl.Int32 if use_int32 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[name] = pl.Float64  # type: ignore
         elif np.issubdtype(array.dtype, np.bool_):
@@ -310,7 +334,7 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     return schema  # type: ignore
 
 
-def to_polars(ds: Dataset, **kwargs) -> pl.DataFrame:
+def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
     """
     Convert an xarray Dataset to a polars DataFrame.
 
@@ -397,7 +421,7 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def save_join(*dataarrays: DataArray, integer_dtype: bool = False):
+def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
@@ -446,7 +470,9 @@ def fill_missing_coords(ds: DataArray, fill_helper_dims: bool = False) -> DataAr
 def fill_missing_coords(ds: Dataset, fill_helper_dims: bool = False) -> Dataset: ...
 
 
-def fill_missing_coords(ds, fill_helper_dims: bool = False):
+def fill_missing_coords(
+    ds: DataArray | Dataset, fill_helper_dims: bool = False
+) -> Dataset | DataArray:
     """
     Fill coordinates of a xarray Dataset or DataArray with integer coordinates.
 
@@ -474,11 +500,46 @@ def fill_missing_coords(ds, fill_helper_dims: bool = False):
     return ds
 
 
+T = TypeVar("T", Dataset, "Variable", "LinearExpression", "Constraint")
+
+
+@overload
 def iterate_slices(
-    ds: Dataset | Variable | LinearExpression | Constraint,
+    ds: Dataset,
     slice_size: int | None = 10_000,
     slice_dims: list | None = None,
-) -> Generator[Dataset | Variable | LinearExpression | Constraint, None, None]:
+) -> Generator[Dataset, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: Variable,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[Variable, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: LinearExpression,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[LinearExpression, None, None]: ...
+
+
+@overload
+def iterate_slices(
+    ds: Constraint,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[Constraint, None, None]: ...
+
+
+def iterate_slices(
+    ds: T,
+    slice_size: int | None = 10_000,
+    slice_dims: list | None = None,
+) -> Generator[T, None, None]:
     """
     Generate slices of an xarray Dataset or DataArray with a specified soft maximum size.
 
@@ -519,31 +580,48 @@ def iterate_slices(
         return
 
     # number of slices
-    n_slices = max(size // slice_size, 1)
+    n_slices = max((size + slice_size - 1) // slice_size, 1)
 
     # leading dimension (the dimension with the largest size)
     sizes = {dim: ds.sizes[dim] for dim in slice_dims}
+    if not sizes:
+        yield ds
+        return
+
     leading_dim = max(sizes, key=sizes.get)  # type: ignore
     size_of_leading_dim = ds.sizes[leading_dim]
 
     if size_of_leading_dim < n_slices:
         n_slices = size_of_leading_dim
 
-    chunk_size = ds.sizes[leading_dim] // n_slices
+    chunk_size = (ds.sizes[leading_dim] + n_slices - 1) // n_slices
 
     # Iterate over the Cartesian product of slice indices
     for i in range(n_slices):
         start = i * chunk_size
-        end = start + chunk_size
+        end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
         yield ds.isel(slice_dict)
 
 
-def _remap(array, mapping):
+def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
     return mapping[array.ravel()].reshape(array.shape)
 
 
-def replace_by_map(ds, mapping):
+def count_initial_letters(word: str) -> int:
+    """
+    Count the number of initial letters in a word.
+    """
+    count = 0
+    for char in word:
+        if char.isalpha():
+            count += 1
+        else:
+            break
+    return count
+
+
+def replace_by_map(ds: DataArray, mapping: np.ndarray) -> DataArray:
     """
     Replace values in a DataArray by a one-dimensional mapping.
     """
@@ -563,7 +641,7 @@ def to_path(path: str | Path | None) -> Path | None:
     return Path(path) if path is not None else None
 
 
-def best_int(max_value: int) -> type:
+def best_int(max_value: int) -> type[signedinteger[Any]]:
     """
     Get the minimal int dtype for storing values <= max_value.
     """
@@ -573,7 +651,7 @@ def best_int(max_value: int) -> type:
     raise ValueError(f"Value {max_value} is too large for int64.")
 
 
-def get_index_map(*arrays):
+def get_index_map(*arrays: Sequence[Hashable]) -> dict[tuple, int]:
     """
     Given arrays of hashable objects, create a map from unique combinations to unique integers.
     """
@@ -583,7 +661,9 @@ def get_index_map(*arrays):
     return {combination: i for i, combination in enumerate(unique_combinations)}
 
 
-def generate_indices_for_printout(dim_sizes, max_lines):
+def generate_indices_for_printout(
+    dim_sizes: Sequence[int], max_lines: int
+) -> Generator[tuple[int | np.signedinteger[Any], ...] | None, None, None]:
     total_lines = int(np.prod(dim_sizes))
     lines_to_skip = total_lines - max_lines + 1 if total_lines > max_lines else 0
     if lines_to_skip > 0:
@@ -598,7 +678,7 @@ def generate_indices_for_printout(dim_sizes, max_lines):
             yield tuple(np.unravel_index(i, dim_sizes))
 
 
-def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]):
+def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]) -> list[str]:
     # Determine the maximum position of the delimiter
     if isinstance(delimiter, str):
         delimiter = [delimiter]
@@ -620,7 +700,7 @@ def align_lines_by_delimiter(lines: list[str], delimiter: str | list[str]):
 
 
 def get_dims_with_index_levels(
-    ds: Dataset, dims: list[Hashable] | tuple[Hashable, ...] | None = None
+    ds: Dataset, dims: Sequence[Hashable] | None = None
 ) -> list[str]:
     """
     Get the dimensions of a Dataset with their index levels.
@@ -647,7 +727,7 @@ def get_dims_with_index_levels(
 
 
 def get_label_position(
-    obj, values: int | np.ndarray
+    obj: Any, values: int | np.ndarray
 ) -> (
     tuple[str, dict]
     | tuple[None, None]
@@ -691,7 +771,7 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord: dict | Iterable) -> str:
+def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     """
     Format coordinates into a string representation.
 
@@ -729,7 +809,7 @@ def print_coord(coord: dict | Iterable) -> str:
     return f"[{', '.join(formatted)}]"
 
 
-def print_single_variable(model, label):
+def print_single_variable(model: Any, label: int) -> str:
     if label == -1:
         return "None"
 
@@ -749,15 +829,21 @@ def print_single_variable(model, label):
     return f"{name}{print_coord(coord)}{bounds}"
 
 
-def print_single_expression(c, v, const, model):
+def print_single_expression(
+    c: np.ndarray,
+    v: np.ndarray,
+    const: float,
+    model: Any,
+) -> str:
     """
     Print a single linear expression based on the coefficients and variables.
     """
-
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
-    def print_line(expr, const):
+    def print_line(
+        expr: list[tuple[float, tuple[str, Any] | list[tuple[str, Any]]]], const: float
+    ) -> str:
         res = []
         for i, (coeff, var) in enumerate(expr):
             coeff_string = f"{coeff:+.4g}"
@@ -816,7 +902,7 @@ def print_single_expression(c, v, const, model):
     return print_line(expr, const)
 
 
-def print_single_constraint(model, label):
+def print_single_constraint(model: Any, label: int) -> str:
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -831,13 +917,13 @@ def print_single_constraint(model, label):
     return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
-def has_optimized_model(func):
+def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Check if a reference model is set.
     """
 
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
         if self.model is None:
             raise AttributeError("No reference model set.")
         if self.model.status != "ok":
@@ -847,11 +933,11 @@ def has_optimized_model(func):
     return wrapper
 
 
-def is_constant(func):
+def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
     from linopy import expressions, variables
 
     @wraps(func)
-    def wrapper(self, arg):
+    def wrapper(self: Any, arg: Any) -> Any:
         if isinstance(
             arg,
             (
@@ -866,16 +952,15 @@ def is_constant(func):
     return wrapper
 
 
-def forward_as_properties(**routes):
+def forward_as_properties(**routes: list[str]) -> Callable[[type], type]:
     #
-    def add_accessor(cls, item, attr):
-        @property
-        def get(self):
+    def add_accessor(cls: Any, item: str, attr: str) -> None:
+        def get(self: Any) -> Any:
             return getattr(getattr(self, item), attr)
 
-        setattr(cls, attr, get)
+        setattr(cls, attr, property(get))
 
-    def deco(cls):
+    def deco(cls: Any) -> Any:
         for item, attrs in routes.items():
             for attr in attrs:
                 add_accessor(cls, item, attr)
@@ -902,13 +987,19 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
-class LocIndexer:
-    __slots__ = ("object",)
+LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")
 
-    def __init__(self, obj):
+
+class LocIndexer(Generic[LocT]):
+    __slots__ = ("object",)
+    object: LocT
+
+    def __init__(self, obj: LocT) -> None:
         self.object = obj
 
-    def __getitem__(self, key) -> Dataset:
+    def __getitem__(
+        self, key: dict[Hashable, Any] | tuple | slice | int | list
+    ) -> LocT:
         if not is_dict_like(key):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)

@@ -14,12 +14,12 @@ import re
 import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
-from pandas.core.series import Series
 
 from linopy.constants import (
     Result,
@@ -103,7 +103,10 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import mindoptpy
 
-    available_solvers.append("mindopt")
+    with contextlib.suppress(mindoptpy.MindoptError):
+        mindoptpy.Env()
+
+        available_solvers.append("mindopt")
 
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
@@ -128,14 +131,6 @@ io_structure = dict(
 )
 
 
-def set_int_index(series: Series) -> Series:
-    """
-    Convert string index to int index.
-    """
-    series.index = series.index.str[1:].astype(int)
-    return series
-
-
 # using enum to match solver subclasses with names
 class SolverName(enum.Enum):
     CBC = "cbc"
@@ -158,7 +153,7 @@ def path_to_string(path: Path) -> str:
     return str(path.resolve())
 
 
-def read_sense_from_problem_file(problem_fn: Path | str):
+def read_sense_from_problem_file(problem_fn: Path | str) -> str:
     with open(problem_fn) as file:
         f = file.read()
     file_format = read_io_api_from_problem_file(problem_fn)
@@ -171,7 +166,7 @@ def read_sense_from_problem_file(problem_fn: Path | str):
         raise ValueError(msg)
 
 
-def read_io_api_from_problem_file(problem_fn: Path | str):
+def read_io_api_from_problem_file(problem_fn: Path | str) -> str:
     if isinstance(problem_fn, Path):
         return problem_fn.suffix[1:]
     else:
@@ -204,8 +199,8 @@ class Solver(ABC):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         self.solver_options = solver_options
 
         # Check for the solver to be initialized whether the package is installed or not.
@@ -213,16 +208,23 @@ class Solver(ABC):
             msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
 
-    def safe_get_solution(self, status: Status, func: Callable) -> Solution:
+    def safe_get_solution(
+        self, status: Status, func: Callable[[], Solution]
+    ) -> Solution:
         """
         Get solution from function call, if status is unknown still try to run it.
         """
         if status.is_ok:
             return func()
         elif status.status == SolverStatus.unknown:
-            with contextlib.suppress(Exception):
+            try:
                 logger.warning("Solution status unknown. Trying to parse solution.")
-                return func()
+                sol = func()
+                status.status = SolverStatus.ok
+                logger.warning("Solution parsed successfully.")
+                return sol
+            except Exception as e:
+                logger.error(f"Failed to parse solution: {e}")
         return Solution()
 
     @abstractmethod
@@ -234,6 +236,7 @@ class Solver(ABC):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a model.
@@ -272,6 +275,7 @@ class Solver(ABC):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem either from a model or a problem file.
@@ -291,6 +295,7 @@ class Solver(ABC):
                 warmstart_fn=warmstart_fn,
                 basis_fn=basis_fn,
                 env=env,
+                explicit_coordinate_names=explicit_coordinate_names,
             )
         elif problem_fn is not None:
             return self.solve_problem_from_file(
@@ -322,8 +327,8 @@ class CBC(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -334,7 +339,8 @@ class CBC(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-    ):
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
 
@@ -441,7 +447,7 @@ class CBC(Solver):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
         status.legacy_status = data
 
-        def get_solver_solution():
+        def get_solver_solution() -> Solution:
             objective = float(data[len("Optimal - objective value ") :])
 
             with open(solution_fn, "rb") as f:
@@ -457,8 +463,8 @@ class CBC(Solver):
             )
             variables_b = df.index.str[0] == "x"
 
-            sol = df[variables_b][2].pipe(set_int_index)
-            dual = df[~variables_b][3].pipe(set_int_index)
+            sol = df[variables_b][2]
+            dual = df[~variables_b][3]
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -477,10 +483,10 @@ class GLPK(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -491,6 +497,7 @@ class GLPK(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for GLPK"
         raise NotImplementedError(msg)
@@ -554,7 +561,8 @@ class GLPK(Solver):
         Path(solution_fn).parent.mkdir(exist_ok=True)
 
         # TODO use --nopresol argument for non-optimal solution output
-        command = f"glpsol --{io_api} {problem_fn} --output {solution_fn} "
+        io_api_arg = "freemps" if io_api == "mps" else io_api
+        command = f"glpsol --{io_api_arg} {problem_fn} --output {solution_fn} "
         if log_fn is not None:
             command += f"--log {log_fn} "
         if warmstart_fn:
@@ -595,7 +603,7 @@ class GLPK(Solver):
 
         f = open(solution_fn)
 
-        def read_until_break(f):
+        def read_until_break(f: io.TextIOWrapper) -> Generator[str, None, None]:
             while True:
                 line = f.readline()
                 if line in ["\n", ""]:
@@ -615,11 +623,7 @@ class GLPK(Solver):
             dual_io = io.StringIO("".join(read_until_break(f))[:-2])
             dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
             if "Marginal" in dual_:
-                dual = (
-                    pd.to_numeric(dual_["Marginal"], "coerce")
-                    .fillna(0)
-                    .pipe(set_int_index)
-                )
+                dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -629,7 +633,6 @@ class GLPK(Solver):
                 pd.read_fwf(sol_io)[1:]
                 .set_index("Column name")["Activity"]
                 .astype(float)
-                .pipe(set_int_index)
             )
             f.close()
             return Solution(sol, dual, objective)
@@ -661,8 +664,8 @@ class Highs(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -673,6 +676,7 @@ class Highs(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Highs solver.
@@ -694,6 +698,8 @@ class Highs(Solver):
             Path to the basis file.
         env : None, optional
             Environment for the solver
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint names to the solver (default: False)
 
         Returns
         -------
@@ -713,7 +719,7 @@ class Highs(Solver):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy()
+        h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
 
         if log_fn is None and model is not None:
             log_fn = model.solver_dir / "highs.log"
@@ -851,12 +857,8 @@ class Highs(Solver):
                 sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
                 dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
             else:
-                sol = pd.Series(
-                    solution.col_value, h.getLp().col_names_, dtype=float
-                ).pipe(set_int_index)
-                dual = pd.Series(
-                    solution.row_dual, h.getLp().row_names_, dtype=float
-                ).pipe(set_int_index)
+                sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float)
+                dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -878,8 +880,8 @@ class Gurobi(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -890,6 +892,7 @@ class Gurobi(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Gurobi solver.
@@ -910,6 +913,8 @@ class Gurobi(Solver):
             Path to the basis file.
         env : None, optional
             Gurobi environment for the solver
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint names to the solver (default: False)
 
         Returns
         -------
@@ -921,7 +926,9 @@ class Gurobi(Solver):
             else:
                 env_ = env
 
-            m = model.to_gurobipy(env=env_)
+            m = model.to_gurobipy(
+                env=env_, explicit_coordinate_names=explicit_coordinate_names
+            )
 
             return self._solve(
                 m,
@@ -990,13 +997,13 @@ class Gurobi(Solver):
 
     def _solve(
         self,
-        m,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        io_api: str | None = None,
-        sense: str | None = None,
+        m: gurobipy.Model,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Gurobi object.
@@ -1074,14 +1081,12 @@ class Gurobi(Solver):
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
-            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
+            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
 
             try:
                 dual = pd.Series(
                     {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
                 )
-                dual = set_int_index(dual)
             except AttributeError:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1110,8 +1115,8 @@ class Cplex(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1122,6 +1127,7 @@ class Cplex(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for Cplex"
         raise NotImplementedError(msg)
@@ -1220,7 +1226,6 @@ class Cplex(Solver):
             solution = pd.Series(
                 m.solution.get_values(), m.variables.get_names(), dtype=float
             )
-            solution = set_int_index(solution)
 
             if is_lp:
                 dual = pd.Series(
@@ -1228,7 +1233,6 @@ class Cplex(Solver):
                     m.linear_constraints.get_names(),
                     dtype=float,
                 )
-                dual = set_int_index(dual)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1252,8 +1256,8 @@ class SCIP(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1264,6 +1268,7 @@ class SCIP(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for SCIP"
         raise NotImplementedError(msg)
@@ -1357,7 +1362,6 @@ class SCIP(Solver):
             sol.drop(
                 ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
             )
-            sol = set_int_index(sol)
 
             cons = m.getConss()
             if len(cons) != 0:
@@ -1365,7 +1369,6 @@ class SCIP(Solver):
                 dual = dual[
                     dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
                 ]
-                dual = set_int_index(dual)
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1393,8 +1396,8 @@ class Xpress(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1405,6 +1408,7 @@ class Xpress(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for Xpress"
         raise NotImplementedError(msg)
@@ -1495,12 +1499,10 @@ class Xpress(Solver):
             var = [str(v) for v in m.getVariable()]
 
             sol = pd.Series(m.getSolution(var), index=var, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual_ = [str(d) for d in m.getConstraint()]
                 dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
-                dual = set_int_index(dual)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1538,8 +1540,8 @@ class Mosek(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1550,6 +1552,7 @@ class Mosek(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the MOSEK solver.
@@ -1567,7 +1570,9 @@ class Mosek(Solver):
         basis_fn : Path, optional
             Path to the basis file.
         env : None, optional
-            Gurobi environment for the solver
+            Mosek environment for the solver
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint names to the solver (default: False)
 
         Returns
         -------
@@ -1578,7 +1583,9 @@ class Mosek(Solver):
                 env_ = stack.enter_context(mosek.Env())
 
             with env_.Task() as m:
-                m = model.to_mosek(m)
+                m = model.to_mosek(
+                    m, explicit_coordinate_names=explicit_coordinate_names
+                )
 
                 return self._solve(
                     m,
@@ -1647,12 +1654,12 @@ class Mosek(Solver):
     def _solve(
         self,
         m: mosek.Task,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        io_api: str | None = None,
-        sense: str | None = None,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Mosek task object.
@@ -1824,13 +1831,11 @@ class Mosek(Solver):
             sol = m.getxx(soltype)
             sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
             sol = pd.Series(sol, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = m.gety(soltype)
                 dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
                 dual = pd.Series(dual, dtype=float)
-                dual = set_int_index(dual)
             except (mosek.Error, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1858,10 +1863,10 @@ class COPT(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -1872,6 +1877,7 @@ class COPT(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for COPT"
         raise NotImplementedError(msg)
@@ -1966,11 +1972,9 @@ class COPT(Solver):
             objective = m.BestObj if m.ismip else m.LpObjVal
 
             sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
-                dual = set_int_index(dual)
             except (coptpy.CoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -2000,10 +2004,10 @@ class MindOpt(Solver):
         options for the given solver
     """
 
-    def __init__(
+    def __init(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
@@ -2014,6 +2018,7 @@ class MindOpt(Solver):
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for MindOpt"
         raise NotImplementedError(msg)
@@ -2110,11 +2115,9 @@ class MindOpt(Solver):
             objective = m.objval
 
             sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
-            sol = set_int_index(sol)
 
             try:
                 dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
-                dual = set_int_index(dual)
             except (mindoptpy.MindoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -2136,8 +2139,8 @@ class PIPS(Solver):
 
     def __init__(
         self,
-        **solver_options,
-    ):
+        **solver_options: Any,
+    ) -> None:
         super().__init__(**solver_options)
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)

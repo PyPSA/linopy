@@ -4,15 +4,16 @@ Linopy constraints module.
 This module contains implementations for the Constraint{s} class.
 """
 
+from __future__ import annotations
+
 import functools
-import warnings
-from collections.abc import Hashable, ItemsView, Iterator
+from collections.abc import Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
-    Union,
+    Callable,
     overload,
 )
 
@@ -23,7 +24,9 @@ import scipy.sparse
 import xarray as xr
 from numpy import array, ndarray
 from xarray import DataArray, Dataset
-from xarray.core.coordinates import DataArrayCoordinates
+from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
+from xarray.core.indexes import Indexes
+from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
 from linopy.common import (
@@ -60,7 +63,13 @@ from linopy.constants import (
     TERM_DIM,
     SIGNS_pretty,
 )
-from linopy.types import ConstantLike
+from linopy.types import (
+    ConstantLike,
+    CoordsLike,
+    ExpressionLike,
+    SignLike,
+    VariableLike,
+)
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -68,9 +77,11 @@ if TYPE_CHECKING:
 FILL_VALUE = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
 
 
-def conwrap(method, *default_args, **new_default_kwargs):
+def conwrap(
+    method: Callable, *default_args: Any, **new_default_kwargs: Any
+) -> Callable:
     @functools.wraps(method)
-    def _conwrap(con, *args, **kwargs):
+    def _conwrap(con: Constraint, *args: Any, **kwargs: Any) -> Constraint:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return con.__class__(
@@ -86,7 +97,7 @@ def conwrap(method, *default_args, **new_default_kwargs):
     return _conwrap
 
 
-def _con_unwrap(con):
+def _con_unwrap(con: Constraint | Dataset) -> Dataset:
     return con.data if isinstance(con, Constraint) else con
 
 
@@ -103,8 +114,12 @@ class Constraint:
     _fill_value = FILL_VALUE
 
     def __init__(
-        self, data: Dataset, model: Any, name: str = "", skip_broadcast: bool = False
-    ):
+        self,
+        data: Dataset,
+        model: Model,
+        name: str = "",
+        skip_broadcast: bool = False,
+    ) -> None:
         """
         Initialize the Constraint.
 
@@ -140,7 +155,9 @@ class Constraint:
         self._data = data
         self._model = model
 
-    def __getitem__(self, selector) -> "Constraint":
+    def __getitem__(
+        self, selector: str | int | slice | list | tuple | dict
+    ) -> Constraint:
         """
         Get selection from the constraint.
         This is a wrapper around the xarray __getitem__ method. It returns a
@@ -150,106 +167,95 @@ class Constraint:
         return self.__class__(data, self.model, self.name)
 
     @property
-    def attrs(self):
+    def attrs(self) -> dict[str, Any]:
         """
         Get the attributes of the constraint.
         """
         return self.data.attrs
 
     @property
-    def coords(self):
+    def coords(self) -> DatasetCoordinates:
         """
         Get the coordinates of the constraint.
         """
         return self.data.coords
 
     @property
-    def indexes(self):
+    def indexes(self) -> Indexes:
         """
         Get the indexes of the constraint.
         """
         return self.data.indexes
 
     @property
-    def dims(self):
+    def dims(self) -> Frozen[Hashable, int]:
         """
         Get the dimensions of the constraint.
         """
         return self.data.dims
 
     @property
-    def sizes(self):
+    def sizes(self) -> Frozen[Hashable, int]:
         """
         Get the sizes of the constraint.
         """
         return self.data.sizes
 
     @property
-    def values(self) -> Union[DataArray, None]:
-        """
-        Get the label values of the constraint.
-        """
-        warnings.warn(
-            "The `.values` attribute is deprecated. Use `.labels.values` instead.",
-            DeprecationWarning,
-        )
-        return self.labels.values if self.is_assigned else None
-
-    @property
-    def nterm(self):
+    def nterm(self) -> int:
         """
         Get the number of terms in the constraint.
         """
         return self.lhs.nterm
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         """
         Get the number of dimensions of the constraint.
         """
         return self.rhs.ndim
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...]:
         """
         Get the shape of the constraint.
         """
         return self.rhs.shape
 
     @property
-    def size(self):
+    def size(self) -> int:
         """
         Get the size of the constraint.
         """
         return self.rhs.size
 
     @property
-    def loc(self):
+    def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
     @property
-    def data(self):
+    def data(self) -> Dataset:
         """
         Get the underlying DataArray.
         """
         return self._data
 
     @property
-    def labels(self):
+    def labels(self) -> DataArray:
         """
         Get the labels of the constraint.
         """
         return self.data.get("labels", DataArray([]))
 
     @property
-    def model(self):
+    def model(self) -> Model:
         """
         Get the model of the constraint.
         """
         return self._model
 
     @property
-    def name(self):
+    def name(self) -> str:
         """
         Return the name of the constraint.
         """
@@ -271,10 +277,10 @@ class Constraint:
         return get_dims_with_index_levels(self.data, self.coord_dims)
 
     @property
-    def is_assigned(self):
+    def is_assigned(self) -> bool:
         return self._assigned
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Print the constraint arrays.
         """
@@ -295,7 +301,8 @@ class Constraint:
                     lines.append("\t\t...")
                 else:
                     coord = [
-                        self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
+                        self.data.indexes[dims[i]][int(ind)]
+                        for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
                         expr = print_single_expression(
@@ -317,16 +324,18 @@ class Constraint:
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(self.coeffs, self.vars, 0, self.model)
+            expr = print_single_expression(
+                self.coeffs.values, self.vars.values, 0, self.model
+            )
             lines.append(
-                f"{header_string}\n{'-'*len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
+                f"{header_string}\n{'-' * len(header_string)}\n{expr} {SIGNS_pretty[self.sign.item()]} {self.rhs.item()}"
             )
         else:
-            lines.append(f"{header_string}\n{'-'*len(header_string)}\n<empty>")
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
 
-    def print(self, display_max_rows=20, display_max_terms=20):
+    def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
         Print the linear expression.
 
@@ -343,32 +352,32 @@ class Constraint:
             )
             print(self)
 
-    def __contains__(self, value):
+    def __contains__(self, value: Any) -> bool:
         return self.data.__contains__(value)
 
     @property
-    def type(self):
+    def type(self) -> str:
         """
         Get the type of the constraint.
         """
         return "Constraint" if self.is_assigned else "Constraint (unassigned)"
 
     @property
-    def range(self):
+    def range(self) -> tuple[int, int]:
         """
         Return the range of the constraint.
         """
         return self.data.attrs["label_range"]
 
     @property
-    def term_dim(self):
+    def term_dim(self) -> str:
         """
         Return the term dimension of the constraint.
         """
         return TERM_DIM
 
     @property
-    def mask(self) -> Union[DataArray, None]:
+    def mask(self) -> DataArray | None:
         """
         Get the mask of the constraint.
 
@@ -384,7 +393,7 @@ class Constraint:
         return None
 
     @property
-    def coeffs(self):
+    def coeffs(self) -> DataArray:
         """
         Get the left-hand-side coefficients of the constraint.
 
@@ -394,12 +403,12 @@ class Constraint:
         return self.data.coeffs
 
     @coeffs.setter
-    def coeffs(self, value):
+    def coeffs(self, value: ConstantLike) -> None:
         value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
         self._data = assign_multiindex_safe(self.data, coeffs=value)
 
     @property
-    def vars(self):
+    def vars(self) -> DataArray:
         """
         Get the left-hand-side variables of the constraint.
 
@@ -409,7 +418,7 @@ class Constraint:
         return self.data.vars
 
     @vars.setter
-    def vars(self, value):
+    def vars(self, value: variables.Variable | DataArray) -> None:
         if isinstance(value, variables.Variable):
             value = value.labels
         if not isinstance(value, DataArray):
@@ -418,7 +427,7 @@ class Constraint:
         self._data = assign_multiindex_safe(self.data, vars=value)
 
     @property
-    def lhs(self):
+    def lhs(self) -> expressions.LinearExpression:
         """
         Get the left-hand-side linear expression of the constraint.
 
@@ -429,7 +438,7 @@ class Constraint:
         return expressions.LinearExpression(data, self.model)
 
     @lhs.setter
-    def lhs(self, value):
+    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
@@ -438,7 +447,7 @@ class Constraint:
         )
 
     @property
-    def sign(self):
+    def sign(self) -> DataArray:
         """
         Get the signs of the constraint.
 
@@ -449,12 +458,12 @@ class Constraint:
 
     @sign.setter
     @is_constant
-    def sign(self, value):
+    def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self.data["sign"] = value
 
     @property
-    def rhs(self):
+    def rhs(self) -> DataArray:
         """
         Get the right hand side constants of the constraint.
 
@@ -464,7 +473,7 @@ class Constraint:
         return self.data.rhs
 
     @rhs.setter
-    def rhs(self, value):
+    def rhs(self, value: ExpressionLike) -> None:
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
@@ -473,7 +482,7 @@ class Constraint:
 
     @property
     @has_optimized_model
-    def dual(self):
+    def dual(self) -> DataArray:
         """
         Get the dual values of the constraint.
 
@@ -487,7 +496,7 @@ class Constraint:
         return self.data["dual"]
 
     @dual.setter
-    def dual(self, value: ConstantLike):
+    def dual(self, value: ConstantLike) -> None:
         """
         Get the dual values of the constraint.
         """
@@ -495,7 +504,7 @@ class Constraint:
         self._data = assign_multiindex_safe(self.data, dual=value)
 
     @classmethod
-    def from_rule(cls, model, rule, coords):
+    def from_rule(cls, model: Model, rule: Callable, coords: CoordsLike) -> Constraint:
         """
         Create a constraint from a rule and a set of coordinates.
 
@@ -565,7 +574,7 @@ class Constraint:
         return cls(data, model=model)
 
     @property
-    def flat(self):
+    def flat(self) -> pd.DataFrame:
         """
         Convert the constraint to a pandas DataFrame.
 
@@ -579,7 +588,7 @@ class Constraint:
         """
         ds = self.data
 
-        def mask_func(data):
+        def mask_func(data: pd.DataFrame) -> pd.Series:
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
             if "labels" in data:
                 mask &= data["labels"] != -1
@@ -595,7 +604,7 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
-    def to_polars(self):
+    def to_polars(self) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
 
@@ -616,10 +625,10 @@ class Constraint:
         long = group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
-        short = ds[[k for k in ds if "_term" not in ds[k].dims]]
-        schema = infer_schema_polars(short)
+        short_ds = ds[[k for k in ds if "_term" not in ds[k].dims]]
+        schema = infer_schema_polars(short_ds)
         schema["sign"] = pl.Enum(["=", "<=", ">="])
-        short = to_polars(short, schema=schema)
+        short = to_polars(short_ds, schema=schema)
         short = filter_nulls_polars(short)
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
 
@@ -675,6 +684,8 @@ class Constraint:
 
     stack = conwrap(Dataset.stack)
 
+    unstack = conwrap(Dataset.unstack)
+
     iterate_slices = iterate_slices
 
 
@@ -685,7 +696,7 @@ class Constraints:
     """
 
     data: dict[str, Constraint]
-    model: "Model"  # Model is not defined due to circular imports
+    model: Model
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
@@ -713,7 +724,11 @@ class Constraints:
         r += f"\n{line}\n"
 
         for name, ds in self.items():
-            coords = " (" + ", ".join(ds.coords) + ")" if ds.coords else ""
+            coords = (
+                " (" + ", ".join([str(c) for c in ds.coords.keys()]) + ")"
+                if ds.coords
+                else ""
+            )
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -723,14 +738,14 @@ class Constraints:
     def __getitem__(self, names: str) -> Constraint: ...
 
     @overload
-    def __getitem__(self, names: list[str]) -> "Constraints": ...
+    def __getitem__(self, names: list[str]) -> Constraints: ...
 
-    def __getitem__(self, names: Union[str, list[str]]):
+    def __getitem__(self, names: str | list[str]) -> Constraint | Constraints:
         if isinstance(names, str):
             return self.data[names]
         return Constraints({name: self.data[name] for name in names}, self.model)
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Constraint:
         # If name is an attribute of self (including methods and properties), return that
         if name in self.data:
             return self.data[name]
@@ -802,8 +817,8 @@ class Constraints:
         Get the variables of all constraints.
         """
 
-        def rename_term_dim(ds):
-            return ds.rename({TERM_DIM: ds.name + TERM_DIM})
+        def rename_term_dim(ds: DataArray) -> DataArray:
+            return ds.rename({TERM_DIM: str(ds.name) + TERM_DIM})
 
         return save_join(
             *[rename_term_dim(v.vars.rename(k)) for k, v in self.items()],
@@ -854,14 +869,14 @@ class Constraints:
         return len(self.flat.labels.unique())
 
     @property
-    def inequalities(self) -> "Constraints":
+    def inequalities(self) -> Constraints:
         """
         Get the subset of constraints which are purely inequalities.
         """
         return self[[n for n, s in self.items() if (s.sign != EQUAL).all()]]
 
     @property
-    def equalities(self) -> "Constraints":
+    def equalities(self) -> Constraints:
         """
         Get the subset of constraints which are purely equalities.
         """
@@ -900,7 +915,7 @@ class Constraints:
             labels = con.labels.where(~valid_infinity_values, -1)
             con._data = assign_multiindex_safe(con.data, labels=labels)
 
-    def get_name_by_label(self, label: Union[int, float]) -> str:
+    def get_name_by_label(self, label: int | float) -> str:
         """
         Get the constraint name of the constraint containing the passed label.
 
@@ -928,18 +943,21 @@ class Constraints:
         raise ValueError(f"No constraint found containing the label {label}.")
 
     def get_label_position(
-        self, values: Union[int, ndarray]
-    ) -> Union[
-        Union[tuple[str, dict], tuple[None, None]],
-        list[Union[tuple[str, dict], tuple[None, None]]],
-        list[list[Union[tuple[str, dict], tuple[None, None]]]],
-    ]:
+        self, values: int | ndarray
+    ) -> (
+        tuple[str, dict]
+        | tuple[None, None]
+        | list[tuple[str, dict] | tuple[None, None]]
+        | list[list[tuple[str, dict] | tuple[None, None]]]
+    ):
         """
         Get tuple of name and coordinate for constraint labels.
         """
         return get_label_position(self, values)
 
-    def print_labels(self, values, display_max_terms=None) -> None:
+    def print_labels(
+        self, values: Sequence[int], display_max_terms: int | None = None
+    ) -> None:
         """
         Print a selection of labels of the constraints.
 
@@ -954,7 +972,7 @@ class Constraints:
             res = [print_single_constraint(self.model, v) for v in values]
         print("\n".join(res))
 
-    def set_blocks(self, block_map) -> None:
+    def set_blocks(self, block_map: np.ndarray) -> None:
         """
         Get a dataset of same shape as constraints.labels with block values.
 
@@ -1005,7 +1023,7 @@ class Constraints:
         df["key"] = df.labels.map(map_labels)
         return df
 
-    def to_matrix(self, filter_missings=True) -> scipy.sparse.csc_matrix:
+    def to_matrix(self, filter_missings: bool = True) -> scipy.sparse.csc_matrix:
         """
         Construct a constraint matrix in sparse format.
 
@@ -1048,15 +1066,15 @@ class AnonymousScalarConstraint:
     (rhs) for exactly one constraint.
     """
 
-    _lhs: "expressions.ScalarLinearExpression"
+    _lhs: expressions.ScalarLinearExpression
     _sign: str
-    _rhs: Union[int, float, np.floating, np.integer]
+    _rhs: int | float | np.floating | np.integer
 
     def __init__(
         self,
-        lhs: "expressions.ScalarLinearExpression",
+        lhs: expressions.ScalarLinearExpression,
         sign: str,
-        rhs: Union[int, float, np.floating, np.integer],
+        rhs: int | float | np.floating | np.integer,
     ):
         """
         Initialize a anonymous scalar constraint.
@@ -1072,12 +1090,12 @@ class AnonymousScalarConstraint:
         Get the representation of the AnonymousScalarConstraint.
         """
         expr_string = print_single_expression(
-            self.lhs.coeffs, self.lhs.vars, 0, self.lhs.model
+            np.array(self.lhs.coeffs), np.array(self.lhs.vars), 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
 
     @property
-    def lhs(self) -> "expressions.ScalarLinearExpression":
+    def lhs(self) -> expressions.ScalarLinearExpression:
         """
         Get the left hand side of the constraint.
         """
@@ -1091,7 +1109,7 @@ class AnonymousScalarConstraint:
         return self._sign
 
     @property
-    def rhs(self) -> Union[int, float, np.floating, np.integer]:
+    def rhs(self) -> int | float | np.floating | np.integer:
         """
         Get the right hand side of the constraint.
         """
