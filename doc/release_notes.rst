@@ -3,6 +3,13 @@ Release Notes
 
 Upcoming Version
 ----------------
+**Deprecations**
+
+* Renamed `expression.empty()` to `expression.empty` to align with the use of empty in
+  pandas. A custom wrapper ensures that `expression.empty()` continues to work, but emits
+  a DeprecationWarning.
+
+**Features**
 
 * Added support for arithmetic operations with custom classes.
 * Avoid allocating a floating license for COPT during the initial solver check
