@@ -541,8 +541,11 @@ def test_linear_expression_loc(x: Variable, y: Variable) -> None:
 
 def test_linear_expression_empty(v: Variable) -> None:
     expr = 7 * v
-    assert not expr.empty()
-    assert expr.loc[[]].empty()
+    assert not expr.empty
+    assert expr.loc[[]].empty
+
+    with pytest.warns(DeprecationWarning, match="use `.empty` property instead"):
+        assert expr.loc[[]].empty()
 
 
 def test_linear_expression_isnull(v: Variable) -> None:

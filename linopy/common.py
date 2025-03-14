@@ -1052,3 +1052,34 @@ class LocIndexer(Generic[LocT]):
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
         return self.object.sel(key)
+
+
+class EmptyDeprecationWrapper:
+    """
+    Temporary wrapper for a smooth transition from .empty() to .empty
+
+    Use `bool(expr.empty)` to explicitly unwrap.
+
+    See Also
+    --------
+    https://github.com/PyPSA/linopy/pull/425
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: bool):
+        self.value = value
+
+    def __bool__(self) -> bool:
+        return self.value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+    def __call__(self) -> bool:
+        warn(
+            "Calling `.empty()` is deprecated, use `.empty` property instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.value

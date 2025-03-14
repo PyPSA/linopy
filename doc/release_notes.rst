@@ -3,11 +3,19 @@ Release Notes
 
 Upcoming Version
 ----------------
+**Deprecations**
+
+* Renamed `expression.empty()` to `expression.empty` to align with the use of empty in
+  pandas. A custom wrapper ensures that `expression.empty()` continues to work, but emits
+  a DeprecationWarning.
+
+**Features**
 
 ** Features **
 
 * Added support for arithmetic operations with custom classes.
 * Added `align` function as a wrapper around :func:`xr.align`.
+* Avoid allocating a floating license for COPT during the initial solver check
 
 Version 0.5.0
 --------------
