@@ -10,7 +10,7 @@ from __future__ import annotations
 import operator
 import os
 from collections.abc import Generator, Hashable, Iterable, Sequence
-from functools import reduce, wraps
+from functools import partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
 from warnings import warn
@@ -19,8 +19,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import arange, signedinteger
-from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
-from xarray.core import indexing
+from pandas.util._decorators import doc
+from xarray import DataArray, Dataset, apply_ufunc, broadcast
+from xarray import align as xr_align
+from xarray.core import dtypes, indexing
+from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
@@ -426,13 +429,13 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
     try:
-        arrs = align(*dataarrays, join="exact")
+        arrs = xr_align(*dataarrays, join="exact")
     except ValueError:
         warn(
             "Coordinates across variables not equal. Perform outer join.",
             UserWarning,
         )
-        arrs = align(*dataarrays, join="outer")
+        arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
             arrs = tuple([ds.fillna(-1).astype(int) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
@@ -985,6 +988,50 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     """
     common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
+
+
+@doc(xr_align)
+def align(
+    *objects: LinearExpression | Variable | T_Alignable,
+    join: JoinOptions = "inner",
+    copy: bool = True,
+    indexes=None,
+    exclude: str | Iterable[Hashable] = frozenset(),
+    fill_value=dtypes.NA,
+) -> tuple[LinearExpression | Variable | T_Alignable, ...]:
+    from linopy.expressions import LinearExpression
+    from linopy.variables import Variable
+
+    finisher = []
+    das = []
+    for obj in objects:
+        if isinstance(obj, LinearExpression):
+            finisher.append(partial(obj.__class__, model=obj.model))
+            das.append(obj.data)
+        elif isinstance(obj, Variable):
+            finisher.append(
+                partial(
+                    obj.__class__,
+                    model=obj.model,
+                    name=obj.data.attrs["name"],
+                    skip_broadcast=True,
+                )
+            )
+            das.append(obj.data)
+        else:
+            finisher.append(lambda x: x)
+            das.append(obj)
+
+    exclude = frozenset(exclude).union(HELPER_DIMS)
+    aligned = xr_align(
+        *das,
+        join=join,
+        copy=copy,
+        indexes=indexes,
+        exclude=exclude,
+        fill_value=fill_value,
+    )
+    return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
 LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")

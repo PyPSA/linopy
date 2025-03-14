@@ -11,7 +11,10 @@ Upcoming Version
 
 **Features**
 
+** Features **
+
 * Added support for arithmetic operations with custom classes.
+* Added `align` function as a wrapper around :func:`xr.align`.
 * Avoid allocating a floating license for COPT during the initial solver check
 
 Version 0.5.0
