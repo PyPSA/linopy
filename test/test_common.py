@@ -13,7 +13,7 @@ from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import Model, Variable
+from linopy import Variable
 from linopy.common import (
     align,
     as_dataarray,
@@ -651,7 +651,7 @@ def test_get_dims_with_index_levels() -> None:
     assert get_dims_with_index_levels(ds5) == []
 
 
-def test_align(m: Model, x: Variable, u: Variable) -> None:
+def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     alpha = xr.DataArray([1, 2], [[1, 2]])
     beta = xr.DataArray(
         [1, 2, 3],
