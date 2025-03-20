@@ -38,7 +38,7 @@ try:
     import xarray.computation.rolling
     from xarray.computation.rolling import DatasetRolling
 except ImportError:
-    import xarray.core.rolling  # type: ignore
+    import xarray.core.rolling
     from xarray.core.rolling import DatasetRolling  # type: ignore
 
 from linopy import constraints, variables
