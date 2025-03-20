@@ -1054,8 +1054,8 @@ def align(
     from linopy.expressions import LinearExpression
     from linopy.variables import Variable
 
-    finisher = []
-    das = []
+    finisher: list[partial[Any] | Callable[[Any], Any]] = []
+    das: list[Any] = []
     for obj in objects:
         if isinstance(obj, LinearExpression):
             finisher.append(partial(obj.__class__, model=obj.model))
