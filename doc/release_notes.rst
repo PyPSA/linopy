@@ -3,6 +3,10 @@ Release Notes
 
 Upcoming Version
 ----------------
+
+Version 0.5.1
+--------------
+
 **Deprecations**
 
 * Renamed `expression.empty()` to `expression.empty` to align with the use of empty in
@@ -16,6 +20,10 @@ Upcoming Version
 * Added support for arithmetic operations with custom classes.
 * Added `align` function as a wrapper around :func:`xr.align`.
 * Avoid allocating a floating license for COPT during the initial solver check
+
+**Bug fixes**
+
+* Ensure compatibility with xarray >= v2025.03.00
 
 Version 0.5.0
 --------------
