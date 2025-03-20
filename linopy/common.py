@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import arange, signedinteger
-from pandas.util._decorators import doc
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
@@ -990,20 +989,73 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
-@doc(xr_align)
 def align(
     *objects: LinearExpression | Variable | T_Alignable,
     join: JoinOptions = "inner",
     copy: bool = True,
-    indexes=None,
+    indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
-    fill_value=dtypes.NA,
+    fill_value: Any = dtypes.NA,
 ) -> tuple[LinearExpression | Variable | T_Alignable, ...]:
+    """
+    Given any number of Variables, Expressions, Dataset and/or DataArray objects,
+    returns new objects with aligned indexes and dimension sizes.
+
+    Array from the aligned objects are suitable as input to mathematical
+    operators, because along each dimension they have the same index and size.
+
+    Missing values (if ``join != 'inner'``) are filled with ``fill_value``.
+    The default fill value is NaN.
+
+    This functions essentially wraps the xarray function
+    :py:func:`xarray.align`.
+
+    Parameters
+    ----------
+    *objects : Variable, LinearExpression, Dataset or DataArray
+        Objects to align.
+    join : {"outer", "inner", "left", "right", "exact", "override"}, optional
+        Method for joining the indexes of the passed objects along each
+        dimension:
+
+        - "outer": use the union of object indexes
+        - "inner": use the intersection of object indexes
+        - "left": use indexes from the first object with each dimension
+        - "right": use indexes from the last object with each dimension
+        - "exact": instead of aligning, raise `ValueError` when indexes to be
+        aligned are not equal
+        - "override": if indexes are of same size, rewrite indexes to be
+        those of the first object with that dimension. Indexes for the same
+        dimension must have the same size in all objects.
+
+    copy : bool, default: True
+        If ``copy=True``, data in the return values is always copied. If
+        ``copy=False`` and reindexing is unnecessary, or can be performed with
+        only slice operations, then the output may share memory with the input.
+        In either case, new xarray objects are always returned.
+    indexes : dict-like, optional
+        Any indexes explicitly provided with the `indexes` argument should be
+        used in preference to the aligned indexes.
+    exclude : str, iterable of hashable or None, optional
+        Dimensions that must be excluded from alignment
+    fill_value : scalar or dict-like, optional
+        Value to use for newly missing values. If a dict-like, maps
+        variable names to fill values. Use a data array's name to
+        refer to its values.
+
+    Returns
+    -------
+    aligned : tuple of DataArray or Dataset
+        Tuple of objects with the same type as `*objects` with aligned
+        coordinates.
+
+
+    """
     from linopy.expressions import LinearExpression
     from linopy.variables import Variable
 
-    finisher = []
-    das = []
+    finisher: list[partial[Any] | Callable[[Any], Any]] = []
+    das: list[Any] = []
     for obj in objects:
         if isinstance(obj, LinearExpression):
             finisher.append(partial(obj.__class__, model=obj.model))

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
+from packaging.version import parse as parse_version
 
 from linopy.constants import (
     Result,
@@ -62,7 +63,8 @@ with contextlib.suppress(ModuleNotFoundError):
     available_solvers.append("highs")
     from importlib.metadata import version
 
-    if version("highspy") < "1.7.1":
+    if parse_version(version("highspy")) < parse_version("1.7.1"):
+        # Fallback if parse_version is not available or version string is invalid
         _new_highspy_mps_layout = False
     else:
         _new_highspy_mps_layout = True
@@ -111,7 +113,11 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
 
-    available_solvers.append("copt")
+    try:
+        coptpy.Envr()
+        available_solvers.append("copt")
+    except coptpy.CoptError:
+        pass
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)

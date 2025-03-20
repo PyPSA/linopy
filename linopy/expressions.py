@@ -24,7 +24,6 @@ import polars as pl
 import scipy
 import xarray as xr
 import xarray.core.groupby
-import xarray.core.rolling
 from numpy import array, nan, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
@@ -32,8 +31,15 @@ from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
-from xarray.core.rolling import DatasetRolling
 from xarray.core.utils import Frozen
+
+try:
+    # resolve breaking change in xarray 2025.03.0
+    import xarray.computation.rolling
+    from xarray.computation.rolling import DatasetRolling
+except ImportError:
+    import xarray.core.rolling
+    from xarray.core.rolling import DatasetRolling  # type: ignore
 
 from linopy import constraints, variables
 from linopy.common import (
