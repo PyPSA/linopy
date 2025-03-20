@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
+from pkg_resources import parse_version
 
 from linopy.constants import (
     Result,
@@ -62,7 +63,8 @@ with contextlib.suppress(ModuleNotFoundError):
     available_solvers.append("highs")
     from importlib.metadata import version
 
-    if version("highspy") < "1.7.1":
+    if parse_version(version("highspy")) < parse_version("1.7.1"):
+        # Fallback if parse_version is not available or version string is invalid
         _new_highspy_mps_layout = False
     else:
         _new_highspy_mps_layout = True
