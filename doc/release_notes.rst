@@ -13,6 +13,10 @@ Version 0.5.2
 This is mainly affecting operations where single numerical items from  pandas objects
 are selected and used for multiplication.
 
+**Breaking Changes**
+
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
 Version 0.5.1
 --------------
 
