@@ -205,6 +205,10 @@ def numpy_to_dataarray(
         DataArray:
             The converted DataArray.
     """
+    # fallback case for zero dim arrays
+    if arr.ndim == 0:
+        return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
+
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
     if isinstance(dims, (Iterable, Sequence)):
         dims = list(dims)
@@ -250,7 +254,7 @@ def as_dataarray(
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, (np.number, int, float, str, bool, list)):
+    elif isinstance(arr, (np.number, np.ndarray, int, float, str, bool, list)):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
