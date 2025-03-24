@@ -72,11 +72,10 @@ def test_wrong_variable_init(m: Model, x: linopy.Variable) -> None:
 
 
 def test_variable_getter(x: linopy.Variable, z: linopy.Variable) -> None:
-    with pytest.warns(FutureWarning):
-        assert isinstance(x[0], linopy.variables.ScalarVariable)
-        assert isinstance(z[0], linopy.variables.ScalarVariable)
+    assert isinstance(x[0], linopy.variables.Variable)
+    assert isinstance(z[0], linopy.variables.Variable)
 
-    assert isinstance(x.at[0], linopy.variables.ScalarVariable)
+    assert isinstance(x.at[0], linopy.variables.Variable)
 
 
 def test_variable_getter_slice(x: linopy.Variable) -> None:

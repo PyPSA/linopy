@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Breaking Changes**
+
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
 Version 0.5.1
 --------------
 
