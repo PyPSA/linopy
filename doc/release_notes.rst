@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Bug Fixes**
+
+* Fix the multiplication with of zero dimensional numpy arrays with linopy objects. This is mainly affecting operations where single numerical items from  pandas objects are selected and used for multiplication.
+
 Version 0.5.1
 --------------
 

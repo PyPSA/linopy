@@ -199,6 +199,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
 
+    expr = np.array(1) * x
+    assert isinstance(expr, LinearExpression)
+
     expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
     assert isinstance(expr, LinearExpression)
 
