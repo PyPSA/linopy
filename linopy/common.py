@@ -254,7 +254,7 @@ def as_dataarray(
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, (np.number, np.ndarray, int, float, str, bool, list)):
+    elif isinstance(arr, (np.number, int, float, str, bool, list)):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
