@@ -5,13 +5,13 @@ Created on Thu Mar 18 09:03:35 2021.
 @author: fabian
 """
 
+import pickle
 from pathlib import Path
 from typing import Union
 
 import pandas as pd
 import pytest
 import xarray as xr
-import pickle
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.testing import assert_model_equal
@@ -109,16 +109,17 @@ def test_model_to_netcdf_with_status_and_condition(
 
     assert_model_equal(m, p)
 
+
 def test_pickle_model(model_with_dash_names: Model, tmp_path: Path):
     m = model_with_dash_names
     fn = tmp_path / "test.nc"
     m._status = "ok"
     m._termination_condition = "optimal"
 
-    with open(fn, 'wb') as f:
+    with open(fn, "wb") as f:
         pickle.dump(m, f)
 
-    with open(fn, 'rb') as f:
+    with open(fn, "rb") as f:
         p = pickle.load(f)
 
     assert_model_equal(m, p)
