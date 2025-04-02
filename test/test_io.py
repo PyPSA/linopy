@@ -110,7 +110,7 @@ def test_model_to_netcdf_with_status_and_condition(
     assert_model_equal(m, p)
 
 
-def test_pickle_model(model_with_dash_names: Model, tmp_path: Path):
+def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     m = model_with_dash_names
     fn = tmp_path / "test.nc"
     m._status = "ok"
