@@ -1185,7 +1185,7 @@ class Variables:
     def __getstate__(self) -> dict:
         return self.__dict__
 
-    def __setstate__(self, d: dict):
+    def __setstate__(self, d: dict) -> None:
         self.__dict__.update(d)
 
     def __dir__(self) -> list[str]:
