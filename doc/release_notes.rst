@@ -17,6 +17,10 @@ are selected and used for multiplication.
 
 * Support pickling models.
 
+**Breaking Changes**
+
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
 Version 0.5.1
 --------------
 
