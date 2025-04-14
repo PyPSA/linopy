@@ -471,6 +471,12 @@ class CBC(Solver):
 
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
+
+            # import ipdb
+            # ipdb.set_trace()
+            # TODO the problem is that this sol file has both rows and columns in it, and uses original names
+            # linopy requires highs for MPS files anyway, so we can use highs for MPS to tell which ones are vars
+
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -1341,9 +1347,6 @@ class SCIP(Solver):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
-        # In order to retrieve the dual values, we need to turn off presolve
-        m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
-
         m.optimize()
 
         if basis_fn:
@@ -1369,14 +1372,11 @@ class SCIP(Solver):
                 ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
             )
 
-            cons = m.getConss()
+            cons = m.getConss(False)
             if len(cons) != 0:
                 dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
-                dual = dual[
-                    dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
-                ]
             else:
-                logger.warning("Dual values of MILP couldn't be parsed")
+                logger.warning("Dual values not available (is this an MILP?)")
                 dual = pd.Series(dtype=float)
 
             return Solution(sol, dual, objective)
