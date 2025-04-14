@@ -866,7 +866,9 @@ class Highs(Solver):
         h.run()
 
         condition = h.getModelStatus()
-        termination_condition = CONDITION_MAP.get(condition, TerminationCondition.unknown)
+        termination_condition = CONDITION_MAP.get(
+            condition, TerminationCondition.unknown
+        )
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = h.modelStatusToString(condition)
 
