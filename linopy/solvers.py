@@ -828,7 +828,28 @@ class Highs(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        # https://ergo-code.github.io/HiGHS/dev/structures/enums/#HighsModelStatus
+        CONDITION_MAP: dict[highspy.HighsModelStatus, TerminationCondition] = {
+            highspy.HighsModelStatus.kNotset: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kLoadError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPresolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kSolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPostsolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelEmpty: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kMemoryLimit: TerminationCondition.resource_interrupt,
+            highspy.HighsModelStatus.kOptimal: TerminationCondition.optimal,
+            highspy.HighsModelStatus.kInfeasible: TerminationCondition.infeasible,
+            highspy.HighsModelStatus.kUnboundedOrInfeasible: TerminationCondition.infeasible_or_unbounded,
+            highspy.HighsModelStatus.kUnbounded: TerminationCondition.unbounded,
+            highspy.HighsModelStatus.kObjectiveBound: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kObjectiveTarget: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kTimeLimit: TerminationCondition.time_limit,
+            highspy.HighsModelStatus.kIterationLimit: TerminationCondition.iteration_limit,
+            highspy.HighsModelStatus.kSolutionLimit: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kInterrupt: TerminationCondition.user_interrupt,
+            highspy.HighsModelStatus.kUnknown: TerminationCondition.unknown,
+        }
 
         if log_fn is not None:
             self.solver_options["log_file"] = path_to_string(log_fn)
@@ -844,10 +865,10 @@ class Highs(Solver):
 
         h.run()
 
-        condition = h.modelStatusToString(h.getModelStatus()).lower()
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        condition = h.getModelStatus()
+        termination_condition = CONDITION_MAP.get(condition, TerminationCondition.unknown)
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = h.modelStatusToString(condition)
 
         if basis_fn:
             h.writeBasis(path_to_string(basis_fn))
