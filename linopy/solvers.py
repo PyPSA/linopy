@@ -1360,14 +1360,11 @@ class SCIP(Solver):
 
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
+            vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
             sol = pd.Series(
-                {
-                    v.name: s[v]
-                    for v in m.getVars()
-                    if v.name not in {"quadobjvar", "qmatrixvar"}
-                }
+                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
             )
 
             cons = m.getConss(False)
@@ -1376,7 +1373,7 @@ class SCIP(Solver):
                     {
                         c.name: m.getDualSolVal(c)
                         for c in cons
-                        if c.name not in {"quadobjvar", "qmatrixvar"}
+                        if c.name not in vars_to_ignore
                     }
                 )
             else:
