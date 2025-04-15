@@ -8,6 +8,7 @@ Upcoming Version
 
 * Fix the parsing of solutions returned by the CBC solver when solving from a file to not
   assume that variables start with `x`.
+* Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
 
 Version 0.5.2
 --------------

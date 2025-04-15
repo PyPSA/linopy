@@ -1347,9 +1347,6 @@ class SCIP(Solver):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
-        # In order to retrieve the dual values, we need to turn off presolve
-        m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
-
         m.optimize()
 
         if basis_fn:
@@ -1368,21 +1365,24 @@ class SCIP(Solver):
 
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
+            vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
-            sol = pd.Series({v.name: s[v] for v in m.getVars()})
-            sol.drop(
-                ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
+            sol = pd.Series(
+                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
             )
 
-            cons = m.getConss()
+            cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
-                dual = dual[
-                    dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
-                ]
+                dual = pd.Series(
+                    {
+                        c.name: m.getDualSolVal(c)
+                        for c in cons
+                        if c.name not in vars_to_ignore
+                    }
+                )
             else:
-                logger.warning("Dual values of MILP couldn't be parsed")
+                logger.warning("Dual values not available (is this an MILP?)")
                 dual = pd.Series(dtype=float)
 
             return Solution(sol, dual, objective)
