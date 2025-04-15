@@ -1362,14 +1362,23 @@ class SCIP(Solver):
             objective = m.getObjVal()
 
             s = m.getSols()[0]
-            sol = pd.Series({v.name: s[v] for v in m.getVars()})
-            sol.drop(
-                ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
+            sol = pd.Series(
+                {
+                    v.name: s[v]
+                    for v in m.getVars()
+                    if v.name not in {"quadobjvar", "qmatrixvar"}
+                }
             )
 
             cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
+                dual = pd.Series(
+                    {
+                        c.name: m.getDualSolVal(c)
+                        for c in cons
+                        if c.name not in {"quadobjvar", "qmatrixvar"}
+                    }
+                )
             else:
                 logger.warning("Dual values not available (is this an MILP?)")
                 dual = pd.Series(dtype=float)
