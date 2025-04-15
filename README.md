@@ -152,6 +152,20 @@ Fri    0          4
 
 Note that these do have to be installed by the user separately.
 
+## Development Setup
+
+To set up a local development environment for linopy and to run the same tests that are run in the CI, you can run:
+
+```sh
+python -m venv venv
+source venv/bin/activate
+pip install uv
+uv pip install -e .[dev,solvers]
+pytest
+```
+
+The `-e` flag of the install command installs the `linopy` package in editable mode, which means that the virtualenv (and thus the tests) will run the code from your local checkout.
+
 ## Citing Linopy
 
 If you use Linopy in your research, please cite the following paper:
