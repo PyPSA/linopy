@@ -453,6 +453,11 @@ class CBC(Solver):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
         status.legacy_status = data
 
+        # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
+        h = highspy.Highs()
+        h.readModel(path_to_string(problem_fn))
+        variables = {v.name for v in h.getVariables()}
+
         def get_solver_solution() -> Solution:
             objective = float(data[len("Optimal - objective value ") :])
 
@@ -467,10 +472,11 @@ class CBC(Solver):
                 usecols=[1, 2, 3],
                 index_col=0,
             )
-            variables_b = df.index.str[0] == "x"
+            variables_b = df.index.isin(variables)
 
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
+
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
