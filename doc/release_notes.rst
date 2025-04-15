@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+**Bug Fixes**
+
+* Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
 
 Version 0.5.2
 --------------
