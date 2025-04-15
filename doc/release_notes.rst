@@ -1,8 +1,13 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
+
+**Bug Fixes**
+
+* Fix the parsing of solutions returned by the CBC solver when solving from a file to not
+  assume that variables start with `x`.
 
 Version 0.5.2
 --------------
