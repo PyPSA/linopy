@@ -472,11 +472,6 @@ class CBC(Solver):
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
 
-            # import ipdb
-            # ipdb.set_trace()
-            # TODO the problem is that this sol file has both rows and columns in it, and uses original names
-            # linopy requires highs for MPS files anyway, so we can use highs for MPS to tell which ones are vars
-
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
