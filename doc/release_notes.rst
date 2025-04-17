@@ -1,14 +1,22 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+
+Version 0.5.3
+--------------
 
 **Bug Fixes**
 
 * Fix the parsing of solutions returned by the CBC solver when solving from a file to not
   assume that variables start with `x`.
 * Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
+
+**Minor Improvements**
+
+* Support pickling models.
 
 Version 0.5.2
 --------------
@@ -18,10 +26,6 @@ Version 0.5.2
 * Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
 This is mainly affecting operations where single numerical items from  pandas objects
 are selected and used for multiplication.
-
-**Feature**
-
-* Support pickling models.
 
 Version 0.5.1
 --------------
