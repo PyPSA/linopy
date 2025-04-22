@@ -1,9 +1,13 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
 
+**Bug Fixes**
+
+* Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
+`solver_options` to be ignored.
 
 Version 0.5.3
 --------------
