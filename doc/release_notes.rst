@@ -1,9 +1,13 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
 
+**Bug Fixes**
+
+* Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
+  gap tolerance.
 
 Version 0.5.3
 --------------
