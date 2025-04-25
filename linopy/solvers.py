@@ -1341,7 +1341,7 @@ class SCIP(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {
+        CONDITION_MAP: dict[str, TerminationCondition] = {
             # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
             "inforunbd": TerminationCondition.infeasible_or_unbounded,
             "userinterrupt": TerminationCondition.user_interrupt,
