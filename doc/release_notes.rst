@@ -1,9 +1,12 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
+Upcoming Version
+----------------
 
+**Bug Fixes**
+
+* Improve the mapping of termination conditions for the SCIP solver
 
 Version 0.5.3
 --------------

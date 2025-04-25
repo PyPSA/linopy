@@ -1341,7 +1341,23 @@ class SCIP(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        CONDITION_MAP: dict[str, str] = {
+            # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
+            "inforunbd": TerminationCondition.infeasible_or_unbounded,
+            "userinterrupt": TerminationCondition.user_interrupt,
+            "terminate": TerminationCondition.user_interrupt,
+            "nodelimit": TerminationCondition.terminated_by_limit,
+            "totalnodelimit": TerminationCondition.terminated_by_limit,
+            "stallnodelimit": TerminationCondition.terminated_by_limit,
+            "timelimit": TerminationCondition.time_limit,
+            "memlimit": TerminationCondition.terminated_by_limit,
+            "gaplimit": TerminationCondition.terminated_by_limit,
+            "primallimit": TerminationCondition.terminated_by_limit,
+            "duallimit": TerminationCondition.terminated_by_limit,
+            "sollimit": TerminationCondition.terminated_by_limit,
+            "bestsollimit": TerminationCondition.terminated_by_limit,
+            "restartlimit": TerminationCondition.terminated_by_limit,
+        }
 
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
