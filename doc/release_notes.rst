@@ -6,6 +6,8 @@ Upcoming Version
 
 **Bug Fixes**
 
+* Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
+  gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver
 
 Version 0.5.3
