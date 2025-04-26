@@ -1369,7 +1369,7 @@ class SCIP(Solver):
             "stallnodelimit": TerminationCondition.terminated_by_limit,
             "timelimit": TerminationCondition.time_limit,
             "memlimit": TerminationCondition.terminated_by_limit,
-            "gaplimit": TerminationCondition.terminated_by_limit,
+            "gaplimit": TerminationCondition.optimal,
             "primallimit": TerminationCondition.terminated_by_limit,
             "duallimit": TerminationCondition.terminated_by_limit,
             "sollimit": TerminationCondition.terminated_by_limit,
