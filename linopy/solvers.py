@@ -573,6 +573,7 @@ class GLPK(Solver):
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
+            "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
         }
         sense = read_sense_from_problem_file(problem_fn)
