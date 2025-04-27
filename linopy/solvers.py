@@ -14,6 +14,7 @@ import re
 import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
+from collections import namedtuple
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -438,20 +439,20 @@ class CBC(Solver):
             p.stdout.close()
             p.wait()
         else:
-            log_f = open(log_fn, "w")
-            p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
-            p.wait()
+            with open(log_fn, "w") as log_f:
+                p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
+                p.wait()
 
         with open(solution_fn) as f:
-            data = f.readline()
+            first_line = f.readline()
 
-        if data.startswith("Optimal - objective value"):
+        if first_line.startswith("Optimal "):
             status = Status.from_termination_condition("optimal")
-        elif "Infeasible" in data:
+        elif "Infeasible" in first_line:
             status = Status.from_termination_condition("infeasible")
         else:
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-        status.legacy_status = data
+        status.legacy_status = first_line
 
         # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
         h = highspy.Highs()
@@ -459,7 +460,11 @@ class CBC(Solver):
         variables = {v.name for v in h.getVariables()}
 
         def get_solver_solution() -> Solution:
-            objective = float(data[len("Optimal - objective value ") :])
+            m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
+            if m and len(m.groups()) == 1:
+                objective = float(m.group(1))
+            else:
+                objective = np.nan
 
             with open(solution_fn, "rb") as f:
                 trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
@@ -482,7 +487,20 @@ class CBC(Solver):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        # Parse the output and get duality gap and solver runtime
+        mip_gap, runtime = None, None
+        if log_fn is not None:
+            with open(log_fn) as log_f:
+                output = "".join(log_f.readlines())
+        m = re.search(r"\nGap: +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            mip_gap = float(m.group(1))
+        m = re.search(r"\nTime \(Wallclock seconds\): +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            runtime = float(m.group(1))
+        CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
+
+        return Result(status, solution, CbcModel(mip_gap, runtime))
 
 
 class GLPK(Solver):
@@ -555,6 +573,7 @@ class GLPK(Solver):
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
+            "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
         }
         sense = read_sense_from_problem_file(problem_fn)
@@ -1338,7 +1357,23 @@ class SCIP(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        CONDITION_MAP: dict[str, TerminationCondition] = {
+            # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
+            "inforunbd": TerminationCondition.infeasible_or_unbounded,
+            "userinterrupt": TerminationCondition.user_interrupt,
+            "terminate": TerminationCondition.user_interrupt,
+            "nodelimit": TerminationCondition.terminated_by_limit,
+            "totalnodelimit": TerminationCondition.terminated_by_limit,
+            "stallnodelimit": TerminationCondition.terminated_by_limit,
+            "timelimit": TerminationCondition.time_limit,
+            "memlimit": TerminationCondition.terminated_by_limit,
+            "gaplimit": TerminationCondition.optimal,
+            "primallimit": TerminationCondition.terminated_by_limit,
+            "duallimit": TerminationCondition.terminated_by_limit,
+            "sollimit": TerminationCondition.terminated_by_limit,
+            "bestsollimit": TerminationCondition.terminated_by_limit,
+            "restartlimit": TerminationCondition.terminated_by_limit,
+        }
 
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
