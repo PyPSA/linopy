@@ -6,6 +6,8 @@ Upcoming Version
 
 **Bug Fixes**
 
+* Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
+`solver_options` to be ignored.
 * Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
   gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver

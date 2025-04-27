@@ -752,9 +752,6 @@ class Highs(Solver):
 
         h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
 
-        if log_fn is None and model is not None:
-            log_fn = model.solver_dir / "highs.log"
-
         return self._solve(
             h,
             solution_fn,
