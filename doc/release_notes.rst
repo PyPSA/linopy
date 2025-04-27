@@ -3,6 +3,41 @@ Release Notes
 
 Upcoming Version
 ----------------
+
+**Bug Fixes**
+
+* Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
+`solver_options` to be ignored.
+* Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
+  gap tolerance.
+* Improve the mapping of termination conditions for the SCIP solver
+* Treat GLPK's `integer undefined` status as not-OK
+
+Version 0.5.3
+--------------
+
+**Bug Fixes**
+
+* Fix the parsing of solutions returned by the CBC solver when solving from a file to not
+  assume that variables start with `x`.
+* Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
+
+**Minor Improvements**
+
+* Support pickling models.
+
+Version 0.5.2
+--------------
+
+**Bug Fixes**
+
+* Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
+This is mainly affecting operations where single numerical items from  pandas objects
+are selected and used for multiplication.
+
+Version 0.5.1
+--------------
+
 **Deprecations**
 
 * Renamed `expression.empty()` to `expression.empty` to align with the use of empty in
@@ -16,6 +51,10 @@ Upcoming Version
 * Added support for arithmetic operations with custom classes.
 * Added `align` function as a wrapper around :func:`xr.align`.
 * Avoid allocating a floating license for COPT during the initial solver check
+
+**Bug fixes**
+
+* Ensure compatibility with xarray >= v2025.03.00
 
 Version 0.5.0
 --------------

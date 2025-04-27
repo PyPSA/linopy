@@ -13,7 +13,7 @@ from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import Model, Variable
+from linopy import LinearExpression, Variable
 from linopy.common import (
     align,
     as_dataarray,
@@ -651,7 +651,7 @@ def test_get_dims_with_index_levels() -> None:
     assert get_dims_with_index_levels(ds5) == []
 
 
-def test_align(m: Model, x: Variable, u: Variable) -> None:
+def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     alpha = xr.DataArray([1, 2], [[1, 2]])
     beta = xr.DataArray(
         [1, 2, 3],
@@ -667,18 +667,21 @@ def test_align(m: Model, x: Variable, u: Variable) -> None:
 
     # inner join
     x_obs, alpha_obs = align(x, alpha)
+    assert isinstance(x_obs, Variable)
     assert x_obs.shape == alpha_obs.shape == (1,)
     assert_varequal(x_obs, x.loc[[1]])
 
     # left-join
     x_obs, alpha_obs = align(x, alpha, join="left")
     assert x_obs.shape == alpha_obs.shape == (2,)
+    assert isinstance(x_obs, Variable)
     assert_varequal(x_obs, x)
     assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
 
     # multiindex
     beta_obs, u_obs = align(beta, u)
     assert u_obs.shape == beta_obs.shape == (2,)
+    assert isinstance(u_obs, Variable)
     assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
     assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
 
@@ -687,4 +690,5 @@ def test_align(m: Model, x: Variable, u: Variable) -> None:
     x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
     assert x_obs.shape == alpha_obs.shape == (1,)
     assert expr_obs.shape == (1, 1)  # _term dim
+    assert isinstance(expr_obs, LinearExpression)
     assert_linequal(expr_obs, expr.loc[[1]])

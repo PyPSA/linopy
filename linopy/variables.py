@@ -1182,6 +1182,12 @@ class Variables:
             f"Variables has no attribute `{name}` or the attribute is not accessible / raises an error."
         )
 
+    def __getstate__(self) -> dict:
+        return self.__dict__
+
+    def __setstate__(self, d: dict) -> None:
+        self.__dict__.update(d)
+
     def __dir__(self) -> list[str]:
         base_attributes = list(super().__dir__())
         formatted_names = [
