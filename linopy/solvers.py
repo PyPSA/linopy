@@ -455,6 +455,11 @@ class CBC(Solver):
         status.legacy_status = first_line
 
         # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
+        if "highs" not in available_solvers:
+            raise ModuleNotFoundError(
+                f"highspy is not installed. Please install it to use {self.solver_name} solver."
+            )
+
         h = highspy.Highs()
         h.readModel(path_to_string(problem_fn))
         variables = {v.name for v in h.getVariables()}
