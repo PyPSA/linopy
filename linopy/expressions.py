@@ -12,10 +12,7 @@ import logging
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import (
-    TYPE_CHECKING,
-    Any,
-)
+from typing import TYPE_CHECKING, Any
 from warnings import warn
 
 import numpy as np
@@ -487,13 +484,16 @@ class LinearExpression:
             )
             print(self)
 
-    def __add__(self, other: SideLike) -> LinearExpression:
+    def __add__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
         """
         Add an expression to others.
 
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        if isinstance(other, QuadraticExpression):
+            return other.__add__(self)
+
         try:
             if np.isscalar(other):
                 return self.assign(const=self.const + other)
@@ -503,9 +503,8 @@ class LinearExpression:
         except TypeError:
             return NotImplemented
 
-    def __radd__(self, other: int) -> LinearExpression | NotImplementedType:
-        # This is needed for using python's sum function
-        return self if other == 0 else NotImplemented
+    def __radd__(self, other: ConstantLike) -> LinearExpression:
+        return self.__add__(other)
 
     def __sub__(self, other: SideLike) -> LinearExpression:
         """
@@ -514,6 +513,9 @@ class LinearExpression:
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        if isinstance(other, QuadraticExpression):
+            return other.__rsub__(self)
+
         try:
             if np.isscalar(other):
                 return self.assign_multiindex_safe(const=self.const - other)
@@ -523,7 +525,7 @@ class LinearExpression:
         except TypeError:
             return NotImplemented
 
-    def __neg__(self) -> LinearExpression | QuadraticExpression:
+    def __neg__(self) -> LinearExpression:
         """
         Get the negative of the expression.
         """
@@ -536,14 +538,11 @@ class LinearExpression:
         """
         Multiply the expr by a factor.
         """
+        if isinstance(other, QuadraticExpression):
+            return other.__rmul__(self)  # type: ignore
+
         try:
-            if isinstance(other, QuadraticExpression):
-                raise TypeError(
-                    "unsupported operand type(s) for *: "
-                    f"{type(self)} and {type(other)}. "
-                    "Higher order non-linear expressions are not yet supported."
-                )
-            elif isinstance(other, (variables.Variable, variables.ScalarVariable)):
+            if isinstance(other, (variables.Variable, variables.ScalarVariable)):
                 other = other.to_linexpr()
 
             if isinstance(other, (LinearExpression, ScalarLinearExpression)):
@@ -593,7 +592,7 @@ class LinearExpression:
             raise ValueError("Power must be 2.")
         return self * self  # type: ignore
 
-    def __rmul__(self, other: ConstantLike) -> LinearExpression | QuadraticExpression:
+    def __rmul__(self, other: ConstantLike) -> LinearExpression:
         """
         Right-multiply the expr by a factor.
         """
@@ -1545,9 +1544,7 @@ class QuadraticExpression(LinearExpression):
         data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
         self._data = data
 
-    def __mul__(
-        self, other: ConstantLike | VariableLike | ExpressionLike
-    ) -> QuadraticExpression:
+    def __mul__(self, other: ConstantLike) -> QuadraticExpression:
         """
         Multiply the expr by a factor.
         """
@@ -1567,13 +1564,14 @@ class QuadraticExpression(LinearExpression):
             )
         return super().__mul__(other)  # type: ignore
 
+    def __rmul__(self, other: ConstantLike) -> QuadraticExpression:
+        return self.__mul__(other)
+
     @property
     def type(self) -> str:
         return "QuadraticExpression"
 
-    def __add__(
-        self, other: ConstantLike | VariableLike | ExpressionLike
-    ) -> QuadraticExpression:
+    def __add__(self, other: SideLike) -> QuadraticExpression:
         """
         Add an expression to others.
 
@@ -1592,21 +1590,13 @@ class QuadraticExpression(LinearExpression):
         except TypeError:
             return NotImplemented
 
-    def __radd__(
-        self, other: LinearExpression | int
-    ) -> LinearExpression | QuadraticExpression:
+    def __radd__(self, other: ConstantLike) -> QuadraticExpression:
         """
         Add others to expression.
         """
-        if type(other) is LinearExpression:
-            other = other.to_quadexpr()
-            return other.__add__(self)
-        elif other == 0:
-            return self
-        else:
-            return NotImplemented
+        return other.__add__(self)
 
-    def __sub__(self, other: SideLike | QuadraticExpression) -> QuadraticExpression:
+    def __sub__(self, other: SideLike) -> QuadraticExpression:
         """
         Subtract others from expression.
 
@@ -1624,15 +1614,17 @@ class QuadraticExpression(LinearExpression):
         except TypeError:
             return NotImplemented
 
-    def __rsub__(self, other: LinearExpression) -> QuadraticExpression:
+    def __rsub__(self, other: SideLike) -> QuadraticExpression:
         """
         Subtract expression from others.
         """
-        if type(other) is LinearExpression:
-            other = other.to_quadexpr()
-            return other.__sub__(self)
-        else:
-            return NotImplemented
+        return self.__neg__().__add__(other)
+
+    def __neg__(self) -> QuadraticExpression:
+        """
+        Get the negative of the expression.
+        """
+        return super().__neg__()  # type: ignore
 
     @property
     def solution(self) -> DataArray:
@@ -1875,7 +1867,7 @@ class ScalarLinearExpression:
     A scalar linear expression container.
 
     In contrast to the LinearExpression class, a ScalarLinearExpression
-    only contains only one label. Use this class to create a constraint
+    only contains one label. Use this class to create a constraint
     in a rule.
     """
 

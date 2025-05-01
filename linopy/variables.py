@@ -382,21 +382,23 @@ class Variable:
         """
         return self.to_linexpr(-1)
 
-    def __mul__(
-        self, other: float | int | ndarray | Variable
-    ) -> LinearExpression | QuadraticExpression:
+    def __mul__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
         """
-        Multiply variables with a coefficient.
+        Multiply variables with a coefficient, variable, or expression.
         """
         try:
-            if isinstance(
-                other, (expressions.LinearExpression, Variable, ScalarVariable)
-            ):
+            if isinstance(other, (Variable, ScalarVariable)):
                 return self.to_linexpr() * other
 
             return self.to_linexpr(other)
         except TypeError:
             return NotImplemented
+
+    def __rmul__(self, other: ConstantLike) -> LinearExpression:
+        """
+        Right-multiply variables by a constant
+        """
+        return self.to_linexpr(other)
 
     def __pow__(self, other: int) -> QuadraticExpression:
         """
@@ -406,15 +408,6 @@ class Variable:
             expr = self.to_linexpr()
             return expr._multiply_by_linear_expression(expr)
         return NotImplemented
-
-    def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
-        """
-        Right-multiply variables with a coefficient.
-        """
-        try:
-            return self.to_linexpr(other)
-        except TypeError:
-            return NotImplemented
 
     def __matmul__(
         self, other: LinearExpression | ndarray | Variable
@@ -449,9 +442,7 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __add__(
-        self, other: int | QuadraticExpression | LinearExpression | Variable
-    ) -> QuadraticExpression | LinearExpression:
+    def __add__(self, other: SideLike) -> LinearExpression:
         """
         Add variables to linear expressions or other variables.
         """
@@ -460,18 +451,27 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __radd__(self, other: int) -> Variable | NotImplementedType:
-        # This is needed for using python's sum function
-        return self if other == 0 else NotImplemented
+    def __radd__(self, other: ConstantLike) -> LinearExpression:
+        try:
+            return self.__add__(other)
+        except ValueError:
+            return NotImplemented
 
-    def __sub__(
-        self, other: QuadraticExpression | LinearExpression | Variable
-    ) -> QuadraticExpression | LinearExpression:
+    def __sub__(self, other: SideLike) -> LinearExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """
         try:
             return self.to_linexpr() - other
+        except TypeError:
+            return NotImplemented
+
+    def __rsub__(self, other: ConstantLike) -> LinearExpression:
+        """
+        Subtract linear expressions or other variables from the variables.
+        """
+        try:
+            return self.to_linexpr(-1) + other
         except TypeError:
             return NotImplemented
 

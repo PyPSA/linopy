@@ -12,6 +12,7 @@ Upcoming Version
   gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver
 * Treat GLPK's `integer undefined` status as not-OK
+* Fixed variable/expression arithmetic methods so that they correctly handle types
 
 Version 0.5.3
 --------------
