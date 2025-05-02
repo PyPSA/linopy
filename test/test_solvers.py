@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from linopy import solvers
+from linopy import Model, solvers
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -64,3 +64,19 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
+
+
+def test_highs_missing(monkeypatch):
+    # Mock the value of "available_solvers" to exclude "highs"
+    monkeypatch.setattr("linopy.solvers.available_solvers", ["cbc"])
+
+    model = Model()
+    x = model.add_variables(lower=0.0, name="x")
+    model.add_constraints(x >= 0.0)
+    model.add_objective(x, sense="min")
+
+    with pytest.raises(
+        ModuleNotFoundError,
+        match="highspy is not installed. Please install it to use CBC solve",
+    ):
+        model.solve(solver_name="cbc")

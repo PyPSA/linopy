@@ -457,7 +457,7 @@ class CBC(Solver):
         # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
         if "highs" not in available_solvers:
             raise ModuleNotFoundError(
-                f"highspy is not installed. Please install it to use {self.solver_name} solver."
+                f"highspy is not installed. Please install it to use {self.solver_name.name} solver."
             )
 
         h = highspy.Highs()
