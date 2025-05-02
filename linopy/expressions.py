@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -531,10 +531,18 @@ class LinearExpression:
         """
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
+    @overload
     def __mul__(
-        self,
+        self: GenericLinearExpression, other: ConstantLike
+    ) -> GenericLinearExpression: ...
+
+    @overload
+    def __mul__(self, other: VariableLike | ExpressionLike) -> QuadraticExpression: ...
+
+    def __mul__(
+        self: GenericLinearExpression,
         other: SideLike,
-    ) -> LinearExpression | QuadraticExpression:
+    ) -> GenericLinearExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
         """
@@ -577,7 +585,9 @@ class LinearExpression:
             res = res + self.reset_const() * other.const
         return res  # type: ignore
 
-    def _multiply_by_constant(self, other: ConstantLike) -> LinearExpression:
+    def _multiply_by_constant(
+        self: GenericLinearExpression, other: ConstantLike
+    ) -> GenericLinearExpression:
         multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         coeffs = self.coeffs * multiplier
         assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
@@ -592,7 +602,9 @@ class LinearExpression:
             raise ValueError("Power must be 2.")
         return self * self  # type: ignore
 
-    def __rmul__(self, other: ConstantLike) -> LinearExpression:
+    def __rmul__(
+        self: GenericLinearExpression, other: ConstantLike
+    ) -> GenericLinearExpression:
         """
         Right-multiply the expr by a factor.
         """
@@ -611,11 +623,18 @@ class LinearExpression:
         return (self * other).sum(dim=common_dims)
 
     def __div__(
-        self, other: Variable | ConstantLike
-    ) -> LinearExpression | QuadraticExpression:
+        self: GenericLinearExpression, other: SideLike
+    ) -> GenericLinearExpression:
         try:
             if isinstance(
-                other, (LinearExpression, variables.Variable, variables.ScalarVariable)
+                other,
+                (
+                    variables.Variable,
+                    variables.ScalarVariable,
+                    LinearExpression,
+                    ScalarLinearExpression,
+                    QuadraticExpression,
+                ),
             ):
                 raise TypeError(
                     "unsupported operand type(s) for /: "
@@ -627,8 +646,8 @@ class LinearExpression:
             return NotImplemented
 
     def __truediv__(
-        self, other: Variable | ConstantLike
-    ) -> LinearExpression | QuadraticExpression:
+        self: GenericLinearExpression, other: SideLike
+    ) -> GenericLinearExpression:
         return self.__div__(other)
 
     def __le__(self, rhs: SideLike) -> Constraint:
@@ -1514,6 +1533,9 @@ class LinearExpression:
     iterate_slices = iterate_slices
 
 
+GenericLinearExpression = TypeVar("GenericLinearExpression", bound=LinearExpression)
+
+
 class QuadraticExpression(LinearExpression):
     """
     A quadratic expression consisting of terms of coefficients and variables.
@@ -1544,7 +1566,7 @@ class QuadraticExpression(LinearExpression):
         data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
         self._data = data
 
-    def __mul__(self, other: ConstantLike) -> QuadraticExpression:
+    def __mul__(self, other: SideLike) -> QuadraticExpression:
         """
         Multiply the expr by a factor.
         """
@@ -1553,6 +1575,7 @@ class QuadraticExpression(LinearExpression):
             (
                 LinearExpression,
                 QuadraticExpression,
+                ScalarLinearExpression,
                 variables.Variable,
                 variables.ScalarVariable,
             ),
@@ -1562,9 +1585,9 @@ class QuadraticExpression(LinearExpression):
                 f"{type(self)} and {type(other)}. "
                 "Higher order non-linear expressions are not yet supported."
             )
-        return super().__mul__(other)  # type: ignore
+        return super().__mul__(other)
 
-    def __rmul__(self, other: ConstantLike) -> QuadraticExpression:
+    def __rmul__(self, other: SideLike) -> QuadraticExpression:
         return self.__mul__(other)
 
     @property

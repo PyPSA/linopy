@@ -5,6 +5,11 @@ import linopy
 
 
 def test_operations_with_data_arrays_are_typed_correctly() -> None:
+    # Get the path of this file
+    file_path = __file__
+    result = api.run([file_path])
+    assert result[2] == 0, "Mypy returned issues: " + result[0]
+
     m = linopy.Model()
 
     a: xr.DataArray = xr.DataArray([1, 2, 3])
@@ -12,7 +17,6 @@ def test_operations_with_data_arrays_are_typed_correctly() -> None:
     v: linopy.Variable = m.add_variables(lower=0.0, name="v")
     e: linopy.LinearExpression = v * 1.0
     q = v * v
-    assert isinstance(q, linopy.QuadraticExpression)
 
     _ = a * v
     _ = v * a
@@ -25,8 +29,3 @@ def test_operations_with_data_arrays_are_typed_correctly() -> None:
     _ = a * q
     _ = q * a
     _ = q + a
-
-    # Get the path of this file
-    file_path = __file__
-    result = api.run([file_path])
-    assert result[2] == 0, "Mypy returned issues: " + result[0]

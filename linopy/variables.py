@@ -52,7 +52,14 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.types import ConstantLike, DimsLike, NotImplementedType, SideLike
+from linopy.types import (
+    ConstantLike,
+    DimsLike,
+    ExpressionLike,
+    NotImplementedType,
+    SideLike,
+    VariableLike,
+)
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
@@ -382,7 +389,13 @@ class Variable:
         """
         return self.to_linexpr(-1)
 
-    def __mul__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
+    @overload
+    def __mul__(self, other: ConstantLike) -> LinearExpression: ...
+
+    @overload
+    def __mul__(self, other: ExpressionLike | VariableLike) -> QuadraticExpression: ...
+
+    def __mul__(self, other: SideLike) -> ExpressionLike:
         """
         Multiply variables with a coefficient, variable, or expression.
         """
@@ -398,7 +411,7 @@ class Variable:
         """
         Right-multiply variables by a constant
         """
-        return self.to_linexpr(other)
+        return self * other
 
     def __pow__(self, other: int) -> QuadraticExpression:
         """
@@ -1539,6 +1552,8 @@ class ScalarVariable:
         return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff: int | float) -> ScalarLinearExpression:
+        if isinstance(coeff, Variable):
+            return NotImplemented
         return self.to_scalar_linexpr(coeff)
 
     def __div__(self, coeff: int | float) -> ScalarLinearExpression:

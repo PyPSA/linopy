@@ -97,7 +97,7 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert_linequal(x + data, x + other_datatype)
     assert_linequal(x - data, x - other_datatype)
     assert_linequal(x * data, x * other_datatype)
-    assert_linequal(x / data, x / other_datatype)
+    assert_linequal(x / data, x / other_datatype)  # type: ignore
     assert_linequal(data * x, other_datatype * x)  # type: ignore
     assert x.__add__(object()) is NotImplemented
     assert x.__sub__(object()) is NotImplemented
@@ -131,7 +131,7 @@ def test_arithmetric_operations_vars_and_expr(m: Model) -> None:
     assert_linequal(x**2 + x, x + x**2)
     assert_linequal(x**2 * 2, x**2 * 2)
     with pytest.raises(TypeError):
-        _ = x**2 * x  # type: ignore
+        _ = x**2 * x
 
 
 def test_arithmetric_operations_con(m: Model) -> None:

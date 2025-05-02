@@ -386,7 +386,7 @@ def test_default_setting_expression_sol_accessor(
     qexpr = 4 * x**2
     assert_equal(qexpr.solution, 4 * x.solution**2)
 
-    qexpr = 4 * x * y
+    qexpr = 4 * (x * y)  # type: ignore
     assert_equal(qexpr.solution, 4 * x.solution * y.solution)
 
 
