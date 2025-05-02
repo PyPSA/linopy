@@ -94,14 +94,14 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     rng = np.random.default_rng()
     data = xr.DataArray(rng.random(x.shape), coords=x.coords)
     other_datatype = SomeOtherDatatype(data.copy())
-    assert_linequal(x + data, x + other_datatype)  # type: ignore
-    assert_linequal(x - data, x - other_datatype)  # type: ignore
-    assert_linequal(x * data, x * other_datatype)  # type: ignore
-    assert_linequal(x / data, x / other_datatype)  # type: ignore
+    assert_linequal(x + data, x + other_datatype)
+    assert_linequal(x - data, x - other_datatype)
+    assert_linequal(x * data, x * other_datatype)
+    assert_linequal(x / data, x / other_datatype)
     assert_linequal(data * x, other_datatype * x)  # type: ignore
-    assert x.__add__(object()) is NotImplemented  # type: ignore
-    assert x.__sub__(object()) is NotImplemented  # type: ignore
-    assert x.__mul__(object()) is NotImplemented  # type: ignore
+    assert x.__add__(object()) is NotImplemented
+    assert x.__sub__(object()) is NotImplemented
+    assert x.__mul__(object()) is NotImplemented
     assert x.__truediv__(object()) is NotImplemented  # type: ignore
     assert x.__pow__(object()) is NotImplemented  # type: ignore
     assert x.__pow__(3) is NotImplemented
@@ -121,6 +121,17 @@ def test_arithmetric_operations_expr(m: Model) -> None:
     assert expr.__sub__(object()) is NotImplemented
     assert expr.__mul__(object()) is NotImplemented
     assert expr.__truediv__(object()) is NotImplemented
+
+
+def test_arithmetric_operations_vars_and_expr(m: Model) -> None:
+    x = m.variables["x"]
+    x_expr = x * 1.0
+
+    assert_linequal(x**2, x_expr**2)
+    assert_linequal(x**2 + x, x + x**2)
+    assert_linequal(x**2 * 2, x**2 * 2)
+    with pytest.raises(TypeError):
+        _ = x**2 * x  # type: ignore
 
 
 def test_arithmetric_operations_con(m: Model) -> None:

@@ -539,7 +539,7 @@ class LinearExpression:
         Multiply the expr by a factor.
         """
         if isinstance(other, QuadraticExpression):
-            return other.__rmul__(self)  # type: ignore
+            return other.__rmul__(self)
 
         try:
             if isinstance(other, (variables.Variable, variables.ScalarVariable)):
@@ -1594,7 +1594,7 @@ class QuadraticExpression(LinearExpression):
         """
         Add others to expression.
         """
-        return other.__add__(self)
+        return self.__add__(other)
 
     def __sub__(self, other: SideLike) -> QuadraticExpression:
         """
