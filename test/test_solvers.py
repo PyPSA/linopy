@@ -5,12 +5,13 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import importlib
 from pathlib import Path
 
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
-from linopy import Model, solvers
+from linopy import solvers
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -68,8 +69,13 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
 
 def test_highs_missing(monkeypatch: MonkeyPatch) -> None:
-    # Mock the value of "available_solvers" to exclude "highs"
     monkeypatch.setattr("linopy.solvers.available_solvers", ["cbc"])
+
+    import linopy.model
+
+    importlib.reload(linopy.model)
+
+    from linopy.model import Model
 
     model = Model()
     x = model.add_variables(lower=0.0, name="x")
