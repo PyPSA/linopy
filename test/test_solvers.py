@@ -8,6 +8,7 @@ Created on Tue Jan 28 09:03:35 2025.
 from pathlib import Path
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 
 from linopy import Model, solvers
 
@@ -66,7 +67,7 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     assert result.solution.objective == 30.0
 
 
-def test_highs_missing(monkeypatch):
+def test_highs_missing(monkeypatch: MonkeyPatch) -> None:
     # Mock the value of "available_solvers" to exclude "highs"
     monkeypatch.setattr("linopy.solvers.available_solvers", ["cbc"])
 
