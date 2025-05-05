@@ -22,8 +22,8 @@ def assert_linequal(
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
-def assert_quadequal(a: QuadraticExpression, b: QuadraticExpression) -> None:
-    """Assert that two linear expressions are equal."""
+def assert_quadequal(a: LinearExpression | QuadraticExpression, b: LinearExpression | QuadraticExpression) -> None:
+    """Assert that two quadratic or linear expressions are equal."""
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 

@@ -6,8 +6,8 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, Variable
-from linopy.testing import assert_linequal
-
+from linopy.testing import assert_linequal, assert_quadequal
+from xarray.testing import assert_equal
 
 class SomeOtherDatatype:
     """
@@ -127,9 +127,9 @@ def test_arithmetric_operations_vars_and_expr(m: Model) -> None:
     x = m.variables["x"]
     x_expr = x * 1.0
 
-    assert_linequal(x**2, x_expr**2)
-    assert_linequal(x**2 + x, x + x**2)
-    assert_linequal(x**2 * 2, x**2 * 2)
+    assert_quadequal(x**2, x_expr**2)
+    assert_quadequal(x**2 + x, x + x**2)
+    assert_quadequal(x**2 * 2, x**2 * 2)
     with pytest.raises(TypeError):
         _ = x**2 * x
 
@@ -144,7 +144,8 @@ def test_arithmetric_operations_con(m: Model) -> None:
     assert_linequal(c.lhs - data, c.lhs - other_datatype)
     assert_linequal(c.lhs * data, c.lhs * other_datatype)
     assert_linequal(c.lhs / data, c.lhs / other_datatype)
-    assert_linequal(c.rhs + data, c.rhs + other_datatype)  # type: ignore
-    assert_linequal(c.rhs - data, c.rhs - other_datatype)  # type: ignore
-    assert_linequal(c.rhs * data, c.rhs * other_datatype)  # type: ignore
-    assert_linequal(c.rhs / data, c.rhs / other_datatype)  # type: ignore
+
+    assert_equal(c.rhs + data, c.rhs + other_datatype)
+    assert_equal(c.rhs - data, c.rhs - other_datatype)
+    assert_equal(c.rhs * data, c.rhs * other_datatype)
+    assert_equal(c.rhs / data, c.rhs / other_datatype)
