@@ -14,7 +14,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, Variable, merge
+from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal
@@ -208,6 +208,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0")) * x
     assert isinstance(expr, LinearExpression)
 
+    assert expr.__mul__(object()) is NotImplemented
+    assert expr.__rmul__(object()) is NotImplemented  # type: ignore
+
 
 def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> None:
     expr = 10 * x + y
@@ -224,6 +227,9 @@ def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> 
 
     expr2 = x.add(y)
     assert_linequal(expr, expr2)
+
+    expr3 = x + (x * x)
+    assert isinstance(expr3, QuadraticExpression)
 
 
 def test_linear_expression_with_raddition(m: Model, x: Variable):

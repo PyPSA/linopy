@@ -291,3 +291,16 @@ def test_matrices_matrix_mixed_linear_and_quadratic(
 def test_quadratic_to_constraint(x: Variable, y: Variable) -> None:
     with pytest.raises(NotImplementedError):
         x * y <= 10
+
+
+def test_power_of_three(x: Variable) -> None:
+    with pytest.raises(TypeError):
+        x * x * x
+    with pytest.raises(TypeError):
+        (x * 1) * (x * x)
+    with pytest.raises(TypeError):
+        (x * x) * (x * 1)
+    with pytest.raises(TypeError):
+        x**3
+    with pytest.raises(TypeError):
+        (x * x) * (x * x)

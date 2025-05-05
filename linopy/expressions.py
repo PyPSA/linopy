@@ -512,7 +512,10 @@ class LinearExpression:
             return NotImplemented
 
     def __radd__(self, other: ConstantLike) -> LinearExpression:
-        return self.__add__(other)
+        try:
+            return self.__add__(other)
+        except TypeError:
+            return NotImplemented
 
     @overload
     def __sub__(
@@ -611,7 +614,10 @@ class LinearExpression:
         """
         Right-multiply the expr by a factor.
         """
-        return self.__mul__(other)
+        try:
+            return self.__mul__(other)
+        except TypeError:
+            return NotImplemented
 
     def __matmul__(
         self, other: LinearExpression | Variable | ndarray | DataArray

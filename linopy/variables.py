@@ -411,7 +411,10 @@ class Variable:
         """
         Right-multiply variables by a constant
         """
-        return self * other
+        try:
+            return self * other
+        except TypeError:
+            return NotImplemented
 
     def __pow__(self, other: int) -> QuadraticExpression:
         """
@@ -475,7 +478,7 @@ class Variable:
     def __radd__(self, other: ConstantLike) -> LinearExpression:
         try:
             return self.__add__(other)
-        except ValueError:
+        except TypeError:
             return NotImplemented
 
     @overload
