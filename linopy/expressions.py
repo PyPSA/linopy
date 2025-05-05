@@ -523,7 +523,10 @@ class LinearExpression:
     def __sub__(self, other: QuadraticExpression) -> QuadraticExpression: ...
 
     def __sub__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
-        return self.__add__(-other)
+        try:
+            return self.__add__(-other)
+        except TypeError:
+            return NotImplemented
 
     def __neg__(self) -> LinearExpression:
         """
@@ -1641,7 +1644,10 @@ class QuadraticExpression(LinearExpression):
         """
         Subtract expression from others.
         """
-        return self.__neg__().__add__(other)
+        try:
+            return self.__neg__() + other
+        except TypeError:
+            return NotImplemented
 
     def __neg__(self) -> QuadraticExpression:
         """
