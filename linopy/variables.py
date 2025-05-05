@@ -64,6 +64,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
+        GenericExpression,
         LinearExpression,
         LinearExpressionGroupby,
         QuadraticExpression,
@@ -425,9 +426,17 @@ class Variable:
             return expr._multiply_by_linear_expression(expr)
         return NotImplemented
 
+    @overload
+    def __matmul__(self, other: ConstantLike) -> LinearExpression: ...
+
+    @overload
     def __matmul__(
-        self, other: LinearExpression | ndarray | Variable
-    ) -> QuadraticExpression | LinearExpression:
+        self, other: VariableLike | ExpressionLike
+    ) -> QuadraticExpression: ...
+
+    def __matmul__(
+        self, other: ConstantLike | VariableLike | ExpressionLike
+    ) -> LinearExpression | QuadraticExpression:
         """
         Matrix multiplication of variables with a coefficient.
         """
@@ -460,13 +469,16 @@ class Variable:
 
     @overload
     def __add__(
-        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+        self, other: ConstantLike | Variable | ScalarLinearExpression
     ) -> LinearExpression: ...
 
     @overload
-    def __add__(self, other: QuadraticExpression) -> QuadraticExpression: ...
+    def __add__(self, other: GenericExpression) -> GenericExpression: ...
 
-    def __add__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
+    def __add__(
+        self,
+        other: ConstantLike | Variable | ScalarLinearExpression | GenericExpression,
+    ) -> LinearExpression | GenericExpression:
         """
         Add variables to linear expressions or other variables.
         """
@@ -483,13 +495,16 @@ class Variable:
 
     @overload
     def __sub__(
-        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+        self, other: ConstantLike | Variable | ScalarLinearExpression
     ) -> LinearExpression: ...
 
     @overload
-    def __sub__(self, other: QuadraticExpression) -> QuadraticExpression: ...
+    def __sub__(self, other: GenericExpression) -> GenericExpression: ...
 
-    def __sub__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
+    def __sub__(
+        self,
+        other: ConstantLike | Variable | ScalarLinearExpression | GenericExpression,
+    ) -> LinearExpression | GenericExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """

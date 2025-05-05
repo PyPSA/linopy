@@ -209,7 +209,7 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     assert isinstance(expr, LinearExpression)
 
     assert expr.__mul__(object()) is NotImplemented
-    assert expr.__rmul__(object()) is NotImplemented  # type: ignore
+    assert expr.__rmul__(object()) is NotImplemented
 
 
 def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> None:
@@ -232,11 +232,11 @@ def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> 
     assert isinstance(expr3, QuadraticExpression)
 
 
-def test_linear_expression_with_raddition(m: Model, x: Variable):
+def test_linear_expression_with_raddition(m: Model, x: Variable) -> None:
     expr = x * 1.0
-    expr_2: LinearExpression = 10.0 + expr  # type: ignore
+    expr_2: LinearExpression = 10.0 + expr
     assert isinstance(expr, LinearExpression)
-    expr_3: LinearExpression = expr + 10.0  # type: ignore
+    expr_3: LinearExpression = expr + 10.0
     assert_linequal(expr_2, expr_3)
 
 
@@ -1031,24 +1031,25 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
 
-    res = merge([expr1, expr2])
+    res = merge([expr1, expr2], cls=LinearExpression)
     assert res.nterm == 6
 
-    res = merge([expr1, expr2])
-    assert res.nterm == 6
+    with pytest.warns(DeprecationWarning):
+        res: LinearExpression = merge([expr1, expr2])  # type: ignore
+        assert res.nterm == 6
 
     # now concat with same length of terms
     expr1 = z.sel(dim_0=0).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge([expr1, expr2], dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
     expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge([expr1, expr2], dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
 

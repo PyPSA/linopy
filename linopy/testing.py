@@ -13,8 +13,12 @@ def assert_varequal(a: Variable, b: Variable) -> None:
     return assert_equal(_var_unwrap(a), _var_unwrap(b))
 
 
-def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
+def assert_linequal(
+    a: LinearExpression | QuadraticExpression, b: LinearExpression | QuadraticExpression
+) -> None:
     """Assert that two linear expressions are equal."""
+    assert isinstance(a, LinearExpression)
+    assert isinstance(b, LinearExpression)
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
