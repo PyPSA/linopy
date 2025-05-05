@@ -4,10 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from xarray.testing import assert_equal
 
 from linopy import LESS_EQUAL, Model, Variable
 from linopy.testing import assert_linequal, assert_quadequal
-from xarray.testing import assert_equal
+
 
 class SomeOtherDatatype:
     """
