@@ -144,8 +144,12 @@ def test_quadratic_expression_raddition(x: Variable, y: Variable) -> None:
     assert (expr.const == 5).all()
     assert expr.nterm == 2
 
-    with pytest.raises(TypeError):
-        5 + x * y + x
+    expr_2 = 5 + x * y + x
+    assert isinstance(expr_2, QuadraticExpression)
+    assert (expr_2.const == 5).all()
+    assert expr_2.nterm == 2
+
+    assert_quadequal(expr, expr_2)
 
 
 def test_quadratic_expression_subtraction(x: Variable, y: Variable) -> None:

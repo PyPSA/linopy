@@ -455,7 +455,15 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __add__(self, other: SideLike) -> LinearExpression:
+    @overload
+    def __add__(
+        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+    ) -> LinearExpression: ...
+
+    @overload
+    def __add__(self, other: QuadraticExpression) -> QuadraticExpression: ...
+
+    def __add__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
         """
@@ -470,7 +478,15 @@ class Variable:
         except ValueError:
             return NotImplemented
 
-    def __sub__(self, other: SideLike) -> LinearExpression:
+    @overload
+    def __sub__(
+        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+    ) -> LinearExpression: ...
+
+    @overload
+    def __sub__(self, other: QuadraticExpression) -> QuadraticExpression: ...
+
+    def __sub__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """

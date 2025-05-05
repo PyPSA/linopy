@@ -226,6 +226,14 @@ def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> 
     assert_linequal(expr, expr2)
 
 
+def test_linear_expression_with_raddition(m: Model, x: Variable):
+    expr = x * 1.0
+    expr_2: LinearExpression = 10.0 + expr  # type: ignore
+    assert isinstance(expr, LinearExpression)
+    expr_3: LinearExpression = expr + 10.0  # type: ignore
+    assert_linequal(expr_2, expr_3)
+
+
 def test_linear_expression_with_subtraction(m: Model, x: Variable, y: Variable) -> None:
     expr = x - y
     assert isinstance(expr, LinearExpression)

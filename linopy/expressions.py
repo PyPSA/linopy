@@ -484,6 +484,14 @@ class LinearExpression:
             )
             print(self)
 
+    @overload
+    def __add__(
+        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+    ) -> LinearExpression: ...
+
+    @overload
+    def __add__(self, other: QuadraticExpression) -> QuadraticExpression: ...
+
     def __add__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
         """
         Add an expression to others.
@@ -506,24 +514,16 @@ class LinearExpression:
     def __radd__(self, other: ConstantLike) -> LinearExpression:
         return self.__add__(other)
 
-    def __sub__(self, other: SideLike) -> LinearExpression:
-        """
-        Subtract others from expression.
+    @overload
+    def __sub__(
+        self, other: ConstantLike | Variable | ScalarLinearExpression | LinearExpression
+    ) -> LinearExpression: ...
 
-        Note: If other is a numpy array or pandas object without axes names,
-        dimension names of self will be filled in other
-        """
-        if isinstance(other, QuadraticExpression):
-            return other.__rsub__(self)
+    @overload
+    def __sub__(self, other: QuadraticExpression) -> QuadraticExpression: ...
 
-        try:
-            if np.isscalar(other):
-                return self.assign_multiindex_safe(const=self.const - other)
-
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
-            return merge([self, -other], cls=self.__class__)
-        except TypeError:
-            return NotImplemented
+    def __sub__(self, other: SideLike) -> LinearExpression | QuadraticExpression:
+        return self.__add__(-other)
 
     def __neg__(self) -> LinearExpression:
         """
