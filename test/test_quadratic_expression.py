@@ -133,7 +133,6 @@ def test_matmul_with_const(x: Variable) -> None:
     assert expr2.data.sizes[FACTOR_DIM] == 2
 
 
-
 def test_quadratic_expression_dot_and_matmul(x: Variable, y: Variable) -> None:
     matmul_expr: QuadraticExpression = 10 * x @ y  # type: ignore
     dot_expr: QuadraticExpression = 10 * x.dot(y)  # type: ignore

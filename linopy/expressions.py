@@ -1655,6 +1655,13 @@ class QuadraticExpression(BaseExpression):
     def type(self) -> str:
         return "QuadraticExpression"
 
+    @property
+    def shape(self) -> tuple[int, ...]:
+        # TODO Implement this
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support shape property"
+        )
+
     def __mul__(self, other: SideLike) -> QuadraticExpression:
         """
         Multiply the expr by a factor.
