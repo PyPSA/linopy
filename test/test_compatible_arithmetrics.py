@@ -105,7 +105,8 @@ def test_arithmetric_operations_variable(m: Model) -> None:
     assert x.__mul__(object()) is NotImplemented
     assert x.__truediv__(object()) is NotImplemented  # type: ignore
     assert x.__pow__(object()) is NotImplemented  # type: ignore
-    assert x.__pow__(3) is NotImplemented
+    with pytest.raises(ValueError):
+        x.__pow__(3)
 
 
 def test_arithmetric_operations_expr(m: Model) -> None:

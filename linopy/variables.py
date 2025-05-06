@@ -421,7 +421,9 @@ class Variable:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
-        if isinstance(other, int) and other == 2:
+        if not isinstance(other, int):
+            return NotImplemented
+        if other == 2:
             expr = self.to_linexpr()
             return expr._multiply_by_linear_expression(expr)
         raise ValueError("Can only raise to the power of 2")
