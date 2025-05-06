@@ -45,6 +45,7 @@ def test_adding_quadratic_expressions(x: Variable) -> None:
     quad_expr = x * x
     double_quad = quad_expr + quad_expr
     assert isinstance(double_quad, QuadraticExpression)
+    assert double_quad.__add__(object()) is NotImplemented
 
 
 def test_quadratic_expression_from_variables_power(x: Variable) -> None:
@@ -123,6 +124,12 @@ def test_matmul_expr_and_expr(x: Variable, y: Variable, z: Variable) -> None:
     assert_quadequal(expr, target)
 
 
+def test_matmul_with_const(x: Variable) -> None:
+    expr = x * x
+    const = 2.0
+    assert_quadequal(expr @ const, (x * const).sum())
+
+
 def test_quadratic_expression_dot_and_matmul(x: Variable, y: Variable) -> None:
     matmul_expr: QuadraticExpression = 10 * x @ y  # type: ignore
     dot_expr: QuadraticExpression = 10 * x.dot(y)  # type: ignore
@@ -163,6 +170,7 @@ def test_quadratic_expression_subtraction(x: Variable, y: Variable) -> None:
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == -5).all()
     assert expr.nterm == 2
+    assert expr.__sub__(object()) is NotImplemented
 
 
 def test_quadratic_expression_rsubtraction(x: Variable, y: Variable) -> None:
@@ -170,6 +178,11 @@ def test_quadratic_expression_rsubtraction(x: Variable, y: Variable) -> None:
     assert isinstance(expr, QuadraticExpression)
     assert (expr.const == -5).all()
     assert expr.nterm == 2
+
+    expr2 = 5 - x * y
+    assert isinstance(expr2, QuadraticExpression)
+    assert (expr2.const == 5).all()
+    assert expr2.nterm == 1
 
 
 def test_quadratic_expression_sum(x: Variable, y: Variable) -> None:
@@ -314,7 +327,7 @@ def test_power_of_three(x: Variable) -> None:
         (x * 1) * (x * x)
     with pytest.raises(TypeError):
         (x * x) * (x * 1)
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         x**3
     with pytest.raises(TypeError):
         (x * x) * (x * x)

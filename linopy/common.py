@@ -1000,7 +1000,7 @@ def align(
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
     fill_value: Any = dtypes.NA,
-) -> tuple[LinearExpression| QuadraticExpression | Variable | T_Alignable, ...]:
+) -> tuple[LinearExpression | QuadraticExpression | Variable | T_Alignable, ...]:
     """
     Given any number of Variables, Expressions, Dataset and/or DataArray objects,
     returns new objects with aligned indexes and dimension sizes.
@@ -1090,7 +1090,14 @@ def align(
     return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
-LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "QuadraticExpression", "Constraint")
+LocT = TypeVar(
+    "LocT",
+    "Dataset",
+    "Variable",
+    "LinearExpression",
+    "QuadraticExpression",
+    "Constraint",
+)
 
 
 class LocIndexer(Generic[LocT]):

@@ -1345,7 +1345,7 @@ class LinearExpression(BaseExpression):
 
     def __rsub__(self, other: ConstantLike | Variable) -> LinearExpression:
         try:
-            return self.__add__(-other)
+            return self.__neg__().__add__(other)
         except TypeError:
             return NotImplemented
 
@@ -1674,13 +1674,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
         try:
-            if isinstance(other, (variables.Variable, variables.ScalarVariable)):
-                other = other.to_linexpr()
-
-            if isinstance(other, (LinearExpression, ScalarLinearExpression)):
-                return self._multiply_by_linear_expression(other)
-            else:
-                return self._multiply_by_constant(other)
+            return self._multiply_by_constant(other)
         except TypeError:
             return NotImplemented
 
@@ -1736,7 +1730,7 @@ class QuadraticExpression(BaseExpression):
         Subtract expression from others.
         """
         try:
-            return self.__neg__() + other
+            return self.__neg__().__add__(other)
         except TypeError:
             return NotImplemented
 

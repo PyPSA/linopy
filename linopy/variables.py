@@ -424,7 +424,7 @@ class Variable:
         if isinstance(other, int) and other == 2:
             expr = self.to_linexpr()
             return expr._multiply_by_linear_expression(expr)
-        return NotImplemented
+        raise ValueError("Can only raise to the power of 2")
 
     @overload
     def __matmul__(self, other: ConstantLike) -> LinearExpression: ...

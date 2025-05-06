@@ -17,7 +17,7 @@ from xarray.testing import assert_equal
 from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
-from linopy.testing import assert_linequal
+from linopy.testing import assert_linequal, assert_quadequal
 
 
 @pytest.fixture
@@ -187,6 +187,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr2 = x.mul(1)
     assert_linequal(expr, expr2)
 
+    expr3 = expr.mul(1)
+    assert_linequal(expr, expr3)
+
     expr = x / 1
     assert isinstance(expr, LinearExpression)
 
@@ -195,6 +198,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
 
     expr2 = x.div(1)
     assert_linequal(expr, expr2)
+
+    expr3 = expr.div(1)
+    assert_linequal(expr, expr3)
 
     expr = np.array([1, 2]) * x
     assert isinstance(expr, LinearExpression)
@@ -228,6 +234,9 @@ def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> 
     expr2 = x.add(y)
     assert_linequal(expr, expr2)
 
+    expr3 = (x * 1).add(y)
+    assert_linequal(expr, expr3)
+
     expr3 = x + (x * x)
     assert isinstance(expr3, QuadraticExpression)
 
@@ -248,9 +257,21 @@ def test_linear_expression_with_subtraction(m: Model, x: Variable, y: Variable) 
     expr2 = x.sub(y)
     assert_linequal(expr, expr2)
 
+    expr3: LinearExpression = x * 1
+    expr4 = expr3.sub(y)
+    assert_linequal(expr, expr4)
+
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
+
+
+def test_linear_expression_rsubtraction(x: Variable, y: Variable) -> None:
+    expr = x * 1.0
+    expr_2: LinearExpression = 10.0 - expr
+    assert isinstance(expr_2, LinearExpression)
+    expr_3: LinearExpression = (expr - 10.0) * -1
+    assert_linequal(expr_2, expr_3)
 
 
 def test_linear_expression_with_constant(m: Model, x: Variable, y: Variable) -> None:
@@ -335,6 +356,9 @@ def test_linear_expression_addition(x: Variable, y: Variable, z: Variable) -> No
     assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.data.notnull().all().to_array().all()
+
+    res2 = expr.add(other)
+    assert_linequal(res, res2)
 
     assert isinstance(x - expr, LinearExpression)
     assert isinstance(x + expr, LinearExpression)
@@ -454,6 +478,17 @@ def test_linear_expression_sum_warn_using_dims(z: Variable) -> None:
 def test_linear_expression_sum_warn_unknown_kwargs(z: Variable) -> None:
     with pytest.raises(ValueError):
         (1 * z).sum(unknown_kwarg="dim_0")
+
+
+def test_linear_expression_power(x: Variable) -> None:
+    qd_expr = x**2
+    assert isinstance(qd_expr, QuadraticExpression)
+
+    qd_expr2 = x.pow(2)
+    assert_quadequal(qd_expr, qd_expr2)
+
+    with pytest.raises(ValueError):
+        x**3
 
 
 def test_linear_expression_multiplication(
