@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, Type, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -1151,8 +1151,8 @@ class BaseExpression(ABC):
 
     @classmethod
     def _sum(
-        cls: Type[GenericExpression],
-        expr: GenericExpression | Dataset,
+        cls,
+        expr: BaseExpression | Dataset,
         dim: DimsLike | None = None,
     ) -> Dataset:
         data = _expr_unwrap(expr)
