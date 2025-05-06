@@ -5,9 +5,11 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import importlib
 from pathlib import Path
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 
 from linopy import solvers
 
@@ -64,3 +66,24 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
+
+
+def test_highs_missing(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr("linopy.solvers.available_solvers", ["cbc"])
+
+    import linopy.model
+
+    importlib.reload(linopy.model)
+
+    from linopy.model import Model
+
+    model = Model()
+    x = model.add_variables(lower=0.0, name="x")
+    model.add_constraints(x >= 0.0)
+    model.add_objective(x, sense="min")
+
+    with pytest.raises(
+        ModuleNotFoundError,
+        match="highspy is not installed. Please install it to use CBC solve",
+    ):
+        model.solve(solver_name="cbc")
