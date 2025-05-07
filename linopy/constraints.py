@@ -7,13 +7,12 @@ This module contains implementations for the Constraint{s} class.
 from __future__ import annotations
 
 import functools
-from collections.abc import Hashable, ItemsView, Iterator, Sequence
+from collections.abc import Callable, Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     overload,
 )
 
@@ -460,7 +459,7 @@ class Constraint:
     @is_constant
     def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
-        self.data["sign"] = value
+        self._data = assign_multiindex_safe(self.data, sign=value)
 
     @property
     def rhs(self) -> DataArray:
@@ -478,7 +477,7 @@ class Constraint:
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
         self.lhs = self.lhs - value.reset_const()
-        self.data["rhs"] = value.const
+        self._data = assign_multiindex_safe(self.data, rhs=value.const)
 
     @property
     @has_optimized_model
@@ -1006,7 +1005,7 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            constraint.data["blocks"] = res
+            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
 
     @property
     def flat(self) -> pd.DataFrame:
