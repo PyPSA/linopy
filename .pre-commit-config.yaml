@@ -1,5 +1,5 @@
 ci:
-  autoupdate_schedule: monthly
+  autoupdate_schedule: quarterly
 
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
@@ -9,7 +9,7 @@ repos:
     -   id: trailing-whitespace
     -   id: check-merge-conflict
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.4
+    rev: v0.11.8
     hooks:
     -   id: ruff
         args: [--fix]

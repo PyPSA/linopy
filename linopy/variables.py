@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Hashable, ItemsView, Iterator, Mapping
+from collections.abc import Callable, Hashable, ItemsView, Iterator, Mapping
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     overload,
 )
 from warnings import warn
@@ -804,7 +803,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.upper)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self.data["upper"] = value
+        self._data = assign_multiindex_safe(self.data, upper=value)
 
     @property
     def lower(self) -> DataArray:
@@ -828,7 +827,7 @@ class Variable:
         value = DataArray(value).broadcast_like(self.lower)
         if not set(value.dims).issubset(self.model.variables[self.name].dims):
             raise ValueError("Cannot assign new dimensions to existing variable.")
-        self.data["lower"] = value
+        self._data = assign_multiindex_safe(self.data, lower=value)
 
     @property
     @has_optimized_model
@@ -1108,8 +1107,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        data = data.assign(labels=data.labels.astype(int))
-        return self.__class__(data, self.model, self.name)
+        return self.assign(labels=data.labels.astype(int))
 
     def sanitize(self) -> Variable:
         """
@@ -1120,8 +1118,7 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            data = self.data.assign(labels=self.labels.fillna(-1).astype(int))
-            return self.__class__(data, self.model, self.name)
+            return self.assign(labels=self.labels.fillna(-1).astype(int))
         return self
 
     def equals(self, other: Variable) -> bool:
@@ -1131,6 +1128,8 @@ class Variable:
     assign_attrs = varwrap(Dataset.assign_attrs)
 
     assign_coords = varwrap(Dataset.assign_coords)
+
+    assign = varwrap(assign_multiindex_safe)
 
     assign_multiindex_safe = varwrap(assign_multiindex_safe)
 
@@ -1499,7 +1498,9 @@ class Variables:
 
         for name, variable in self.items():
             if dim in variable.dims:
-                variable.data["blocks"] = blocks.broadcast_like(variable.labels)
+                variable._data = assign_multiindex_safe(
+                    variable.data, blocks=blocks.broadcast_like(variable.labels)
+                )
 
     def get_blockmap(self, dtype: type = np.int8) -> ndarray:
         """

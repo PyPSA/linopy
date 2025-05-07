@@ -311,7 +311,7 @@ class LinearExpressionRolling:
             .rename({TERM_DIM: STACKED_TERM_DIM})
             .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
         )
-        ds["const"] = data.const.sum("_rolling_term")
+        ds = assign_multiindex_safe(ds, const=data.const.sum("_rolling_term"))
         return LinearExpression(ds, self.model)
 
 
@@ -712,7 +712,7 @@ class BaseExpression(ABC):
 
     @vars.setter
     def vars(self, value: DataArray) -> None:
-        self.data["vars"] = value
+        self._data = assign_multiindex_safe(self.data, vars=value)
 
     @property
     def coeffs(self) -> DataArray:
@@ -720,7 +720,7 @@ class BaseExpression(ABC):
 
     @coeffs.setter
     def coeffs(self, value: DataArray) -> None:
-        self.data["coeffs"] = value
+        self._data = assign_multiindex_safe(self.data, coeffs=value)
 
     @property
     def const(self) -> DataArray:
@@ -728,7 +728,7 @@ class BaseExpression(ABC):
 
     @const.setter
     def const(self, value: DataArray) -> None:
-        self.data["const"] = value
+        self._data = assign_multiindex_safe(self.data, const=value)
 
     @property
     def has_constant(self) -> DataArray:
@@ -1182,7 +1182,7 @@ class BaseExpression(ABC):
         return ds
 
     # Wrapped function which would convert variable to dataarray
-    assign = exprwrap(Dataset.assign)
+    assign = exprwrap(assign_multiindex_safe)
 
     assign_multiindex_safe = exprwrap(assign_multiindex_safe)
 

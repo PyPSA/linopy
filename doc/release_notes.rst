@@ -1,6 +1,11 @@
 Release Notes
 =============
 
+Future Version
+---------------
+**Minor Improvements**
+* Improved variable/expression arithmetic methods so that they correctly handle types
+
 Upcoming Version
 ----------------
 
@@ -12,7 +17,8 @@ Upcoming Version
   gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver
 * Treat GLPK's `integer undefined` status as not-OK
-* Fixed variable/expression arithmetic methods so that they correctly handle types
+* Internally assign new data fields to `Variable` and `Constraint` with a multiindexed-safe routine. Before the
+  assignment when using multi-indexed coordinates, an deprecation warning was raised. This is fixed now.
 
 Version 0.5.3
 --------------
