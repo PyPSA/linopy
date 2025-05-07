@@ -1623,7 +1623,7 @@ class LinearExpression(BaseExpression):
             if len(t) == 2:
                 # assume first element is coefficient and second is variable
                 c, v = t
-                if isinstance(v, ScalarVariable):
+                if isinstance(v, variables.ScalarVariable):
                     if not isinstance(c, (int, float)):
                         raise TypeError(
                             "Expected int or float as coefficient of scalar variable (first element of tuple)."
