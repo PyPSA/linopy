@@ -1,8 +1,12 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+Version 0.5.4
+--------------
+
 
 **Bug Fixes**
 
