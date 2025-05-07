@@ -16,6 +16,8 @@ doc/api
 Highs.log
 paper/
 monkeytype.sqlite3
+.github/copilot-instructions.md
+uv.lock
 
 # Environments
 .env
