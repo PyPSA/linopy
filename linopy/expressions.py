@@ -1550,7 +1550,7 @@ class LinearExpression(BaseExpression):
             raise TypeError(msg)
 
         combinations = product(*[c.values for c in coords.values()])
-        exprs = []
+
         placeholder = ScalarLinearExpression((np.nan,), (-1,), model)
         exprs = [rule(model, *coord) or placeholder for coord in combinations]
         return cls._from_scalarexpression_list(exprs, coords, model)
@@ -1558,9 +1558,7 @@ class LinearExpression(BaseExpression):
     @classmethod
     def from_tuples(
         cls,
-        *tuples: tuple[ConstantLike, str | Variable | ScalarVariable]
-        | tuple[ConstantLike]
-        | ConstantLike,
+        *tuples: tuple[ConstantLike, str | Variable | ScalarVariable] | ConstantLike,
         model: Model | None = None,
     ) -> LinearExpression:
         """
@@ -1574,7 +1572,6 @@ class LinearExpression(BaseExpression):
         ----------
         tuples : A list of elements. Each element is either:
             * (coefficients, variables)
-            * (constant,)
             * constant
 
             Each (coefficients, variables) tuple represents one term in the resulting linear expression,
@@ -1603,20 +1600,23 @@ class LinearExpression(BaseExpression):
         >>> x = m.add_variables(pd.Series([0, 0]), 1)
         >>> y = m.add_variables(4, pd.Series([8, 10]))
         >>> expr = LinearExpression.from_tuples((10, x), (1, y), 1)
-        >>> expr = LinearExpression.from_tuples(
-        ...     (10, x), (1, y), (1,)
-        ... )  # Alternative usage
 
         This is the same as calling ``10*x + y` + 1` but a bit more performant.
         """
-        exprs: list[LinearExpression] = []
-        for t in tuples:
+
+        def process_one(
+            t: tuple[ConstantLike, str | Variable | ScalarVariable]
+            | tuple[ConstantLike]
+            | ConstantLike,
+        ) -> LinearExpression:
+            nonlocal model
+
             if isinstance(t, SUPPORTED_CONSTANT_TYPES):
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 expr = LinearExpression(t, model)
-                exprs.append(expr)
-                continue
+                return expr
+
             if not isinstance(t, tuple):
                 raise ValueError("Expected tuple or constant.")
 
@@ -1640,16 +1640,22 @@ class LinearExpression(BaseExpression):
 
                 if model is None:
                     model = expr.model  # TODO: Ensure equality of models
-            elif len(t) == 1:
+                return expr
+
+            if len(t) == 1:
+                warn(
+                    "Passing a single value tuple to LinearExpression.from_tuples is deprecated",
+                    DeprecationWarning,
+                )
                 # assume that the element is a constant
                 const = as_dataarray(t[0])
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
-                expr = LinearExpression(const, model)
+                return LinearExpression(const, model)
             else:
-                raise ValueError("Expected tuples of length 1 or 2.")
+                raise ValueError("Expected tuples of length 2")
 
-            exprs.append(expr)
+        exprs = [process_one(t) for t in tuples]
 
         return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 

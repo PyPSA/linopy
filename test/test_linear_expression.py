@@ -1074,7 +1074,8 @@ def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
     expr = LinearExpression.from_tuples((10, x), (1, y))
     assert isinstance(expr, LinearExpression)
 
-    expr2 = LinearExpression.from_tuples((10, x), (1,))
+    with pytest.warns(DeprecationWarning):
+        expr2 = LinearExpression.from_tuples((10, x), (1,))
     assert isinstance(expr2, LinearExpression)
     assert (expr2.const == 1).all()
 
