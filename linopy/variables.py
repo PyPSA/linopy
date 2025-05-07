@@ -490,7 +490,7 @@ class Variable:
 
     def __radd__(self, other: ConstantLike) -> LinearExpression:
         try:
-            return self.__add__(other)
+            return self + other
         except TypeError:
             return NotImplemented
 
@@ -1588,7 +1588,7 @@ class ScalarVariable:
         return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff: int | float) -> ScalarLinearExpression:
-        if isinstance(coeff, Variable):
+        if isinstance(coeff, (Variable, ScalarVariable)):
             return NotImplemented
         return self.to_scalar_linexpr(coeff)
 

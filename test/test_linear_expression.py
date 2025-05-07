@@ -331,6 +331,9 @@ def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
     with pytest.raises(TypeError):
         m.linexpr((10, x.labels), (1, "y"))
 
+    with pytest.raises(TypeError):
+        m.linexpr(a=2)  # type: ignore
+
 
 def test_linear_expression_from_rule(m: Model, x: Variable, y: Variable) -> None:
     def bound(m: Model, i: int) -> ScalarLinearExpression:

@@ -884,16 +884,12 @@ class Model:
     @overload
     def linexpr(
         self, *args: Sequence[Sequence | pd.Index | DataArray] | Mapping
-    ) -> LinearExpression:
-        ...
-        # A function and tuples of coordinates
+    ) -> LinearExpression: ...
 
     @overload
     def linexpr(
         self, *args: tuple[ConstantLike, str | Variable | ScalarVariable] | ConstantLike
-    ) -> LinearExpression:
-        ...
-        # A mixture of tuples of (coefficients, variables) and constants
+    ) -> LinearExpression: ...
 
     def linexpr(
         self,
