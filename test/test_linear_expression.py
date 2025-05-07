@@ -158,6 +158,13 @@ def test_linexpr_with_scalars(m: Model) -> None:
     assert_equal(expr.coeffs, target)
 
 
+def test_linexpr_with_variables_and_constants(
+    m: Model, x: Variable, y: Variable
+) -> None:
+    expr = m.linexpr((10, x), (1, y), 2)
+    assert (expr.const == 2).all()
+
+
 def test_linexpr_with_series(m: Model, v: Variable) -> None:
     lhs = pd.Series(np.arange(20)), v
     expr = m.linexpr(lhs)
@@ -213,6 +220,12 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
 
     expr = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0")) * x
     assert isinstance(expr, LinearExpression)
+
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+
+    with pytest.raises(TypeError):
+        quad * quad
 
     assert expr.__mul__(object()) is NotImplemented
     assert expr.__rmul__(object()) is NotImplemented
@@ -312,7 +325,7 @@ def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
         x / (1 * x)
 
     with pytest.raises(TypeError):
-        m.linexpr((10, x.labels), (1, "y"))  # type: ignore
+        m.linexpr((10, x.labels), (1, "y"))
 
 
 def test_linear_expression_from_rule(m: Model, x: Variable, y: Variable) -> None:
@@ -1055,6 +1068,28 @@ def test_linear_expression_rolling_with_const(v: Variable) -> None:
 def test_linear_expression_rolling_from_variable(v: Variable) -> None:
     rolled = v.rolling(dim_2=2).sum()
     assert rolled.nterm == 2
+
+
+def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
+    expr = LinearExpression.from_tuples((10, x), (1, y))
+    assert isinstance(expr, LinearExpression)
+
+    expr2 = LinearExpression.from_tuples((10, x), (1,))
+    assert isinstance(expr2, LinearExpression)
+    assert (expr2.const == 1).all()
+
+    expr3 = LinearExpression.from_tuples((10, x), 1)
+    assert isinstance(expr3, LinearExpression)
+    assert_linequal(expr2, expr3)
+
+    expr4 = LinearExpression.from_tuples((10, x), (1, y), 1)
+    assert isinstance(expr4, LinearExpression)
+
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples((10, x), (1, y), x)
+
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples((10, x, 3), (1, y), 1)
 
 
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:

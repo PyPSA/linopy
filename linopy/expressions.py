@@ -1557,7 +1557,11 @@ class LinearExpression(BaseExpression):
 
     @classmethod
     def from_tuples(
-        cls, *tuples: tuple, model: Model | None = None
+        cls,
+        *tuples: tuple[ConstantLike, str | Variable | ScalarVariable]
+        | tuple[ConstantLike]
+        | ConstantLike,
+        model: Model | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression by using tuples of coefficients and
@@ -1568,8 +1572,12 @@ class LinearExpression(BaseExpression):
 
         Parameters
         ----------
-        tuples : tuples of (coefficients, variables)
-            Each tuple represents one term in the resulting linear expression,
+        tuples : A list of elements. Each element is either:
+            * (coefficients, variables)
+            * (constant,)
+            * constant
+
+            Each (coefficients, variables) tuple represents one term in the resulting linear expression,
             which can possibly span over multiple dimensions:
 
             * coefficients : int/float/array_like
@@ -1579,6 +1587,9 @@ class LinearExpression(BaseExpression):
             * variables : str/array_like/linopy.Variable
                 The variable(s) going into the term. These may be referenced
                 by name.
+            * constant: int/float/array_like
+                The constant value to add to the expression
+        model : The linopy.Model. If None this can be inferred from the provided variables
 
         Returns
         -------
@@ -1591,25 +1602,47 @@ class LinearExpression(BaseExpression):
         >>> m = Model()
         >>> x = m.add_variables(pd.Series([0, 0]), 1)
         >>> y = m.add_variables(4, pd.Series([8, 10]))
-        >>> expr = LinearExpression.from_tuples((10, x), (1, y))
+        >>> expr = LinearExpression.from_tuples((10, x), (1, y), 1)
+        >>> expr = LinearExpression.from_tuples(
+        ...     (10, x), (1, y), (1,)
+        ... )  # Alternative usage
 
-        This is the same as calling ``10*x + y`` but a bit more performant.
+        This is the same as calling ``10*x + y` + 1` but a bit more performant.
         """
-        exprs = []
+        exprs: list[LinearExpression] = []
         for t in tuples:
+            if isinstance(t, SUPPORTED_CONSTANT_TYPES):
+                if model is None:
+                    raise ValueError("Model must be provided when using constants.")
+                expr = LinearExpression(t, model)
+                exprs.append(expr)
+                continue
+            if not isinstance(t, tuple):
+                raise ValueError("Expected tuple or constant.")
+
             if len(t) == 2:
                 # assume first element is coefficient and second is variable
                 c, v = t
-                if not isinstance(v, (variables.Variable, variables.ScalarVariable)):
+                if isinstance(v, ScalarVariable):
+                    if not isinstance(c, (int, float)):
+                        raise TypeError(
+                            "Expected int or float as coefficient of scalar variable (first element of tuple)."
+                        )
+                    expr = v.to_linexpr(c)
+                elif isinstance(v, variables.Variable):
+                    if not isinstance(c, SUPPORTED_CONSTANT_TYPES):
+                        raise TypeError(
+                            "Expected constant as coefficient of variable (first element of tuple)."
+                        )
+                    expr = v.to_linexpr(c)
+                else:
                     raise TypeError("Expected variable as second element of tuple.")
-                expr = v.to_linexpr(c)
-                const = None
+
                 if model is None:
                     model = expr.model  # TODO: Ensure equality of models
             elif len(t) == 1:
                 # assume that the element is a constant
-                c, v = None, None
-                (const,) = as_dataarray(t)
+                const = as_dataarray(t[0])
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 expr = LinearExpression(const, model)

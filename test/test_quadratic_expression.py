@@ -214,6 +214,10 @@ def test_quadratic_expression_wrong_multiplication(x: Variable, y: Variable) -> 
     with pytest.raises(TypeError):
         x * x * y
 
+    quad = x * x
+    with pytest.raises(TypeError):
+        quad * quad
+
 
 def merge_raise_deprecation_warning(x: Variable, y: Variable) -> None:
     expr: QuadraticExpression = x * y  # type: ignore

@@ -1568,7 +1568,7 @@ class ScalarVariable:
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
-    def to_linexpr(self, coeff: int = 1) -> LinearExpression:
+    def to_linexpr(self, coeff: int | float = 1) -> LinearExpression:
         return self.to_scalar_linexpr(coeff).to_linexpr()
 
     def __neg__(self) -> ScalarLinearExpression:
