@@ -17,6 +17,7 @@ from xarray.testing import assert_equal
 import linopy
 import linopy.variables
 from linopy import Model
+from linopy.testing import assert_linequal
 
 
 @pytest.fixture
@@ -305,3 +306,39 @@ def test_variable_iterate_slices(x: linopy.Variable) -> None:
     for s in slices:
         assert isinstance(s, linopy.variables.Variable)
         assert s.size <= 2
+
+
+def test_variable_addition(x: linopy.Variable) -> None:
+    expr1 = x + 1
+    assert isinstance(expr1, linopy.expressions.LinearExpression)
+    expr2 = 1 + x
+    assert isinstance(expr2, linopy.expressions.LinearExpression)
+    assert_linequal(expr1, expr2)
+
+    assert x.__radd__(object()) is NotImplemented
+    assert x.__add__(object()) is NotImplemented
+
+
+def test_variable_subtraction(x: linopy.Variable) -> None:
+    expr1 = -x + 1
+    assert isinstance(expr1, linopy.expressions.LinearExpression)
+    expr2 = 1 - x
+    assert isinstance(expr2, linopy.expressions.LinearExpression)
+    assert_linequal(expr1, expr2)
+
+    assert x.__rsub__(object()) is NotImplemented
+    assert x.__sub__(object()) is NotImplemented
+
+
+def test_variable_multiplication(x: linopy.Variable) -> None:
+    expr1 = x * 2
+    assert isinstance(expr1, linopy.expressions.LinearExpression)
+    expr2 = 2 * x
+    assert isinstance(expr2, linopy.expressions.LinearExpression)
+    assert_linequal(expr1, expr2)
+
+    expr3 = x * x
+    assert isinstance(expr3, linopy.expressions.QuadraticExpression)
+
+    assert x.__rmul__(object()) is NotImplemented
+    assert x.__mul__(object()) is NotImplemented

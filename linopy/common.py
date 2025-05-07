@@ -37,7 +37,7 @@ from linopy.types import CoordsLike, DimsLike
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
 
@@ -994,13 +994,13 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
 
 
 def align(
-    *objects: LinearExpression | Variable | T_Alignable,
+    *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
     join: JoinOptions = "inner",
     copy: bool = True,
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
     fill_value: Any = dtypes.NA,
-) -> tuple[LinearExpression | Variable | T_Alignable, ...]:
+) -> tuple[LinearExpression | QuadraticExpression | Variable | T_Alignable, ...]:
     """
     Given any number of Variables, Expressions, Dataset and/or DataArray objects,
     returns new objects with aligned indexes and dimension sizes.
@@ -1055,13 +1055,13 @@ def align(
 
 
     """
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
     finisher: list[partial[Any] | Callable[[Any], Any]] = []
     das: list[Any] = []
     for obj in objects:
-        if isinstance(obj, LinearExpression):
+        if isinstance(obj, (LinearExpression, QuadraticExpression)):
             finisher.append(partial(obj.__class__, model=obj.model))
             das.append(obj.data)
         elif isinstance(obj, Variable):
@@ -1090,7 +1090,14 @@ def align(
     return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
-LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")
+LocT = TypeVar(
+    "LocT",
+    "Dataset",
+    "Variable",
+    "LinearExpression",
+    "QuadraticExpression",
+    "Constraint",
+)
 
 
 class LocIndexer(Generic[LocT]):
