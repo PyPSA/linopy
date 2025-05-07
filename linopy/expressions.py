@@ -564,12 +564,8 @@ class LinearExpression:
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants
         # merge on factor dimension only returns v1 * v2 + c1 * c2
-        ds = (
-            other.data[["coeffs", "vars"]]
-            .sel(_term=0)
-            .broadcast_like(self.data)
-            .assign(const=other.const)
-        )
+        ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
+        ds = assign_multiindex_safe(ds, const=other.const)
         res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
@@ -1115,7 +1111,7 @@ class LinearExpression:
         vars = self.data.vars.expand_dims(FACTOR_DIM)
         fill_value = self._fill_value["vars"]
         vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)
-        data = self.data.assign(vars=vars)
+        data = assign_multiindex_safe(self.data, vars=vars)
         return QuadraticExpression(data, self.model)
 
     def to_constraint(
