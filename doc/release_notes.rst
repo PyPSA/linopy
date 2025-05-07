@@ -4,6 +4,12 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
+Version 0.5.5
+--------------
+
+* Internally assign new data fields to expressions with a multiindexed-safe routine.
+
+
 Version 0.5.4
 --------------
 
