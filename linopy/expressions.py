@@ -1317,7 +1317,7 @@ class LinearExpression(BaseExpression):
 
     def __radd__(self, other: ConstantLike) -> LinearExpression:
         try:
-            return self.__add__(other)
+            return self + other
         except TypeError:
             return NotImplemented
 
@@ -1345,7 +1345,7 @@ class LinearExpression(BaseExpression):
 
     def __rsub__(self, other: ConstantLike | Variable) -> LinearExpression:
         try:
-            return self.__neg__().__add__(other)
+            return (self * -1) + other
         except TypeError:
             return NotImplemented
 
@@ -1389,7 +1389,7 @@ class LinearExpression(BaseExpression):
         Right-multiply the expr by a factor.
         """
         try:
-            return self.__mul__(other)
+            return self * other
         except TypeError:
             return NotImplemented
 
@@ -1725,7 +1725,7 @@ class QuadraticExpression(BaseExpression):
             return NotImplemented
 
     def __rmul__(self, other: SideLike) -> QuadraticExpression:
-        return self.__mul__(other)
+        return self * other
 
     def __add__(self, other: SideLike) -> QuadraticExpression:
         """
@@ -1776,7 +1776,7 @@ class QuadraticExpression(BaseExpression):
         Subtract expression from others.
         """
         try:
-            return self.__neg__().__add__(other)
+            return (self * -1) + other
         except TypeError:
             return NotImplemented
 

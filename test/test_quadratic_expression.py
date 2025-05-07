@@ -123,6 +123,9 @@ def test_matmul_expr_and_expr(x: Variable, y: Variable, z: Variable) -> None:
     assert expr.nterm == 6
     assert_quadequal(expr, target)
 
+    with pytest.raises(TypeError):
+        (x**2) @ (y**2)
+
 
 def test_matmul_with_const(x: Variable) -> None:
     expr = x * x

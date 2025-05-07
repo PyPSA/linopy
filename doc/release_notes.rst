@@ -4,6 +4,7 @@ Release Notes
 Future Version
 ---------------
 **Minor Improvements**
+
 * Improved variable/expression arithmetic methods so that they correctly handle types
 
 Upcoming Version

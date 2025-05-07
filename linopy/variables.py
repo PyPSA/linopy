@@ -1516,8 +1516,7 @@ class ScalarVariable:
     """
     A scalar variable container.
 
-    In contrast to the Variable class, a ScalarVariable only contains
-    only one label. Use this class to create a expression or constraint
+    In contrast to the Variable class, a ScalarVariable only contains one label. Use this class to create a expression or constraint
     in a rule.
     """
 

@@ -18,6 +18,7 @@ from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
+from linopy.variables import ScalarVariable
 
 
 @pytest.fixture
@@ -227,6 +228,8 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     with pytest.raises(TypeError):
         quad * quad
 
+    expr = x * 1
+    assert isinstance(expr, LinearExpression)
     assert expr.__mul__(object()) is NotImplemented
     assert expr.__rmul__(object()) is NotImplemented
 
@@ -285,6 +288,7 @@ def test_linear_expression_rsubtraction(x: Variable, y: Variable) -> None:
     assert isinstance(expr_2, LinearExpression)
     expr_3: LinearExpression = (expr - 10.0) * -1
     assert_linequal(expr_2, expr_3)
+    assert expr.__rsub__(object()) is NotImplemented
 
 
 def test_linear_expression_with_constant(m: Model, x: Variable, y: Variable) -> None:
@@ -494,14 +498,15 @@ def test_linear_expression_sum_warn_unknown_kwargs(z: Variable) -> None:
 
 
 def test_linear_expression_power(x: Variable) -> None:
-    qd_expr = x**2
+    expr: LinearExpression = x * 1.0
+    qd_expr = expr**2
     assert isinstance(qd_expr, QuadraticExpression)
 
-    qd_expr2 = x.pow(2)
+    qd_expr2 = expr.pow(2)
     assert_quadequal(qd_expr, qd_expr2)
 
     with pytest.raises(ValueError):
-        x**3
+        expr**3
 
 
 def test_linear_expression_multiplication(
@@ -1085,12 +1090,30 @@ def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
 
     expr4 = LinearExpression.from_tuples((10, x), (1, y), 1)
     assert isinstance(expr4, LinearExpression)
+    assert (expr4.const == 1).all()
 
+    expr5 = LinearExpression.from_tuples(1, model=x.model)
+    assert isinstance(expr5, LinearExpression)
+
+
+def test_linear_expression_from_tuples_bad_calls(
+    m: Model, x: Variable, y: Variable
+) -> None:
     with pytest.raises(ValueError):
         LinearExpression.from_tuples((10, x), (1, y), x)
 
     with pytest.raises(ValueError):
         LinearExpression.from_tuples((10, x, 3), (1, y), 1)
+
+    sv = ScalarVariable(label=0, model=m)
+    with pytest.raises(TypeError):
+        LinearExpression.from_tuples((np.array([1, 1]), sv))
+
+    with pytest.raises(TypeError):
+        LinearExpression.from_tuples((x, x))
+
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples(10)
 
 
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
