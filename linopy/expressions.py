@@ -508,7 +508,7 @@ class BaseExpression(ABC):
         # merge on factor dimension only returns v1 * v2 + c1 * c2
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
-        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression) # type: ignore
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
             res = res + self.const * other.reset_const()
