@@ -1,14 +1,19 @@
 Release Notes
 =============
 
-Future Version
----------------
-**Minor Improvements**
+.. Upcoming Version
+.. ----------------
 
 * Improved variable/expression arithmetic methods so that they correctly handle types
 
-Upcoming Version
-----------------
+Version 0.5.5
+--------------
+
+* Internally assign new data fields to expressions with a multiindexed-safe routine.
+
+Version 0.5.4
+--------------
+
 
 **Bug Fixes**
 
@@ -20,6 +25,7 @@ Upcoming Version
 * Treat GLPK's `integer undefined` status as not-OK
 * Internally assign new data fields to `Variable` and `Constraint` with a multiindexed-safe routine. Before the
   assignment when using multi-indexed coordinates, an deprecation warning was raised. This is fixed now.
+
 
 Version 0.5.3
 --------------
