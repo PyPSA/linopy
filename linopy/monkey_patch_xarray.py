@@ -26,6 +26,13 @@ def monkey_patch(cls: type[DataArray], pass_unpatched_method: bool = False) -> C
 def __mul__(
     da: DataArray, other: Any, unpatched_method: Callable
 ) -> DataArray | NotImplementedType:
-    if isinstance(other, (variables.Variable, expressions.LinearExpression)):
+    if isinstance(
+        other,
+        (
+            variables.Variable,
+            expressions.LinearExpression,
+            expressions.QuadraticExpression,
+        ),
+    ):
         return NotImplemented
     return unpatched_method(da, other)

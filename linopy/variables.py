@@ -51,11 +51,19 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.types import ConstantLike, DimsLike, NotImplementedType, SideLike
+from linopy.types import (
+    ConstantLike,
+    DimsLike,
+    ExpressionLike,
+    NotImplementedType,
+    SideLike,
+    VariableLike,
+)
 
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
+        GenericExpression,
         LinearExpression,
         LinearExpressionGroupby,
         QuadraticExpression,
@@ -381,19 +389,30 @@ class Variable:
         """
         return self.to_linexpr(-1)
 
-    def __mul__(
-        self, other: float | int | ndarray | Variable
-    ) -> LinearExpression | QuadraticExpression:
+    @overload
+    def __mul__(self, other: ConstantLike) -> LinearExpression: ...
+
+    @overload
+    def __mul__(self, other: ExpressionLike | VariableLike) -> QuadraticExpression: ...
+
+    def __mul__(self, other: SideLike) -> ExpressionLike:
         """
-        Multiply variables with a coefficient.
+        Multiply variables with a coefficient, variable, or expression.
         """
         try:
-            if isinstance(
-                other, (expressions.LinearExpression, Variable, ScalarVariable)
-            ):
+            if isinstance(other, (Variable, ScalarVariable)):
                 return self.to_linexpr() * other
 
             return self.to_linexpr(other)
+        except TypeError:
+            return NotImplemented
+
+    def __rmul__(self, other: ConstantLike) -> LinearExpression:
+        """
+        Right-multiply variables by a constant
+        """
+        try:
+            return self * other
         except TypeError:
             return NotImplemented
 
@@ -401,23 +420,24 @@ class Variable:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
         """
-        if isinstance(other, int) and other == 2:
+        if not isinstance(other, int):
+            return NotImplemented
+        if other == 2:
             expr = self.to_linexpr()
             return expr._multiply_by_linear_expression(expr)
-        return NotImplemented
+        raise ValueError("Can only raise to the power of 2")
 
-    def __rmul__(self, other: float | DataArray | int | ndarray) -> LinearExpression:
-        """
-        Right-multiply variables with a coefficient.
-        """
-        try:
-            return self.to_linexpr(other)
-        except TypeError:
-            return NotImplemented
+    @overload
+    def __matmul__(self, other: ConstantLike) -> LinearExpression: ...
+
+    @overload
+    def __matmul__(
+        self, other: VariableLike | ExpressionLike
+    ) -> QuadraticExpression: ...
 
     def __matmul__(
-        self, other: LinearExpression | ndarray | Variable
-    ) -> QuadraticExpression | LinearExpression:
+        self, other: ConstantLike | VariableLike | ExpressionLike
+    ) -> LinearExpression | QuadraticExpression:
         """
         Matrix multiplication of variables with a coefficient.
         """
@@ -448,9 +468,18 @@ class Variable:
         except TypeError:
             return NotImplemented
 
+    @overload
     def __add__(
-        self, other: int | QuadraticExpression | LinearExpression | Variable
-    ) -> QuadraticExpression | LinearExpression:
+        self, other: ConstantLike | Variable | ScalarLinearExpression
+    ) -> LinearExpression: ...
+
+    @overload
+    def __add__(self, other: GenericExpression) -> GenericExpression: ...
+
+    def __add__(
+        self,
+        other: ConstantLike | Variable | ScalarLinearExpression | GenericExpression,
+    ) -> LinearExpression | GenericExpression:
         """
         Add variables to linear expressions or other variables.
         """
@@ -459,18 +488,38 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __radd__(self, other: int) -> Variable | NotImplementedType:
-        # This is needed for using python's sum function
-        return self if other == 0 else NotImplemented
+    def __radd__(self, other: ConstantLike) -> LinearExpression:
+        try:
+            return self + other
+        except TypeError:
+            return NotImplemented
+
+    @overload
+    def __sub__(
+        self, other: ConstantLike | Variable | ScalarLinearExpression
+    ) -> LinearExpression: ...
+
+    @overload
+    def __sub__(self, other: GenericExpression) -> GenericExpression: ...
 
     def __sub__(
-        self, other: QuadraticExpression | LinearExpression | Variable
-    ) -> QuadraticExpression | LinearExpression:
+        self,
+        other: ConstantLike | Variable | ScalarLinearExpression | GenericExpression,
+    ) -> LinearExpression | GenericExpression:
         """
         Subtract linear expressions or other variables from the variables.
         """
         try:
             return self.to_linexpr() - other
+        except TypeError:
+            return NotImplemented
+
+    def __rsub__(self, other: ConstantLike) -> LinearExpression:
+        """
+        Subtract linear expressions or other variables from the variables.
+        """
+        try:
+            return self.to_linexpr(-1) + other
         except TypeError:
             return NotImplemented
 
@@ -1467,8 +1516,7 @@ class ScalarVariable:
     """
     A scalar variable container.
 
-    In contrast to the Variable class, a ScalarVariable only contains
-    only one label. Use this class to create a expression or constraint
+    In contrast to the Variable class, a ScalarVariable only contains one label. Use this class to create a expression or constraint
     in a rule.
     """
 
@@ -1520,7 +1568,7 @@ class ScalarVariable:
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
-    def to_linexpr(self, coeff: int = 1) -> LinearExpression:
+    def to_linexpr(self, coeff: int | float = 1) -> LinearExpression:
         return self.to_scalar_linexpr(coeff).to_linexpr()
 
     def __neg__(self) -> ScalarLinearExpression:
@@ -1540,6 +1588,8 @@ class ScalarVariable:
         return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff: int | float) -> ScalarLinearExpression:
+        if isinstance(coeff, (Variable, ScalarVariable)):
+            return NotImplemented
         return self.to_scalar_linexpr(coeff)
 
     def __div__(self, coeff: int | float) -> ScalarLinearExpression:

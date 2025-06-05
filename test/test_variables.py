@@ -13,6 +13,7 @@ import xarray.core.utils
 import linopy
 from linopy import Model
 from linopy.testing import assert_varequal
+from linopy.variables import ScalarVariable
 
 
 @pytest.fixture
@@ -115,3 +116,9 @@ def test_variables_get_name_by_label(m: Model) -> None:
 
     with pytest.raises(ValueError):
         m.variables.get_name_by_label("anystring")  # type: ignore
+
+
+def test_scalar_variable(m: Model) -> None:
+    x = ScalarVariable(label=0, model=m)
+    assert isinstance(x, ScalarVariable)
+    assert x.__rmul__(x) is NotImplemented  # type: ignore

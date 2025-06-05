@@ -1226,6 +1226,17 @@ class Cplex(Solver):
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
+            "integer infeasible": "infeasible",
+            "time limit exceeded": "time_limit",
+            "time limit exceeded, no integer solution": "infeasible",
+            "error termination": "error",
+            "error termination, no integer solution": "error",
+            "memory limit exceeded": "internal_solver_error",
+            "memory limit exceeded, no integer solution": "internal_solver_error",
+            "aborted": "user_interrupt",
+            "integer unbounded": "unbounded",
+            "integer infeasible or unbounded": "infeasible_or_unbounded",
+            "Unknown status value": "unknown",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)

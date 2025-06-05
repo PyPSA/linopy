@@ -4,11 +4,13 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
+
+* Improved variable/expression arithmetic methods so that they correctly handle types
+
 Version 0.5.5
 --------------
 
 * Internally assign new data fields to expressions with a multiindexed-safe routine.
-
 
 Version 0.5.4
 --------------

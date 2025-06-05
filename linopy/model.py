@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any
+from typing import Any, overload
 
 import numpy as np
 import pandas as pd
@@ -884,17 +884,33 @@ class Model:
         blocks = replace_by_map(self.objective.vars, block_map)
         self.objective = self.objective.assign(blocks=blocks)
 
+    @overload
     def linexpr(
-        self, *args: tuple[ConstantLike, str | Variable | ScalarVariable] | Callable
+        self, *args: Sequence[Sequence | pd.Index | DataArray] | Mapping
+    ) -> LinearExpression: ...
+
+    @overload
+    def linexpr(
+        self, *args: tuple[ConstantLike, str | Variable | ScalarVariable] | ConstantLike
+    ) -> LinearExpression: ...
+
+    def linexpr(
+        self,
+        *args: tuple[ConstantLike, str | Variable | ScalarVariable]
+        | ConstantLike
+        | Callable
+        | Sequence[Sequence | pd.Index | DataArray]
+        | Mapping,
     ) -> LinearExpression:
         """
         Create a linopy.LinearExpression from argument list.
 
         Parameters
         ----------
-        args : tuples of (coefficients, variables) or tuples of
-               coordinates and a function
-            If args is a collection of coefficients-variables-tuples, the resulting
+        args : A mixture of tuples of (coefficients, variables) and constants
+            or a function and tuples of coordinates
+
+            If args is a collection of coefficients-variables-tuples and constants, the resulting
             linear expression is built with the function LinearExpression.from_tuples.
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
@@ -903,6 +919,8 @@ class Model:
             * variables : str/array_like/linopy.Variable
                 The variable(s) going into the term. These may be referenced
                 by name.
+            * constant: int/float/array_like
+                The constant value to add to the expression
 
             If args is a collection of coordinates with an appended function at the
             end, the function LinearExpression.from_rule is used to build the linear
@@ -913,7 +931,7 @@ class Model:
                 The first argument of the function is the underlying `linopy.Model`.
                 The following arguments are given by the coordinates for accessing
                 the variables. The function has to return a
-                `ScalarLinearExpression`. Therefore use the direct getter when
+                `ScalarLinearExpression`. Therefore, use the direct getter when
                 indexing variables.
             * coords : coordinate-like
                 Coordinates to be processed by `xarray.DataArray`. For each
@@ -960,9 +978,14 @@ class Model:
             return LinearExpression.from_rule(self, rule, coords)  # type: ignore
         if not isinstance(args, tuple):
             raise TypeError(f"Not supported type {args}.")
-        tuples = [  # type: ignore
-            (c, self.variables[v]) if isinstance(v, str) else (c, v) for (c, v) in args
-        ]
+
+        tuples: list[tuple[ConstantLike, VariableLike] | ConstantLike] = []
+        for arg in args:
+            if isinstance(arg, tuple):
+                c, v = arg
+                tuples.append((c, self.variables[v]) if isinstance(v, str) else (c, v))
+            else:
+                tuples.append(arg)
         return LinearExpression.from_tuples(*tuples, model=self)
 
     @property
