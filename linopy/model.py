@@ -27,6 +27,7 @@ from xarray.core.types import T_Chunks
 from linopy import solvers
 from linopy.common import (
     as_dataarray,
+    assign_multiindex_safe,
     best_int,
     maybe_replace_signs,
     replace_by_map,
@@ -737,7 +738,9 @@ class Model:
         for k in list(self.constraints):
             vars = self.constraints[k].data["vars"]
             vars = vars.where(~vars.isin(labels), -1)
-            self.constraints[k].data["vars"] = vars
+            self.constraints[k]._data = assign_multiindex_safe(
+                self.constraints[k].data, vars=vars
+            )
 
         self.objective = self.objective.sel(
             {TERM_DIM: ~self.objective.vars.isin(labels)}
