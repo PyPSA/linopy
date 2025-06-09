@@ -1,26 +1,65 @@
 import pytest
 from datetime import datetime
 from unittest.mock import patch, Mock
+import base64
+import json
 
 import requests
 from requests import RequestException
 
-from linopy.oetc import OetcCredentials, OetcSettings, OetcHandler, AuthenticationResult
+from linopy.oetc import (
+    OetcHandler, OetcSettings, OetcCredentials, AuthenticationResult,
+    ComputeProvider, GcpCredentials
+)
+
+
+@pytest.fixture
+def sample_jwt_token():
+    """Create a sample JWT token with test payload"""
+    payload = {
+        "iss": "OETC",
+        "sub": "user-uuid-123",
+        "exp": 1640995200,
+        "jti": "jwt-id-456",
+        "email": "test@example.com",
+        "firstname": "Test",
+        "lastname": "User"
+    }
+
+    # Create a simple JWT-like token (header.payload.signature)
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).decode().rstrip('=')
+    payload_encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+    signature = "fake_signature"
+
+    return f"{header}.{payload_encoded}.{signature}"
+
+
+@pytest.fixture
+def mock_gcp_credentials_response():
+    """Create a mock GCP credentials response"""
+    return {
+        "gcp_project_id": "test-project-123",
+        "gcp_service_key": "test-service-key-content",
+        "input_bucket": "test-input-bucket",
+        "solution_bucket": "test-solution-bucket"
+    }
+
+
+@pytest.fixture
+def mock_settings():
+    """Create mock settings for testing"""
+    credentials = OetcCredentials(
+        email="test@example.com",
+        password="test_password"
+    )
+    return OetcSettings(
+        credentials=credentials,
+        authentication_server_url="https://auth.example.com",
+        compute_provider=ComputeProvider.GCP
+    )
 
 
 class TestOetcHandler:
-
-    @pytest.fixture
-    def mock_settings(self):
-        """Create mock settings for testing"""
-        credentials = OetcCredentials(
-            email="test@example.com",
-            password="test_password"
-        )
-        return OetcSettings(
-            credentials=credentials,
-            authentication_server_url="https://auth.example.com"
-        )
 
     @pytest.fixture
     def mock_jwt_response(self):
@@ -32,22 +71,32 @@ class TestOetcHandler:
         }
 
     @patch('linopy.oetc.requests.post')
+    @patch('linopy.oetc.requests.get')
     @patch('linopy.oetc.datetime')
-    def test_successful_authentication(self, mock_datetime, mock_post, mock_settings, mock_jwt_response):
+    def test_successful_authentication(self, mock_datetime, mock_get, mock_post, mock_settings, mock_jwt_response,
+                                       mock_gcp_credentials_response, sample_jwt_token):
         """Test successful authentication flow"""
         # Setup mocks
         fixed_time = datetime(2024, 1, 15, 12, 0, 0)
         mock_datetime.now.return_value = fixed_time
 
-        mock_response = Mock()
-        mock_response.json.return_value = mock_jwt_response
-        mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
+        # Mock authentication response
+        mock_auth_response = Mock()
+        mock_jwt_response["token"] = sample_jwt_token
+        mock_auth_response.json.return_value = mock_jwt_response
+        mock_auth_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_auth_response
+
+        # Mock GCP credentials response
+        mock_gcp_response = Mock()
+        mock_gcp_response.json.return_value = mock_gcp_credentials_response
+        mock_gcp_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_gcp_response
 
         # Execute
         handler = OetcHandler(mock_settings)
 
-        # Verify requests.post was called correctly
+        # Verify authentication request
         mock_post.assert_called_once_with(
             "https://auth.example.com/sign-in",
             json={
@@ -58,12 +107,29 @@ class TestOetcHandler:
             timeout=30
         )
 
+        # Verify GCP credentials request
+        mock_get.assert_called_once_with(
+            "https://auth.example.com/users/user-uuid-123/gcp-credentials",
+            headers={
+                "Authorization": f"Bearer {sample_jwt_token}",
+                "Content-Type": "application/json"
+            },
+            timeout=30
+        )
+
         # Verify AuthenticationResult
         assert isinstance(handler.jwt, AuthenticationResult)
-        assert handler.jwt.token == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        assert handler.jwt.token == sample_jwt_token
         assert handler.jwt.token_type == "Bearer"
         assert handler.jwt.expires_in == 3600
         assert handler.jwt.authenticated_at == fixed_time
+
+        # Verify GcpCredentials
+        assert isinstance(handler.cloud_provider_credentials, GcpCredentials)
+        assert handler.cloud_provider_credentials.gcp_project_id == "test-project-123"
+        assert handler.cloud_provider_credentials.gcp_service_key == "test-service-key-content"
+        assert handler.cloud_provider_credentials.input_bucket == "test-input-bucket"
+        assert handler.cloud_provider_credentials.solution_bucket == "test-solution-bucket"
 
     @patch('linopy.oetc.requests.post')
     def test_authentication_http_error(self, mock_post, mock_settings):
@@ -78,6 +144,200 @@ class TestOetcHandler:
             OetcHandler(mock_settings)
 
         assert "Authentication request failed" in str(exc_info.value)
+
+
+class TestJwtDecoding:
+
+    @pytest.fixture
+    def handler_with_mocked_auth(self):
+        """Create handler with mocked authentication for testing JWT decoding"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                authentication_server_url="https://auth.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            # Mock the authentication and credentials fetching
+            mock_auth_result = AuthenticationResult(
+                token="fake.token.here",
+                token_type="Bearer",
+                expires_in=3600,
+                authenticated_at=datetime.now()
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = mock_auth_result
+            handler.cloud_provider_credentials = None
+
+            return handler
+
+    def test_decode_jwt_payload_success(self, handler_with_mocked_auth, sample_jwt_token):
+        """Test successful JWT payload decoding"""
+        result = handler_with_mocked_auth._decode_jwt_payload(sample_jwt_token)
+
+        assert result["iss"] == "OETC"
+        assert result["sub"] == "user-uuid-123"
+        assert result["email"] == "test@example.com"
+        assert result["firstname"] == "Test"
+        assert result["lastname"] == "User"
+
+    def test_decode_jwt_payload_invalid_token(self, handler_with_mocked_auth):
+        """Test JWT payload decoding with invalid token"""
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._decode_jwt_payload("invalid.token")
+
+        assert "Failed to decode JWT payload" in str(exc_info.value)
+
+    def test_decode_jwt_payload_malformed_token(self, handler_with_mocked_auth):
+        """Test JWT payload decoding with malformed token"""
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._decode_jwt_payload("not_a_jwt_token")
+
+        assert "Failed to decode JWT payload" in str(exc_info.value)
+
+
+class TestCloudProviderCredentials:
+
+    @pytest.fixture
+    def handler_with_mocked_auth(self, sample_jwt_token):
+        """Create handler with mocked authentication for testing credentials fetching"""
+        credentials = OetcCredentials(email="test@example.com", password="test_password")
+        settings = OetcSettings(
+            credentials=credentials,
+            authentication_server_url="https://auth.example.com",
+            compute_provider=ComputeProvider.GCP
+        )
+
+        # Mock the authentication result
+        mock_auth_result = AuthenticationResult(
+            token=sample_jwt_token,
+            token_type="Bearer",
+            expires_in=3600,
+            authenticated_at=datetime.now()
+        )
+
+        handler = OetcHandler.__new__(OetcHandler)
+        handler.settings = settings
+        handler.jwt = mock_auth_result
+
+        return handler
+
+    @patch('linopy.oetc.requests.get')
+    def test_get_gcp_credentials_success(self, mock_get, handler_with_mocked_auth, mock_gcp_credentials_response):
+        """Test successful GCP credentials fetching"""
+        # Setup mock
+        mock_response = Mock()
+        mock_response.json.return_value = mock_gcp_credentials_response
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        # Execute
+        result = handler_with_mocked_auth._OetcHandler__get_gcp_credentials()
+
+        # Verify request
+        mock_get.assert_called_once_with(
+            "https://auth.example.com/users/user-uuid-123/gcp-credentials",
+            headers={
+                "Authorization": f"Bearer {handler_with_mocked_auth.jwt.token}",
+                "Content-Type": "application/json"
+            },
+            timeout=30
+        )
+
+        # Verify result
+        assert isinstance(result, GcpCredentials)
+        assert result.gcp_project_id == "test-project-123"
+        assert result.gcp_service_key == "test-service-key-content"
+        assert result.input_bucket == "test-input-bucket"
+        assert result.solution_bucket == "test-solution-bucket"
+
+    @patch('linopy.oetc.requests.get')
+    def test_get_gcp_credentials_http_error(self, mock_get, handler_with_mocked_auth):
+        """Test GCP credentials fetching with HTTP error"""
+        # Setup mock to raise HTTP error
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
+        mock_get.return_value = mock_response
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()
+
+        assert "Failed to fetch GCP credentials" in str(exc_info.value)
+
+    @patch('linopy.oetc.requests.get')
+    def test_get_gcp_credentials_missing_field(self, mock_get, handler_with_mocked_auth):
+        """Test GCP credentials fetching with missing response field"""
+        # Setup mock with invalid response
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "gcp_project_id": "test-project-123",
+            "gcp_service_key": "test-service-key-content",
+            "input_bucket": "test-input-bucket"
+            # Missing "solution_bucket" field
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()
+
+        assert "Invalid credentials response format: missing field 'solution_bucket'" in str(exc_info.value)
+
+    def test_get_cloud_provider_credentials_unsupported_provider(self, handler_with_mocked_auth):
+        """Test cloud provider credentials with unsupported provider"""
+        # Change to unsupported provider
+        handler_with_mocked_auth.settings.compute_provider = "AWS"  # Not in enum, but for testing
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._OetcHandler__get_cloud_provider_credentials()
+
+        assert "Unsupported compute provider: AWS" in str(exc_info.value)
+
+    def test_get_gcp_credentials_no_user_uuid_in_token(self, handler_with_mocked_auth):
+        """Test GCP credentials fetching when JWT token has no user UUID"""
+        # Create token without 'sub' field
+        payload = {"iss": "OETC", "email": "test@example.com"}
+        payload_encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+        token_without_sub = f"header.{payload_encoded}.signature"
+
+        handler_with_mocked_auth.jwt.token = token_without_sub
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()
+
+        assert "User UUID not found in JWT token" in str(exc_info.value)
+
+
+class TestGcpCredentials:
+
+    def test_gcp_credentials_creation(self):
+        """Test GcpCredentials dataclass creation"""
+        credentials = GcpCredentials(
+            gcp_project_id="test-project-123",
+            gcp_service_key="test-service-key-content",
+            input_bucket="test-input-bucket",
+            solution_bucket="test-solution-bucket"
+        )
+
+        assert credentials.gcp_project_id == "test-project-123"
+        assert credentials.gcp_service_key == "test-service-key-content"
+        assert credentials.input_bucket == "test-input-bucket"
+        assert credentials.solution_bucket == "test-solution-bucket"
+
+
+class TestComputeProvider:
+
+    def test_compute_provider_enum(self):
+        """Test ComputeProvider enum values"""
+        assert ComputeProvider.GCP == "GCP"
+        assert ComputeProvider.GCP.value == "GCP"
 
     @patch('linopy.oetc.requests.post')
     def test_authentication_network_error(self, mock_post, mock_settings):
@@ -184,11 +444,14 @@ class TestAuthenticationResult:
         assert auth_result.is_expired is True
 
 
+# Additional integration-style test
 class TestOetcHandlerIntegration:
+
     @patch('linopy.oetc.requests.post')
+    @patch('linopy.oetc.requests.get')
     @patch('linopy.oetc.datetime')
-    def test_complete_authentication_flow(self, mock_datetime, mock_post):
-        """Test complete authentication flow with realistic data"""
+    def test_complete_authentication_flow(self, mock_datetime, mock_get, mock_post):
+        """Test complete authentication and credentials flow with realistic data"""
         # Setup
         fixed_time = datetime(2024, 1, 15, 12, 0, 0)
         mock_datetime.now.return_value = fixed_time
@@ -199,27 +462,76 @@ class TestOetcHandlerIntegration:
         )
         settings = OetcSettings(
             credentials=credentials,
-            authentication_server_url="https://api.company.com/auth"
+            authentication_server_url="https://api.company.com/auth",
+            compute_provider=ComputeProvider.GCP
         )
 
-        mock_response = Mock()
-        mock_response.json.return_value = {
-            "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        # Create realistic JWT token
+        payload = {
+            "iss": "OETC",
+            "sub": "user-uuid-456",
+            "exp": 1640995200,
+            "jti": "jwt-id-789",
+            "email": "user@company.com",
+            "firstname": "John",
+            "lastname": "Doe"
+        }
+        header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).decode().rstrip('=')
+        payload_encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+        realistic_token = f"{header}.{payload_encoded}.realistic_signature"
+
+        # Mock authentication response
+        mock_auth_response = Mock()
+        mock_auth_response.json.return_value = {
+            "token": realistic_token,
             "token_type": "Bearer",
             "expires_in": 7200  # 2 hours
         }
-        mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
+        mock_auth_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_auth_response
+
+        # Mock GCP credentials response
+        mock_gcp_response = Mock()
+        mock_gcp_response.json.return_value = {
+            "gcp_project_id": "production-project-456",
+            "gcp_service_key": "production-service-key-content",
+            "input_bucket": "prod-input-bucket",
+            "solution_bucket": "prod-solution-bucket"
+        }
+        mock_gcp_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_gcp_response
 
         # Execute
         handler = OetcHandler(settings)
 
-        # Verify
-        assert handler.jwt.token.startswith("eyJhbGciOiJIUzI1NiI")
+        # Verify authentication
+        assert handler.jwt.token == realistic_token
         assert handler.jwt.token_type == "Bearer"
         assert handler.jwt.expires_in == 7200
         assert handler.jwt.authenticated_at == fixed_time
         assert handler.jwt.expires_at == datetime(2024, 1, 15, 14, 0, 0)  # 2 hours later
-
-        # Test that token is not expired immediately after authentication
         assert handler.jwt.is_expired is False
+
+        # Verify GCP credentials
+        assert isinstance(handler.cloud_provider_credentials, GcpCredentials)
+        assert handler.cloud_provider_credentials.gcp_project_id == "production-project-456"
+        assert handler.cloud_provider_credentials.gcp_service_key == "production-service-key-content"
+        assert handler.cloud_provider_credentials.input_bucket == "prod-input-bucket"
+        assert handler.cloud_provider_credentials.solution_bucket == "prod-solution-bucket"
+
+        # Verify correct API calls were made
+        mock_post.assert_called_once_with(
+            "https://api.company.com/auth/sign-in",
+            json={"email": "user@company.com", "password": "secure_password_123"},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+
+        mock_get.assert_called_once_with(
+            "https://api.company.com/auth/users/user-uuid-456/gcp-credentials",
+            headers={
+                "Authorization": f"Bearer {realistic_token}",
+                "Content-Type": "application/json"
+            },
+            timeout=30
+        )
