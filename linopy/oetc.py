@@ -4,9 +4,14 @@ from enum import Enum
 from typing import Union
 import json
 import base64
+import gzip
+import os
+import tempfile
 
 import requests
 from requests import RequestException
+from google.cloud import storage
+from google.oauth2 import service_account
 
 
 class ComputeProvider(str, Enum):
@@ -176,3 +181,100 @@ class OetcHandler:
             raise Exception(f"Invalid credentials response format: missing field {e}")
         except Exception as e:
             raise Exception(f"Error fetching GCP credentials: {e}")
+
+    def solve_on_oetc(self, model):
+        """
+        Solve a linopy model on the OET Cloud compute app.
+
+        Parameters
+        ----------
+        model : linopy.model.Model
+        **kwargs :
+            Keyword arguments passed to `linopy.model.Model.solve`.
+
+        Returns
+        -------
+        linopy.model.Model
+            Solved model.
+        """
+        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+            model.to_netcdf(fn.name)
+            input_file_name = self._upload_file_to_gcp(fn.name)
+
+            # TODO: Submit job to compute service
+            # TODO: Wait for job completion
+            # TODO: Download result from GCP
+            # TODO: Return solved model
+
+            return model
+
+    def _gzip_compress(self, source_path: str) -> str:
+        """
+        Compress a file using gzip compression.
+
+        Args:
+            source_path: Path to the source file to compress
+
+        Returns:
+            str: Path to the compressed file
+
+        Raises:
+            Exception: If compression fails
+        """
+        try:
+            output_path = source_path + ".gz"
+            chunk_size = 1024 * 1024
+
+            with open(source_path, "rb") as f_in:
+                with gzip.open(output_path, "wb", compresslevel=9) as f_out:
+                    while True:
+                        chunk = f_in.read(chunk_size)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+
+            return output_path
+        except Exception as e:
+            raise Exception(f"Failed to compress file: {e}")
+
+    def _upload_file_to_gcp(self, file_path: str) -> str:
+        """
+        Upload a file to GCP storage bucket after compression.
+
+        Args:
+            file_path: Path to the file to upload
+
+        Returns:
+            str: Name of the uploaded file in the bucket
+
+        Raises:
+            Exception: If upload fails
+        """
+        try:
+            compressed_file_path = self._gzip_compress(file_path)
+            compressed_file_name = os.path.basename(compressed_file_path)
+
+            # Create GCP credentials from service key
+            service_key_dict = json.loads(self.cloud_provider_credentials.gcp_service_key)
+            credentials = service_account.Credentials.from_service_account_info(
+                service_key_dict,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+
+            # Upload to GCP bucket
+            storage_client = storage.Client(
+                credentials=credentials,
+                project=self.cloud_provider_credentials.gcp_project_id
+            )
+            bucket = storage_client.bucket(self.cloud_provider_credentials.input_bucket)
+            blob = bucket.blob(compressed_file_name)
+
+            blob.upload_from_filename(compressed_file_path)
+
+            # Clean up compressed file
+            os.remove(compressed_file_path)
+
+            return compressed_file_name
+
+        except Exception as e:
+            raise Exception(f"Failed to upload file to GCP: {e}")

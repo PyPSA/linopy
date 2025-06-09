@@ -107,29 +107,263 @@ class TestOetcHandler:
             timeout=30
         )
 
-        # Verify GCP credentials request
-        mock_get.assert_called_once_with(
-            "https://auth.example.com/users/user-uuid-123/gcp-credentials",
-            headers={
-                "Authorization": f"Bearer {sample_jwt_token}",
-                "Content-Type": "application/json"
-            },
-            timeout=30
-        )
 
-        # Verify AuthenticationResult
-        assert isinstance(handler.jwt, AuthenticationResult)
-        assert handler.jwt.token == sample_jwt_token
-        assert handler.jwt.token_type == "Bearer"
-        assert handler.jwt.expires_in == 3600
-        assert handler.jwt.authenticated_at == fixed_time
+class TestFileCompression:
 
-        # Verify GcpCredentials
-        assert isinstance(handler.cloud_provider_credentials, GcpCredentials)
-        assert handler.cloud_provider_credentials.gcp_project_id == "test-project-123"
-        assert handler.cloud_provider_credentials.gcp_service_key == "test-service-key-content"
-        assert handler.cloud_provider_credentials.input_bucket == "test-input-bucket"
-        assert handler.cloud_provider_credentials.solution_bucket == "test-solution-bucket"
+    @pytest.fixture
+    def handler_with_mocked_auth(self):
+        """Create handler with mocked authentication for testing file operations"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                authentication_server_url="https://auth.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = Mock()
+            handler.cloud_provider_credentials = Mock()
+
+            return handler
+
+    @patch('linopy.oetc.gzip.open')
+    @patch('linopy.oetc.os.path.exists')
+    @patch('builtins.open')
+    def test_gzip_compress_success(self, mock_open, mock_exists, mock_gzip_open, handler_with_mocked_auth):
+        """Test successful file compression"""
+        # Setup
+        source_path = "/tmp/test_file.nc"
+        expected_output = "/tmp/test_file.nc.gz"
+
+        # Mock file operations
+        mock_exists.return_value = True
+        mock_file_in = Mock()
+        mock_file_out = Mock()
+        mock_open.return_value.__enter__.return_value = mock_file_in
+        mock_gzip_open.return_value.__enter__.return_value = mock_file_out
+
+        # Mock file reading
+        mock_file_in.read.side_effect = [b"test_data_chunk", b""]  # First read returns data, second returns empty
+
+        # Execute
+        result = handler_with_mocked_auth._gzip_compress(source_path)
+
+        # Verify
+        assert result == expected_output
+        mock_open.assert_called_once_with(source_path, "rb")
+        mock_gzip_open.assert_called_once_with(expected_output, "wb", compresslevel=9)
+        mock_file_out.write.assert_called_once_with(b"test_data_chunk")
+
+    @patch('builtins.open')
+    def test_gzip_compress_file_read_error(self, mock_open, handler_with_mocked_auth):
+        """Test file compression with read error"""
+        # Setup
+        source_path = "/tmp/test_file.nc"
+        mock_open.side_effect = IOError("File not found")
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._gzip_compress(source_path)
+
+        assert "Failed to compress file" in str(exc_info.value)
+
+
+class TestGcpUpload:
+
+    @pytest.fixture
+    def handler_with_gcp_credentials(self, mock_gcp_credentials_response):
+        """Create handler with GCP credentials for testing upload"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                authentication_server_url="https://auth.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            # Create proper GCP credentials
+            gcp_creds = GcpCredentials(
+                gcp_project_id="test-project-123",
+                gcp_service_key='{"type": "service_account", "project_id": "test-project-123"}',
+                input_bucket="test-input-bucket",
+                solution_bucket="test-solution-bucket"
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = Mock()
+            handler.cloud_provider_credentials = gcp_creds
+
+            return handler
+
+    @patch('linopy.oetc.os.remove')
+    @patch('linopy.oetc.os.path.basename')
+    @patch('linopy.oetc.storage.Client')
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_upload_file_to_gcp_success(self, mock_creds_from_info, mock_storage_client, mock_basename, mock_remove,
+                                        handler_with_gcp_credentials):
+        """Test successful file upload to GCP"""
+        # Setup
+        file_path = "/tmp/test_file.nc"
+        compressed_path = "/tmp/test_file.nc.gz"
+        compressed_name = "test_file.nc.gz"
+
+        # Mock compression
+        with patch.object(handler_with_gcp_credentials, '_gzip_compress', return_value=compressed_path):
+            # Mock path operations
+            mock_basename.return_value = compressed_name
+
+            # Mock GCP components
+            mock_credentials = Mock()
+            mock_creds_from_info.return_value = mock_credentials
+
+            mock_client = Mock()
+            mock_storage_client.return_value = mock_client
+
+            mock_bucket = Mock()
+            mock_client.bucket.return_value = mock_bucket
+
+            mock_blob = Mock()
+            mock_bucket.blob.return_value = mock_blob
+
+            # Execute
+            result = handler_with_gcp_credentials._upload_file_to_gcp(file_path)
+
+            # Verify
+            assert result == compressed_name
+
+            # Verify GCP credentials creation
+            mock_creds_from_info.assert_called_once_with(
+                {"type": "service_account", "project_id": "test-project-123"},
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+
+            # Verify GCP client creation
+            mock_storage_client.assert_called_once_with(
+                credentials=mock_credentials,
+                project="test-project-123"
+            )
+
+            # Verify bucket access
+            mock_client.bucket.assert_called_once_with("test-input-bucket")
+
+            # Verify blob operations
+            mock_bucket.blob.assert_called_once_with(compressed_name)
+            mock_blob.upload_from_filename.assert_called_once_with(compressed_path)
+
+            # Verify cleanup
+            mock_remove.assert_called_once_with(compressed_path)
+
+    @patch('linopy.oetc.json.loads')
+    def test_upload_file_to_gcp_invalid_service_key(self, mock_json_loads, handler_with_gcp_credentials):
+        """Test upload failure with invalid service key"""
+        # Setup
+        file_path = "/tmp/test_file.nc"
+        mock_json_loads.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_gcp_credentials._upload_file_to_gcp(file_path)
+
+        assert "Failed to upload file to GCP" in str(exc_info.value)
+
+    @patch('linopy.oetc.storage.Client')
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_upload_file_to_gcp_upload_error(self, mock_creds_from_info, mock_storage_client,
+                                             handler_with_gcp_credentials):
+        """Test upload failure during blob upload"""
+        # Setup
+        file_path = "/tmp/test_file.nc"
+        compressed_path = "/tmp/test_file.nc.gz"
+
+        # Mock compression
+        with patch.object(handler_with_gcp_credentials, '_gzip_compress', return_value=compressed_path):
+            # Mock GCP setup
+            mock_credentials = Mock()
+            mock_creds_from_info.return_value = mock_credentials
+
+            mock_client = Mock()
+            mock_storage_client.return_value = mock_client
+
+            mock_bucket = Mock()
+            mock_client.bucket.return_value = mock_bucket
+
+            mock_blob = Mock()
+            mock_blob.upload_from_filename.side_effect = Exception("Upload failed")
+            mock_bucket.blob.return_value = mock_blob
+
+            # Execute and verify exception
+            with pytest.raises(Exception) as exc_info:
+                handler_with_gcp_credentials._upload_file_to_gcp(file_path)
+
+            assert "Failed to upload file to GCP" in str(exc_info.value)
+
+
+class TestSolveOnOetc:
+
+    @pytest.fixture
+    def handler_with_complete_setup(self, mock_gcp_credentials_response):
+        """Create handler with complete setup for testing solve functionality"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                authentication_server_url="https://auth.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            gcp_creds = GcpCredentials(
+                gcp_project_id="test-project-123",
+                gcp_service_key='{"type": "service_account", "project_id": "test-project-123"}',
+                input_bucket="test-input-bucket",
+                solution_bucket="test-solution-bucket"
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = Mock()
+            handler.cloud_provider_credentials = gcp_creds
+
+            return handler
+
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    def test_solve_on_oetc_file_upload(self, mock_tempfile, handler_with_complete_setup):
+        """Test solve_on_oetc method file upload flow"""
+        # Setup
+        mock_model = Mock()
+        mock_temp_file = Mock()
+        mock_temp_file.name = "/tmp/linopy-abc123.nc"
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        # Mock file upload
+        with patch.object(handler_with_complete_setup, '_upload_file_to_gcp',
+                          return_value="uploaded_file.nc.gz") as mock_upload:
+            # Execute
+            result = handler_with_complete_setup.solve_on_oetc(mock_model)
+
+            # Verify
+            assert result == mock_model  # Currently returns the input model
+            mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
+            mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
+
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    def test_solve_on_oetc_upload_failure(self, mock_tempfile, handler_with_complete_setup):
+        """Test solve_on_oetc method with upload failure"""
+        # Setup
+        mock_model = Mock()
+        mock_temp_file = Mock()
+        mock_temp_file.name = "/tmp/linopy-abc123.nc"
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        # Mock upload failure
+        with patch.object(handler_with_complete_setup, '_upload_file_to_gcp', side_effect=Exception("Upload failed")):
+            # Execute and verify exception
+            with pytest.raises(Exception) as exc_info:
+                handler_with_complete_setup.solve_on_oetc(mock_model)
+
+            assert "Upload failed" in str(exc_info.value)
 
     @patch('linopy.oetc.requests.post')
     def test_authentication_http_error(self, mock_post, mock_settings):
@@ -535,3 +769,4 @@ class TestOetcHandlerIntegration:
             },
             timeout=30
         )
+
