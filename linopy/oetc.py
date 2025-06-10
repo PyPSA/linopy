@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Union
@@ -27,8 +27,15 @@ class OetcCredentials:
 @dataclass
 class OetcSettings:
     credentials: OetcCredentials
+    name: str
     authentication_server_url: str
+    orchestrator_server_url: str
     compute_provider: ComputeProvider = ComputeProvider.GCP
+    solver: str = "highs"
+    solver_options: dict = field(default_factory=dict)
+    cpu_cores: int = 2
+    disk_space_gb: int = 10
+    delete_worker_on_error: bool = False
 
 
 @dataclass
@@ -55,6 +62,11 @@ class AuthenticationResult:
     def is_expired(self) -> bool:
         """Check if the token has expired"""
         return datetime.now() >= self.expires_at
+
+
+@dataclass
+class CreateComputeJobResult:
+    uuid: str
 
 
 class OetcHandler:
@@ -182,6 +194,53 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Error fetching GCP credentials: {e}")
 
+    def _submit_job_to_compute_service(self, input_file_name: str) -> CreateComputeJobResult:
+        """
+        Submit a job to the compute service.
+
+        Args:
+            input_file_name: Name of the input file uploaded to GCP
+
+        Returns:
+            CreateComputeJobResult: The job creation result with UUID
+
+        Raises:
+            Exception: If job submission fails
+        """
+        try:
+            payload = {
+                "name": self.settings.name,
+                "solver": self.settings.solver,
+                "solver_options": self.settings.solver_options,
+                "provider": self.settings.compute_provider.value,
+                "cpu_cores": self.settings.cpu_cores,
+                "disk_space_gb": self.settings.disk_space_gb,
+                "input_file_name": input_file_name,
+                "delete_worker_on_error": self.settings.delete_worker_on_error
+            }
+
+            response = requests.post(
+                f"{self.settings.orchestrator_server_url}/create",
+                json=payload,
+                headers={
+                    "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
+                    "Content-Type": "application/json"
+                },
+                timeout=30
+            )
+
+            response.raise_for_status()
+            job_result = response.json()
+
+            return CreateComputeJobResult(uuid=job_result["uuid"])
+
+        except RequestException as e:
+            raise Exception(f"Failed to submit job to compute service: {e}")
+        except KeyError as e:
+            raise Exception(f"Invalid job submission response format: missing field {e}")
+        except Exception as e:
+            raise Exception(f"Error submitting job to compute service: {e}")
+
     def solve_on_oetc(self, model):
         """
         Solve a linopy model on the OET Cloud compute app.
@@ -189,8 +248,6 @@ class OetcHandler:
         Parameters
         ----------
         model : linopy.model.Model
-        **kwargs :
-            Keyword arguments passed to `linopy.model.Model.solve`.
 
         Returns
         -------
@@ -201,7 +258,8 @@ class OetcHandler:
             model.to_netcdf(fn.name)
             input_file_name = self._upload_file_to_gcp(fn.name)
 
-            # TODO: Submit job to compute service
+            job_result = self._submit_job_to_compute_service(input_file_name)
+
             # TODO: Wait for job completion
             # TODO: Download result from GCP
             # TODO: Return solved model
