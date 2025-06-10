@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -65,8 +66,17 @@ class AuthenticationResult:
 
 
 @dataclass
-class CreateComputeJobResult:
+class JobResult:
     uuid: str
+    status: str
+    name: str = None
+    owner: str = None
+    solver: str = None
+    duration_in_seconds: int = None
+    solving_duration_in_seconds: int = None
+    input_files: list = None
+    output_files: list = None
+    created_at: str = None
 
 
 class OetcHandler:
@@ -194,7 +204,7 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Error fetching GCP credentials: {e}")
 
-    def _submit_job_to_compute_service(self, input_file_name: str) -> CreateComputeJobResult:
+    def _submit_job_to_compute_service(self, input_file_name: str) -> str:
         """
         Submit a job to the compute service.
 
@@ -232,7 +242,7 @@ class OetcHandler:
             response.raise_for_status()
             job_result = response.json()
 
-            return CreateComputeJobResult(uuid=job_result["uuid"])
+            return job_result["uuid"]
 
         except RequestException as e:
             raise Exception(f"Failed to submit job to compute service: {e}")
@@ -240,6 +250,114 @@ class OetcHandler:
             raise Exception(f"Invalid job submission response format: missing field {e}")
         except Exception as e:
             raise Exception(f"Error submitting job to compute service: {e}")
+
+    def wait_and_get_job_data(self, job_uuid: str, initial_poll_interval: int = 30,
+                              max_poll_interval: int = 300) -> JobResult:
+        """
+        Wait for job completion and get job data by polling the orchestrator service.
+
+        This method will poll indefinitely until the job finishes (FINISHED) or
+        encounters an error (SETUP_ERROR, RUNTIME_ERROR).
+
+        Args:
+            job_uuid: UUID of the job to wait for
+            initial_poll_interval: Initial polling interval in seconds (default: 30)
+            max_poll_interval: Maximum polling interval in seconds (default: 300)
+
+        Returns:
+            JobResult: The job result when complete
+
+        Raises:
+            Exception: If job encounters errors or network requests consistently fail
+        """
+        poll_interval = initial_poll_interval
+        consecutive_failures = 0
+        max_network_retries = 10
+
+        print(f"Waiting for job {job_uuid} to complete...")
+
+        while True:
+            try:
+                response = requests.get(
+                    f"{self.settings.orchestrator_server_url}/jobs/{job_uuid}",
+                    headers={
+                        "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=30
+                )
+
+                response.raise_for_status()
+                job_data_dict = response.json()
+
+                job_result = JobResult(
+                    uuid=job_data_dict["uuid"],
+                    status=job_data_dict["status"],
+                    name=job_data_dict.get("name"),
+                    owner=job_data_dict.get("owner"),
+                    solver=job_data_dict.get("solver"),
+                    duration_in_seconds=job_data_dict.get("duration_in_seconds"),
+                    solving_duration_in_seconds=job_data_dict.get("solving_duration_in_seconds"),
+                    input_files=job_data_dict.get("input_files", []),
+                    output_files=job_data_dict.get("output_files", []),
+                    created_at=job_data_dict.get("created_at")
+                )
+
+                consecutive_failures = 0
+
+                if job_result.status == "FINISHED":
+                    print(f"Job {job_uuid} completed successfully!")
+                    if not job_result.output_files:
+                        print("Warning: Job completed but no output files found")
+                    return job_result
+
+                elif job_result.status == "SETUP_ERROR":
+                    error_msg = f"Job failed during setup phase (status: {job_result.status}). Please check the OETC logs for details."
+                    print(f"Error: {error_msg}")
+                    raise Exception(error_msg)
+
+                elif job_result.status == "RUNTIME_ERROR":
+                    error_msg = f"Job failed during execution (status: {job_result.status}). Please check the OETC logs for details."
+                    print(f"Error: {error_msg}")
+                    raise Exception(error_msg)
+
+                elif job_result.status in ["PENDING", "STARTING", "RUNNING"]:
+                    status_msg = f"Job {job_uuid} status: {job_result.status}"
+                    if job_result.duration_in_seconds:
+                        status_msg += f" (running for {job_result.duration_in_seconds}s)"
+                    status_msg += f", checking again in {poll_interval} seconds..."
+                    print(status_msg)
+
+                    time.sleep(poll_interval)
+
+                    # Exponential backoff for polling interval, capped at max_poll_interval
+                    poll_interval = min(int(poll_interval * 1.5), max_poll_interval)
+
+                else:
+                    # Unknown status
+                    error_msg = f"Unknown job status: {job_result.status}. Please check the OETC logs for details."
+                    print(f"Error: {error_msg}")
+                    raise Exception(error_msg)
+
+            except RequestException as e:
+                consecutive_failures += 1
+
+                if consecutive_failures >= max_network_retries:
+                    raise Exception(f"Failed to get job status after {max_network_retries} network retries: {e}")
+
+                # Wait before retrying network request
+                retry_wait = min(consecutive_failures * 10, 60)
+                print(f"Network error getting job status (attempt {consecutive_failures}/{max_network_retries}), "
+                      f"retrying in {retry_wait} seconds: {e}")
+                time.sleep(retry_wait)
+
+            except KeyError as e:
+                raise Exception(f"Invalid job status response format: missing field {e}")
+            except Exception as e:
+                if "status:" in str(e) or "OETC logs" in str(e):
+                    raise
+                else:
+                    raise Exception(f"Error getting job status: {e}")
 
     def solve_on_oetc(self, model):
         """
@@ -258,11 +376,11 @@ class OetcHandler:
             model.to_netcdf(fn.name)
             input_file_name = self._upload_file_to_gcp(fn.name)
 
-            job_result = self._submit_job_to_compute_service(input_file_name)
+            job_uuid = self._submit_job_to_compute_service(input_file_name)
+            job_result = self.wait_and_get_job_data(job_uuid)
 
-            # TODO: Wait for job completion
-            # TODO: Download result from GCP
-            # TODO: Return solved model
+            # TODO: Download result from GCP using job_data.output_files
+            # TODO: Load result into model and return solved model
 
             return model
 

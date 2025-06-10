@@ -9,7 +9,7 @@ from requests import RequestException
 
 from linopy.oetc import (
     OetcHandler, OetcSettings, OetcCredentials, AuthenticationResult,
-    ComputeProvider, GcpCredentials, CreateComputeJobResult
+    ComputeProvider, GcpCredentials, JobResult
 )
 
 
@@ -718,8 +718,7 @@ class TestJobSubmission:
         )
 
         # Verify result
-        assert isinstance(result, CreateComputeJobResult)
-        assert result.uuid == expected_job_uuid
+        assert result == expected_job_uuid
 
     @patch('linopy.oetc.requests.post')
     def test_submit_job_http_error(self, mock_post, handler_with_auth_setup):
@@ -804,19 +803,23 @@ class TestSolveOnOetc:
         mock_temp_file.name = "/tmp/linopy-abc123.nc"
         mock_tempfile.return_value.__enter__.return_value = mock_temp_file
 
-        # Mock file upload and job submission
+        # Mock file upload, job submission, and job waiting
         with patch.object(handler_with_complete_setup, '_upload_file_to_gcp',
                           return_value="uploaded_file.nc.gz") as mock_upload:
             with patch.object(handler_with_complete_setup, '_submit_job_to_compute_service',
-                              return_value=CreateComputeJobResult(uuid="test-job-uuid")) as mock_submit:
-                # Execute
-                result = handler_with_complete_setup.solve_on_oetc(mock_model)
+                              return_value="test-job-uuid") as mock_submit:
+                with patch.object(handler_with_complete_setup, 'wait_and_get_job_data',
+                                  return_value=JobResult(uuid="test-job-uuid", status="FINISHED",
+                                                         output_files=[{"name": "result.nc.gz"}])) as mock_wait:
+                    # Execute
+                    result = handler_with_complete_setup.solve_on_oetc(mock_model)
 
-                # Verify
-                assert result == mock_model  # Currently returns the input model
-                mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
-                mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                mock_submit.assert_called_once_with("uploaded_file.nc.gz")
+                    # Verify
+                    assert result == mock_model  # Currently returns the input model
+                    mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
+                    mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
+                    mock_submit.assert_called_once_with("uploaded_file.nc.gz")
+                    mock_wait.assert_called_once_with("test-job-uuid")
 
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
     def test_solve_on_oetc_upload_failure(self, mock_tempfile, handler_with_complete_setup):
@@ -869,7 +872,7 @@ class TestSolveOnOetcWithJobSubmission:
 
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
     def test_solve_on_oetc_with_job_submission(self, mock_tempfile, handler_with_full_setup):
-        """Test solve_on_oetc method including job submission"""
+        """Test solve_on_oetc method including job submission and waiting"""
         # Setup
         mock_model = Mock()
         mock_temp_file = Mock()
@@ -879,19 +882,23 @@ class TestSolveOnOetcWithJobSubmission:
         uploaded_file_name = "model_file.nc.gz"
         job_uuid = "job-uuid-456"
 
-        # Mock file upload and job submission
+        # Mock file upload, job submission, and job waiting
         with patch.object(handler_with_full_setup, '_upload_file_to_gcp',
                           return_value=uploaded_file_name) as mock_upload:
             with patch.object(handler_with_full_setup, '_submit_job_to_compute_service',
-                              return_value=CreateComputeJobResult(uuid=job_uuid)) as mock_submit:
-                # Execute
-                result = handler_with_full_setup.solve_on_oetc(mock_model)
+                              return_value=job_uuid) as mock_submit:
+                with patch.object(handler_with_full_setup, 'wait_and_get_job_data',
+                                  return_value=JobResult(uuid=job_uuid, status="FINISHED",
+                                                         output_files=[{"name": "result.nc.gz"}])) as mock_wait:
+                    # Execute
+                    result = handler_with_full_setup.solve_on_oetc(mock_model)
 
-                # Verify
-                assert result == mock_model  # Currently returns the input model
-                mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
-                mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                mock_submit.assert_called_once_with(uploaded_file_name)
+                    # Verify
+                    assert result == mock_model  # Currently returns the input model
+                    mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
+                    mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
+                    mock_submit.assert_called_once_with(uploaded_file_name)
+                    mock_wait.assert_called_once_with(job_uuid)
 
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
     def test_solve_on_oetc_job_submission_failure(self, mock_tempfile, handler_with_full_setup):
@@ -904,7 +911,7 @@ class TestSolveOnOetcWithJobSubmission:
 
         uploaded_file_name = "model_file.nc.gz"
 
-        # Mock successful upload but failed job submission
+        # Mock successful upload but failed job submission - no need to mock waiting since submission fails
         with patch.object(handler_with_full_setup, '_upload_file_to_gcp', return_value=uploaded_file_name):
             with patch.object(handler_with_full_setup, '_submit_job_to_compute_service',
                               side_effect=Exception("Job submission failed")):
@@ -913,6 +920,30 @@ class TestSolveOnOetcWithJobSubmission:
                     handler_with_full_setup.solve_on_oetc(mock_model)
 
                 assert "Job submission failed" in str(exc_info.value)
+
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    def test_solve_on_oetc_job_waiting_failure(self, mock_tempfile, handler_with_full_setup):
+        """Test solve_on_oetc method with job waiting failure"""
+        # Setup
+        mock_model = Mock()
+        mock_temp_file = Mock()
+        mock_temp_file.name = "/tmp/linopy-abc123.nc"
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        uploaded_file_name = "model_file.nc.gz"
+        job_uuid = "job-uuid-failed"
+
+        # Mock successful upload and job submission but failed job waiting
+        with patch.object(handler_with_full_setup, '_upload_file_to_gcp', return_value=uploaded_file_name):
+            with patch.object(handler_with_full_setup, '_submit_job_to_compute_service',
+                              return_value=job_uuid):
+                with patch.object(handler_with_full_setup, 'wait_and_get_job_data',
+                                  side_effect=Exception("Job failed: solver error")):
+                    # Execute and verify exception
+                    with pytest.raises(Exception) as exc_info:
+                        handler_with_full_setup.solve_on_oetc(mock_model)
+
+                    assert "Job failed: solver error" in str(exc_info.value)
 
 
 # Additional integration-style test
