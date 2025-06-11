@@ -646,6 +646,305 @@ class TestGcpUpload:
 
             assert "Failed to upload file to GCP" in str(exc_info.value)
 
+class TestFileDecompression:
+
+    @pytest.fixture
+    def handler_with_mocked_auth(self):
+        """Create handler with mocked authentication for testing file operations"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                name="Test Job",
+                authentication_server_url="https://auth.example.com",
+                orchestrator_server_url="https://orchestrator.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = Mock()
+            handler.cloud_provider_credentials = Mock()
+
+            return handler
+
+    @patch('linopy.oetc.gzip.open')
+    @patch('builtins.open')
+    def test_gzip_decompress_success(self, mock_open_file, mock_gzip_open, handler_with_mocked_auth):
+        """Test successful file decompression"""
+        # Setup
+        input_path = "/tmp/test_file.nc.gz"
+        expected_output = "/tmp/test_file.nc"
+
+        # Mock file operations
+        mock_file_in = Mock()
+        mock_file_out = Mock()
+        mock_gzip_open.return_value.__enter__.return_value = mock_file_in
+        mock_open_file.return_value.__enter__.return_value = mock_file_out
+
+        # Mock file reading - simulate reading compressed data in chunks
+        mock_file_in.read.side_effect = [b"decompressed_data_chunk",
+                                         b""]  # First read returns data, second returns empty
+
+        # Execute
+        result = handler_with_mocked_auth._gzip_decompress(input_path)
+
+        # Verify
+        assert result == expected_output
+        mock_gzip_open.assert_called_once_with(input_path, "rb")
+        mock_open_file.assert_called_once_with(expected_output, "wb")
+        mock_file_out.write.assert_called_once_with(b"decompressed_data_chunk")
+
+    @patch('linopy.oetc.gzip.open')
+    def test_gzip_decompress_gzip_open_error(self, mock_gzip_open, handler_with_mocked_auth):
+        """Test file decompression with gzip open error"""
+        # Setup
+        input_path = "/tmp/test_file.nc.gz"
+        mock_gzip_open.side_effect = IOError("Failed to open gzip file")
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._gzip_decompress(input_path)
+
+        assert "Failed to decompress file" in str(exc_info.value)
+
+    @patch('linopy.oetc.gzip.open')
+    @patch('builtins.open')
+    def test_gzip_decompress_write_error(self, mock_open_file, mock_gzip_open, handler_with_mocked_auth):
+        """Test file decompression with write error"""
+        # Setup
+        input_path = "/tmp/test_file.nc.gz"
+
+        # Mock file operations
+        mock_file_in = Mock()
+        mock_gzip_open.return_value.__enter__.return_value = mock_file_in
+        mock_open_file.side_effect = IOError("Permission denied")
+
+        # Mock file reading
+        mock_file_in.read.return_value = b"test_data"
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_mocked_auth._gzip_decompress(input_path)
+
+        assert "Failed to decompress file" in str(exc_info.value)
+
+    def test_gzip_decompress_output_path_generation(self, handler_with_mocked_auth):
+        """Test correct output path generation for decompression"""
+        # Test first path
+        with patch('linopy.oetc.gzip.open') as mock_gzip_open:
+            with patch('builtins.open') as mock_open_file:
+                mock_file_in = Mock()
+                mock_file_out = Mock()
+                mock_gzip_open.return_value.__enter__.return_value = mock_file_in
+                mock_open_file.return_value.__enter__.return_value = mock_file_out
+                mock_file_in.read.side_effect = [b"test", b""]
+
+                result = handler_with_mocked_auth._gzip_decompress("/tmp/file.nc.gz")
+                assert result == "/tmp/file.nc"
+
+        # Test second path with fresh mocks
+        with patch('linopy.oetc.gzip.open') as mock_gzip_open:
+            with patch('builtins.open') as mock_open_file:
+                mock_file_in = Mock()
+                mock_file_out = Mock()
+                mock_gzip_open.return_value.__enter__.return_value = mock_file_in
+                mock_open_file.return_value.__enter__.return_value = mock_file_out
+                mock_file_in.read.side_effect = [b"test", b""]
+
+                result = handler_with_mocked_auth._gzip_decompress("/path/to/model.data.gz")
+                assert result == "/path/to/model.data"
+
+
+class TestGcpDownload:
+
+    @pytest.fixture
+    def handler_with_gcp_credentials(self, mock_gcp_credentials_response):
+        """Create handler with GCP credentials for testing download"""
+        with patch('linopy.oetc.requests.post'), patch('linopy.oetc.requests.get'):
+            credentials = OetcCredentials(email="test@example.com", password="test_password")
+            settings = OetcSettings(
+                credentials=credentials,
+                name="Test Job",
+                authentication_server_url="https://auth.example.com",
+                orchestrator_server_url="https://orchestrator.example.com",
+                compute_provider=ComputeProvider.GCP
+            )
+
+            # Create proper GCP credentials
+            gcp_creds = GcpCredentials(
+                gcp_project_id="test-project-123",
+                gcp_service_key='{"type": "service_account", "project_id": "test-project-123"}',
+                input_bucket="test-input-bucket",
+                solution_bucket="test-solution-bucket"
+            )
+
+            handler = OetcHandler.__new__(OetcHandler)
+            handler.settings = settings
+            handler.jwt = Mock()
+            handler.cloud_provider_credentials = gcp_creds
+
+            return handler
+
+    @patch('linopy.oetc.os.remove')
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    @patch('linopy.oetc.storage.Client')
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_download_file_from_gcp_success(self, mock_creds_from_info, mock_storage_client,
+                                            mock_tempfile, mock_remove, handler_with_gcp_credentials):
+        """Test successful file download from GCP"""
+        # Setup
+        file_name = "solution_file.nc.gz"
+        compressed_path = "/tmp/tmpfile.gz"
+        decompressed_path = "/tmp/tmpfile"
+
+        # Mock temporary file creation
+        mock_temp_file = Mock()
+        mock_temp_file.name = compressed_path
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        # Mock decompression
+        with patch.object(handler_with_gcp_credentials, '_gzip_decompress', return_value=decompressed_path):
+            # Mock GCP components
+            mock_credentials = Mock()
+            mock_creds_from_info.return_value = mock_credentials
+
+            mock_client = Mock()
+            mock_storage_client.return_value = mock_client
+
+            mock_bucket = Mock()
+            mock_client.bucket.return_value = mock_bucket
+
+            mock_blob = Mock()
+            mock_bucket.blob.return_value = mock_blob
+
+            # Execute
+            result = handler_with_gcp_credentials._download_file_from_gcp(file_name)
+
+            # Verify
+            assert result == decompressed_path
+
+            # Verify GCP credentials creation
+            mock_creds_from_info.assert_called_once_with(
+                {"type": "service_account", "project_id": "test-project-123"},
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+
+            # Verify GCP client creation
+            mock_storage_client.assert_called_once_with(
+                credentials=mock_credentials,
+                project="test-project-123"
+            )
+
+            # Verify bucket access (solution bucket, not input bucket)
+            mock_client.bucket.assert_called_once_with("test-solution-bucket")
+
+            # Verify blob operations
+            mock_bucket.blob.assert_called_once_with(file_name)
+            mock_blob.download_to_filename.assert_called_once_with(compressed_path)
+
+            # Verify cleanup
+            mock_remove.assert_called_once_with(compressed_path)
+
+    @patch('linopy.oetc.json.loads')
+    def test_download_file_from_gcp_invalid_service_key(self, mock_json_loads, handler_with_gcp_credentials):
+        """Test download failure with invalid service key"""
+        # Setup
+        file_name = "solution_file.nc.gz"
+        mock_json_loads.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_gcp_credentials._download_file_from_gcp(file_name)
+
+        assert "Failed to download file from GCP" in str(exc_info.value)
+
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    @patch('linopy.oetc.storage.Client')
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_download_file_from_gcp_download_error(self, mock_creds_from_info, mock_storage_client,
+                                                   mock_tempfile, handler_with_gcp_credentials):
+        """Test download failure during blob download"""
+        # Setup
+        file_name = "solution_file.nc.gz"
+        compressed_path = "/tmp/tmpfile.gz"
+
+        # Mock temporary file creation
+        mock_temp_file = Mock()
+        mock_temp_file.name = compressed_path
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        # Mock GCP setup
+        mock_credentials = Mock()
+        mock_creds_from_info.return_value = mock_credentials
+
+        mock_client = Mock()
+        mock_storage_client.return_value = mock_client
+
+        mock_bucket = Mock()
+        mock_client.bucket.return_value = mock_bucket
+
+        mock_blob = Mock()
+        mock_blob.download_to_filename.side_effect = Exception("Download failed")
+        mock_bucket.blob.return_value = mock_blob
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_gcp_credentials._download_file_from_gcp(file_name)
+
+        assert "Failed to download file from GCP" in str(exc_info.value)
+
+    @patch('linopy.oetc.os.remove')
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    @patch('linopy.oetc.storage.Client')
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_download_file_from_gcp_decompression_error(self, mock_creds_from_info, mock_storage_client,
+                                                        mock_tempfile, mock_remove, handler_with_gcp_credentials):
+        """Test download failure during decompression"""
+        # Setup
+        file_name = "solution_file.nc.gz"
+        compressed_path = "/tmp/tmpfile.gz"
+
+        # Mock temporary file creation
+        mock_temp_file = Mock()
+        mock_temp_file.name = compressed_path
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        # Mock successful GCP download but failed decompression
+        mock_credentials = Mock()
+        mock_creds_from_info.return_value = mock_credentials
+
+        mock_client = Mock()
+        mock_storage_client.return_value = mock_client
+
+        mock_bucket = Mock()
+        mock_client.bucket.return_value = mock_bucket
+
+        mock_blob = Mock()
+        mock_bucket.blob.return_value = mock_blob
+
+        # Mock decompression failure
+        with patch.object(handler_with_gcp_credentials, '_gzip_decompress',
+                          side_effect=Exception("Decompression failed")):
+            # Execute and verify exception
+            with pytest.raises(Exception) as exc_info:
+                handler_with_gcp_credentials._download_file_from_gcp(file_name)
+
+            assert "Failed to download file from GCP" in str(exc_info.value)
+
+    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
+    def test_download_file_from_gcp_credentials_error(self, mock_creds_from_info, handler_with_gcp_credentials):
+        """Test download failure during credentials creation"""
+        # Setup
+        file_name = "solution_file.nc.gz"
+        mock_creds_from_info.side_effect = Exception("Invalid credentials")
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_gcp_credentials._download_file_from_gcp(file_name)
+
+        assert "Failed to download file from GCP" in str(exc_info.value)
+
 
 class TestJobSubmission:
 
@@ -794,16 +1093,24 @@ class TestSolveOnOetc:
 
             return handler
 
+    @patch('linopy.oetc.linopy.read_netcdf')
+    @patch('linopy.oetc.os.remove')
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_file_upload(self, mock_tempfile, handler_with_complete_setup):
-        """Test solve_on_oetc method file upload flow"""
+    def test_solve_on_oetc_file_upload(self, mock_tempfile, mock_remove, mock_read_netcdf, handler_with_complete_setup):
+        """Test solve_on_oetc method complete workflow"""
         # Setup
         mock_model = Mock()
+        mock_solved_model = Mock()
+        mock_solved_model.status = "optimal"
+        mock_solved_model.objective.value = 42.0
+
         mock_temp_file = Mock()
         mock_temp_file.name = "/tmp/linopy-abc123.nc"
         mock_tempfile.return_value.__enter__.return_value = mock_temp_file
 
-        # Mock file upload, job submission, and job waiting
+        mock_read_netcdf.return_value = mock_solved_model
+
+        # Mock file upload, job submission, job waiting, and download
         with patch.object(handler_with_complete_setup, '_upload_file_to_gcp',
                           return_value="uploaded_file.nc.gz") as mock_upload:
             with patch.object(handler_with_complete_setup, '_submit_job_to_compute_service',
@@ -811,15 +1118,20 @@ class TestSolveOnOetc:
                 with patch.object(handler_with_complete_setup, 'wait_and_get_job_data',
                                   return_value=JobResult(uuid="test-job-uuid", status="FINISHED",
                                                          output_files=[{"name": "result.nc.gz"}])) as mock_wait:
-                    # Execute
-                    result = handler_with_complete_setup.solve_on_oetc(mock_model)
+                    with patch.object(handler_with_complete_setup, '_download_file_from_gcp',
+                                      return_value="/tmp/downloaded_result.nc") as mock_download:
+                        # Execute
+                        result = handler_with_complete_setup.solve_on_oetc(mock_model)
 
-                    # Verify
-                    assert result == mock_model  # Currently returns the input model
-                    mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
-                    mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                    mock_submit.assert_called_once_with("uploaded_file.nc.gz")
-                    mock_wait.assert_called_once_with("test-job-uuid")
+                        # Verify
+                        assert result == mock_solved_model  # Now returns the solved model
+                        mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
+                        mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
+                        mock_submit.assert_called_once_with("uploaded_file.nc.gz")
+                        mock_wait.assert_called_once_with("test-job-uuid")
+                        mock_download.assert_called_once_with("result.nc.gz")
+                        mock_read_netcdf.assert_called_once_with("/tmp/downloaded_result.nc")
+                        mock_remove.assert_called_once_with("/tmp/downloaded_result.nc")
 
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
     def test_solve_on_oetc_upload_failure(self, mock_tempfile, handler_with_complete_setup):
@@ -870,19 +1182,28 @@ class TestSolveOnOetcWithJobSubmission:
 
         return handler
 
+    @patch('linopy.oetc.linopy.read_netcdf')
+    @patch('linopy.oetc.os.remove')
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_with_job_submission(self, mock_tempfile, handler_with_full_setup):
-        """Test solve_on_oetc method including job submission and waiting"""
+    def test_solve_on_oetc_with_job_submission(self, mock_tempfile, mock_remove, mock_read_netcdf,
+                                               handler_with_full_setup):
+        """Test solve_on_oetc method including job submission, waiting, and download"""
         # Setup
         mock_model = Mock()
+        mock_solved_model = Mock()
+        mock_solved_model.status = "optimal"
+        mock_solved_model.objective.value = 100.5
+
         mock_temp_file = Mock()
         mock_temp_file.name = "/tmp/linopy-abc123.nc"
         mock_tempfile.return_value.__enter__.return_value = mock_temp_file
 
+        mock_read_netcdf.return_value = mock_solved_model
+
         uploaded_file_name = "model_file.nc.gz"
         job_uuid = "job-uuid-456"
 
-        # Mock file upload, job submission, and job waiting
+        # Mock complete workflow
         with patch.object(handler_with_full_setup, '_upload_file_to_gcp',
                           return_value=uploaded_file_name) as mock_upload:
             with patch.object(handler_with_full_setup, '_submit_job_to_compute_service',
@@ -890,15 +1211,20 @@ class TestSolveOnOetcWithJobSubmission:
                 with patch.object(handler_with_full_setup, 'wait_and_get_job_data',
                                   return_value=JobResult(uuid=job_uuid, status="FINISHED",
                                                          output_files=[{"name": "result.nc.gz"}])) as mock_wait:
-                    # Execute
-                    result = handler_with_full_setup.solve_on_oetc(mock_model)
+                    with patch.object(handler_with_full_setup, '_download_file_from_gcp',
+                                      return_value="/tmp/solution_file.nc") as mock_download:
+                        # Execute
+                        result = handler_with_full_setup.solve_on_oetc(mock_model)
 
-                    # Verify
-                    assert result == mock_model  # Currently returns the input model
-                    mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
-                    mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
-                    mock_submit.assert_called_once_with(uploaded_file_name)
-                    mock_wait.assert_called_once_with(job_uuid)
+                        # Verify
+                        assert result == mock_solved_model  # Now returns the solved model
+                        mock_model.to_netcdf.assert_called_once_with("/tmp/linopy-abc123.nc")
+                        mock_upload.assert_called_once_with("/tmp/linopy-abc123.nc")
+                        mock_submit.assert_called_once_with(uploaded_file_name)
+                        mock_wait.assert_called_once_with(job_uuid)
+                        mock_download.assert_called_once_with("result.nc.gz")
+                        mock_read_netcdf.assert_called_once_with("/tmp/solution_file.nc")
+                        mock_remove.assert_called_once_with("/tmp/solution_file.nc")
 
     @patch('linopy.oetc.tempfile.NamedTemporaryFile')
     def test_solve_on_oetc_job_submission_failure(self, mock_tempfile, handler_with_full_setup):
@@ -944,6 +1270,31 @@ class TestSolveOnOetcWithJobSubmission:
                         handler_with_full_setup.solve_on_oetc(mock_model)
 
                     assert "Job failed: solver error" in str(exc_info.value)
+
+    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
+    def test_solve_on_oetc_no_output_files_error(self, mock_tempfile, handler_with_full_setup):
+        """Test solve_on_oetc method when job completes but has no output files"""
+        # Setup
+        mock_model = Mock()
+        mock_temp_file = Mock()
+        mock_temp_file.name = "/tmp/linopy-abc123.nc"
+        mock_tempfile.return_value.__enter__.return_value = mock_temp_file
+
+        uploaded_file_name = "model_file.nc.gz"
+        job_uuid = "job-uuid-456"
+
+        # Mock successful workflow until job completion with no output files
+        with patch.object(handler_with_full_setup, '_upload_file_to_gcp', return_value=uploaded_file_name):
+            with patch.object(handler_with_full_setup, '_submit_job_to_compute_service', return_value=job_uuid):
+                with patch.object(handler_with_full_setup, 'wait_and_get_job_data',
+                                  return_value=JobResult(uuid=job_uuid, status="FINISHED",
+                                                         output_files=[])):  # No output files
+
+                    # Execute and verify exception
+                    with pytest.raises(Exception) as exc_info:
+                        handler_with_full_setup.solve_on_oetc(mock_model)
+
+                    assert "No output files found in completed job" in str(exc_info.value)
 
 
 # Additional integration-style test

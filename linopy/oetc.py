@@ -13,6 +13,7 @@ import requests
 from requests import RequestException
 from google.cloud import storage
 from google.oauth2 import service_account
+import linopy
 
 
 class ComputeProvider(str, Enum):
@@ -359,6 +360,81 @@ class OetcHandler:
                 else:
                     raise Exception(f"Error getting job status: {e}")
 
+    def _gzip_decompress(self, input_path: str) -> str:
+        """
+        Decompress a gzip-compressed file.
+
+        Args:
+            input_path: Path to the compressed file
+
+        Returns:
+            str: Path to the decompressed file
+
+        Raises:
+            Exception: If decompression fails
+        """
+        try:
+            output_path = input_path[:-3]
+            chunk_size = 1024 * 1024
+
+            with gzip.open(input_path, "rb") as f_in:
+                with open(output_path, "wb") as f_out:
+                    while True:
+                        chunk = f_in.read(chunk_size)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+
+            return output_path
+        except Exception as e:
+            raise Exception(f"Failed to decompress file: {e}")
+
+    def _download_file_from_gcp(self, file_name: str) -> str:
+        """
+        Download a file from GCP storage bucket.
+
+        Args:
+            file_name: Name of the file to download from the solution bucket
+
+        Returns:
+            str: Path to the downloaded and decompressed file
+
+        Raises:
+            Exception: If download or decompression fails
+        """
+        try:
+            # Create GCP credentials from service key
+            service_key_dict = json.loads(self.cloud_provider_credentials.gcp_service_key)
+            credentials = service_account.Credentials.from_service_account_info(
+                service_key_dict,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+
+            # Download from GCP solution bucket
+            storage_client = storage.Client(
+                credentials=credentials,
+                project=self.cloud_provider_credentials.gcp_project_id
+            )
+            bucket = storage_client.bucket(self.cloud_provider_credentials.solution_bucket)
+            blob = bucket.blob(file_name)
+
+            # Create temporary file for download
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".gz") as temp_file:
+                compressed_file_path = temp_file.name
+
+            blob.download_to_filename(compressed_file_path)
+
+            # Decompress the downloaded file
+            decompressed_file_path = self._gzip_decompress(compressed_file_path)
+
+            # Clean up compressed file
+            os.remove(compressed_file_path)
+
+            return decompressed_file_path
+
+        except Exception as e:
+            raise Exception(f"Failed to download file from GCP: {e}")
+
     def solve_on_oetc(self, model):
         """
         Solve a linopy model on the OET Cloud compute app.
@@ -371,18 +447,44 @@ class OetcHandler:
         -------
         linopy.model.Model
             Solved model.
-        """
-        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
-            model.to_netcdf(fn.name)
-            input_file_name = self._upload_file_to_gcp(fn.name)
 
+        Raises:
+            Exception: If solving fails at any stage
+        """
+        try:
+            # Save model to temporary file and upload
+            with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+                model.to_netcdf(fn.name)
+                input_file_name = self._upload_file_to_gcp(fn.name)
+
+            # Submit job and wait for completion
             job_uuid = self._submit_job_to_compute_service(input_file_name)
             job_result = self.wait_and_get_job_data(job_uuid)
 
-            # TODO: Download result from GCP using job_data.output_files
-            # TODO: Load result into model and return solved model
+            # Download and load the solution
+            if not job_result.output_files:
+                raise Exception("No output files found in completed job")
 
-            return model
+            output_file_name = job_result.output_files[0]
+            if isinstance(output_file_name, dict) and 'name' in output_file_name:
+                output_file_name = output_file_name['name']
+
+            solution_file_path = self._download_file_from_gcp(output_file_name)
+
+            # Load the solved model
+            solved_model = linopy.read_netcdf(solution_file_path)
+
+            # Clean up downloaded file
+            os.remove(solution_file_path)
+
+            print(f"Model solved successfully. Status: {solved_model.status}")
+            if hasattr(solved_model, 'objective') and hasattr(solved_model.objective, 'value'):
+                print(f"Objective value: {solved_model.objective.value:.2e}")
+
+            return solved_model
+
+        except Exception as e:
+            raise Exception(f"Error solving model on OETC: {e}")
 
     def _gzip_compress(self, source_path: str) -> str:
         """
