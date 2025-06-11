@@ -1,3 +1,4 @@
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -15,6 +16,8 @@ from google.cloud import storage
 from google.oauth2 import service_account
 import linopy
 
+
+logger = logging.getLogger(__name__)
 
 class ComputeProvider(str, Enum):
     GCP = "GCP"
@@ -97,6 +100,7 @@ class OetcHandler:
             Exception: If authentication fails or response is invalid
         """
         try:
+            logger.info("OETC - Signing in...")
             payload = {
                 "email": self.settings.credentials.email,
                 "password": self.settings.credentials.password
@@ -111,6 +115,8 @@ class OetcHandler:
 
             response.raise_for_status()
             jwt_result = response.json()
+
+            logger.info("OETC - Signed in")
 
             return AuthenticationResult(
                 token=jwt_result["token"],
@@ -173,6 +179,7 @@ class OetcHandler:
             Exception: If credentials fetching fails or response is invalid
         """
         try:
+            logger.info("OETC - Fetching user GCP credentials...")
             payload = self._decode_jwt_payload(self.jwt.token)
             user_uuid = payload.get('sub')
 
@@ -190,6 +197,8 @@ class OetcHandler:
 
             response.raise_for_status()
             credentials_data = response.json()
+
+            logger.info("OETC - Fetched user GCP credentials")
 
             return GcpCredentials(
                 gcp_project_id=credentials_data["gcp_project_id"],
@@ -219,6 +228,7 @@ class OetcHandler:
             Exception: If job submission fails
         """
         try:
+            logger.info("OETC - Submitting compute job...")
             payload = {
                 "name": self.settings.name,
                 "solver": self.settings.solver,
@@ -242,6 +252,8 @@ class OetcHandler:
 
             response.raise_for_status()
             job_result = response.json()
+
+            logger.info(f"OETC - Compute job {job_result['uuid']} started")
 
             return job_result["uuid"]
 
@@ -275,7 +287,7 @@ class OetcHandler:
         consecutive_failures = 0
         max_network_retries = 10
 
-        print(f"Waiting for job {job_uuid} to complete...")
+        logger.info(f"OETC - Waiting for job {job_uuid} to complete...")
 
         while True:
             try:
@@ -307,19 +319,19 @@ class OetcHandler:
                 consecutive_failures = 0
 
                 if job_result.status == "FINISHED":
-                    print(f"Job {job_uuid} completed successfully!")
+                    logger.info(f"OETC - Job {job_uuid} completed successfully!")
                     if not job_result.output_files:
-                        print("Warning: Job completed but no output files found")
+                        logger.warning("OETC - Warning: Job completed but no output files found")
                     return job_result
 
                 elif job_result.status == "SETUP_ERROR":
                     error_msg = f"Job failed during setup phase (status: {job_result.status}). Please check the OETC logs for details."
-                    print(f"Error: {error_msg}")
+                    logger.error(f"OETC Error: {error_msg}")
                     raise Exception(error_msg)
 
                 elif job_result.status == "RUNTIME_ERROR":
                     error_msg = f"Job failed during execution (status: {job_result.status}). Please check the OETC logs for details."
-                    print(f"Error: {error_msg}")
+                    logger.error(f"OETC Error: {error_msg}")
                     raise Exception(error_msg)
 
                 elif job_result.status in ["PENDING", "STARTING", "RUNNING"]:
@@ -327,7 +339,7 @@ class OetcHandler:
                     if job_result.duration_in_seconds:
                         status_msg += f" (running for {job_result.duration_in_seconds}s)"
                     status_msg += f", checking again in {poll_interval} seconds..."
-                    print(status_msg)
+                    logger.info(f"OETC - {status_msg}")
 
                     time.sleep(poll_interval)
 
@@ -337,7 +349,7 @@ class OetcHandler:
                 else:
                     # Unknown status
                     error_msg = f"Unknown job status: {job_result.status}. Please check the OETC logs for details."
-                    print(f"Error: {error_msg}")
+                    logger.error(f"OETC Error: {error_msg}")
                     raise Exception(error_msg)
 
             except RequestException as e:
@@ -348,7 +360,7 @@ class OetcHandler:
 
                 # Wait before retrying network request
                 retry_wait = min(consecutive_failures * 10, 60)
-                print(f"Network error getting job status (attempt {consecutive_failures}/{max_network_retries}), "
+                logger.error(f"OETC - Network error getting job status (attempt {consecutive_failures}/{max_network_retries}), "
                       f"retrying in {retry_wait} seconds: {e}")
                 time.sleep(retry_wait)
 
@@ -477,9 +489,9 @@ class OetcHandler:
             # Clean up downloaded file
             os.remove(solution_file_path)
 
-            print(f"Model solved successfully. Status: {solved_model.status}")
+            logger.info(f"OETC - Model solved successfully. Status: {solved_model.status}")
             if hasattr(solved_model, 'objective') and hasattr(solved_model.objective, 'value'):
-                print(f"Objective value: {solved_model.objective.value:.2e}")
+                logger.info(f"OETC - Objective value: {solved_model.objective.value:.2e}")
 
             return solved_model
 
