@@ -59,6 +59,7 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
+from linopy.oetc import OetcHandler, OetcSettings
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -1049,7 +1050,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: Any = None,
         progress: bool | None = None,
-        oetc_settings: dict | None = {},
+        oetc_settings: OetcSettings = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1117,6 +1118,9 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        oetc_settings : dict, optional
+            Settings for the solving on the OETC platform. If a value is provided
+            solving will be attempted on OETC, otherwise it will be done locally.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1135,20 +1139,25 @@ class Model:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-        if remote:
-            solved = remote.solve_on_remote(
-                self,
-                solver_name=solver_name,
-                io_api=io_api,
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                basis_fn=basis_fn,
-                warmstart_fn=warmstart_fn,
-                keep_files=keep_files,
-                sanitize_zeros=sanitize_zeros,
-                **solver_options,
-            )
+        if remote or oetc_settings:
+            if remote and oetc_settings:
+                raise ValueError("Remote and OETC can't be active at the same time")
+            if remote:
+                solved = remote.solve_on_remote(
+                    self,
+                    solver_name=solver_name,
+                    io_api=io_api,
+                    problem_fn=problem_fn,
+                    solution_fn=solution_fn,
+                    log_fn=log_fn,
+                    basis_fn=basis_fn,
+                    warmstart_fn=warmstart_fn,
+                    keep_files=keep_files,
+                    sanitize_zeros=sanitize_zeros,
+                    **solver_options,
+                )
+            else:
+                solved = OetcHandler(oetc_settings).solve_on_oetc(self)
 
             self.objective.set_value(solved.objective.value)
             self.status = solved.status
