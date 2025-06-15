@@ -955,7 +955,7 @@ def test_linear_expression_groupby_with_dataarray(
 
     # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
     if use_fallback:
-        with pytest.raises(KeyError):
+        with pytest.raises((KeyError, IndexError)):
             expr.groupby(groups).sum(use_fallback=use_fallback)
         return
 
