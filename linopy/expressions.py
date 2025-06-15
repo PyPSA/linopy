@@ -39,6 +39,8 @@ except ImportError:
     import xarray.core.rolling
     from xarray.core.rolling import DatasetRolling  # type: ignore
 
+from types import EllipsisType, NotImplementedType
+
 from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
@@ -77,9 +79,7 @@ from linopy.constants import (
 from linopy.types import (
     ConstantLike,
     DimsLike,
-    EllipsisType,
     ExpressionLike,
-    NotImplementedType,
     SideLike,
     SignLike,
     VariableLike,
