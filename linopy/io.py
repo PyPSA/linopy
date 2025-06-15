@@ -8,11 +8,11 @@ from __future__ import annotations
 import logging
 import shutil
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter, TextIOWrapper
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd

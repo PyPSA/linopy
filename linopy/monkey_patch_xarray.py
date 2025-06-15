@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partialmethod, update_wrapper
-from typing import Any, Callable
+from types import NotImplementedType
+from typing import Any
 
 from xarray import DataArray
 
 from linopy import expressions, variables
-from linopy.types import NotImplementedType
 
 
 def monkey_patch(cls: type[DataArray], pass_unpatched_method: bool = False) -> Callable:
@@ -28,11 +29,9 @@ def __mul__(
 ) -> DataArray | NotImplementedType:
     if isinstance(
         other,
-        (
-            variables.Variable,
-            expressions.LinearExpression,
-            expressions.QuadraticExpression,
-        ),
+        variables.Variable
+        | expressions.LinearExpression
+        | expressions.QuadraticExpression,
     ):
         return NotImplemented
     return unpatched_method(da, other)

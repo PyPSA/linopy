@@ -15,9 +15,9 @@ import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -2041,9 +2041,9 @@ class COPT(Solver):
 
         # TODO: check if this suffices
         condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = CONDITION_MAP.get(condition, str(condition))
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = str(condition)
 
         def get_solver_solution() -> Solution:
             # TODO: check if this suffices

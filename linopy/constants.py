@@ -169,7 +169,7 @@ class Status:
 
     status: SolverStatus
     termination_condition: TerminationCondition
-    legacy_status: Union[tuple[str, str], str] = ""
+    legacy_status: tuple[str, str] | str = ""
 
     @classmethod
     def process(cls, status: str, termination_condition: str) -> "Status":
@@ -214,7 +214,7 @@ class Result:
     """
 
     status: Status
-    solution: Union[Solution, None] = None
+    solution: Solution | None = None
     solver_model: Any = None
 
     def __repr__(self) -> str:

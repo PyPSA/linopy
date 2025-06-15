@@ -5,7 +5,12 @@ Release Notes
 .. ----------------
 
 
+
 * Improved variable/expression arithmetic methods so that they correctly handle types
+
+**Breaking Changes**
+
+* With this release, the package support for python 3.9 was dropped. It now requires python 3.10 or higher.
 
 Version 0.5.5
 --------------

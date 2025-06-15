@@ -39,6 +39,8 @@ except ImportError:
     import xarray.core.rolling
     from xarray.core.rolling import DatasetRolling  # type: ignore
 
+from types import EllipsisType, NotImplementedType
+
 from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
@@ -77,9 +79,7 @@ from linopy.constants import (
 from linopy.types import (
     ConstantLike,
     DimsLike,
-    EllipsisType,
     ExpressionLike,
-    NotImplementedType,
     SideLike,
     SignLike,
     VariableLike,
@@ -129,7 +129,7 @@ def exprwrap(
 def _expr_unwrap(
     maybe_expr: Any | LinearExpression | QuadraticExpression,
 ) -> Any:
-    if isinstance(maybe_expr, (LinearExpression, QuadraticExpression)):
+    if isinstance(maybe_expr, LinearExpression | QuadraticExpression):
         return maybe_expr.data
 
     return maybe_expr
@@ -249,6 +249,8 @@ class LinearExpressionGroupby:
                 orig_group = group
                 group = group.apply(tuple, axis=1).map(int_map)
 
+            # At this point, group is always a pandas Series
+            assert isinstance(group, pd.Series)
             group_dim = group.index.name
 
             arrays = [group, group.groupby(group).cumcount()]
@@ -529,13 +531,11 @@ class BaseExpression(ABC):
         try:
             if isinstance(
                 other,
-                (
-                    variables.Variable,
-                    variables.ScalarVariable,
-                    LinearExpression,
-                    ScalarLinearExpression,
-                    QuadraticExpression,
-                ),
+                variables.Variable
+                | variables.ScalarVariable
+                | LinearExpression
+                | ScalarLinearExpression
+                | QuadraticExpression,
             ):
                 raise TypeError(
                     "unsupported operand type(s) for /: "
@@ -930,7 +930,7 @@ class BaseExpression(ABC):
                 _other = FILL_VALUE
             else:
                 _other = None
-        elif isinstance(other, (int, float, DataArray)):
+        elif isinstance(other, int | float | DataArray):
             _other = {**self._fill_value, "const": other}
         else:
             _other = _expr_unwrap(other)
@@ -970,7 +970,7 @@ class BaseExpression(ABC):
             A new object with missing values filled with the given value.
         """
         value = _expr_unwrap(value)
-        if isinstance(value, (DataArray, np.floating, np.integer, int, float)):
+        if isinstance(value, DataArray | np.floating | np.integer | int | float):
             value = {"const": value}
         return self.__class__(self.data.fillna(value), self.model)
 
@@ -1362,10 +1362,10 @@ class LinearExpression(BaseExpression):
             return other.__rmul__(self)
 
         try:
-            if isinstance(other, (variables.Variable, variables.ScalarVariable)):
+            if isinstance(other, variables.Variable | variables.ScalarVariable):
                 other = other.to_linexpr()
 
-            if isinstance(other, (LinearExpression, ScalarLinearExpression)):
+            if isinstance(other, LinearExpression | ScalarLinearExpression):
                 return self._multiply_by_linear_expression(other)
             else:
                 return self._multiply_by_constant(other)
@@ -1403,7 +1403,7 @@ class LinearExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
-        if not isinstance(other, (LinearExpression, variables.Variable)):
+        if not isinstance(other, LinearExpression | variables.Variable):
             other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
@@ -1620,7 +1620,7 @@ class LinearExpression(BaseExpression):
                 # assume first element is coefficient and second is variable
                 c, v = t
                 if isinstance(v, variables.ScalarVariable):
-                    if not isinstance(c, (int, float)):
+                    if not isinstance(c, int | float):
                         raise TypeError(
                             "Expected int or float as coefficient of scalar variable (first element of tuple)."
                         )
@@ -1703,12 +1703,10 @@ class QuadraticExpression(BaseExpression):
         """
         if isinstance(
             other,
-            (
-                BaseExpression,
-                ScalarLinearExpression,
-                variables.Variable,
-                variables.ScalarVariable,
-            ),
+            BaseExpression
+            | ScalarLinearExpression
+            | variables.Variable
+            | variables.ScalarVariable,
         ):
             raise TypeError(
                 "unsupported operand type(s) for *: "
@@ -1787,12 +1785,10 @@ class QuadraticExpression(BaseExpression):
         """
         if isinstance(
             other,
-            (
-                BaseExpression,
-                ScalarLinearExpression,
-                variables.Variable,
-                variables.ScalarVariable,
-            ),
+            BaseExpression
+            | ScalarLinearExpression
+            | variables.Variable
+            | variables.ScalarVariable,
         ):
             raise TypeError(
                 "Higher order non-linear expressions are not yet supported."
@@ -1915,9 +1911,9 @@ def as_expression(
     ValueError
         If object cannot be converted to LinearExpression.
     """
-    if isinstance(obj, (LinearExpression, QuadraticExpression)):
+    if isinstance(obj, LinearExpression | QuadraticExpression):
         return obj
-    elif isinstance(obj, (variables.Variable, variables.ScalarVariable)):
+    elif isinstance(obj, variables.Variable | variables.ScalarVariable):
         return obj.to_linexpr()
     else:
         try:
@@ -2134,7 +2130,7 @@ class ScalarLinearExpression:
         )
 
     def __mul__(self, other: float | int) -> ScalarLinearExpression:
-        if not isinstance(other, (int, float, np.number)):
+        if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for *: {type(self)} and {type(other)}"
             )
@@ -2147,7 +2143,7 @@ class ScalarLinearExpression:
         return self.__mul__(other)
 
     def __div__(self, other: float | int) -> ScalarLinearExpression:
-        if not isinstance(other, (int, float, np.number)):
+        if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for /: {type(self)} and {type(other)}"
             )
@@ -2157,7 +2153,7 @@ class ScalarLinearExpression:
         return self.__div__(other)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
-        if not isinstance(other, (int, float, np.number)):
+        if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
             )
@@ -2165,7 +2161,7 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
-        if not isinstance(other, (int, float, np.number)):
+        if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
             )
@@ -2173,7 +2169,7 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
     def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
-        if not isinstance(other, (int, float, np.number)):
+        if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
             )

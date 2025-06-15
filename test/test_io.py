@@ -7,7 +7,6 @@ Created on Thu Mar 18 09:03:35 2021.
 
 import pickle
 from pathlib import Path
-from typing import Union
 
 import pandas as pd
 import pytest
@@ -165,7 +164,7 @@ def test_to_file_lp_explicit_coordinate_names(model: Model, tmp_path: Path) -> N
 def test_to_file_lp_None(model: Model) -> None:
     import gurobipy
 
-    fn: Union[str, None] = None
+    fn: str | None = None
     model.to_file(fn)
 
     fn_path = model.get_problem_file()
