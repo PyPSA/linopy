@@ -1151,7 +1151,7 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     assert res.sel(dim_1=0).vars[2].item() == -1
 
     with pytest.warns(DeprecationWarning):
-        merge(expr1, expr2)  # type: ignore[arg-type]
+        merge(expr1, expr2)
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:

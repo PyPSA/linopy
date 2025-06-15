@@ -710,7 +710,7 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-        self.objective.expression = expr  # type: ignore[assignment]
+        self.objective.expression = expr
         self.objective.sense = sense
 
     def remove_variables(self, name: str) -> None:
