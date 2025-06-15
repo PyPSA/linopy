@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 # Type aliases using Union for Python 3.9 compatibility
 CoordsLike = Union[
-    Sequence[Union[Sequence, Index, DataArray]],
+    Sequence[Sequence | Index | DataArray],
     Mapping,
     DataArrayCoordinates,
     DatasetCoordinates,
