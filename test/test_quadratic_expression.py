@@ -303,7 +303,7 @@ def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) 
 
 def test_matrices_matrix(model: Model, x: Variable, y: Variable) -> None:
     expr = 10 * x * y
-    model.objective = expr  # type: ignore
+    model.objective = expr
 
     Q = model.matrices.Q
     assert isinstance(Q, csc_matrix)
@@ -314,7 +314,7 @@ def test_matrices_matrix_mixed_linear_and_quadratic(
     model: Model, x: Variable, y: Variable
 ) -> None:
     quad_expr = x * y + x
-    model.objective = quad_expr + x  # type: ignore
+    model.objective = quad_expr + x
 
     Q = model.matrices.Q
     assert isinstance(Q, csc_matrix)

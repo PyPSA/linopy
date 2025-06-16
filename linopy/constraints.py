@@ -940,7 +940,7 @@ class Constraints:
         name : str
             Name of the containing constraint.
         """
-        if not isinstance(label, (float, int)) or label < 0:
+        if not isinstance(label, float | int) or label < 0:
             raise ValueError("Label must be a positive number.")
         for name, ds in self.items():
             if label in ds.labels:
@@ -1084,7 +1084,7 @@ class AnonymousScalarConstraint:
         """
         Initialize a anonymous scalar constraint.
         """
-        if not isinstance(rhs, (int, float, np.floating, np.integer)):
+        if not isinstance(rhs, int | float | np.floating | np.integer):
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
         self._lhs = lhs
         self._sign = sign
