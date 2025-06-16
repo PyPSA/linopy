@@ -183,9 +183,6 @@ def test_variable_sum_warn_unknown_kwargs(x: linopy.Variable) -> None:
 def test_fill_value() -> None:
     isinstance(linopy.variables.Variable._fill_value, dict)
 
-    with pytest.warns(DeprecationWarning):
-        linopy.variables.Variable.fill_value
-
 
 def test_variable_where(x: linopy.Variable) -> None:
     x = x.where([True] * 4 + [False] * 6)

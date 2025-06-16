@@ -147,9 +147,6 @@ def test_repr(m: Model) -> None:
 def test_fill_value() -> None:
     isinstance(LinearExpression._fill_value, dict)
 
-    with pytest.warns(DeprecationWarning):
-        LinearExpression.fill_value
-
 
 def test_linexpr_with_scalars(m: Model) -> None:
     expr = m.linexpr((10, "x"), (1, "y"))

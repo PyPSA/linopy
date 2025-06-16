@@ -755,18 +755,6 @@ class Variable:
         """
         return self.data.attrs["label_range"]
 
-    @classmethod  # type: ignore
-    @property
-    def fill_value(cls) -> dict[str, Any]:
-        """
-        Return the fill value of the variable.
-        """
-        warn(
-            "The `.fill_value` attribute is deprecated, use linopy.variables.FILL_VALUE instead.",
-            DeprecationWarning,
-        )
-        return cls._fill_value
-
     @property
     def mask(self) -> DataArray:
         """

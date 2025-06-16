@@ -664,15 +664,6 @@ class BaseExpression(ABC):
     def loc(self) -> LocIndexer:
         return LocIndexer(self)
 
-    @classmethod  # type: ignore
-    @property
-    def fill_value(cls) -> dict[str, Any]:
-        warn(
-            "The `.fill_value` attribute is deprecated, use linopy.expressions.FILL_VALUE instead.",
-            DeprecationWarning,
-        )
-        return cls._fill_value
-
     @property
     def type(self) -> str:
         return "LinearExpression"
