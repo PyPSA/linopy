@@ -310,7 +310,7 @@ def test_constraint_rhs_getter(c: linopy.constraints.Constraint) -> None:
 def test_constraint_vars_setter(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.vars = x  # type: ignore
+    c.vars = x
     assert_equal(c.vars, x.labels)
 
 
@@ -329,7 +329,7 @@ def test_constraint_vars_setter_invalid(
 
 
 def test_constraint_coeffs_setter(c: linopy.constraints.Constraint) -> None:
-    c.coeffs = 3  # type: ignore
+    c.coeffs = 3
     assert (c.coeffs == 3).all()
 
 
@@ -345,32 +345,32 @@ def test_constraint_lhs_setter(
 def test_constraint_lhs_setter_with_variable(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.lhs = x  # type: ignore
+    c.lhs = x
     assert c.lhs.nterm == 1
 
 
 def test_constraint_lhs_setter_with_constant(c: linopy.constraints.Constraint) -> None:
     sizes = c.sizes
-    c.lhs = 10  # type: ignore
+    c.lhs = 10
     assert (c.rhs == -10).all()
     assert c.lhs.nterm == 0
     assert c.sizes["first"] == sizes["first"]
 
 
 def test_constraint_sign_setter(c: linopy.constraints.Constraint) -> None:
-    c.sign = EQUAL  # type: ignore
+    c.sign = EQUAL
     assert (c.sign == EQUAL).all()
 
 
 def test_constraint_sign_setter_alternative(c: linopy.constraints.Constraint) -> None:
-    c.sign = long_EQUAL  # type: ignore
+    c.sign = long_EQUAL
     assert (c.sign == EQUAL).all()
 
 
 def test_constraint_sign_setter_invalid(c: linopy.constraints.Constraint) -> None:
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
-        c.sign = "asd"  # type: ignore
+        c.sign = "asd"
 
 
 def test_constraint_rhs_setter(c: linopy.constraints.Constraint) -> None:
@@ -392,7 +392,7 @@ def test_constraint_rhs_setter_with_variable(
 def test_constraint_rhs_setter_with_expression(
     c: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    c.rhs = x + y  # type: ignore
+    c.rhs = x + y
     assert (c.rhs == 0).all()
     assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
     assert c.lhs.nterm == 3
@@ -401,7 +401,7 @@ def test_constraint_rhs_setter_with_expression(
 def test_constraint_rhs_setter_with_expression_and_constant(
     c: linopy.constraints.Constraint, x: linopy.Variable
 ) -> None:
-    c.rhs = x + 1  # type: ignore
+    c.rhs = x + 1
     assert (c.rhs == 1).all()
     assert (c.coeffs.sum(c.term_dim) == 0).all()
     assert c.lhs.nterm == 2

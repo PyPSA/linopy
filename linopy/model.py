@@ -317,7 +317,7 @@ class Model:
 
     @solver_dir.setter
     def solver_dir(self, value: str | Path) -> None:
-        if not isinstance(value, (str, Path)):
+        if not isinstance(value, str | Path):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
 
@@ -614,7 +614,7 @@ class Model:
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
             data = lhs.to_constraint(sign, rhs).data
-        elif isinstance(lhs, (list, tuple)):
+        elif isinstance(lhs, list | tuple):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_none)
             data = self.linexpr(*lhs).to_constraint(sign, rhs).data
@@ -633,7 +633,7 @@ class Model:
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.data
-        elif isinstance(lhs, (Variable, ScalarVariable, ScalarLinearExpression)):
+        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
             data = lhs.to_linexpr().to_constraint(sign, rhs).data
@@ -710,7 +710,7 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-        self.objective.expression = expr  # type: ignore[assignment]
+        self.objective.expression = expr
         self.objective.sense = sense
 
     def remove_variables(self, name: str) -> None:
