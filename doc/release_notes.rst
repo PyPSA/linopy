@@ -10,7 +10,7 @@ Release Notes
 
 **Breaking Changes**
 
-* With this release, the package support for python 3.9 was dropped. It now requires python 3.10 or higher.
+* With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
 
 Version 0.5.5
 --------------
