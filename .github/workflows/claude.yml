@@ -12,12 +12,18 @@ on:
 
 jobs:
   claude:
+    # This workflow triggers when @claude is mentioned in:
+    # - Issue comments (on issues or PRs)
+    # - Pull request review comments (inline code comments)
+    # - Pull request reviews (general review comments)
+    # - New issues (in title or body)
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read
@@ -28,6 +34,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "Error: Missing required secret ANTHROPIC_API_KEY"
+            echo "Please add the ANTHROPIC_API_KEY secret to your repository settings"
+            exit 1
+          fi
 
       - name: Run Claude Code
         id: claude
@@ -44,14 +58,20 @@ jobs:
           # Optional: Trigger when specific user is assigned to an issue
           # assignee_trigger: "claude-bot"
 
-          # Optional: Allow Claude to run specific commands
-          # allowed_tools: "Bash(npm install),Bash(npm run build),Bash(npm run test:*),Bash(npm run lint:*)"
+          # Project-specific tools for Python development
+          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[dev,solvers])"
 
-          # Optional: Add custom instructions for Claude to customize its behavior for your project
-          # custom_instructions: |
-          #   Follow our coding standards
-          #   Ensure all new code has tests
-          #   Use TypeScript for new files
+          # Custom instructions for linopy project
+          custom_instructions: |
+            You are working on linopy, a optimization library built on xarray.
+            Follow these guidelines:
+            - Use type hints and ensure mypy compliance
+            - Follow xarray patterns for dimension handling
+            - Write tests for new features or bug fixes
+            - Use ruff for linting and formatting (run ruff check --fix .)
+            - Place tests in the test directory with test_*.py naming
+            - Maintain consistency with existing codebase patterns, avoiding redundant code
+            - Consider memory efficiency for large-scale optimization problems
 
           # Optional: Custom environment variables for Claude
           # claude_env: |

@@ -102,6 +102,27 @@ When modifying the codebase, maintain consistency with these patterns and ensure
 * Always create a feature branch for new features or bug fixes.
 * Use the github cli (gh) to interact with the Github repository.
 
+### GitHub Claude Code Integration
+
+This repository includes Claude Code GitHub Actions for automated assistance:
+
+1. **Automated PR Reviews** (`claude-code-review.yml`):
+   - Automatically reviews PRs only when first created (opened)
+   - Subsequent reviews require manual `@claude` mention
+   - Focuses on Python best practices, xarray patterns, and optimization correctness
+   - Can run tests and linting as part of the review
+   - **Skip initial review by**: Adding `[skip-review]` or `[WIP]` to PR title, or using draft PRs
+
+2. **Manual Claude Assistance** (`claude.yml`):
+   - Trigger by mentioning `@claude` in any:
+     - Issue comments
+     - Pull request comments
+     - Pull request reviews
+     - New issue body or title
+   - Claude can help with bug fixes, feature implementation, code explanations, etc.
+
+**Note**: Both workflows require the `ANTHROPIC_API_KEY` secret to be configured in the repository settings.
+
 
 ## Development Guidelines
 
