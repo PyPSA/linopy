@@ -39,3 +39,6 @@ benchmark/scripts/leftovers/
 
 # IDE
 .idea/
+
+# Claude
+.claude/settings.local.json
