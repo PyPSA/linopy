@@ -1,0 +1,86 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+
+jobs:
+  claude-review:
+    # Skip review for draft PRs, WIP, or explicitly skipped PRs
+    if: |
+      !contains(github.event.pull_request.title, '[skip-review]') &&
+      !contains(github.event.pull_request.title, '[WIP]') &&
+      !github.event.pull_request.draft
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "Error: Missing required secret ANTHROPIC_API_KEY"
+            echo "Please add the ANTHROPIC_API_KEY secret to your repository settings"
+            exit 1
+          fi
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
+          # model: "claude-opus-4-20250514"
+
+          # Direct prompt for automated review (no @claude mention needed)
+          direct_prompt: |
+            Please review this pull request for the linopy optimization library. Focus on:
+            - Python best practices and type safety (we use mypy for type checking)
+            - Proper xarray integration patterns and dimension handling
+            - Performance implications for large-scale optimization problems
+            - Mathematical correctness in solver interfaces and constraint formulations
+            - Memory efficiency considerations for handling large arrays
+            - Test coverage and edge cases
+            - Consistency with the existing codebase patterns, avoiding redundant code
+
+            Linopy is built on xarray and provides N-dimensional labeled arrays for variables and constraints.
+            Be constructive and specific in your feedback.
+
+          # Optional: Customize review based on file types
+          # direct_prompt: |
+          #   Review this PR focusing on:
+          #   - For TypeScript files: Type safety and proper interface usage
+          #   - For API endpoints: Security, input validation, and error handling
+          #   - For React components: Performance, accessibility, and best practices
+          #   - For tests: Coverage, edge cases, and test quality
+
+          # Optional: Different prompts for different authors
+          # direct_prompt: |
+          #   ${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' &&
+          #   'Welcome! Please review this PR from a first-time contributor. Be encouraging and provide detailed explanations for any suggestions.' ||
+          #   'Please provide a thorough code review focusing on our coding standards and best practices.' }}
+
+          # Project-specific tools for Python development
+          allowed_tools: "Bash(pytest),Bash(ruff check .),Bash(ruff format .),Bash(mypy .),Bash(uv pip install -e .[dev,solvers])"
+
+          # Optional: Skip review for certain conditions
+          # if: |
+          #   !contains(github.event.pull_request.title, '[skip-review]') &&
+          #   !contains(github.event.pull_request.title, '[WIP]')

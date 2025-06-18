@@ -128,12 +128,12 @@ def test_variable_lower_getter(z: linopy.Variable) -> None:
 
 
 def test_variable_upper_setter(z: linopy.Variable) -> None:
-    z.upper = 20  # type: ignore
+    z.upper = 20
     assert z.upper.item() == 20
 
 
 def test_variable_lower_setter(z: linopy.Variable) -> None:
-    z.lower = 8  # type: ignore
+    z.lower = 8
     assert z.lower == 8
 
 
@@ -182,9 +182,6 @@ def test_variable_sum_warn_unknown_kwargs(x: linopy.Variable) -> None:
 
 def test_fill_value() -> None:
     isinstance(linopy.variables.Variable._fill_value, dict)
-
-    with pytest.warns(DeprecationWarning):
-        linopy.variables.Variable.fill_value
 
 
 def test_variable_where(x: linopy.Variable) -> None:

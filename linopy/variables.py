@@ -10,6 +10,7 @@ import functools
 import logging
 from collections.abc import Callable, Hashable, ItemsView, Iterator, Mapping
 from dataclasses import dataclass
+from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -55,7 +56,6 @@ from linopy.types import (
     ConstantLike,
     DimsLike,
     ExpressionLike,
-    NotImplementedType,
     SideLike,
     VariableLike,
 )
@@ -400,7 +400,7 @@ class Variable:
         Multiply variables with a coefficient, variable, or expression.
         """
         try:
-            if isinstance(other, (Variable, ScalarVariable)):
+            if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
 
             return self.to_linexpr(other)
@@ -449,7 +449,7 @@ class Variable:
         """
         Divide variables with a coefficient.
         """
-        if isinstance(other, (expressions.LinearExpression, Variable)):
+        if isinstance(other, expressions.LinearExpression | Variable):
             raise TypeError(
                 "unsupported operand type(s) for /: "
                 f"{type(self)} and {type(other)}. "
@@ -755,18 +755,6 @@ class Variable:
         """
         return self.data.attrs["label_range"]
 
-    @classmethod  # type: ignore
-    @property
-    def fill_value(cls) -> dict[str, Any]:
-        """
-        Return the fill value of the variable.
-        """
-        warn(
-            "The `.fill_value` attribute is deprecated, use linopy.variables.FILL_VALUE instead.",
-            DeprecationWarning,
-        )
-        return cls._fill_value
-
     @property
     def mask(self) -> DataArray:
         """
@@ -1028,7 +1016,7 @@ class Variable:
             _other = other.data
         elif isinstance(other, ScalarVariable):
             _other = {"labels": other.label, "lower": other.lower, "upper": other.upper}
-        elif isinstance(other, (dict, Dataset)):
+        elif isinstance(other, dict | Dataset):
             _other = other
         else:
             raise ValueError(
@@ -1432,7 +1420,7 @@ class Variables:
         name : str
             Name of the containing variable.
         """
-        if not isinstance(label, (float, int, np.integer)) or label < 0:
+        if not isinstance(label, float | int | np.integer) or label < 0:
             raise ValueError("Label must be a positive number.")
         for name, labels in self.labels.items():
             if label in labels:
@@ -1564,7 +1552,7 @@ class ScalarVariable:
         return self._model
 
     def to_scalar_linexpr(self, coeff: int | float = 1) -> ScalarLinearExpression:
-        if not isinstance(coeff, (int, np.integer, float)):
+        if not isinstance(coeff, int | np.integer | float):
             raise TypeError(f"Coefficient must be a numeric value, got {type(coeff)}.")
         return expressions.ScalarLinearExpression((coeff,), (self.label,), self.model)
 
@@ -1588,7 +1576,7 @@ class ScalarVariable:
         return self.to_scalar_linexpr(coeff)
 
     def __rmul__(self, coeff: int | float) -> ScalarLinearExpression:
-        if isinstance(coeff, (Variable, ScalarVariable)):
+        if isinstance(coeff, Variable | ScalarVariable):
             return NotImplemented
         return self.to_scalar_linexpr(coeff)
 

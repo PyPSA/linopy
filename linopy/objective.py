@@ -8,8 +8,8 @@ This module contains definition related to objective expressions.
 from __future__ import annotations
 
 import functools
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import polars as pl
@@ -175,11 +175,11 @@ class Objective:
         """
         Sets the expression of the objective.
         """
-        if isinstance(expr, (list, tuple)):
+        if isinstance(expr, list | tuple):
             expr = self.model.linexpr(*expr)
 
         if not isinstance(
-            expr, (expressions.LinearExpression, expressions.QuadraticExpression)
+            expr, expressions.LinearExpression | expressions.QuadraticExpression
         ):
             raise ValueError(
                 f"Invalid type of `expr` ({type(expr)})."
@@ -263,7 +263,7 @@ class Objective:
 
     def __mul__(self, expr: ConstantLike) -> Objective:
         # only allow scalar multiplication
-        if not isinstance(expr, (int, float, np.floating, np.integer)):
+        if not isinstance(expr, int | float | np.floating | np.integer):
             raise ValueError("Invalid type for multiplication.")
         return Objective(self.expression * expr, self.model, self.sense)
 
@@ -272,6 +272,6 @@ class Objective:
 
     def __truediv__(self, expr: ConstantLike) -> Objective:
         # only allow scalar division
-        if not isinstance(expr, (int, float, np.floating, np.integer)):
+        if not isinstance(expr, int | float | np.floating | np.integer):
             raise ValueError("Invalid type for division.")
         return Objective(self.expression / expr, self.model, self.sense)
