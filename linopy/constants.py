@@ -106,6 +106,8 @@ class TerminationCondition(Enum):
     iteration_limit = "iteration_limit"
     terminated_by_limit = "terminated_by_limit"
     suboptimal = "suboptimal"
+    numerical = "numerical"
+    imprecise = "imprecise"
 
     # WARNING
     unbounded = "unbounded"
@@ -141,6 +143,8 @@ STATUS_TO_TERMINATION_CONDITION_MAP: dict[SolverStatus, list[TerminationConditio
         TerminationCondition.time_limit,
         TerminationCondition.terminated_by_limit,
         TerminationCondition.suboptimal,
+        TerminationCondition.numerical,
+        TerminationCondition.imprecise,
     ],
     SolverStatus.warning: [
         TerminationCondition.unbounded,
