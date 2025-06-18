@@ -5,8 +5,8 @@ Created on Thu Mar 18 09:03:35 2021.
 @author: fabian
 """
 
+import pickle
 from pathlib import Path
-from typing import Union
 
 import pandas as pd
 import pytest
@@ -109,6 +109,21 @@ def test_model_to_netcdf_with_status_and_condition(
     assert_model_equal(m, p)
 
 
+def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
+    m = model_with_dash_names
+    fn = tmp_path / "test.nc"
+    m._status = "ok"
+    m._termination_condition = "optimal"
+
+    with open(fn, "wb") as f:
+        pickle.dump(m, f)
+
+    with open(fn, "rb") as f:
+        p = pickle.load(f)
+
+    assert_model_equal(m, p)
+
+
 # skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
 @pytest.mark.skipif(
     xr.__version__ in ["2024.1.0", "2024.1.1"],
@@ -149,7 +164,7 @@ def test_to_file_lp_explicit_coordinate_names(model: Model, tmp_path: Path) -> N
 def test_to_file_lp_None(model: Model) -> None:
     import gurobipy
 
-    fn: Union[str, None] = None
+    fn: str | None = None
     model.to_file(fn)
 
     fn_path = model.get_problem_file()

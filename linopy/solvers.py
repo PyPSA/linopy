@@ -14,9 +14,10 @@ import re
 import subprocess as sub
 import sys
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections import namedtuple
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -438,23 +439,32 @@ class CBC(Solver):
             p.stdout.close()
             p.wait()
         else:
-            log_f = open(log_fn, "w")
-            p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
-            p.wait()
+            with open(log_fn, "w") as log_f:
+                p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
+                p.wait()
 
         with open(solution_fn) as f:
-            data = f.readline()
+            first_line = f.readline()
 
-        if data.startswith("Optimal - objective value"):
+        if first_line.startswith("Optimal "):
             status = Status.from_termination_condition("optimal")
-        elif "Infeasible" in data:
+        elif "Infeasible" in first_line:
             status = Status.from_termination_condition("infeasible")
         else:
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-        status.legacy_status = data
+        status.legacy_status = first_line
+
+        # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
+        h = highspy.Highs()
+        h.readModel(path_to_string(problem_fn))
+        variables = {v.name for v in h.getVariables()}
 
         def get_solver_solution() -> Solution:
-            objective = float(data[len("Optimal - objective value ") :])
+            m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
+            if m and len(m.groups()) == 1:
+                objective = float(m.group(1))
+            else:
+                objective = np.nan
 
             with open(solution_fn, "rb") as f:
                 trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
@@ -467,16 +477,30 @@ class CBC(Solver):
                 usecols=[1, 2, 3],
                 index_col=0,
             )
-            variables_b = df.index.str[0] == "x"
+            variables_b = df.index.isin(variables)
 
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
+
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        # Parse the output and get duality gap and solver runtime
+        mip_gap, runtime = None, None
+        if log_fn is not None:
+            with open(log_fn) as log_f:
+                output = "".join(log_f.readlines())
+        m = re.search(r"\nGap: +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            mip_gap = float(m.group(1))
+        m = re.search(r"\nTime \(Wallclock seconds\): +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            runtime = float(m.group(1))
+        CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
+
+        return Result(status, solution, CbcModel(mip_gap, runtime))
 
 
 class GLPK(Solver):
@@ -549,6 +573,7 @@ class GLPK(Solver):
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
+            "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
         }
         sense = read_sense_from_problem_file(problem_fn)
@@ -727,9 +752,6 @@ class Highs(Solver):
 
         h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
 
-        if log_fn is None and model is not None:
-            log_fn = model.solver_dir / "highs.log"
-
         return self._solve(
             h,
             solution_fn,
@@ -828,7 +850,28 @@ class Highs(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        # https://ergo-code.github.io/HiGHS/dev/structures/enums/#HighsModelStatus
+        CONDITION_MAP: dict[highspy.HighsModelStatus, TerminationCondition] = {
+            highspy.HighsModelStatus.kNotset: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kLoadError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPresolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kSolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPostsolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelEmpty: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kMemoryLimit: TerminationCondition.resource_interrupt,
+            highspy.HighsModelStatus.kOptimal: TerminationCondition.optimal,
+            highspy.HighsModelStatus.kInfeasible: TerminationCondition.infeasible,
+            highspy.HighsModelStatus.kUnboundedOrInfeasible: TerminationCondition.infeasible_or_unbounded,
+            highspy.HighsModelStatus.kUnbounded: TerminationCondition.unbounded,
+            highspy.HighsModelStatus.kObjectiveBound: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kObjectiveTarget: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kTimeLimit: TerminationCondition.time_limit,
+            highspy.HighsModelStatus.kIterationLimit: TerminationCondition.iteration_limit,
+            highspy.HighsModelStatus.kSolutionLimit: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kInterrupt: TerminationCondition.user_interrupt,
+            highspy.HighsModelStatus.kUnknown: TerminationCondition.unknown,
+        }
 
         if log_fn is not None:
             self.solver_options["log_file"] = path_to_string(log_fn)
@@ -844,10 +887,12 @@ class Highs(Solver):
 
         h.run()
 
-        condition = h.modelStatusToString(h.getModelStatus()).lower()
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        condition = h.getModelStatus()
+        termination_condition = CONDITION_MAP.get(
+            condition, TerminationCondition.unknown
+        )
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = h.modelStatusToString(condition)
 
         if basis_fn:
             h.writeBasis(path_to_string(basis_fn))
@@ -1176,6 +1221,17 @@ class Cplex(Solver):
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
+            "integer infeasible": "infeasible",
+            "time limit exceeded": "time_limit",
+            "time limit exceeded, no integer solution": "infeasible",
+            "error termination": "error",
+            "error termination, no integer solution": "error",
+            "memory limit exceeded": "internal_solver_error",
+            "memory limit exceeded, no integer solution": "internal_solver_error",
+            "aborted": "user_interrupt",
+            "integer unbounded": "unbounded",
+            "integer infeasible or unbounded": "infeasible_or_unbounded",
+            "Unknown status value": "unknown",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
@@ -1312,7 +1368,23 @@ class SCIP(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        CONDITION_MAP: dict[str, TerminationCondition] = {
+            # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
+            "inforunbd": TerminationCondition.infeasible_or_unbounded,
+            "userinterrupt": TerminationCondition.user_interrupt,
+            "terminate": TerminationCondition.user_interrupt,
+            "nodelimit": TerminationCondition.terminated_by_limit,
+            "totalnodelimit": TerminationCondition.terminated_by_limit,
+            "stallnodelimit": TerminationCondition.terminated_by_limit,
+            "timelimit": TerminationCondition.time_limit,
+            "memlimit": TerminationCondition.terminated_by_limit,
+            "gaplimit": TerminationCondition.optimal,
+            "primallimit": TerminationCondition.terminated_by_limit,
+            "duallimit": TerminationCondition.terminated_by_limit,
+            "sollimit": TerminationCondition.terminated_by_limit,
+            "bestsollimit": TerminationCondition.terminated_by_limit,
+            "restartlimit": TerminationCondition.terminated_by_limit,
+        }
 
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
@@ -1341,9 +1413,6 @@ class SCIP(Solver):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
-        # In order to retrieve the dual values, we need to turn off presolve
-        m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
-
         m.optimize()
 
         if basis_fn:
@@ -1362,21 +1431,24 @@ class SCIP(Solver):
 
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
+            vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
-            sol = pd.Series({v.name: s[v] for v in m.getVars()})
-            sol.drop(
-                ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
+            sol = pd.Series(
+                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
             )
 
-            cons = m.getConss()
+            cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
-                dual = dual[
-                    dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
-                ]
+                dual = pd.Series(
+                    {
+                        c.name: m.getDualSolVal(c)
+                        for c in cons
+                        if c.name not in vars_to_ignore
+                    }
+                )
             else:
-                logger.warning("Dual values of MILP couldn't be parsed")
+                logger.warning("Dual values not available (is this an MILP?)")
                 dual = pd.Series(dtype=float)
 
             return Solution(sol, dual, objective)
@@ -1969,9 +2041,9 @@ class COPT(Solver):
 
         # TODO: check if this suffices
         condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = CONDITION_MAP.get(condition, str(condition))
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = str(condition)
 
         def get_solver_solution() -> Solution:
             # TODO: check if this suffices

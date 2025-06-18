@@ -16,6 +16,8 @@ doc/api
 Highs.log
 paper/
 monkeytype.sqlite3
+.github/copilot-instructions.md
+uv.lock
 
 # Environments
 .env
@@ -34,3 +36,9 @@ benchmark/notebooks/.ipynb_checkpoints
 benchmark/scripts/__pycache__
 benchmark/scripts/benchmarks-pypsa-eur/__pycache__
 benchmark/scripts/leftovers/
+
+# IDE
+.idea/
+
+# Claude
+.claude/settings.local.json

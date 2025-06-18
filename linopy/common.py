@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -37,7 +37,7 @@ from linopy.types import CoordsLike, DimsLike
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
 
@@ -117,7 +117,7 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     """
     if lst is None:
         return None
-    if isinstance(lst, (Sequence, Iterable)):
+    if isinstance(lst, Sequence | Iterable):
         lst = list(lst)
     else:
         lst = [lst]
@@ -205,8 +205,12 @@ def numpy_to_dataarray(
         DataArray:
             The converted DataArray.
     """
+    # fallback case for zero dim arrays
+    if arr.ndim == 0:
+        return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
+
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
-    if isinstance(dims, (Iterable, Sequence)):
+    if isinstance(dims, Iterable | Sequence):
         dims = list(dims)
     elif dims is not None:
         dims = [dims]
@@ -246,11 +250,11 @@ def as_dataarray(
         DataArray:
             The converted DataArray.
     """
-    if isinstance(arr, (pd.Series, pd.DataFrame)):
+    if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, (np.number, int, float, str, bool, list)):
+    elif isinstance(arr, np.number | int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
@@ -489,7 +493,7 @@ def fill_missing_coords(
 
     """
     ds = ds.copy()
-    if not isinstance(ds, (Dataset, DataArray)):
+    if not isinstance(ds, Dataset | DataArray):
         raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
 
     skip_dims = [] if fill_helper_dims else HELPER_DIMS
@@ -803,7 +807,7 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     # Convert each coordinate component to string
     formatted = []
     for value in values:
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list | tuple):
             formatted.append(f"({', '.join(str(x) for x in value)})")
         else:
             formatted.append(str(value))
@@ -942,11 +946,9 @@ def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(self: Any, arg: Any) -> Any:
         if isinstance(
             arg,
-            (
-                variables.Variable,
-                variables.ScalarVariable,
-                expressions.LinearExpression,
-            ),
+            variables.Variable
+            | variables.ScalarVariable
+            | expressions.LinearExpression,
         ):
             raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
         return func(self, arg)
@@ -990,13 +992,13 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
 
 
 def align(
-    *objects: LinearExpression | Variable | T_Alignable,
+    *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
     join: JoinOptions = "inner",
     copy: bool = True,
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
     fill_value: Any = dtypes.NA,
-) -> tuple[LinearExpression | Variable | T_Alignable, ...]:
+) -> tuple[LinearExpression | QuadraticExpression | Variable | T_Alignable, ...]:
     """
     Given any number of Variables, Expressions, Dataset and/or DataArray objects,
     returns new objects with aligned indexes and dimension sizes.
@@ -1051,13 +1053,13 @@ def align(
 
 
     """
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
     finisher: list[partial[Any] | Callable[[Any], Any]] = []
     das: list[Any] = []
     for obj in objects:
-        if isinstance(obj, LinearExpression):
+        if isinstance(obj, LinearExpression | QuadraticExpression):
             finisher.append(partial(obj.__class__, model=obj.model))
             das.append(obj.data)
         elif isinstance(obj, Variable):
@@ -1086,7 +1088,14 @@ def align(
     return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
-LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")
+LocT = TypeVar(
+    "LocT",
+    "Dataset",
+    "Variable",
+    "LinearExpression",
+    "QuadraticExpression",
+    "Constraint",
+)
 
 
 class LocIndexer(Generic[LocT]):

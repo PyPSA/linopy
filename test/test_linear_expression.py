@@ -14,10 +14,11 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, Variable, merge
+from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
-from linopy.testing import assert_linequal
+from linopy.testing import assert_linequal, assert_quadequal
+from linopy.variables import ScalarVariable
 
 
 @pytest.fixture
@@ -146,9 +147,6 @@ def test_repr(m: Model) -> None:
 def test_fill_value() -> None:
     isinstance(LinearExpression._fill_value, dict)
 
-    with pytest.warns(DeprecationWarning):
-        LinearExpression.fill_value
-
 
 def test_linexpr_with_scalars(m: Model) -> None:
     expr = m.linexpr((10, "x"), (1, "y"))
@@ -156,6 +154,13 @@ def test_linexpr_with_scalars(m: Model) -> None:
         [[10, 1], [10, 1]], coords={"dim_0": [0, 1]}, dims=["dim_0", TERM_DIM]
     )
     assert_equal(expr.coeffs, target)
+
+
+def test_linexpr_with_variables_and_constants(
+    m: Model, x: Variable, y: Variable
+) -> None:
+    expr = m.linexpr((10, x), (1, y), 2)
+    assert (expr.const == 2).all()
 
 
 def test_linexpr_with_series(m: Model, v: Variable) -> None:
@@ -187,6 +192,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr2 = x.mul(1)
     assert_linequal(expr, expr2)
 
+    expr3 = expr.mul(1)
+    assert_linequal(expr, expr3)
+
     expr = x / 1
     assert isinstance(expr, LinearExpression)
 
@@ -196,7 +204,13 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr2 = x.div(1)
     assert_linequal(expr, expr2)
 
+    expr3 = expr.div(1)
+    assert_linequal(expr, expr3)
+
     expr = np.array([1, 2]) * x
+    assert isinstance(expr, LinearExpression)
+
+    expr = np.array(1) * x
     assert isinstance(expr, LinearExpression)
 
     expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
@@ -204,6 +218,17 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
 
     expr = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0")) * x
     assert isinstance(expr, LinearExpression)
+
+    quad = x * x
+    assert isinstance(quad, QuadraticExpression)
+
+    with pytest.raises(TypeError):
+        quad * quad
+
+    expr = x * 1
+    assert isinstance(expr, LinearExpression)
+    assert expr.__mul__(object()) is NotImplemented
+    assert expr.__rmul__(object()) is NotImplemented
 
 
 def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> None:
@@ -222,6 +247,20 @@ def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> 
     expr2 = x.add(y)
     assert_linequal(expr, expr2)
 
+    expr3 = (x * 1).add(y)
+    assert_linequal(expr, expr3)
+
+    expr3 = x + (x * x)
+    assert isinstance(expr3, QuadraticExpression)
+
+
+def test_linear_expression_with_raddition(m: Model, x: Variable) -> None:
+    expr = x * 1.0
+    expr_2: LinearExpression = 10.0 + expr
+    assert isinstance(expr, LinearExpression)
+    expr_3: LinearExpression = expr + 10.0
+    assert_linequal(expr_2, expr_3)
+
 
 def test_linear_expression_with_subtraction(m: Model, x: Variable, y: Variable) -> None:
     expr = x - y
@@ -231,9 +270,22 @@ def test_linear_expression_with_subtraction(m: Model, x: Variable, y: Variable) 
     expr2 = x.sub(y)
     assert_linequal(expr, expr2)
 
+    expr3: LinearExpression = x * 1
+    expr4 = expr3.sub(y)
+    assert_linequal(expr, expr4)
+
     expr = -x - 8 * y
     assert isinstance(expr, LinearExpression)
     assert_linequal(expr, m.linexpr((-1, "x"), (-8, "y")))
+
+
+def test_linear_expression_rsubtraction(x: Variable, y: Variable) -> None:
+    expr = x * 1.0
+    expr_2: LinearExpression = 10.0 - expr
+    assert isinstance(expr_2, LinearExpression)
+    expr_3: LinearExpression = (expr - 10.0) * -1
+    assert_linequal(expr_2, expr_3)
+    assert expr.__rsub__(object()) is NotImplemented
 
 
 def test_linear_expression_with_constant(m: Model, x: Variable, y: Variable) -> None:
@@ -274,7 +326,10 @@ def test_linear_expression_with_errors(m: Model, x: Variable) -> None:
         x / (1 * x)
 
     with pytest.raises(TypeError):
-        m.linexpr((10, x.labels), (1, "y"))  # type: ignore
+        m.linexpr((10, x.labels), (1, "y"))
+
+    with pytest.raises(TypeError):
+        m.linexpr(a=2)  # type: ignore
 
 
 def test_linear_expression_from_rule(m: Model, x: Variable, y: Variable) -> None:
@@ -318,6 +373,9 @@ def test_linear_expression_addition(x: Variable, y: Variable, z: Variable) -> No
     assert (res.coords["dim_0"] == expr.coords["dim_0"]).all()
     assert (res.coords["dim_1"] == other.coords["dim_1"]).all()
     assert res.data.notnull().all().to_array().all()
+
+    res2 = expr.add(other)
+    assert_linequal(res, res2)
 
     assert isinstance(x - expr, LinearExpression)
     assert isinstance(x + expr, LinearExpression)
@@ -437,6 +495,18 @@ def test_linear_expression_sum_warn_using_dims(z: Variable) -> None:
 def test_linear_expression_sum_warn_unknown_kwargs(z: Variable) -> None:
     with pytest.raises(ValueError):
         (1 * z).sum(unknown_kwarg="dim_0")
+
+
+def test_linear_expression_power(x: Variable) -> None:
+    expr: LinearExpression = x * 1.0
+    qd_expr = expr**2
+    assert isinstance(qd_expr, QuadraticExpression)
+
+    qd_expr2 = expr.pow(2)
+    assert_quadequal(qd_expr, qd_expr2)
+
+    with pytest.raises(ValueError):
+        expr**3
 
 
 def test_linear_expression_multiplication(
@@ -882,7 +952,7 @@ def test_linear_expression_groupby_with_dataarray(
 
     # this should not be the case, see https://github.com/PyPSA/linopy/issues/351
     if use_fallback:
-        with pytest.raises(KeyError):
+        with pytest.raises((KeyError, IndexError)):
             expr.groupby(groups).sum(use_fallback=use_fallback)
         return
 
@@ -1005,6 +1075,47 @@ def test_linear_expression_rolling_from_variable(v: Variable) -> None:
     assert rolled.nterm == 2
 
 
+def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
+    expr = LinearExpression.from_tuples((10, x), (1, y))
+    assert isinstance(expr, LinearExpression)
+
+    with pytest.warns(DeprecationWarning):
+        expr2 = LinearExpression.from_tuples((10, x), (1,))
+    assert isinstance(expr2, LinearExpression)
+    assert (expr2.const == 1).all()
+
+    expr3 = LinearExpression.from_tuples((10, x), 1)
+    assert isinstance(expr3, LinearExpression)
+    assert_linequal(expr2, expr3)
+
+    expr4 = LinearExpression.from_tuples((10, x), (1, y), 1)
+    assert isinstance(expr4, LinearExpression)
+    assert (expr4.const == 1).all()
+
+    expr5 = LinearExpression.from_tuples(1, model=x.model)
+    assert isinstance(expr5, LinearExpression)
+
+
+def test_linear_expression_from_tuples_bad_calls(
+    m: Model, x: Variable, y: Variable
+) -> None:
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples((10, x), (1, y), x)
+
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples((10, x, 3), (1, y), 1)
+
+    sv = ScalarVariable(label=0, model=m)
+    with pytest.raises(TypeError):
+        LinearExpression.from_tuples((np.array([1, 1]), sv))
+
+    with pytest.raises(TypeError):
+        LinearExpression.from_tuples((x, x))
+
+    with pytest.raises(ValueError):
+        LinearExpression.from_tuples(10)
+
+
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     assert isinstance(expr.sanitize(), LinearExpression)
@@ -1014,29 +1125,30 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
 
-    res = merge([expr1, expr2])
+    res = merge([expr1, expr2], cls=LinearExpression)
     assert res.nterm == 6
 
-    res = merge([expr1, expr2])
-    assert res.nterm == 6
+    with pytest.warns(DeprecationWarning):
+        res: LinearExpression = merge([expr1, expr2])  # type: ignore
+        assert res.nterm == 6
 
     # now concat with same length of terms
     expr1 = z.sel(dim_0=0).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge([expr1, expr2], dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
 
     # now with different length of terms
     expr1 = z.sel(dim_0=0, dim_1=slice(0, 1)).sum("dim_1")
     expr2 = z.sel(dim_0=1).sum("dim_1")
 
-    res = merge([expr1, expr2], dim="dim_1")
+    res = merge([expr1, expr2], dim="dim_1", cls=LinearExpression)
     assert res.nterm == 3
     assert res.sel(dim_1=0).vars[2].item() == -1
 
     with pytest.warns(DeprecationWarning):
-        merge(expr1, expr2)  # type: ignore
+        merge(expr1, expr2)
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:

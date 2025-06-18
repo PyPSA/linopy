@@ -1,8 +1,59 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+
+
+
+* Improved variable/expression arithmetic methods so that they correctly handle types
+
+**Breaking Changes**
+
+* With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
+
+Version 0.5.5
+--------------
+
+* Internally assign new data fields to expressions with a multiindexed-safe routine.
+
+Version 0.5.4
+--------------
+
+
+**Bug Fixes**
+
+* Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
+`solver_options` to be ignored.
+* Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
+  gap tolerance.
+* Improve the mapping of termination conditions for the SCIP solver
+* Treat GLPK's `integer undefined` status as not-OK
+* Internally assign new data fields to `Variable` and `Constraint` with a multiindexed-safe routine. Before the
+  assignment when using multi-indexed coordinates, an deprecation warning was raised. This is fixed now.
+
+
+Version 0.5.3
+--------------
+
+**Bug Fixes**
+
+* Fix the parsing of solutions returned by the CBC solver when solving from a file to not
+  assume that variables start with `x`.
+* Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
+
+**Minor Improvements**
+
+* Support pickling models.
+
+Version 0.5.2
+--------------
+
+**Bug Fixes**
+
+* Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
+This is mainly affecting operations where single numerical items from  pandas objects
+are selected and used for multiplication.
 
 **Breaking Changes**
 

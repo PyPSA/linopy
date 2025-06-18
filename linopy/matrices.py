@@ -32,7 +32,7 @@ def create_vector(
     """Create a vector of a size equal to the maximum index plus one."""
     if shape is None:
         max_value = indices.max()
-        if not isinstance(max_value, (np.integer, int)):
+        if not isinstance(max_value, np.integer | int):
             raise ValueError("Indices must be integers.")
         shape = max_value + 1
     vector = np.full(shape, fill_value)
