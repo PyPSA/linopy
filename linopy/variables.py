@@ -199,22 +199,9 @@ class Variable:
     def __getitem__(
         self, selector: list[int] | int | slice | tuple[int64, str_]
     ) -> Variable | ScalarVariable:
-        keys = selector if isinstance(selector, tuple) else (selector,)
-        if all(map(pd.api.types.is_scalar, keys)):
-            warn(
-                "Accessing a single value with `Variable[...]` and return type "
-                "ScalarVariable is deprecated. In future, this will return a Variable."
-                "To get a ScalarVariable use `Variable.at[...]` instead.",
-                FutureWarning,
-            )
-            return self.at[keys]
-
-        else:
-            # return selected Variable
-            data = Dataset(
-                {k: self.data[k][selector] for k in self.data}, attrs=self.attrs
-            )
-            return self.__class__(data, self.model, self.name)
+        # return selected Variable
+        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
+        return self.__class__(data, self.model, self.name)
 
     @property
     def attrs(self) -> dict[str, Hashable]:
