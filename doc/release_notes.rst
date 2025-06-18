@@ -12,6 +12,9 @@ Release Notes
 
 * With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
 
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
+
 Version 0.5.5
 --------------
 
@@ -54,10 +57,6 @@ Version 0.5.2
 * Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
 This is mainly affecting operations where single numerical items from  pandas objects
 are selected and used for multiplication.
-
-**Breaking Changes**
-
-* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
 
 Version 0.5.1
 --------------
