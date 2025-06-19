@@ -26,6 +26,14 @@ def quadratic_objective() -> Objective:
     return m.objective
 
 
+def test_set_objective_from_variable() -> None:
+    m = Model()
+    v = m.add_variables(coords=[[1, 2, 3]])
+    m.add_objective(v)
+    assert isinstance(m.objective, Objective)
+    assert isinstance(m.objective.expression, LinearExpression)
+
+
 def test_model(linear_objective: Objective, quadratic_objective: Objective) -> None:
     assert isinstance(linear_objective.model, Model)
     assert isinstance(quadratic_objective.model, Model)

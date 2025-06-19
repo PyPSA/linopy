@@ -38,7 +38,7 @@ benchmark/scripts/benchmarks-pypsa-eur/__pycache__
 benchmark/scripts/leftovers/
 
 # IDE
-.idea/
+.idea
 
 # Claude
 .claude/settings.local.json
