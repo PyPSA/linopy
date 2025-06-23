@@ -1970,9 +1970,7 @@ def merge(
         )
 
     if has_quad_expression and cls is not QuadraticExpression:
-        raise ValueError(
-            "Cannot merge linear expressions to QuadraticExpression"
-        )
+        raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
     linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
 
