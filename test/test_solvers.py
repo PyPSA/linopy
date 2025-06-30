@@ -7,9 +7,11 @@ Created on Tue Jan 28 09:03:35 2025.
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
+import xarray as xr
 
-from linopy import solvers
+from linopy import LESS_EQUAL, Model, solvers
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -44,6 +46,22 @@ ENDATA
 """
 
 
+@pytest.fixture
+def model() -> Model:
+    m = Model()
+
+    x = m.add_variables(4, pd.Series([8, 10]), name="x")
+    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y")
+
+    m.add_constraints(x + y, LESS_EQUAL, 10)
+
+    m.add_objective(2 * x + 3 * y)
+
+    m.parameters["param"] = xr.DataArray([1, 2, 3, 4], dims=["x"])
+
+    return m
+
+
 @pytest.mark.parametrize("solver", set(solvers.available_solvers))
 def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     try:
@@ -64,3 +82,29 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+)
+def test_gurobi_environment_parameters(model: Model, tmp_path: Path) -> None:
+    gurobi = solvers.Gurobi()
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    log1_file = tmp_path / "gurobi1.log"
+    result = gurobi.solve_problem(
+        problem_fn=mps_file, solution_fn=sol_file, env={"LogFile": str(log1_file)}
+    )
+
+    assert result.status.is_ok
+    assert log1_file.exists()
+
+    log2_file = tmp_path / "gurobi2.log"
+    gurobi.solve_problem(
+        model=model, solution_fn=sol_file, env={"LogFile": str(log2_file)}
+    )
+    assert result.status.is_ok
+    assert log2_file.exists()

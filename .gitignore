@@ -1,6 +1,7 @@
 .coverage
 .eggs
 .DS_Store
+.mypy_cache
 linopy/__pycache__
 test/__pycache__
 linopy.egg-info
