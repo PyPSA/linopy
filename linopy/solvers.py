@@ -963,7 +963,8 @@ class Gurobi(Solver):
         basis_fn : Path, optional
             Path to the basis file.
         env : None, optional
-            Gurobi environment for the solver
+            Gurobi environment for the solver, a dictionary is used as parameters for
+            environment creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -974,6 +975,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
@@ -1031,6 +1034,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
