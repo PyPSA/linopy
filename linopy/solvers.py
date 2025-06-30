@@ -32,6 +32,8 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
+    import gurobipy
+
     from linopy.model import Model
 
 QUADRATIC_SOLVERS = [
@@ -942,7 +944,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -962,9 +964,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver, a dictionary is used as parameters for
-            environment creation.
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -1001,7 +1002,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -1020,8 +1021,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
 
         Returns
         -------

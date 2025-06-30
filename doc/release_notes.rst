@@ -7,6 +7,7 @@ Release Notes
 
 
 * Improved variable/expression arithmetic methods so that they correctly handle types
+* Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
 
 **Breaking Changes**
 
