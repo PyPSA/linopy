@@ -7,11 +7,10 @@ Created on Tue Jan 28 09:03:35 2025.
 
 from pathlib import Path
 
-import pandas as pd
 import pytest
-import xarray as xr
+from test_io import model  # noqa: F401
 
-from linopy import LESS_EQUAL, Model, solvers
+from linopy import Model, solvers
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -46,22 +45,6 @@ ENDATA
 """
 
 
-@pytest.fixture
-def model() -> Model:
-    m = Model()
-
-    x = m.add_variables(4, pd.Series([8, 10]), name="x")
-    y = m.add_variables(0, pd.DataFrame([[1, 2], [3, 4]]), name="y")
-
-    m.add_constraints(x + y, LESS_EQUAL, 10)
-
-    m.add_objective(2 * x + 3 * y)
-
-    m.parameters["param"] = xr.DataArray([1, 2, 3, 4], dims=["x"])
-
-    return m
-
-
 @pytest.mark.parametrize("solver", set(solvers.available_solvers))
 def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     try:
@@ -87,7 +70,7 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
-def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:
+def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # noqa: F811
     gurobi = solvers.Gurobi()
 
     mps_file = tmp_path / "problem.mps"
@@ -113,7 +96,7 @@ def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
-def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> None:
+def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> None:  # noqa: F811
     import gurobipy as gp
 
     gurobi = solvers.Gurobi()
