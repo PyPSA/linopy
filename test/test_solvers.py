@@ -87,7 +87,7 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
-def test_gurobi_environment_parameters(model: Model, tmp_path: Path) -> None:
+def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:
     gurobi = solvers.Gurobi()
 
     mps_file = tmp_path / "problem.mps"
@@ -106,5 +106,34 @@ def test_gurobi_environment_parameters(model: Model, tmp_path: Path) -> None:
     gurobi.solve_problem(
         model=model, solution_fn=sol_file, env={"LogFile": str(log2_file)}
     )
+    assert result.status.is_ok
+    assert log2_file.exists()
+
+
+@pytest.mark.skipif(
+    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+)
+def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> None:
+    import gurobipy as gp
+
+    gurobi = solvers.Gurobi()
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    log1_file = tmp_path / "gurobi1.log"
+
+    with gp.Env(params={"LogFile": str(log1_file)}) as env:
+        result = gurobi.solve_problem(
+            problem_fn=mps_file, solution_fn=sol_file, env=env
+        )
+
+    assert result.status.is_ok
+    assert log1_file.exists()
+
+    log2_file = tmp_path / "gurobi2.log"
+    with gp.Env(params={"LogFile": str(log2_file)}) as env:
+        gurobi.solve_problem(model=model, solution_fn=sol_file, env=env)
     assert result.status.is_ok
     assert log2_file.exists()
