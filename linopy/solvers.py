@@ -923,7 +923,7 @@ class Highs(Solver[None]):
         return Result(status, solution, h)
 
 
-class Gurobi(Solver[gurobipy.Env | dict[str, Any] | None]):
+class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
     Solver subclass for the gurobi solver.
 
