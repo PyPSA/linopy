@@ -65,9 +65,9 @@ Linopy aims to make optimization programs transparent and flexible. To illustrat
 
 >>> m = linopy.Model()
 
->>> days = pd.Index(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], name='day')
->>> apples = m.add_variables(lower=0, name='apples', coords=[days])
->>> bananas = m.add_variables(lower=0, name='bananas', coords=[days])
+>>> days = pd.Index(["Mon", "Tue", "Wed", "Thu", "Fri"], name="day")
+>>> apples = m.add_variables(lower=0, name="apples", coords=[days])
+>>> bananas = m.add_variables(lower=0, name="bananas", coords=[days])
 >>> apples
 ```
 ```
@@ -83,7 +83,7 @@ Variable (day: 5)
 Add daily vitamin constraints
 
 ```python
->>> m.add_constraints(3 * apples + 2 * bananas >= 8, name='daily_vitamins')
+>>> m.add_constraints(3 * apples + 2 * bananas >= 8, name="daily_vitamins")
 ```
 ```
 Constraint `daily_vitamins` (day: 5):
@@ -98,7 +98,7 @@ Constraint `daily_vitamins` (day: 5):
 Add weekly vitamin constraint
 
 ```python
->>> m.add_constraints((3 * apples + 2 * bananas).sum() >= 50, name='weekly_vitamins')
+>>> m.add_constraints((3 * apples + 2 * bananas).sum() >= 50, name="weekly_vitamins")
 ```
 ```
 Constraint `weekly_vitamins`
