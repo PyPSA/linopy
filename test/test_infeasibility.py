@@ -13,7 +13,7 @@ class TestInfeasibility:
     """Test class for infeasibility detection functionality."""
 
     @pytest.fixture
-    def simple_infeasible_model(self):
+    def simple_infeasible_model(self) -> Model:
         """Create a simple infeasible model."""
         m = Model()
 
@@ -32,7 +32,7 @@ class TestInfeasibility:
         return m
 
     @pytest.fixture
-    def complex_infeasible_model(self):
+    def complex_infeasible_model(self) -> Model:
         """Create a more complex infeasible model."""
         m = Model()
 
@@ -54,7 +54,7 @@ class TestInfeasibility:
         return m
 
     @pytest.fixture
-    def multi_dimensional_infeasible_model(self):
+    def multi_dimensional_infeasible_model(self) -> Model:
         """Create a multi-dimensional infeasible model."""
         m = Model()
 
@@ -74,7 +74,9 @@ class TestInfeasibility:
         return m
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
-    def test_simple_infeasibility_detection(self, simple_infeasible_model, solver):
+    def test_simple_infeasibility_detection(
+        self, simple_infeasible_model: Model, solver: str
+    ) -> None:
         """Test basic infeasibility detection."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
@@ -94,7 +96,9 @@ class TestInfeasibility:
         m.print_infeasibilities()
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
-    def test_complex_infeasibility_detection(self, complex_infeasible_model, solver):
+    def test_complex_infeasibility_detection(
+        self, complex_infeasible_model: Model, solver: str
+    ) -> None:
         """Test infeasibility detection on more complex model."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
@@ -116,8 +120,8 @@ class TestInfeasibility:
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
     def test_multi_dimensional_infeasibility(
-        self, multi_dimensional_infeasible_model, solver
-    ):
+        self, multi_dimensional_infeasible_model: Model, solver: str
+    ) -> None:
         """Test infeasibility detection on multi-dimensional model."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
@@ -133,7 +137,7 @@ class TestInfeasibility:
         assert len(labels) > 0
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
-    def test_no_solver_model_error(self, solver):
+    def test_no_solver_model_error(self, solver: str) -> None:
         """Test error when no solver model is available."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
@@ -148,7 +152,7 @@ class TestInfeasibility:
             m.compute_infeasibilities()
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
-    def test_feasible_model_iis(self, solver):
+    def test_feasible_model_iis(self, solver: str) -> None:
         """Test IIS computation on a feasible model."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
@@ -178,7 +182,7 @@ class TestInfeasibility:
             # Some solvers might raise an error when computing IIS on feasible model
             pass
 
-    def test_unsupported_solver_error(self):
+    def test_unsupported_solver_error(self) -> None:
         """Test error for unsupported solvers."""
         m = Model()
         x = m.add_variables(name="x")
@@ -194,7 +198,9 @@ class TestInfeasibility:
                 m.compute_infeasibilities()
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
-    def test_deprecated_method(self, simple_infeasible_model, solver):
+    def test_deprecated_method(
+        self, simple_infeasible_model: Model, solver: str
+    ) -> None:
         """Test that deprecated method still works."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
