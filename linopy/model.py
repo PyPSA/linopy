@@ -1284,7 +1284,8 @@ class Model:
         Compute a set of infeasible constraints.
 
         This function requires that the model was solved with `gurobi` or `xpress`
-        and the termination condition was infeasible.
+        and the termination condition was infeasible. The solver must have detected
+        the infeasibility during the solve process.
 
         Returns
         -------
@@ -1354,45 +1355,65 @@ class Model:
 
         labels = set()
 
-        # Get all constraints from the model for index mapping
-        all_constraints = list(solver_model.getConstraint())
+        # Create constraint mapping for efficient lookups
+        constraint_to_index = {
+            constraint: idx
+            for idx, constraint in enumerate(solver_model.getConstraint())
+        }
 
         # Retrieve each IIS
         for iis_num in range(1, num_iis + 1):
-            # Prepare lists to receive IIS data
-            miisrow: list[Any] = []  # Constraint objects in the IIS
-            miiscol: list[Any] = []  # Variable objects in the IIS
-            constrainttype: list[str] = []  # Constraint types
-            colbndtype: list[str] = []  # Column bound types
-            duals: list[float] = []  # Dual values
-            rdcs: list[float] = []  # Reduced costs
-            isolationrows: list[str] = []  # Row isolation info
-            isolationcols: list[str] = []  # Column isolation info
-
-            # Get IIS data
-            solver_model.getiisdata(
-                iis_num,
-                miisrow,
-                miiscol,
-                constrainttype,
-                colbndtype,
-                duals,
-                rdcs,
-                isolationrows,
-                isolationcols,
-            )
+            iis_constraints = self._extract_iis_constraints(solver_model, iis_num)
 
             # Convert constraint objects to indices
-            # miisrow contains xpress.constraint objects
-            for constraint_obj in miisrow:
-                try:
-                    idx = all_constraints.index(constraint_obj)
-                    labels.add(idx)
-                except ValueError:
-                    # If constraint not found, skip it
-                    pass
+            for constraint_obj in iis_constraints:
+                if constraint_obj in constraint_to_index:
+                    labels.add(constraint_to_index[constraint_obj])
+                # Note: Silently skip constraints not found in mapping
+                # This can happen if the model structure changed after solving
 
         return sorted(list(labels))
+
+    def _extract_iis_constraints(self, solver_model: Any, iis_num: int) -> list[Any]:
+        """
+        Extract constraint objects from a specific IIS.
+
+        Parameters
+        ----------
+        solver_model : xpress.problem
+            The Xpress solver model
+        iis_num : int
+            IIS number (1-indexed)
+
+        Returns
+        -------
+        list[Any]
+            List of xpress.constraint objects in the IIS
+        """
+        # Prepare lists to receive IIS data
+        miisrow: list[Any] = []  # xpress.constraint objects in the IIS
+        miiscol: list[Any] = []  # xpress.variable objects in the IIS
+        constrainttype: list[str] = []  # Constraint types ('L', 'G', 'E')
+        colbndtype: list[str] = []  # Column bound types
+        duals: list[float] = []  # Dual values
+        rdcs: list[float] = []  # Reduced costs
+        isolationrows: list[str] = []  # Row isolation info
+        isolationcols: list[str] = []  # Column isolation info
+
+        # Get IIS data from Xpress
+        solver_model.getiisdata(
+            iis_num,
+            miisrow,
+            miiscol,
+            constrainttype,
+            colbndtype,
+            duals,
+            rdcs,
+            isolationrows,
+            isolationcols,
+        )
+
+        return miisrow
 
     def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
         """
