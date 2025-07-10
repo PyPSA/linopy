@@ -1293,18 +1293,15 @@ class Model:
             Labels of the infeasible constraints.
         """
         solver_model = getattr(self, "solver_model", None)
-        if solver_model is None:
-            raise ValueError(
-                "No solver model available. The model must be solved first with "
-                "'gurobi' or 'xpress' solver and the result must be infeasible."
-            )
 
         # Check for Gurobi
         if "gurobi" in available_solvers:
             try:
                 import gurobipy
 
-                if isinstance(solver_model, gurobipy.Model):
+                if solver_model is not None and isinstance(
+                    solver_model, gurobipy.Model
+                ):
                     return self._compute_infeasibilities_gurobi(solver_model)
             except ImportError:
                 pass
@@ -1314,15 +1311,34 @@ class Model:
             try:
                 import xpress
 
-                if isinstance(solver_model, xpress.problem):
+                if solver_model is not None and isinstance(
+                    solver_model, xpress.problem
+                ):
                     return self._compute_infeasibilities_xpress(solver_model)
             except ImportError:
                 pass
 
-        raise NotImplementedError(
-            "Computing infeasibilities is only supported for Gurobi and Xpress solvers. "
-            f"Current solver model type: {type(solver_model).__name__}"
-        )
+        # If we get here, either the solver doesn't support IIS or no solver model is available
+        if solver_model is None:
+            # Check if this is a supported solver without a stored model
+            solver_name = getattr(self, "solver_name", "unknown")
+            if solver_name in ["gurobi", "xpress"]:
+                raise ValueError(
+                    "No solver model available. The model must be solved first with "
+                    "'gurobi' or 'xpress' solver and the result must be infeasible."
+                )
+            else:
+                # This is an unsupported solver
+                raise NotImplementedError(
+                    f"Computing infeasibilities is not supported for '{solver_name}' solver. "
+                    "Only Gurobi and Xpress solvers support IIS computation."
+                )
+        else:
+            # We have a solver model but it's not a supported type
+            raise NotImplementedError(
+                "Computing infeasibilities is only supported for Gurobi and Xpress solvers. "
+                f"Current solver model type: {type(solver_model).__name__}"
+            )
 
     def _compute_infeasibilities_gurobi(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Gurobi solver."""

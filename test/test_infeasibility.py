@@ -136,9 +136,22 @@ class TestInfeasibility:
         assert isinstance(labels, list)
         assert len(labels) > 0
 
+    def test_unsolved_model_error(self) -> None:
+        """Test error when model hasn't been solved yet."""
+        m = Model()
+        x = m.add_variables(name="x")
+        m.add_constraints(x >= 0)
+        m.add_objective(1 * x)  # Convert to LinearExpression
+
+        # Don't solve the model - should raise NotImplementedError for unsolved models
+        with pytest.raises(
+            NotImplementedError, match="Computing infeasibilities is not supported"
+        ):
+            m.compute_infeasibilities()
+
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
     def test_no_solver_model_error(self, solver: str) -> None:
-        """Test error when no solver model is available."""
+        """Test error when solver model is not available after solving."""
         if solver not in available_solvers:
             pytest.skip(f"{solver} not available")
 
@@ -147,7 +160,14 @@ class TestInfeasibility:
         m.add_constraints(x >= 0)
         m.add_objective(1 * x)  # Convert to LinearExpression
 
-        # Don't solve the model - should raise error
+        # Solve the model first
+        m.solve(solver_name=solver)
+
+        # Manually remove the solver_model to simulate cleanup
+        m.solver_model = None
+        m.solver_name = solver  # But keep the solver name
+
+        # Should raise ValueError since we know it was solved with supported solver
         with pytest.raises(ValueError, match="No solver model available"):
             m.compute_infeasibilities()
 
