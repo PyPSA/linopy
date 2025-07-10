@@ -1283,24 +1283,48 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` and the
-        termination condition was infeasible.
+        This function requires that the model was solved with `gurobi` or `xpress`
+        and the termination condition was infeasible.
 
         Returns
         -------
         labels : list[int]
             Labels of the infeasible constraints.
         """
-        if "gurobi" not in available_solvers:
-            raise ImportError("Gurobi is required for this method.")
+        solver_model = getattr(self, "solver_model", None)
+        if solver_model is None:
+            raise ValueError(
+                "No solver model available. The model must be solved first with "
+                "'gurobi' or 'xpress' solver and the result must be infeasible."
+            )
 
-        import gurobipy
+        # Check for Gurobi
+        if "gurobi" in available_solvers:
+            try:
+                import gurobipy
 
-        solver_model = getattr(self, "solver_model")
+                if isinstance(solver_model, gurobipy.Model):
+                    return self._compute_infeasibilities_gurobi(solver_model)
+            except ImportError:
+                pass
 
-        if not isinstance(solver_model, gurobipy.Model):
-            raise NotImplementedError("Solver model must be a Gurobi Model.")
+        # Check for Xpress
+        if "xpress" in available_solvers:
+            try:
+                import xpress
 
+                if isinstance(solver_model, xpress.problem):
+                    return self._compute_infeasibilities_xpress(solver_model)
+            except ImportError:
+                pass
+
+        raise NotImplementedError(
+            "Computing infeasibilities is only supported for Gurobi and Xpress solvers. "
+            f"Current solver model type: {type(solver_model).__name__}"
+        )
+
+    def _compute_infeasibilities_gurobi(self, solver_model: Any) -> list[int]:
+        """Compute infeasibilities for Gurobi solver."""
         solver_model.computeIIS()
         f = NamedTemporaryFile(suffix=".ilp", prefix="linopy-iis-", delete=False)
         solver_model.write(f.name)
@@ -1315,13 +1339,66 @@ class Model:
                 match = pattern.match(line_decoded)
                 if match:
                     labels.append(int(match.group(1)))
+        f.close()
         return labels
+
+    def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
+        """Compute infeasibilities for Xpress solver."""
+        # Compute all IIS
+        solver_model.iisall()
+
+        # Get the number of IIS found
+        num_iis = solver_model.attributes.numiis
+        if num_iis == 0:
+            return []
+
+        labels = set()
+
+        # Get all constraints from the model for index mapping
+        all_constraints = list(solver_model.getConstraint())
+
+        # Retrieve each IIS
+        for iis_num in range(1, num_iis + 1):
+            # Prepare lists to receive IIS data
+            miisrow: list[Any] = []  # Constraint objects in the IIS
+            miiscol: list[Any] = []  # Variable objects in the IIS
+            constrainttype: list[str] = []  # Constraint types
+            colbndtype: list[str] = []  # Column bound types
+            duals: list[float] = []  # Dual values
+            rdcs: list[float] = []  # Reduced costs
+            isolationrows: list[str] = []  # Row isolation info
+            isolationcols: list[str] = []  # Column isolation info
+
+            # Get IIS data
+            solver_model.getiisdata(
+                iis_num,
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            )
+
+            # Convert constraint objects to indices
+            # miisrow contains xpress.constraint objects
+            for constraint_obj in miisrow:
+                try:
+                    idx = all_constraints.index(constraint_obj)
+                    labels.add(idx)
+                except ValueError:
+                    # If constraint not found, skip it
+                    pass
+
+        return sorted(list(labels))
 
     def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
         """
         Print a list of infeasible constraints.
 
-        This function requires that the model was solved using `gurobi`
+        This function requires that the model was solved using `gurobi` or `xpress`
         and the termination condition was infeasible.
 
         Parameters
@@ -1346,7 +1423,7 @@ class Model:
         """
         Compute a set of infeasible constraints.
 
-        This function requires that the model was solved with `gurobi` and the
+        This function requires that the model was solved with `gurobi` or `xpress` and the
         termination condition was infeasible.
 
         Returns
