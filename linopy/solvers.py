@@ -100,10 +100,9 @@ with contextlib.suppress(ModuleNotFoundError):
     import mosek
 
     with contextlib.suppress(mosek.Error):
-        with mosek.Env() as m:
-            t = m.Task()
-            t.optimize()
-            m.checkinall()
+        t = mosek.Task()
+        t.optimize()
+        m.checkinall()
 
         available_solvers.append("mosek")
 
@@ -1664,24 +1663,20 @@ class Mosek(Solver[None]):
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
+        with mosek.Task() as m:
+            m = model.to_mosek(
+                m, explicit_coordinate_names=explicit_coordinate_names
+            )
 
-            with env_.Task() as m:
-                m = model.to_mosek(
-                    m, explicit_coordinate_names=explicit_coordinate_names
-                )
-
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api="direct",
-                    sense=model.sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api="direct",
+                sense=model.sense,
+            )
 
     def solve_problem_from_file(
         self,
@@ -1715,27 +1710,23 @@ class Mosek(Solver[None]):
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
+        with mosek.Task() as m:
+            # read sense and io_api from problem file
+            sense = read_sense_from_problem_file(problem_fn)
+            io_api = read_io_api_from_problem_file(problem_fn)
+            # for Mosek solver, the path needs to be a string
+            problem_fn_ = path_to_string(problem_fn)
+            m.readdata(problem_fn_)
 
-            with env_.Task() as m:
-                # read sense and io_api from problem file
-                sense = read_sense_from_problem_file(problem_fn)
-                io_api = read_io_api_from_problem_file(problem_fn)
-                # for Mosek solver, the path needs to be a string
-                problem_fn_ = path_to_string(problem_fn)
-                m.readdata(problem_fn_)
-
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api=io_api,
-                    sense=sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api=io_api,
+                sense=sense,
+            )
 
     def _solve(
         self,
