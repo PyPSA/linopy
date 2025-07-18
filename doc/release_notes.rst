@@ -8,6 +8,7 @@ Release Notes
 
 * Improved variable/expression arithmetic methods so that they correctly handle types
 * Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
+* Mosek: Remove explicit use of Env, use global env instead
 
 **Breaking Changes**
 
