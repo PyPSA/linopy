@@ -1664,9 +1664,7 @@ class Mosek(Solver[None]):
         Result
         """
         with mosek.Task() as m:
-            m = model.to_mosek(
-                m, explicit_coordinate_names=explicit_coordinate_names
-            )
+            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
 
             return self._solve(
                 m,
