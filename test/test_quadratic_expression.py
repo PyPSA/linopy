@@ -238,6 +238,9 @@ def test_merge_linear_expression_and_quadratic_expression(
     with pytest.raises(ValueError):
         merge([linexpr, quadexpr], cls=QuadraticExpression)
 
+    new_quad_ex = merge([linexpr.to_quadexpr(), quadexpr])  # type: ignore
+    assert isinstance(new_quad_ex, QuadraticExpression)
+
     with pytest.warns(DeprecationWarning):
         merge(quadexpr, quadexpr, cls=QuadraticExpression)  # type: ignore
 

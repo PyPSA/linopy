@@ -1941,7 +1941,7 @@ def merge(
     dim : str
         Dimension along which the expressions should be concatenated.
     cls : type
-        Type of the resulting expression.
+        Explicitly set the type of the resulting expression (So that the type checker will know the return type)
     **kwargs
         Additional keyword arguments passed to xarray.concat. Defaults to
         {coords: "minimal", compat: "override"} or, in the special case described
@@ -1949,41 +1949,32 @@ def merge(
 
     Returns
     -------
-    res : linopy.LinearExpression
+    res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if cls is None:
-        warn(
-            "Using merge without specifying the class is deprecated",
-            DeprecationWarning,
-        )
-        cls = LinearExpression
-
-    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
-
     if not isinstance(exprs, list) and len(add_exprs):
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
         )
         exprs = [exprs] + list(add_exprs)  # type: ignore
-    model = exprs[0].model
 
-    if (
-        cls is QuadraticExpression
-        and dim == TERM_DIM
-        and any(type(e) is LinearExpression for e in exprs)
-    ):
+    has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
+    has_linear_expression = any(type(e) is LinearExpression for e in exprs)
+    if cls is None:
+        cls = QuadraticExpression if has_quad_expression else LinearExpression
+
+    if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
         raise ValueError(
             "Cannot merge linear and quadratic expressions along term dimension."
             "Convert to QuadraticExpression first."
         )
 
-    if cls is not QuadraticExpression and any(
-        type(e) is QuadraticExpression for e in exprs
-    ):
-        raise ValueError(
-            "Cannot merge linear and quadratic expressions to QuadraticExpression"
-        )
+    if has_quad_expression and cls is not QuadraticExpression:
+        raise ValueError("Cannot merge linear expressions to QuadraticExpression")
+
+    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
+
+    model = exprs[0].model
 
     if cls in linopy_types and dim in HELPER_DIMS:
         coord_dims = [

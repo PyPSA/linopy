@@ -1128,9 +1128,8 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     res = merge([expr1, expr2], cls=LinearExpression)
     assert res.nterm == 6
 
-    with pytest.warns(DeprecationWarning):
-        res: LinearExpression = merge([expr1, expr2])  # type: ignore
-        assert res.nterm == 6
+    res: LinearExpression = merge([expr1, expr2])  # type: ignore
+    assert isinstance(res, LinearExpression)
 
     # now concat with same length of terms
     expr1 = z.sel(dim_0=0).sum("dim_1")
