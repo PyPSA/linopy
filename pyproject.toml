@@ -37,6 +37,7 @@ dependencies = [
     "tqdm",
     "deprecation",
     "google-cloud-storage",
+    "requests"
 ]
 
 [project.urls]
