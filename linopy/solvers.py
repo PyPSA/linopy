@@ -1666,7 +1666,9 @@ class Mosek(Solver[None]):
         """
 
         if env is not None:
-            warnings.warn("Argument 'env' in solve_problem_from_model",DeprecationWarning)
+            warnings.warn(
+                "Argument 'env' in solve_problem_from_model", DeprecationWarning
+            )
         with mosek.Task() as m:
             m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
 
@@ -1713,7 +1715,9 @@ class Mosek(Solver[None]):
         Result
         """
         if env is not None:
-            warnings.warn("Argument 'env' in solve_problem_from_model",DeprecationWarning)
+            warnings.warn(
+                "Argument 'env' in solve_problem_from_model", DeprecationWarning
+            )
         with mosek.Task() as m:
             # read sense and io_api from problem file
             sense = read_sense_from_problem_file(problem_fn)
