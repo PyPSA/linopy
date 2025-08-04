@@ -14,11 +14,8 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from requests import RequestException
 
-<<<<<<< Updated upstream
 import linopy
 
-=======
->>>>>>> Stashed changes
 logger = logging.getLogger(__name__)
 
 
@@ -155,11 +152,7 @@ class OetcHandler:
         except (IndexError, json.JSONDecodeError, Exception) as e:
             raise Exception(f"Failed to decode JWT payload: {e}")
 
-<<<<<<< Updated upstream
-    def __get_cloud_provider_credentials(self) -> GcpCredentials | None:
-=======
     def __get_cloud_provider_credentials(self) -> GcpCredentials:
->>>>>>> Stashed changes
         """
         Fetch cloud provider credentials based on the configured provider.
 
