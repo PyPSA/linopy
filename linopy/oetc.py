@@ -241,7 +241,7 @@ class OetcHandler:
             }
 
             response = requests.post(
-                f"{self.settings.orchestrator_server_url}/create",
+                f"{self.settings.orchestrator_server_url}/compute-job/create",
                 json=payload,
                 headers={
                     "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
@@ -292,7 +292,7 @@ class OetcHandler:
         while True:
             try:
                 response = requests.get(
-                    f"{self.settings.orchestrator_server_url}/jobs/{job_uuid}",
+                    f"{self.settings.orchestrator_server_url}/compute-job/{job_uuid}",
                     headers={
                         "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
                         "Content-Type": "application/json"

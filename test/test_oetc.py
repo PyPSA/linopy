@@ -1007,7 +1007,7 @@ class TestJobSubmission:
         }
 
         mock_post.assert_called_once_with(
-            "https://orchestrator.example.com/create",
+            "https://orchestrator.example.com/compute-job/create",
             json=expected_payload,
             headers={
                 "Authorization": f"Bearer {handler_with_auth_setup.jwt.token}",
