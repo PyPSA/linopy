@@ -1,23 +1,23 @@
+import base64
+import gzip
+import json
 import logging
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Union
-import json
-import base64
-import gzip
-import os
-import tempfile
 
 import requests
-from requests import RequestException
 from google.cloud import storage
 from google.oauth2 import service_account
+from requests import RequestException
+
 import linopy
 
-
 logger = logging.getLogger(__name__)
+
 
 class ComputeProvider(str, Enum):
     GCP = "GCP"
@@ -103,14 +103,14 @@ class OetcHandler:
             logger.info("OETC - Signing in...")
             payload = {
                 "email": self.settings.credentials.email,
-                "password": self.settings.credentials.password
+                "password": self.settings.credentials.password,
             }
 
             response = requests.post(
                 f"{self.settings.authentication_server_url}/sign-in",
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=30
+                timeout=30,
             )
 
             response.raise_for_status()
@@ -122,7 +122,7 @@ class OetcHandler:
                 token=jwt_result["token"],
                 token_type=jwt_result["token_type"],
                 expires_in=jwt_result["expires_in"],
-                authenticated_at=datetime.now()
+                authenticated_at=datetime.now(),
             )
 
         except RequestException as e:
@@ -146,14 +146,14 @@ class OetcHandler:
             Exception: If token cannot be decoded
         """
         try:
-            payload_part = token.split('.')[1]
-            payload_part += '=' * (4 - len(payload_part) % 4)
+            payload_part = token.split(".")[1]
+            payload_part += "=" * (4 - len(payload_part) % 4)
             payload_bytes = base64.urlsafe_b64decode(payload_part)
-            return json.loads(payload_bytes.decode('utf-8'))
+            return json.loads(payload_bytes.decode("utf-8"))
         except (IndexError, json.JSONDecodeError, Exception) as e:
             raise Exception(f"Failed to decode JWT payload: {e}")
 
-    def __get_cloud_provider_credentials(self) -> Union[GcpCredentials, None]:
+    def __get_cloud_provider_credentials(self) -> GcpCredentials | None:
         """
         Fetch cloud provider credentials based on the configured provider.
 
@@ -166,7 +166,9 @@ class OetcHandler:
         if self.settings.compute_provider == ComputeProvider.GCP:
             return self.__get_gcp_credentials()
         else:
-            raise Exception(f"Unsupported compute provider: {self.settings.compute_provider}")
+            raise Exception(
+                f"Unsupported compute provider: {self.settings.compute_provider}"
+            )
 
     def __get_gcp_credentials(self) -> GcpCredentials:
         """
@@ -181,7 +183,7 @@ class OetcHandler:
         try:
             logger.info("OETC - Fetching user GCP credentials...")
             payload = self._decode_jwt_payload(self.jwt.token)
-            user_uuid = payload.get('sub')
+            user_uuid = payload.get("sub")
 
             if not user_uuid:
                 raise Exception("User UUID not found in JWT token")
@@ -190,9 +192,9 @@ class OetcHandler:
                 f"{self.settings.authentication_server_url}/users/{user_uuid}/gcp-credentials",
                 headers={
                     "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                timeout=30
+                timeout=30,
             )
 
             response.raise_for_status()
@@ -204,7 +206,7 @@ class OetcHandler:
                 gcp_project_id=credentials_data["gcp_project_id"],
                 gcp_service_key=credentials_data["gcp_service_key"],
                 input_bucket=credentials_data["input_bucket"],
-                solution_bucket=credentials_data["solution_bucket"]
+                solution_bucket=credentials_data["solution_bucket"],
             )
 
         except RequestException as e:
@@ -237,7 +239,7 @@ class OetcHandler:
                 "cpu_cores": self.settings.cpu_cores,
                 "disk_space_gb": self.settings.disk_space_gb,
                 "input_file_name": input_file_name,
-                "delete_worker_on_error": self.settings.delete_worker_on_error
+                "delete_worker_on_error": self.settings.delete_worker_on_error,
             }
 
             response = requests.post(
@@ -245,9 +247,9 @@ class OetcHandler:
                 json=payload,
                 headers={
                     "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                timeout=30
+                timeout=30,
             )
 
             response.raise_for_status()
@@ -260,12 +262,18 @@ class OetcHandler:
         except RequestException as e:
             raise Exception(f"Failed to submit job to compute service: {e}")
         except KeyError as e:
-            raise Exception(f"Invalid job submission response format: missing field {e}")
+            raise Exception(
+                f"Invalid job submission response format: missing field {e}"
+            )
         except Exception as e:
             raise Exception(f"Error submitting job to compute service: {e}")
 
-    def wait_and_get_job_data(self, job_uuid: str, initial_poll_interval: int = 30,
-                              max_poll_interval: int = 300) -> JobResult:
+    def wait_and_get_job_data(
+        self,
+        job_uuid: str,
+        initial_poll_interval: int = 30,
+        max_poll_interval: int = 300,
+    ) -> JobResult:
         """
         Wait for job completion and get job data by polling the orchestrator service.
 
@@ -295,9 +303,9 @@ class OetcHandler:
                     f"{self.settings.orchestrator_server_url}/compute-job/{job_uuid}",
                     headers={
                         "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    timeout=30
+                    timeout=30,
                 )
 
                 response.raise_for_status()
@@ -310,10 +318,12 @@ class OetcHandler:
                     owner=job_data_dict.get("owner"),
                     solver=job_data_dict.get("solver"),
                     duration_in_seconds=job_data_dict.get("duration_in_seconds"),
-                    solving_duration_in_seconds=job_data_dict.get("solving_duration_in_seconds"),
+                    solving_duration_in_seconds=job_data_dict.get(
+                        "solving_duration_in_seconds"
+                    ),
                     input_files=job_data_dict.get("input_files", []),
                     output_files=job_data_dict.get("output_files", []),
-                    created_at=job_data_dict.get("created_at")
+                    created_at=job_data_dict.get("created_at"),
                 )
 
                 consecutive_failures = 0
@@ -321,7 +331,9 @@ class OetcHandler:
                 if job_result.status == "FINISHED":
                     logger.info(f"OETC - Job {job_uuid} completed successfully!")
                     if not job_result.output_files:
-                        logger.warning("OETC - Warning: Job completed but no output files found")
+                        logger.warning(
+                            "OETC - Warning: Job completed but no output files found"
+                        )
                     return job_result
 
                 elif job_result.status == "SETUP_ERROR":
@@ -337,7 +349,9 @@ class OetcHandler:
                 elif job_result.status in ["PENDING", "STARTING", "RUNNING"]:
                     status_msg = f"Job {job_uuid} status: {job_result.status}"
                     if job_result.duration_in_seconds:
-                        status_msg += f" (running for {job_result.duration_in_seconds}s)"
+                        status_msg += (
+                            f" (running for {job_result.duration_in_seconds}s)"
+                        )
                     status_msg += f", checking again in {poll_interval} seconds..."
                     logger.info(f"OETC - {status_msg}")
 
@@ -356,16 +370,22 @@ class OetcHandler:
                 consecutive_failures += 1
 
                 if consecutive_failures >= max_network_retries:
-                    raise Exception(f"Failed to get job status after {max_network_retries} network retries: {e}")
+                    raise Exception(
+                        f"Failed to get job status after {max_network_retries} network retries: {e}"
+                    )
 
                 # Wait before retrying network request
                 retry_wait = min(consecutive_failures * 10, 60)
-                logger.error(f"OETC - Network error getting job status (attempt {consecutive_failures}/{max_network_retries}), "
-                      f"retrying in {retry_wait} seconds: {e}")
+                logger.error(
+                    f"OETC - Network error getting job status (attempt {consecutive_failures}/{max_network_retries}), "
+                    f"retrying in {retry_wait} seconds: {e}"
+                )
                 time.sleep(retry_wait)
 
             except KeyError as e:
-                raise Exception(f"Invalid job status response format: missing field {e}")
+                raise Exception(
+                    f"Invalid job status response format: missing field {e}"
+                )
             except Exception as e:
                 if "status:" in str(e) or "OETC logs" in str(e):
                     raise
@@ -416,7 +436,9 @@ class OetcHandler:
         """
         try:
             # Create GCP credentials from service key
-            service_key_dict = json.loads(self.cloud_provider_credentials.gcp_service_key)
+            service_key_dict = json.loads(
+                self.cloud_provider_credentials.gcp_service_key
+            )
             credentials = service_account.Credentials.from_service_account_info(
                 service_key_dict,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
@@ -425,9 +447,11 @@ class OetcHandler:
             # Download from GCP solution bucket
             storage_client = storage.Client(
                 credentials=credentials,
-                project=self.cloud_provider_credentials.gcp_project_id
+                project=self.cloud_provider_credentials.gcp_project_id,
             )
-            bucket = storage_client.bucket(self.cloud_provider_credentials.solution_bucket)
+            bucket = storage_client.bucket(
+                self.cloud_provider_credentials.solution_bucket
+            )
             blob = bucket.blob(file_name)
 
             # Create temporary file for download
@@ -460,7 +484,8 @@ class OetcHandler:
         linopy.model.Model
             Solved model.
 
-        Raises:
+        Raises
+        ------
             Exception: If solving fails at any stage
         """
         try:
@@ -478,8 +503,8 @@ class OetcHandler:
                 raise Exception("No output files found in completed job")
 
             output_file_name = job_result.output_files[0]
-            if isinstance(output_file_name, dict) and 'name' in output_file_name:
-                output_file_name = output_file_name['name']
+            if isinstance(output_file_name, dict) and "name" in output_file_name:
+                output_file_name = output_file_name["name"]
 
             solution_file_path = self._download_file_from_gcp(output_file_name)
 
@@ -489,9 +514,15 @@ class OetcHandler:
             # Clean up downloaded file
             os.remove(solution_file_path)
 
-            logger.info(f"OETC - Model solved successfully. Status: {solved_model.status}")
-            if hasattr(solved_model, 'objective') and hasattr(solved_model.objective, 'value'):
-                logger.info(f"OETC - Objective value: {solved_model.objective.value:.2e}")
+            logger.info(
+                f"OETC - Model solved successfully. Status: {solved_model.status}"
+            )
+            if hasattr(solved_model, "objective") and hasattr(
+                solved_model.objective, "value"
+            ):
+                logger.info(
+                    f"OETC - Objective value: {solved_model.objective.value:.2e}"
+                )
 
             return solved_model
 
@@ -545,7 +576,9 @@ class OetcHandler:
             compressed_file_name = os.path.basename(compressed_file_path)
 
             # Create GCP credentials from service key
-            service_key_dict = json.loads(self.cloud_provider_credentials.gcp_service_key)
+            service_key_dict = json.loads(
+                self.cloud_provider_credentials.gcp_service_key
+            )
             credentials = service_account.Credentials.from_service_account_info(
                 service_key_dict,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
@@ -554,7 +587,7 @@ class OetcHandler:
             # Upload to GCP bucket
             storage_client = storage.Client(
                 credentials=credentials,
-                project=self.cloud_provider_credentials.gcp_project_id
+                project=self.cloud_provider_credentials.gcp_project_id,
             )
             bucket = storage_client.bucket(self.cloud_provider_credentials.input_bucket)
             blob = bucket.blob(compressed_file_name)
