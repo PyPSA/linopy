@@ -2,7 +2,6 @@ import base64
 import json
 from datetime import datetime
 from unittest.mock import Mock, patch
-from typing import Any
 
 import pytest
 import requests
@@ -80,11 +79,19 @@ class TestOetcHandler:
             "expires_in": 3600,
         }
 
-    @patch('linopy.oetc.requests.post')
-    @patch('linopy.oetc.requests.get')
-    @patch('linopy.oetc.datetime')
-    def test_successful_authentication(self, mock_datetime: Mock, mock_get: Mock, mock_post: Mock, mock_settings: OetcSettings, mock_jwt_response: dict,
-                                       mock_gcp_credentials_response: dict, sample_jwt_token: str) -> None:
+    @patch("linopy.oetc.requests.post")
+    @patch("linopy.oetc.requests.get")
+    @patch("linopy.oetc.datetime")
+    def test_successful_authentication(
+        self,
+        mock_datetime: Mock,
+        mock_get: Mock,
+        mock_post: Mock,
+        mock_settings: OetcSettings,
+        mock_jwt_response: dict,
+        mock_gcp_credentials_response: dict,
+        sample_jwt_token: str,
+    ) -> None:
         """Test successful authentication flow"""
         # Setup mocks
         fixed_time = datetime(2024, 1, 15, 12, 0, 0)
@@ -143,9 +150,10 @@ class TestOetcHandler:
             handler.cloud_provider_credentials.solution_bucket == "test-solution-bucket"
         )
 
-
-    @patch('linopy.oetc.requests.post')
-    def test_authentication_http_error(self, mock_post: Mock, mock_settings: OetcSettings) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_authentication_http_error(
+        self, mock_post: Mock, mock_settings: OetcSettings
+    ) -> None:
         """Test authentication failure with HTTP error"""
         # Setup mock to raise HTTP error
         mock_response = Mock()
@@ -192,7 +200,9 @@ class TestJwtDecoding:
 
             return handler
 
-    def test_decode_jwt_payload_success(self, handler_with_mocked_auth: OetcHandler, sample_jwt_token: str) -> None:
+    def test_decode_jwt_payload_success(
+        self, handler_with_mocked_auth: OetcHandler, sample_jwt_token: str
+    ) -> None:
         """Test successful JWT payload decoding"""
         result = handler_with_mocked_auth._decode_jwt_payload(sample_jwt_token)
 
@@ -202,14 +212,18 @@ class TestJwtDecoding:
         assert result["firstname"] == "Test"
         assert result["lastname"] == "User"
 
-    def test_decode_jwt_payload_invalid_token(self, handler_with_mocked_auth: OetcHandler) -> None:
+    def test_decode_jwt_payload_invalid_token(
+        self, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test JWT payload decoding with invalid token"""
         with pytest.raises(Exception) as exc_info:
             handler_with_mocked_auth._decode_jwt_payload("invalid.token")
 
         assert "Failed to decode JWT payload" in str(exc_info.value)
 
-    def test_decode_jwt_payload_malformed_token(self, handler_with_mocked_auth: OetcHandler) -> None:
+    def test_decode_jwt_payload_malformed_token(
+        self, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test JWT payload decoding with malformed token"""
         with pytest.raises(Exception) as exc_info:
             handler_with_mocked_auth._decode_jwt_payload("not_a_jwt_token")
@@ -246,8 +260,13 @@ class TestCloudProviderCredentials:
 
         return handler
 
-    @patch('linopy.oetc.requests.get')
-    def test_get_gcp_credentials_success(self, mock_get: Mock, handler_with_mocked_auth: OetcHandler, mock_gcp_credentials_response: dict) -> None:
+    @patch("linopy.oetc.requests.get")
+    def test_get_gcp_credentials_success(
+        self,
+        mock_get: Mock,
+        handler_with_mocked_auth: OetcHandler,
+        mock_gcp_credentials_response: dict,
+    ) -> None:
         """Test successful GCP credentials fetching"""
         # Setup mock
         mock_response = Mock()
@@ -256,7 +275,7 @@ class TestCloudProviderCredentials:
         mock_get.return_value = mock_response
 
         # Execute
-        result = handler_with_mocked_auth._OetcHandler__get_gcp_credentials() # type: ignore[attr-defined]
+        result = handler_with_mocked_auth._OetcHandler__get_gcp_credentials()  # type: ignore[attr-defined]
 
         # Verify request
         mock_get.assert_called_once_with(
@@ -275,8 +294,10 @@ class TestCloudProviderCredentials:
         assert result.input_bucket == "test-input-bucket"
         assert result.solution_bucket == "test-solution-bucket"
 
-    @patch('linopy.oetc.requests.get')
-    def test_get_gcp_credentials_http_error(self, mock_get: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.get")
+    def test_get_gcp_credentials_http_error(
+        self, mock_get: Mock, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test GCP credentials fetching with HTTP error"""
         # Setup mock to raise HTTP error
         mock_response = Mock()
@@ -285,12 +306,14 @@ class TestCloudProviderCredentials:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_mocked_auth._OetcHandler__get_gcp_credentials() # type: ignore[attr-defined]
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()  # type: ignore[attr-defined]
 
         assert "Failed to fetch GCP credentials" in str(exc_info.value)
 
-    @patch('linopy.oetc.requests.get')
-    def test_get_gcp_credentials_missing_field(self, mock_get: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.get")
+    def test_get_gcp_credentials_missing_field(
+        self, mock_get: Mock, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test GCP credentials fetching with missing response field"""
         # Setup mock with invalid response
         mock_response = Mock()
@@ -305,25 +328,29 @@ class TestCloudProviderCredentials:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_mocked_auth._OetcHandler__get_gcp_credentials() # type: ignore[attr-defined]
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()  # type: ignore[attr-defined]
 
         assert (
             "Invalid credentials response format: missing field 'solution_bucket'"
             in str(exc_info.value)
         )
 
-    def test_get_cloud_provider_credentials_unsupported_provider(self, handler_with_mocked_auth: OetcHandler) -> None:
+    def test_get_cloud_provider_credentials_unsupported_provider(
+        self, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test cloud provider credentials with unsupported provider"""
         # Change to unsupported provider
         handler_with_mocked_auth.settings.compute_provider = "AWS"  # type: ignore  # Not in enum, but for testing
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_mocked_auth._OetcHandler__get_cloud_provider_credentials() # type: ignore[attr-defined]
+            handler_with_mocked_auth._OetcHandler__get_cloud_provider_credentials()  # type: ignore[attr-defined]
 
         assert "Unsupported compute provider: AWS" in str(exc_info.value)
 
-    def test_get_gcp_credentials_no_user_uuid_in_token(self, handler_with_mocked_auth: OetcHandler) -> None:
+    def test_get_gcp_credentials_no_user_uuid_in_token(
+        self, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test GCP credentials fetching when JWT token has no user UUID"""
         # Create token without 'sub' field
         payload = {"iss": "OETC", "email": "test@example.com"}
@@ -336,7 +363,7 @@ class TestCloudProviderCredentials:
 
         # Execute and verify exception
         with pytest.raises(Exception) as exc_info:
-            handler_with_mocked_auth._OetcHandler__get_gcp_credentials() # type: ignore[attr-defined]
+            handler_with_mocked_auth._OetcHandler__get_gcp_credentials()  # type: ignore[attr-defined]
 
         assert "User UUID not found in JWT token" in str(exc_info.value)
 
@@ -363,8 +390,10 @@ class TestComputeProvider:
         assert ComputeProvider.GCP == "GCP"
         assert ComputeProvider.GCP.value == "GCP"
 
-    @patch('linopy.oetc.requests.post')
-    def test_authentication_network_error(self, mock_post: Mock, mock_settings: OetcSettings) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_authentication_network_error(
+        self, mock_post: Mock, mock_settings: OetcSettings
+    ) -> None:
         """Test authentication failure with network error"""
         # Setup mock to raise network error
         mock_post.side_effect = RequestException("Connection timeout")
@@ -375,8 +404,10 @@ class TestComputeProvider:
 
         assert "Authentication request failed" in str(exc_info.value)
 
-    @patch('linopy.oetc.requests.post')
-    def test_authentication_invalid_response_missing_token(self, mock_post: Mock, mock_settings: OetcSettings) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_authentication_invalid_response_missing_token(
+        self, mock_post: Mock, mock_settings: OetcSettings
+    ) -> None:
         """Test authentication failure with missing token in response"""
         # Setup mock with invalid response
         mock_response = Mock()
@@ -394,8 +425,10 @@ class TestComputeProvider:
 
         assert "Invalid response format: missing field 'token'" in str(exc_info.value)
 
-    @patch('linopy.oetc.requests.post')
-    def test_authentication_invalid_response_missing_expires_in(self, mock_post: Mock, mock_settings: OetcSettings) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_authentication_invalid_response_missing_expires_in(
+        self, mock_post: Mock, mock_settings: OetcSettings
+    ) -> None:
         """Test authentication failure with missing expires_in in response"""
         # Setup mock with invalid response
         mock_response = Mock()
@@ -415,8 +448,10 @@ class TestComputeProvider:
             exc_info.value
         )
 
-    @patch('linopy.oetc.requests.post')
-    def test_authentication_timeout_error(self, mock_post: Mock, mock_settings: OetcSettings) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_authentication_timeout_error(
+        self, mock_post: Mock, mock_settings: OetcSettings
+    ) -> None:
         """Test authentication failure with timeout"""
         # Setup mock to raise timeout error
         mock_post.side_effect = requests.Timeout("Request timeout")
@@ -444,24 +479,30 @@ class TestAuthenticationResult:
         expected_expiry = datetime(2024, 1, 15, 13, 0, 0)  # 1 hour later
         assert auth_result.expires_at == expected_expiry
 
-    @patch('linopy.oetc.datetime')
-    def test_is_expired_false_when_not_expired(self, mock_datetime: Mock, auth_result: AuthenticationResult) -> None:
+    @patch("linopy.oetc.datetime")
+    def test_is_expired_false_when_not_expired(
+        self, mock_datetime: Mock, auth_result: AuthenticationResult
+    ) -> None:
         """Test is_expired returns False when token is still valid"""
         # Set current time to before expiration
         mock_datetime.now.return_value = datetime(2024, 1, 15, 12, 30, 0)
 
         assert auth_result.is_expired is False
 
-    @patch('linopy.oetc.datetime')
-    def test_is_expired_true_when_expired(self, mock_datetime: Mock, auth_result: AuthenticationResult) -> None:
+    @patch("linopy.oetc.datetime")
+    def test_is_expired_true_when_expired(
+        self, mock_datetime: Mock, auth_result: AuthenticationResult
+    ) -> None:
         """Test is_expired returns True when token has expired"""
         # Set current time to after expiration
         mock_datetime.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
 
         assert auth_result.is_expired is True
 
-    @patch('linopy.oetc.datetime')
-    def test_is_expired_true_when_exactly_expired(self, mock_datetime: Mock, auth_result: AuthenticationResult) -> None:
+    @patch("linopy.oetc.datetime")
+    def test_is_expired_true_when_exactly_expired(
+        self, mock_datetime: Mock, auth_result: AuthenticationResult
+    ) -> None:
         """Test is_expired returns True when token expires exactly now"""
         # Set current time to exact expiration time
         mock_datetime.now.return_value = datetime(2024, 1, 15, 13, 0, 0)
@@ -492,10 +533,16 @@ class TestFileCompression:
 
             return handler
 
-    @patch('linopy.oetc.gzip.open')
-    @patch('linopy.oetc.os.path.exists')
-    @patch('builtins.open')
-    def test_gzip_compress_success(self, mock_open: Mock, mock_exists: Mock, mock_gzip_open: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.gzip.open")
+    @patch("linopy.oetc.os.path.exists")
+    @patch("builtins.open")
+    def test_gzip_compress_success(
+        self,
+        mock_open: Mock,
+        mock_exists: Mock,
+        mock_gzip_open: Mock,
+        handler_with_mocked_auth: OetcHandler,
+    ) -> None:
         """Test successful file compression"""
         # Setup
         source_path = "/tmp/test_file.nc"
@@ -523,8 +570,10 @@ class TestFileCompression:
         mock_gzip_open.assert_called_once_with(expected_output, "wb", compresslevel=9)
         mock_file_out.write.assert_called_once_with(b"test_data_chunk")
 
-    @patch('builtins.open')
-    def test_gzip_compress_file_read_error(self, mock_open: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("builtins.open")
+    def test_gzip_compress_file_read_error(
+        self, mock_open: Mock, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test file compression with read error"""
         # Setup
         source_path = "/tmp/test_file.nc"
@@ -539,7 +588,9 @@ class TestFileCompression:
 
 class TestGcpUpload:
     @pytest.fixture
-    def handler_with_gcp_credentials(self, mock_gcp_credentials_response: dict) -> OetcHandler:
+    def handler_with_gcp_credentials(
+        self, mock_gcp_credentials_response: dict
+    ) -> OetcHandler:
         """Create handler with GCP credentials for testing upload"""
         with patch("linopy.oetc.requests.post"), patch("linopy.oetc.requests.get"):
             credentials = OetcCredentials(
@@ -568,12 +619,18 @@ class TestGcpUpload:
 
             return handler
 
-    @patch('linopy.oetc.os.remove')
-    @patch('linopy.oetc.os.path.basename')
-    @patch('linopy.oetc.storage.Client')
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_upload_file_to_gcp_success(self, mock_creds_from_info: Mock, mock_storage_client: Mock, mock_basename: Mock, mock_remove: Mock,
-                                        handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.os.remove")
+    @patch("linopy.oetc.os.path.basename")
+    @patch("linopy.oetc.storage.Client")
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_upload_file_to_gcp_success(
+        self,
+        mock_creds_from_info: Mock,
+        mock_storage_client: Mock,
+        mock_basename: Mock,
+        mock_remove: Mock,
+        handler_with_gcp_credentials: OetcHandler,
+    ) -> None:
         """Test successful file upload to GCP"""
         # Setup
         file_path = "/tmp/test_file.nc"
@@ -627,8 +684,10 @@ class TestGcpUpload:
             # Verify cleanup
             mock_remove.assert_called_once_with(compressed_path)
 
-    @patch('linopy.oetc.json.loads')
-    def test_upload_file_to_gcp_invalid_service_key(self, mock_json_loads: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.json.loads")
+    def test_upload_file_to_gcp_invalid_service_key(
+        self, mock_json_loads: Mock, handler_with_gcp_credentials: OetcHandler
+    ) -> None:
         """Test upload failure with invalid service key"""
         # Setup
         file_path = "/tmp/test_file.nc"
@@ -640,10 +699,14 @@ class TestGcpUpload:
 
         assert "Failed to upload file to GCP" in str(exc_info.value)
 
-    @patch('linopy.oetc.storage.Client')
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_upload_file_to_gcp_upload_error(self, mock_creds_from_info: Mock, mock_storage_client: Mock,
-                                             handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.storage.Client")
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_upload_file_to_gcp_upload_error(
+        self,
+        mock_creds_from_info: Mock,
+        mock_storage_client: Mock,
+        handler_with_gcp_credentials: OetcHandler,
+    ) -> None:
         """Test upload failure during blob upload"""
         # Setup
         file_path = "/tmp/test_file.nc"
@@ -697,9 +760,14 @@ class TestFileDecompression:
 
             return handler
 
-    @patch('linopy.oetc.gzip.open')
-    @patch('builtins.open')
-    def test_gzip_decompress_success(self, mock_open_file: Mock, mock_gzip_open: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.gzip.open")
+    @patch("builtins.open")
+    def test_gzip_decompress_success(
+        self,
+        mock_open_file: Mock,
+        mock_gzip_open: Mock,
+        handler_with_mocked_auth: OetcHandler,
+    ) -> None:
         """Test successful file decompression"""
         # Setup
         input_path = "/tmp/test_file.nc.gz"
@@ -726,8 +794,10 @@ class TestFileDecompression:
         mock_open_file.assert_called_once_with(expected_output, "wb")
         mock_file_out.write.assert_called_once_with(b"decompressed_data_chunk")
 
-    @patch('linopy.oetc.gzip.open')
-    def test_gzip_decompress_gzip_open_error(self, mock_gzip_open: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.gzip.open")
+    def test_gzip_decompress_gzip_open_error(
+        self, mock_gzip_open: Mock, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test file decompression with gzip open error"""
         # Setup
         input_path = "/tmp/test_file.nc.gz"
@@ -739,9 +809,14 @@ class TestFileDecompression:
 
         assert "Failed to decompress file" in str(exc_info.value)
 
-    @patch('linopy.oetc.gzip.open')
-    @patch('builtins.open')
-    def test_gzip_decompress_write_error(self, mock_open_file: Mock, mock_gzip_open: Mock, handler_with_mocked_auth: OetcHandler) -> None:
+    @patch("linopy.oetc.gzip.open")
+    @patch("builtins.open")
+    def test_gzip_decompress_write_error(
+        self,
+        mock_open_file: Mock,
+        mock_gzip_open: Mock,
+        handler_with_mocked_auth: OetcHandler,
+    ) -> None:
         """Test file decompression with write error"""
         # Setup
         input_path = "/tmp/test_file.nc.gz"
@@ -760,7 +835,9 @@ class TestFileDecompression:
 
         assert "Failed to decompress file" in str(exc_info.value)
 
-    def test_gzip_decompress_output_path_generation(self, handler_with_mocked_auth: OetcHandler) -> None:
+    def test_gzip_decompress_output_path_generation(
+        self, handler_with_mocked_auth: OetcHandler
+    ) -> None:
         """Test correct output path generation for decompression"""
         # Test first path
         with patch("linopy.oetc.gzip.open") as mock_gzip_open:
@@ -791,7 +868,9 @@ class TestFileDecompression:
 
 class TestGcpDownload:
     @pytest.fixture
-    def handler_with_gcp_credentials(self, mock_gcp_credentials_response: dict) -> OetcHandler:
+    def handler_with_gcp_credentials(
+        self, mock_gcp_credentials_response: dict
+    ) -> OetcHandler:
         """Create handler with GCP credentials for testing download"""
         with patch("linopy.oetc.requests.post"), patch("linopy.oetc.requests.get"):
             credentials = OetcCredentials(
@@ -820,12 +899,18 @@ class TestGcpDownload:
 
             return handler
 
-    @patch('linopy.oetc.os.remove')
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    @patch('linopy.oetc.storage.Client')
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_download_file_from_gcp_success(self, mock_creds_from_info: Mock, mock_storage_client: Mock,
-                                            mock_tempfile: Mock, mock_remove: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.os.remove")
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    @patch("linopy.oetc.storage.Client")
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_download_file_from_gcp_success(
+        self,
+        mock_creds_from_info: Mock,
+        mock_storage_client: Mock,
+        mock_tempfile: Mock,
+        mock_remove: Mock,
+        handler_with_gcp_credentials: OetcHandler,
+    ) -> None:
         """Test successful file download from GCP"""
         # Setup
         file_name = "solution_file.nc.gz"
@@ -883,8 +968,10 @@ class TestGcpDownload:
             # Verify cleanup
             mock_remove.assert_called_once_with(compressed_path)
 
-    @patch('linopy.oetc.json.loads')
-    def test_download_file_from_gcp_invalid_service_key(self, mock_json_loads: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.json.loads")
+    def test_download_file_from_gcp_invalid_service_key(
+        self, mock_json_loads: Mock, handler_with_gcp_credentials: OetcHandler
+    ) -> None:
         """Test download failure with invalid service key"""
         # Setup
         file_name = "solution_file.nc.gz"
@@ -896,11 +983,16 @@ class TestGcpDownload:
 
         assert "Failed to download file from GCP" in str(exc_info.value)
 
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    @patch('linopy.oetc.storage.Client')
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_download_file_from_gcp_download_error(self, mock_creds_from_info: Mock, mock_storage_client: Mock,
-                                                   mock_tempfile: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    @patch("linopy.oetc.storage.Client")
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_download_file_from_gcp_download_error(
+        self,
+        mock_creds_from_info: Mock,
+        mock_storage_client: Mock,
+        mock_tempfile: Mock,
+        handler_with_gcp_credentials: OetcHandler,
+    ) -> None:
         """Test download failure during blob download"""
         # Setup
         file_name = "solution_file.nc.gz"
@@ -931,12 +1023,18 @@ class TestGcpDownload:
 
         assert "Failed to download file from GCP" in str(exc_info.value)
 
-    @patch('linopy.oetc.os.remove')
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    @patch('linopy.oetc.storage.Client')
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_download_file_from_gcp_decompression_error(self, mock_creds_from_info: Mock, mock_storage_client: Mock,
-                                                        mock_tempfile: Mock, mock_remove: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.os.remove")
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    @patch("linopy.oetc.storage.Client")
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_download_file_from_gcp_decompression_error(
+        self,
+        mock_creds_from_info: Mock,
+        mock_storage_client: Mock,
+        mock_tempfile: Mock,
+        mock_remove: Mock,
+        handler_with_gcp_credentials: OetcHandler,
+    ) -> None:
         """Test download failure during decompression"""
         # Setup
         file_name = "solution_file.nc.gz"
@@ -972,8 +1070,10 @@ class TestGcpDownload:
 
             assert "Failed to download file from GCP" in str(exc_info.value)
 
-    @patch('linopy.oetc.service_account.Credentials.from_service_account_info')
-    def test_download_file_from_gcp_credentials_error(self, mock_creds_from_info: Mock, handler_with_gcp_credentials: OetcHandler) -> None:
+    @patch("linopy.oetc.service_account.Credentials.from_service_account_info")
+    def test_download_file_from_gcp_credentials_error(
+        self, mock_creds_from_info: Mock, handler_with_gcp_credentials: OetcHandler
+    ) -> None:
         """Test download failure during credentials creation"""
         # Setup
         file_name = "solution_file.nc.gz"
@@ -1019,8 +1119,10 @@ class TestJobSubmission:
 
         return handler
 
-    @patch('linopy.oetc.requests.post')
-    def test_submit_job_success(self, mock_post: Mock, handler_with_auth_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_submit_job_success(
+        self, mock_post: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
         """Test successful job submission to compute service"""
         # Setup
         input_file_name = "test_model.nc.gz"
@@ -1060,8 +1162,10 @@ class TestJobSubmission:
         # Verify result
         assert result == expected_job_uuid
 
-    @patch('linopy.oetc.requests.post')
-    def test_submit_job_http_error(self, mock_post: Mock, handler_with_auth_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_submit_job_http_error(
+        self, mock_post: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
         """Test job submission with HTTP error"""
         # Setup
         input_file_name = "test_model.nc.gz"
@@ -1077,8 +1181,10 @@ class TestJobSubmission:
 
         assert "Failed to submit job to compute service" in str(exc_info.value)
 
-    @patch('linopy.oetc.requests.post')
-    def test_submit_job_missing_uuid_in_response(self, mock_post: Mock, handler_with_auth_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_submit_job_missing_uuid_in_response(
+        self, mock_post: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
         """Test job submission with missing UUID in response"""
         # Setup
         input_file_name = "test_model.nc.gz"
@@ -1095,8 +1201,10 @@ class TestJobSubmission:
             exc_info.value
         )
 
-    @patch('linopy.oetc.requests.post')
-    def test_submit_job_network_error(self, mock_post: Mock, handler_with_auth_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.requests.post")
+    def test_submit_job_network_error(
+        self, mock_post: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
         """Test job submission with network error"""
         # Setup
         input_file_name = "test_model.nc.gz"
@@ -1111,7 +1219,9 @@ class TestJobSubmission:
 
 class TestSolveOnOetc:
     @pytest.fixture
-    def handler_with_complete_setup(self, mock_gcp_credentials_response: dict) -> OetcHandler:
+    def handler_with_complete_setup(
+        self, mock_gcp_credentials_response: dict
+    ) -> OetcHandler:
         """Create handler with complete setup for testing solve functionality"""
         with patch("linopy.oetc.requests.post"), patch("linopy.oetc.requests.get"):
             credentials = OetcCredentials(
@@ -1139,10 +1249,16 @@ class TestSolveOnOetc:
 
             return handler
 
-    @patch('linopy.oetc.linopy.read_netcdf')
-    @patch('linopy.oetc.os.remove')
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_file_upload(self, mock_tempfile: Mock, mock_remove: Mock, mock_read_netcdf: Mock, handler_with_complete_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.linopy.read_netcdf")
+    @patch("linopy.oetc.os.remove")
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_file_upload(
+        self,
+        mock_tempfile: Mock,
+        mock_remove: Mock,
+        mock_read_netcdf: Mock,
+        handler_with_complete_setup: OetcHandler,
+    ) -> None:
         """Test solve_on_oetc method complete workflow"""
         # Setup
         mock_model = Mock()
@@ -1200,8 +1316,10 @@ class TestSolveOnOetc:
                         )
                         mock_remove.assert_called_once_with("/tmp/downloaded_result.nc")
 
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_upload_failure(self, mock_tempfile: Mock, handler_with_complete_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_upload_failure(
+        self, mock_tempfile: Mock, handler_with_complete_setup: OetcHandler
+    ) -> None:
         """Test solve_on_oetc method with upload failure"""
         # Setup
         mock_model = Mock()
@@ -1254,11 +1372,16 @@ class TestSolveOnOetcWithJobSubmission:
 
         return handler
 
-    @patch('linopy.oetc.linopy.read_netcdf')
-    @patch('linopy.oetc.os.remove')
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_with_job_submission(self, mock_tempfile: Mock, mock_remove: Mock, mock_read_netcdf: Mock,
-                                               handler_with_full_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.linopy.read_netcdf")
+    @patch("linopy.oetc.os.remove")
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_with_job_submission(
+        self,
+        mock_tempfile: Mock,
+        mock_remove: Mock,
+        mock_read_netcdf: Mock,
+        handler_with_full_setup: OetcHandler,
+    ) -> None:
         """Test solve_on_oetc method including job submission, waiting, and download"""
         # Setup
         mock_model = Mock()
@@ -1319,8 +1442,10 @@ class TestSolveOnOetcWithJobSubmission:
                         )
                         mock_remove.assert_called_once_with("/tmp/solution_file.nc")
 
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_job_submission_failure(self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_job_submission_failure(
+        self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler
+    ) -> None:
         """Test solve_on_oetc method with job submission failure"""
         # Setup
         mock_model = Mock()
@@ -1347,8 +1472,10 @@ class TestSolveOnOetcWithJobSubmission:
 
                 assert "Job submission failed" in str(exc_info.value)
 
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_job_waiting_failure(self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_job_waiting_failure(
+        self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler
+    ) -> None:
         """Test solve_on_oetc method with job waiting failure"""
         # Setup
         mock_model = Mock()
@@ -1381,8 +1508,10 @@ class TestSolveOnOetcWithJobSubmission:
 
                     assert "Job failed: solver error" in str(exc_info.value)
 
-    @patch('linopy.oetc.tempfile.NamedTemporaryFile')
-    def test_solve_on_oetc_no_output_files_error(self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler) -> None:
+    @patch("linopy.oetc.tempfile.NamedTemporaryFile")
+    def test_solve_on_oetc_no_output_files_error(
+        self, mock_tempfile: Mock, handler_with_full_setup: OetcHandler
+    ) -> None:
         """Test solve_on_oetc method when job completes but has no output files"""
         # Setup
         mock_model = Mock()
@@ -1422,10 +1551,12 @@ class TestSolveOnOetcWithJobSubmission:
 
 # Additional integration-style test
 class TestOetcHandlerIntegration:
-    @patch('linopy.oetc.requests.post')
-    @patch('linopy.oetc.requests.get')
-    @patch('linopy.oetc.datetime')
-    def test_complete_authentication_flow(self, mock_datetime: Mock, mock_get: Mock, mock_post: Mock) -> None:
+    @patch("linopy.oetc.requests.post")
+    @patch("linopy.oetc.requests.get")
+    @patch("linopy.oetc.datetime")
+    def test_complete_authentication_flow(
+        self, mock_datetime: Mock, mock_get: Mock, mock_post: Mock
+    ) -> None:
         """Test complete authentication and credentials flow with realistic data"""
         # Setup
         fixed_time = datetime(2024, 1, 15, 12, 0, 0)

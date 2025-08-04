@@ -74,13 +74,14 @@ class JobResult:
     uuid: str
     status: str
     name: str | None = None
-    owner: str | None  = None
-    solver: str | None  = None
-    duration_in_seconds: int | None  = None
-    solving_duration_in_seconds: int | None  = None
-    input_files: list | None  = None
-    output_files: list | None  = None
-    created_at: str | None  = None
+    owner: str | None = None
+    solver: str | None = None
+    duration_in_seconds: int | None = None
+    solving_duration_in_seconds: int | None = None
+    input_files: list | None = None
+    output_files: list | None = None
+    created_at: str | None = None
+
 
 class OetcHandler:
     def __init__(self, settings: OetcSettings) -> None:
@@ -470,7 +471,7 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Failed to download file from GCP: {e}")
 
-    def solve_on_oetc(self, model): # type: ignore
+    def solve_on_oetc(self, model):  # type: ignore
         """
         Solve a linopy model on the OET Cloud compute app.
 
