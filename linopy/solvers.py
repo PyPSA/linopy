@@ -13,6 +13,7 @@ import os
 import re
 import subprocess as sub
 import sys
+import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from collections.abc import Callable, Generator
@@ -1654,8 +1655,8 @@ class Mosek(Solver[None]):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated
+            Ignored.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -1663,6 +1664,9 @@ class Mosek(Solver[None]):
         -------
         Result
         """
+
+        if env is not None:
+            warnings.warn("Argument 'env' in solve_problem_from_model",DeprecationWarning)
         with mosek.Task() as m:
             m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
 
@@ -1701,13 +1705,15 @@ class Mosek(Solver[None]):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated.
+            Ignored.
 
         Returns
         -------
         Result
         """
+        if env is not None:
+            warnings.warn("Argument 'env' in solve_problem_from_model",DeprecationWarning)
         with mosek.Task() as m:
             # read sense and io_api from problem file
             sense = read_sense_from_problem_file(problem_fn)
