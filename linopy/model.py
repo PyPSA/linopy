@@ -1157,7 +1157,7 @@ class Model:
                     **solver_options,
                 )
             else:
-                solved = OetcHandler(oetc_settings).solve_on_oetc(self)
+                solved = OetcHandler(oetc_settings).solve_on_oetc(self) # type: ignore
 
             self.objective.set_value(solved.objective.value)
             self.status = solved.status
