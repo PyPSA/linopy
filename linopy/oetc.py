@@ -14,8 +14,11 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from requests import RequestException
 
+<<<<<<< Updated upstream
 import linopy
 
+=======
+>>>>>>> Stashed changes
 logger = logging.getLogger(__name__)
 
 
@@ -73,15 +76,14 @@ class AuthenticationResult:
 class JobResult:
     uuid: str
     status: str
-    name: str = None
-    owner: str = None
-    solver: str = None
-    duration_in_seconds: int = None
-    solving_duration_in_seconds: int = None
-    input_files: list = None
-    output_files: list = None
-    created_at: str = None
-
+    name: str | None = None
+    owner: str | None  = None
+    solver: str | None  = None
+    duration_in_seconds: int | None  = None
+    solving_duration_in_seconds: int | None  = None
+    input_files: list | None  = None
+    output_files: list | None  = None
+    created_at: str | None  = None
 
 class OetcHandler:
     def __init__(self, settings: OetcSettings) -> None:
@@ -153,12 +155,16 @@ class OetcHandler:
         except (IndexError, json.JSONDecodeError, Exception) as e:
             raise Exception(f"Failed to decode JWT payload: {e}")
 
+<<<<<<< Updated upstream
     def __get_cloud_provider_credentials(self) -> GcpCredentials | None:
+=======
+    def __get_cloud_provider_credentials(self) -> GcpCredentials:
+>>>>>>> Stashed changes
         """
         Fetch cloud provider credentials based on the configured provider.
 
         Returns:
-            Union[GcpCredentials, None]: The cloud provider credentials
+            GcpCredentials: The cloud provider credentials
 
         Raises:
             Exception: If the compute provider is not supported
@@ -471,7 +477,7 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Failed to download file from GCP: {e}")
 
-    def solve_on_oetc(self, model):
+    def solve_on_oetc(self, model): # type: ignore
         """
         Solve a linopy model on the OET Cloud compute app.
 

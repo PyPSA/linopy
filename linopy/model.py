@@ -1050,7 +1050,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: Any = None,
         progress: bool | None = None,
-        oetc_settings: OetcSettings = None,
+        oetc_settings: OetcSettings | None = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
