@@ -103,7 +103,6 @@ with contextlib.suppress(ModuleNotFoundError):
     with contextlib.suppress(mosek.Error):
         t = mosek.Task()
         t.optimize()
-        m.checkinall()
 
         available_solvers.append("mosek")
 
