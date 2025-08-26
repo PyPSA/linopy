@@ -406,6 +406,7 @@ class OetcHandler:
             Exception: If decompression fails
         """
         try:
+            logger.info(f"OETC - Decompressing file: {input_path}")
             output_path = input_path[:-3]
             chunk_size = 1024 * 1024
 
@@ -417,6 +418,7 @@ class OetcHandler:
                             break
                         f_out.write(chunk)
 
+            logger.info(f"OETC - File decompressed successfully: {output_path}")
             return output_path
         except Exception as e:
             raise Exception(f"Failed to decompress file: {e}")
@@ -435,6 +437,8 @@ class OetcHandler:
             Exception: If download or decompression fails
         """
         try:
+            logger.info(f"OETC - Downloading file from GCP: {file_name}")
+
             # Create GCP credentials from service key
             service_key_dict = json.loads(
                 self.cloud_provider_credentials.gcp_service_key
@@ -459,6 +463,7 @@ class OetcHandler:
                 compressed_file_path = temp_file.name
 
             blob.download_to_filename(compressed_file_path)
+            logger.info(f"OETC - File downloaded from GCP successfully: {file_name}")
 
             # Decompress the downloaded file
             decompressed_file_path = self._gzip_decompress(compressed_file_path)
@@ -543,6 +548,7 @@ class OetcHandler:
             Exception: If compression fails
         """
         try:
+            logger.info(f"OETC - Compressing file: {source_path}")
             output_path = source_path + ".gz"
             chunk_size = 1024 * 1024
 
@@ -554,6 +560,7 @@ class OetcHandler:
                             break
                         f_out.write(chunk)
 
+            logger.info(f"OETC - File compressed successfully: {output_path}")
             return output_path
         except Exception as e:
             raise Exception(f"Failed to compress file: {e}")
@@ -575,6 +582,8 @@ class OetcHandler:
             compressed_file_path = self._gzip_compress(file_path)
             compressed_file_name = os.path.basename(compressed_file_path)
 
+            logger.info(f"OETC - Uploading file to GCP: {compressed_file_name}")
+
             # Create GCP credentials from service key
             service_key_dict = json.loads(
                 self.cloud_provider_credentials.gcp_service_key
@@ -593,6 +602,8 @@ class OetcHandler:
             blob = bucket.blob(compressed_file_name)
 
             blob.upload_from_filename(compressed_file_path)
+
+            logger.info(f"OETC - File uploaded to GCP successfully: {compressed_file_name}")
 
             # Clean up compressed file
             os.remove(compressed_file_path)
