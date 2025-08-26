@@ -603,7 +603,9 @@ class OetcHandler:
 
             blob.upload_from_filename(compressed_file_path)
 
-            logger.info(f"OETC - File uploaded to GCP successfully: {compressed_file_name}")
+            logger.info(
+                f"OETC - File uploaded to GCP successfully: {compressed_file_name}"
+            )
 
             # Clean up compressed file
             os.remove(compressed_file_path)
