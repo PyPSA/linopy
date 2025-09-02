@@ -29,9 +29,23 @@ def assert_quadequal(
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
-def assert_conequal(a: Constraint, b: Constraint) -> None:
-    """Assert that two constraints are equal."""
-    return assert_equal(_con_unwrap(a), _con_unwrap(b))
+def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
+    """Assert that two constraints are equal.
+    Parameters
+    ----------
+        a: Constraint
+            The first constraint.
+        b: Constraint
+            The second constraint.
+        strict: bool
+            Whether to compare the constraints strictly. If not, only compare mathematically relevant parts.
+    """
+    if strict:
+        return assert_equal(_con_unwrap(a), _con_unwrap(b))
+    else:
+        assert_linequal(a.lhs, b.lhs)
+        assert_equal(a.sign, b.sign)
+        assert_equal(a.rhs, b.rhs)
 
 
 def assert_model_equal(a: Model, b: Model) -> None:
