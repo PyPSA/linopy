@@ -41,7 +41,7 @@ def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
             Whether to compare the constraints strictly. If not, only compare mathematically relevant parts.
     """
     if strict:
-        return assert_equal(_con_unwrap(a), _con_unwrap(b))
+        assert_equal(_con_unwrap(a), _con_unwrap(b))
     else:
         assert_linequal(a.lhs, b.lhs)
         assert_equal(a.sign, b.sign)
