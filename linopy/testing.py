@@ -30,7 +30,9 @@ def assert_quadequal(
 
 
 def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
-    """Assert that two constraints are equal.
+    """
+    Assert that two constraints are equal.
+
     Parameters
     ----------
         a: Constraint
