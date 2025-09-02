@@ -41,6 +41,7 @@ def test_constraint_assignment() -> None:
 
     assert_conequal(m.constraints.con0, con0)
 
+
 def test_constraint_equality() -> None:
     m: Model = Model()
 
@@ -54,7 +55,7 @@ def test_constraint_equality() -> None:
     con0 = m.add_constraints(1 * x + 10 * y, EQUAL, 0)
 
     assert_conequal(con0, 1 * x + 10 * y == 0, strict=False)
-    assert_conequal(1 * x + 10 * y  == 0, 1 * x + 10 * y == 0, strict=False)
+    assert_conequal(1 * x + 10 * y == 0, 1 * x + 10 * y == 0, strict=False)
 
     with pytest.raises(AssertionError):
         assert_conequal(con0, 1 * x + 10 * y <= 0, strict=False)
@@ -63,7 +64,7 @@ def test_constraint_equality() -> None:
         assert_conequal(con0, 1 * x + 10 * y >= 0, strict=False)
 
     with pytest.raises(AssertionError):
-        assert_conequal(10 * y + 2 * x  == 0, 1 * x + 10 * y == 0, strict=False)
+        assert_conequal(10 * y + 2 * x == 0, 1 * x + 10 * y == 0, strict=False)
 
 
 def test_constraints_getattr_formatted() -> None:
@@ -230,6 +231,3 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
-
-if __name__ == "__main__":
-    test_constraint_equality()
