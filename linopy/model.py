@@ -58,7 +58,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.oetc import OetcHandler, OetcSettings
+from linopy.oetc import OetcHandler
 from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,
@@ -1048,9 +1048,8 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: Any = None,
+        remote: "RemoteHandler" | OetcHandler = None,
         progress: bool | None = None,
-        oetc_settings: OetcSettings | None = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1139,10 +1138,10 @@ class Model:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-        if remote or oetc_settings:
-            if remote and oetc_settings:
-                raise ValueError("Remote and OETC can't be active at the same time")
-            if remote:
+        if remote is not None:
+            if isinstance(remote, OetcHandler):
+                solved = remote.solve_on_oetc(self)  # type: ignore
+            else:
                 solved = remote.solve_on_remote(
                     self,
                     solver_name=solver_name,
@@ -1156,8 +1155,6 @@ class Model:
                     sanitize_zeros=sanitize_zeros,
                     **solver_options,
                 )
-            else:
-                solved = OetcHandler(oetc_settings).solve_on_oetc(self)  # type: ignore
 
             self.objective.set_value(solved.objective.value)
             self.status = solved.status
