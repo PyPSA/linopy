@@ -1048,7 +1048,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: "RemoteHandler" | OetcHandler = None, # type: ignore
+        remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
