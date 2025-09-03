@@ -1109,7 +1109,7 @@ class Model:
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
             chunks to avoid memory issues. The default is 2_000_000.
-        remote : linopy.remote.RemoteHandler
+        remote : linopy.remote.RemoteHandler | linopy.oetc.OetcHandler, optional
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
             linopy.remote.RemoteHandler for more details.
@@ -1117,9 +1117,6 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
-        oetc_settings : dict, optional
-            Settings for the solving on the OETC platform. If a value is provided
-            solving will be attempted on OETC, otherwise it will be done locally.
         **solver_options : kwargs
             Options passed to the solver.
 
