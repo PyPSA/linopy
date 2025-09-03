@@ -1048,7 +1048,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler = None,
+        remote: "RemoteHandler" | OetcHandler = None, # type: ignore
         progress: bool | None = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
@@ -1140,7 +1140,7 @@ class Model:
 
         if remote is not None:
             if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(self)  # type: ignore
+                solved = remote.solve_on_oetc(self)
             else:
                 solved = remote.solve_on_remote(
                     self,
