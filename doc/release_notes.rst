@@ -4,7 +4,8 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
-
+Version 0.5.6
+--------------
 
 * Improved variable/expression arithmetic methods so that they correctly handle types
 * Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
@@ -13,6 +14,9 @@ Release Notes
 **Breaking Changes**
 
 * With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
+
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
 
 Version 0.5.5
 --------------
