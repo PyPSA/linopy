@@ -1049,6 +1049,7 @@ class Model:
         keep_files: bool = False,
         env: Any = None,
         sanitize_zeros: bool = True,
+        sanitize_missings: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
@@ -1106,6 +1107,9 @@ class Model:
             Whether to set terms with zero coefficient as missing.
             This will remove unneeded overhead in the lp file writing.
             The default is True.
+        sanitize_missings : bool, optional
+            Whether to ignore constraints with only missing coefficients.
+            This will remove unneeded overhead in the lp file writing.
         sanitize_infinities : bool, optional
             Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
         slice_size : int, optional
@@ -1194,6 +1198,9 @@ class Model:
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
+
+        if sanitize_missings:
+            self.constraints.sanitize_missings()
 
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
