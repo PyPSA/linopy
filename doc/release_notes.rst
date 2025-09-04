@@ -17,7 +17,6 @@ Version 0.5.6
 **Breaking Changes**
 
 * With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
-
 * The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
 
 
