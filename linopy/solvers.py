@@ -1661,7 +1661,8 @@ class Mosek(Solver[None]):
         basis_fn : Path, optional
             Path to the basis file.
         env : None, optional, deprecated
-            Ignored.
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -1672,7 +1673,11 @@ class Mosek(Solver[None]):
 
         if env is not None:
             warnings.warn(
-                "Argument 'env' in solve_problem_from_model", DeprecationWarning
+                "The 'env' parameter in solve_problem_from_model is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
             )
         with mosek.Task() as m:
             m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
@@ -1712,8 +1717,9 @@ class Mosek(Solver[None]):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional, deprecated.
-            Ignored.
+        env : None, optional, deprecated
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
 
         Returns
         -------
@@ -1721,7 +1727,11 @@ class Mosek(Solver[None]):
         """
         if env is not None:
             warnings.warn(
-                "Argument 'env' in solve_problem_from_model", DeprecationWarning
+                "The 'env' parameter in solve_problem_from_file is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
             )
         with mosek.Task() as m:
             # read sense and io_api from problem file
