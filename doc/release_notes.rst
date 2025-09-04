@@ -1,8 +1,34 @@
 Release Notes
 =============
 
-Upcoming Version
-----------------
+.. Upcoming Version
+.. ----------------
+.. * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
+
+Version 0.5.6
+--------------
+
+* Improved variable/expression arithmetic methods so that they correctly handle types
+* Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
+* Added integration with OETC platform
+* Mosek: Remove explicit use of Env, use global env instead
+* Objectives can now be created from variables via `linopy.Model.add_objective`.
+
+**Breaking Changes**
+
+* With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
+
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
+
+Version 0.5.5
+--------------
+
+* Internally assign new data fields to expressions with a multiindexed-safe routine.
+
+Version 0.5.4
+--------------
+
 
 **Bug Fixes**
 
@@ -12,6 +38,9 @@ Upcoming Version
   gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver
 * Treat GLPK's `integer undefined` status as not-OK
+* Internally assign new data fields to `Variable` and `Constraint` with a multiindexed-safe routine. Before the
+  assignment when using multi-indexed coordinates, an deprecation warning was raised. This is fixed now.
+
 
 Version 0.5.3
 --------------

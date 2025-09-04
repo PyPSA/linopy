@@ -13,11 +13,12 @@ import os
 import re
 import subprocess as sub
 import sys
+import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,11 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
+    import gurobipy
+
     from linopy.model import Model
+
+EnvType = TypeVar("EnvType")
 
 QUADRATIC_SOLVERS = [
     "gurobi",
@@ -96,10 +101,8 @@ with contextlib.suppress(ModuleNotFoundError):
     import mosek
 
     with contextlib.suppress(mosek.Error):
-        with mosek.Env() as m:
-            t = m.Task()
-            t.optimize()
-            m.checkinall()
+        t = mosek.Task()
+        t.optimize()
 
         available_solvers.append("mosek")
 
@@ -195,7 +198,7 @@ def maybe_adjust_objective_sign(
     return solution
 
 
-class Solver(ABC):
+class Solver(ABC, Generic[EnvType]):
     """
     Abstract base class for solving a given linear problem.
 
@@ -242,7 +245,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -262,7 +265,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a problem file.
@@ -281,7 +284,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -322,7 +325,7 @@ class Solver(ABC):
         return SolverName[self.__class__.__name__]
 
 
-class CBC(Solver):
+class CBC(Solver[None]):
     """
     Solver subclass for the CBC solver.
 
@@ -456,6 +459,7 @@ class CBC(Solver):
 
         # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
         h = highspy.Highs()
+        h.silent()
         h.readModel(path_to_string(problem_fn))
         variables = {v.name for v in h.getVariables()}
 
@@ -503,7 +507,7 @@ class CBC(Solver):
         return Result(status, solution, CbcModel(mip_gap, runtime))
 
 
-class GLPK(Solver):
+class GLPK(Solver[None]):
     """
     Solver subclass for the GLPK solver.
 
@@ -673,7 +677,7 @@ class GLPK(Solver):
         return Result(status, solution)
 
 
-class Highs(Solver):
+class Highs(Solver[None]):
     """
     Solver subclass for the Highs solver. Highs must be installed
     for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
@@ -751,11 +755,11 @@ class Highs(Solver):
             )
 
         h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        self._set_solver_params(h, log_fn)
 
         return self._solve(
             h,
             solution_fn,
-            log_fn,
             warmstart_fn,
             basis_fn,
             model=model,
@@ -800,23 +804,35 @@ class Highs(Solver):
 
         problem_fn_ = path_to_string(problem_fn)
         h = highspy.Highs()
+        self._set_solver_params(h, log_fn)
+
         h.readModel(problem_fn_)
 
         return self._solve(
             h,
             solution_fn,
-            log_fn,
             warmstart_fn,
             basis_fn,
             io_api=read_io_api_from_problem_file(problem_fn),
             sense=read_sense_from_problem_file(problem_fn),
         )
 
+    def _set_solver_params(
+        self,
+        highs_solver: highspy.Highs,
+        log_fn: Path | None = None,
+    ) -> None:
+        if log_fn is not None:
+            self.solver_options["log_file"] = path_to_string(log_fn)
+            logger.info(f"Log file at {self.solver_options['log_file']}")
+
+        for k, v in self.solver_options.items():
+            highs_solver.setOptionValue(k, v)
+
     def _solve(
         self,
         h: highspy.Highs,
         solution_fn: Path | None = None,
-        log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         model: Model | None = None,
@@ -873,13 +889,6 @@ class Highs(Solver):
             highspy.HighsModelStatus.kUnknown: TerminationCondition.unknown,
         }
 
-        if log_fn is not None:
-            self.solver_options["log_file"] = path_to_string(log_fn)
-            logger.info(f"Log file at {self.solver_options['log_file']}")
-
-        for k, v in self.solver_options.items():
-            h.setOptionValue(k, v)
-
         if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
             h.readSolution(path_to_string(warmstart_fn), 0)
         elif warmstart_fn:
@@ -919,7 +928,7 @@ class Highs(Solver):
         return Result(status, solution, h)
 
 
-class Gurobi(Solver):
+class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
     Solver subclass for the gurobi solver.
 
@@ -942,7 +951,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -962,8 +971,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -974,6 +983,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
@@ -998,7 +1009,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -1017,8 +1028,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
 
         Returns
         -------
@@ -1031,6 +1042,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
@@ -1150,7 +1163,7 @@ class Gurobi(Solver):
         return Result(status, solution, m)
 
 
-class Cplex(Solver):
+class Cplex(Solver[None]):
     """
     Solver subclass for the Cplex solver.
 
@@ -1221,6 +1234,17 @@ class Cplex(Solver):
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
+            "integer infeasible": "infeasible",
+            "time limit exceeded": "time_limit",
+            "time limit exceeded, no integer solution": "infeasible",
+            "error termination": "error",
+            "error termination, no integer solution": "error",
+            "memory limit exceeded": "internal_solver_error",
+            "memory limit exceeded, no integer solution": "internal_solver_error",
+            "aborted": "user_interrupt",
+            "integer unbounded": "unbounded",
+            "integer infeasible or unbounded": "infeasible_or_unbounded",
+            "Unknown status value": "unknown",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
@@ -1295,7 +1319,7 @@ class Cplex(Solver):
         return Result(status, solution, m)
 
 
-class SCIP(Solver):
+class SCIP(Solver[None]):
     """
     Solver subclass for the SCIP solver.
 
@@ -1448,7 +1472,7 @@ class SCIP(Solver):
         return Result(status, solution, m)
 
 
-class Xpress(Solver):
+class Xpress(Solver[None]):
     """
     Solver subclass for the xpress solver.
 
@@ -1585,7 +1609,7 @@ class Xpress(Solver):
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
 
 
-class Mosek(Solver):
+class Mosek(Solver[None]):
     """
     Solver subclass for the Mosek solver.
 
@@ -1636,8 +1660,9 @@ class Mosek(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -1645,24 +1670,27 @@ class Mosek(Solver):
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
 
-            with env_.Task() as m:
-                m = model.to_mosek(
-                    m, explicit_coordinate_names=explicit_coordinate_names
-                )
+        if env is not None:
+            warnings.warn(
+                "The 'env' parameter in solve_problem_from_model is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        with mosek.Task() as m:
+            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
 
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api="direct",
-                    sense=model.sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api="direct",
+                sense=model.sense,
+            )
 
     def solve_problem_from_file(
         self,
@@ -1689,34 +1717,39 @@ class Mosek(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
 
         Returns
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
+        if env is not None:
+            warnings.warn(
+                "The 'env' parameter in solve_problem_from_file is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        with mosek.Task() as m:
+            # read sense and io_api from problem file
+            sense = read_sense_from_problem_file(problem_fn)
+            io_api = read_io_api_from_problem_file(problem_fn)
+            # for Mosek solver, the path needs to be a string
+            problem_fn_ = path_to_string(problem_fn)
+            m.readdata(problem_fn_)
 
-            with env_.Task() as m:
-                # read sense and io_api from problem file
-                sense = read_sense_from_problem_file(problem_fn)
-                io_api = read_io_api_from_problem_file(problem_fn)
-                # for Mosek solver, the path needs to be a string
-                problem_fn_ = path_to_string(problem_fn)
-                m.readdata(problem_fn_)
-
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api=io_api,
-                    sense=sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api=io_api,
+                sense=sense,
+            )
 
     def _solve(
         self,
@@ -1915,7 +1948,7 @@ class Mosek(Solver):
         return Result(status, solution)
 
 
-class COPT(Solver):
+class COPT(Solver[None]):
     """
     Solver subclass for the COPT solver.
 
@@ -2030,9 +2063,9 @@ class COPT(Solver):
 
         # TODO: check if this suffices
         condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = CONDITION_MAP.get(condition, str(condition))
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = str(condition)
 
         def get_solver_solution() -> Solution:
             # TODO: check if this suffices
@@ -2056,7 +2089,7 @@ class COPT(Solver):
         return Result(status, solution, m)
 
 
-class MindOpt(Solver):
+class MindOpt(Solver[None]):
     """
     Solver subclass for the MindOpt solver.
 
@@ -2200,7 +2233,7 @@ class MindOpt(Solver):
         return Result(status, solution, m)
 
 
-class PIPS(Solver):
+class PIPS(Solver[None]):
     """
     Solver subclass for the PIPS solver.
     """

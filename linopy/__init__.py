@@ -20,7 +20,7 @@ from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.remote import RemoteHandler
+from linopy.remote import OetcHandler, RemoteHandler
 
 __all__ = (
     "Constraint",
@@ -31,6 +31,7 @@ __all__ = (
     "LinearExpression",
     "Model",
     "Objective",
+    "OetcHandler",
     "QuadraticExpression",
     "RemoteHandler",
     "Variable",
