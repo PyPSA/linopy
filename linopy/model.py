@@ -58,8 +58,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.oetc import OetcHandler
-from linopy.remote import RemoteHandler
+from linopy.remote import OetcHandler, RemoteHandler
 from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,

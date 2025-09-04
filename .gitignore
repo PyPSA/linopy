@@ -20,6 +20,8 @@ paper/
 monkeytype.sqlite3
 .github/copilot-instructions.md
 uv.lock
+*.pyc
+
 
 # Environments
 .env
