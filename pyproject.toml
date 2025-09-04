@@ -88,6 +88,10 @@ include = ["linopy"]
 write_to = "linopy/version.py"
 version_scheme = "no-guess-dev"
 
+[tool.pytest.ini_options]
+testpaths = ["test"]
+norecursedirs = ["dev-scripts", "doc", "examples", "benchmark"]
+
 [tool.coverage.run]
 branch = true
 source = ["linopy"]
