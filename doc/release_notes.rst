@@ -12,6 +12,7 @@ Version 0.5.6
 * Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
 * Added integration with OETC platform
 * Mosek: Remove explicit use of Env, use global env instead
+* Objectives can now be created from variables via `linopy.Model.add_objective`.
 
 **Breaking Changes**
 

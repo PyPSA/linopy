@@ -31,6 +31,13 @@ def test_model(linear_objective: Objective, quadratic_objective: Objective) -> N
     assert isinstance(quadratic_objective.model, Model)
 
 
+def test_add_objective_from_variable() -> None:
+    m = Model()
+    v = m.add_variables(coords=[[1, 2, 3]])
+    m.add_objective(v)
+    assert isinstance(m.objective, Objective)
+
+
 def test_sense(linear_objective: Objective, quadratic_objective: Objective) -> None:
     assert linear_objective.sense == "min"
     assert quadratic_objective.sense == "max"
