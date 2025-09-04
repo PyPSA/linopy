@@ -684,7 +684,8 @@ class Model:
 
     def add_objective(
         self,
-        expr: LinearExpression
+        expr: Variable
+        | LinearExpression
         | QuadraticExpression
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
@@ -710,6 +711,8 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
+        if isinstance(expr, Variable):
+            expr = 1 * expr
         self.objective.expression = expr
         self.objective.sense = sense
 

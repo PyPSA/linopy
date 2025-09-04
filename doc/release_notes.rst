@@ -11,6 +11,7 @@ Version 0.5.6
 * Improved variable/expression arithmetic methods so that they correctly handle types
 * Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
 * Mosek: Remove explicit use of Env, use global env instead
+* Objectives can now be created from variables via `linopy.Model.add_objective`.
 
 **Breaking Changes**
 
