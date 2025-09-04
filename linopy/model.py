@@ -58,6 +58,7 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
+from linopy.remote import OetcHandler, RemoteHandler
 from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
 from linopy.types import (
     ConstantLike,
@@ -1050,7 +1051,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: Any = None,
+        remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         **solver_options: Any,
     ) -> tuple[str, str]:
@@ -1111,7 +1112,7 @@ class Model:
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
             chunks to avoid memory issues. The default is 2_000_000.
-        remote : linopy.remote.RemoteHandler
+        remote : linopy.remote.RemoteHandler | linopy.oetc.OetcHandler, optional
             Remote handler to use for solving model on a server. Note that when
             solving on a rSee
             linopy.remote.RemoteHandler for more details.
@@ -1137,20 +1138,23 @@ class Model:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-        if remote:
-            solved = remote.solve_on_remote(
-                self,
-                solver_name=solver_name,
-                io_api=io_api,
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                basis_fn=basis_fn,
-                warmstart_fn=warmstart_fn,
-                keep_files=keep_files,
-                sanitize_zeros=sanitize_zeros,
-                **solver_options,
-            )
+        if remote is not None:
+            if isinstance(remote, OetcHandler):
+                solved = remote.solve_on_oetc(self)
+            else:
+                solved = remote.solve_on_remote(
+                    self,
+                    solver_name=solver_name,
+                    io_api=io_api,
+                    problem_fn=problem_fn,
+                    solution_fn=solution_fn,
+                    log_fn=log_fn,
+                    basis_fn=basis_fn,
+                    warmstart_fn=warmstart_fn,
+                    keep_files=keep_files,
+                    sanitize_zeros=sanitize_zeros,
+                    **solver_options,
+                )
 
             self.objective.set_value(solved.objective.value)
             self.status = solved.status

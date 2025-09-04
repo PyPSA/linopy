@@ -14,11 +14,14 @@ doc/_build
 doc/generated
 doc/api
 .vscode
+.idea
 Highs.log
 paper/
 monkeytype.sqlite3
 .github/copilot-instructions.md
 uv.lock
+*.pyc
+
 
 # Environments
 .env

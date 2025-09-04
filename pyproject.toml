@@ -36,6 +36,8 @@ dependencies = [
     "polars",
     "tqdm",
     "deprecation",
+    "google-cloud-storage",
+    "requests"
 ]
 
 [project.urls]
@@ -63,6 +65,7 @@ dev = [
     "netcdf4",
     "paramiko",
     "types-paramiko",
+    "types-requests",
     "gurobipy",
     "highspy",
 ]
