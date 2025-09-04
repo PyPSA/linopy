@@ -2231,6 +2231,7 @@ class MindOpt(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        m.dispose()
         env_.dispose()
 
         return Result(status, solution, m)
