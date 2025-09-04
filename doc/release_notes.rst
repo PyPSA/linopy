@@ -4,7 +4,8 @@ Release Notes
 .. Upcoming Version
 .. ----------------
 
-
+Version 0.5.6
+--------------
 
 * Improved variable/expression arithmetic methods so that they correctly handle types
 * Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
