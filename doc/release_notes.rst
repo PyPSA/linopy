@@ -3,6 +3,7 @@ Release Notes
 
 .. Upcoming Version
 .. ----------------
+.. * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
 
 Version 0.5.6
 --------------
