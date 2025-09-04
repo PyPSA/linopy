@@ -21,7 +21,7 @@ from linopy.remote.oetc import (
 
 
 @pytest.fixture
-def mock_settings():
+def mock_settings() -> OetcSettings:
     """Create mock settings for testing."""
     credentials = OetcCredentials(email="test@example.com", password="test_password")
     return OetcSettings(
@@ -34,7 +34,7 @@ def mock_settings():
 
 
 @pytest.fixture
-def mock_auth_result():
+def mock_auth_result() -> AuthenticationResult:
     """Create mock authentication result."""
     return AuthenticationResult(
         token="mock_token",
@@ -45,7 +45,9 @@ def mock_auth_result():
 
 
 @pytest.fixture
-def oetc_handler(mock_settings, mock_auth_result):
+def oetc_handler(
+    mock_settings: OetcSettings, mock_auth_result: AuthenticationResult
+) -> OetcHandler:
     """Create OetcHandler with mocked authentication."""
     with patch(
         "linopy.remote.oetc.OetcHandler._OetcHandler__sign_in",
@@ -61,7 +63,7 @@ def oetc_handler(mock_settings, mock_auth_result):
 class TestJobPollingSuccess:
     """Test successful job polling scenarios."""
 
-    def test_job_completes_immediately(self, oetc_handler):
+    def test_job_completes_immediately(self, oetc_handler: OetcHandler) -> None:
         """Test job that completes on first poll."""
         job_data = {
             "uuid": "job-123",
@@ -89,7 +91,9 @@ class TestJobPollingSuccess:
             assert result.output_files == ["output.nc"]
             mock_get.assert_called_once()
 
-    def test_job_completes_with_no_output_files_warning(self, oetc_handler):
+    def test_job_completes_with_no_output_files_warning(
+        self, oetc_handler: OetcHandler
+    ) -> None:
         """Test job completion with no output files generates warning."""
         job_data = {"uuid": "job-123", "status": "FINISHED", "output_files": []}
 
@@ -108,7 +112,9 @@ class TestJobPollingSuccess:
                 )
 
     @patch("time.sleep")  # Mock sleep to speed up test
-    def test_job_polling_progression(self, mock_sleep, oetc_handler):
+    def test_job_polling_progression(
+        self, mock_sleep: Mock, oetc_handler: OetcHandler
+    ) -> None:
         """Test job progresses through multiple states before completion."""
         responses = [
             {"uuid": "job-123", "status": "PENDING"},
@@ -133,7 +139,9 @@ class TestJobPollingSuccess:
             assert mock_sleep.call_count == 4  # Sleep called 4 times between 5 polls
 
     @patch("time.sleep")
-    def test_polling_interval_backoff(self, mock_sleep, oetc_handler):
+    def test_polling_interval_backoff(
+        self, mock_sleep: Mock, oetc_handler: OetcHandler
+    ) -> None:
         """Test polling interval increases with exponential backoff."""
         responses = [
             {"uuid": "job-123", "status": "PENDING"},
@@ -160,7 +168,7 @@ class TestJobPollingSuccess:
 class TestJobPollingErrors:
     """Test job polling error scenarios."""
 
-    def test_setup_error_status(self, oetc_handler):
+    def test_setup_error_status(self, oetc_handler: OetcHandler) -> None:
         """Test job with SETUP_ERROR status raises exception."""
         job_data = {"uuid": "job-123", "status": "SETUP_ERROR"}
 
@@ -173,7 +181,7 @@ class TestJobPollingErrors:
             with pytest.raises(Exception, match="Job failed during setup phase"):
                 oetc_handler.wait_and_get_job_data("job-123")
 
-    def test_runtime_error_status(self, oetc_handler):
+    def test_runtime_error_status(self, oetc_handler: OetcHandler) -> None:
         """Test job with RUNTIME_ERROR status raises exception."""
         job_data = {"uuid": "job-123", "status": "RUNTIME_ERROR"}
 
@@ -186,7 +194,7 @@ class TestJobPollingErrors:
             with pytest.raises(Exception, match="Job failed during execution"):
                 oetc_handler.wait_and_get_job_data("job-123")
 
-    def test_unknown_status_error(self, oetc_handler):
+    def test_unknown_status_error(self, oetc_handler: OetcHandler) -> None:
         """Test job with unknown status raises exception."""
         job_data = {"uuid": "job-123", "status": "UNKNOWN_STATUS"}
 
@@ -204,7 +212,9 @@ class TestJobPollingNetworkErrors:
     """Test network error handling during job polling."""
 
     @patch("time.sleep")
-    def test_network_retry_success(self, mock_sleep, oetc_handler):
+    def test_network_retry_success(
+        self, mock_sleep: Mock, oetc_handler: OetcHandler
+    ) -> None:
         """Test network errors are retried and eventually succeed."""
         successful_response = {
             "uuid": "job-123",
@@ -234,7 +244,9 @@ class TestJobPollingNetworkErrors:
             assert sleep_calls[1] == 20  # Second retry: 2 * 10 = 20
 
     @patch("time.sleep")
-    def test_max_network_retries_exceeded(self, mock_sleep, oetc_handler):
+    def test_max_network_retries_exceeded(
+        self, mock_sleep: Mock, oetc_handler: OetcHandler
+    ) -> None:
         """Test max network retries causes exception."""
         with patch("requests.get") as mock_get:
             # All calls fail with RequestException
@@ -249,7 +261,9 @@ class TestJobPollingNetworkErrors:
             assert mock_get.call_count == 10
 
     @patch("time.sleep")
-    def test_network_retry_delay_cap(self, mock_sleep, oetc_handler):
+    def test_network_retry_delay_cap(
+        self, mock_sleep: Mock, oetc_handler: OetcHandler
+    ) -> None:
         """Test network retry delay is capped at 60 seconds."""
         with patch("requests.get") as mock_get:
             mock_get.side_effect = RequestException("Network error")
@@ -261,7 +275,7 @@ class TestJobPollingNetworkErrors:
             sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
             assert all(delay <= 60 for delay in sleep_calls)
 
-    def test_keyerror_in_response(self, oetc_handler):
+    def test_keyerror_in_response(self, oetc_handler: OetcHandler) -> None:
         """Test KeyError in response parsing raises exception."""
         with patch("requests.get") as mock_get:
             mock_response = Mock()
@@ -274,7 +288,7 @@ class TestJobPollingNetworkErrors:
             ):
                 oetc_handler.wait_and_get_job_data("job-123")
 
-    def test_generic_exception_handling(self, oetc_handler):
+    def test_generic_exception_handling(self, oetc_handler: OetcHandler) -> None:
         """Test generic exception handling in polling loop."""
         with patch("requests.get") as mock_get:
             mock_response = Mock()
@@ -286,7 +300,7 @@ class TestJobPollingNetworkErrors:
             ):
                 oetc_handler.wait_and_get_job_data("job-123")
 
-    def test_status_error_exception_preserved(self, oetc_handler):
+    def test_status_error_exception_preserved(self, oetc_handler: OetcHandler) -> None:
         """Test that status-related exceptions are preserved."""
         with patch("requests.get") as mock_get:
             # Simulate an exception that mentions "status:" - should be re-raised as-is
@@ -299,7 +313,7 @@ class TestJobPollingNetworkErrors:
             with pytest.raises(Exception, match="Custom status: error"):
                 oetc_handler.wait_and_get_job_data("job-123")
 
-    def test_oetc_logs_exception_preserved(self, oetc_handler):
+    def test_oetc_logs_exception_preserved(self, oetc_handler: OetcHandler) -> None:
         """Test that OETC logs exceptions are preserved."""
         with patch("requests.get") as mock_get:
             # Simulate an exception that mentions "OETC logs" - should be re-raised as-is
