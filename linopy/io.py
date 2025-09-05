@@ -731,28 +731,55 @@ def constraints_to_file_polars(
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
 
-            # df = df.lazy()
-            # filter out repeated label values
-            df = df.with_columns(
-                pl.when(pl.col("labels").is_first_distinct())
-                .then(pl.col("labels"))
-                .otherwise(pl.lit(None))
-                .alias("labels")
+            if df.height == 0:
+                continue
+
+            # Ensure each constraint has both coefficient and RHS terms
+            analysis = df.group_by("labels").agg(
+                [
+                    pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
+                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
+                ]
             )
 
-            row_labels = print_constraint(pl.col("labels"))
+            valid = analysis.filter(
+                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
+            )
+
+            if valid.height == 0:
+                continue
+
+            # Keep only constraints that have both parts
+            df = df.join(valid.select("labels"), on="labels", how="inner")
+
+            # Sort by labels and mark first/last occurrences
+            df = df.sort("labels").with_columns(
+                [
+                    pl.when(pl.col("labels").is_first_distinct())
+                    .then(pl.col("labels"))
+                    .otherwise(pl.lit(None))
+                    .alias("labels_first"),
+                    (pl.col("labels") != pl.col("labels").shift(-1))
+                    .fill_null(True)
+                    .alias("is_last_in_group"),
+                ]
+            )
+
+            row_labels = print_constraint(pl.col("labels_first"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels").is_not_null()).then(row_labels[0]),
-                pl.when(pl.col("labels").is_not_null()).then(row_labels[1]),
-                pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[0]),
+                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[1]),
+                pl.when(pl.col("labels_first").is_not_null())
+                .then(pl.lit(":\n"))
+                .alias(":"),
                 pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
                 pl.col("coeffs").cast(pl.String),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
-                "sign",
-                pl.lit(" "),
-                pl.col("rhs").cast(pl.String),
+                pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
+                pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
+                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
             ]
 
             kwargs: Any = dict(
