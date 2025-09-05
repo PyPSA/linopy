@@ -765,7 +765,6 @@ def constraints_to_file_polars(
                 ]
             )
 
-            # Build output columns
             row_labels = print_constraint(pl.col("labels_first"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
