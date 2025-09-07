@@ -309,3 +309,4 @@ See Also
 - :doc:`creating-variables`: Creating variables with coordinates
 - :doc:`creating-constraints`: Adding regular constraints
 - :doc:`user-guide`: General linopy usage patterns
+- Example notebook: ``examples/sos-constraints-example.ipynb``
