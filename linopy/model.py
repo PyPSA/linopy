@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, overload
+from typing import Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -550,6 +550,39 @@ class Model:
         variable = Variable(data, name=name, model=self, skip_broadcast=True)
         self.variables.add(variable)
         return variable
+
+    def add_sos_constraints(
+        self,
+        variable: Variable,
+        sos_type: Literal[1, 2],
+        sos_dim: str,
+    ):
+        """
+        Add an sos1 or sos2 constraint for one dimension of a variable
+
+        The dimension values are used as SOS.
+
+        Parameters
+        ----------
+        variable : Variable
+        sos_type : {1, 2}
+            Type of SOS
+        sos_dim : str
+            Which dimension of variable to add SOS constraint to
+        """
+        if sos_type not in (1, 2):
+            raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
+        if sos_dim not in variable.dims:
+            raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
+
+        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
+            sos_type = variable.attrs.get("sos_type")
+            sos_dim = variable.attrs.get("sos_dim")
+            raise ValueError(
+                "variable already has an sos{sos_type} constraint on {sos_dim}"
+            )
+
+        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
 
     def add_constraints(
         self,
