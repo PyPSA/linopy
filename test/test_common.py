@@ -369,6 +369,14 @@ def test_as_dataarray_with_number() -> None:
     assert list(da.coords["dim1"].values) == ["a"]
 
 
+def test_as_dataarray_with_np_number() -> None:
+    num = np.float64(1)
+    da = as_dataarray(num, dims=["dim1"], coords=[["a"]])
+    assert isinstance(da, DataArray)
+    assert da.dims == ("dim1",)
+    assert list(da.coords["dim1"].values) == ["a"]
+
+
 def test_as_dataarray_with_number_default_dims_coords() -> None:
     num = 1
     da = as_dataarray(num)
