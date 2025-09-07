@@ -576,10 +576,17 @@ class Model:
             raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
 
         if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
-            sos_type = variable.attrs.get("sos_type")
-            sos_dim = variable.attrs.get("sos_dim")
+            existing_sos_type = variable.attrs.get("sos_type")
+            existing_sos_dim = variable.attrs.get("sos_dim")
             raise ValueError(
-                "variable already has an sos{sos_type} constraint on {sos_dim}"
+                f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
+            )
+
+        # Validate that sos_dim coordinates are numeric (needed for weights)
+        if not pd.api.types.is_numeric_dtype(variable.coords[sos_dim]):
+            raise ValueError(
+                f"SOS constraint requires numeric coordinates for dimension '{sos_dim}', "
+                f"but got {variable.coords[sos_dim].dtype}"
             )
 
         variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)

@@ -751,6 +751,23 @@ def to_gurobipy(
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         c.setAttr("ConstrName", list(names))  # type: ignore
 
+    if m.variables.sos:
+        for var_name in m.variables.sos:
+            var = m.variables.sos[var_name]
+            sos_type = var.attrs["sos_type"]
+            sos_dim = var.attrs["sos_dim"]
+
+            def add_sos(s):
+                s = s.squeeze()
+                model.addSOS(sos_type, x[s].tolist(), s.coords[sos_dim].values)
+
+            others = tuple(dim for dim in var.labels.dims if dim != sos_dim)
+            if not others:
+                add_sos(var.labels)
+            else:
+                for _, s in var.labels.groupby(*others):
+                    add_sos(s)
+
     model.update()
     return model
 
