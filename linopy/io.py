@@ -549,6 +549,13 @@ def to_lp_file(
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
+        sos_to_file(
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time() - start, 2)}s")
