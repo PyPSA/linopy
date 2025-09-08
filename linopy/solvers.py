@@ -1578,8 +1578,7 @@ class Xpress(Solver[None]):
 
         if solution_fn is not None:
             try:
-                # TODO: possibly update saving of solution file
-                m.writesol(path_to_string(solution_fn))
+                m.writebinsol(path_to_string(solution_fn))
             except Exception as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -1591,13 +1590,15 @@ class Xpress(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
 
-            var = [str(v) for v in m.getVariable()]
-
-            sol = pd.Series(m.getSolution(var), index=var, dtype=float)
+            var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                dual_ = [str(d) for d in m.getConstraint()]
-                dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
+                _dual = m.getDual()
+                constraints = m.getnamelist(
+                    xpress.Namespaces.ROW, 0, m.attributes.rows - 1
+                )
+                dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
