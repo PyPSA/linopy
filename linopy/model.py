@@ -1190,7 +1190,15 @@ class Model:
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
         if solution_fn is None:
-            solution_fn = self.get_solution_file()
+            if (
+                solver_name
+                in ["xpress", "gurobi", "highs", "mosek", "scip", "copt", "mindopt"]
+                and not keep_files
+            ):
+                # these (solver, keep_files=False) combos do not need a solution file
+                solution_fn = None
+            else:
+                solution_fn = self.get_solution_file()
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
