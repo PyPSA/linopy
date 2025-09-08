@@ -363,22 +363,35 @@ def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
 
 def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
     """
-    Checks if the given DataFrame contains any null values and raises a ValueError if it does.
+    Checks if the given DataFrame contains any null or NaN values and raises a ValueError if it does.
 
     Args:
     ----
-        df (pl.DataFrame): The DataFrame to check for null values.
+        df (pl.DataFrame): The DataFrame to check for null or NaN values.
         name (str): The name of the data container being checked.
 
     Raises:
     ------
-        ValueError: If the DataFrame contains null values,
-        a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
+        ValueError: If the DataFrame contains null or NaN values,
+        a ValueError is raised with a message indicating the name of the constraint and the fields containing null/NaN values.
     """
+    # Check for null values in all columns
     has_nulls = df.select(pl.col("*").is_null().any())
     null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
-    if null_columns:
-        raise ValueError(f"{name} contains nan's in field(s) {null_columns}")
+
+    # Check for NaN values only in numeric columns (avoid enum/categorical columns)
+    numeric_cols = [
+        col for col, dtype in zip(df.columns, df.dtypes) if dtype.is_numeric()
+    ]
+
+    nan_columns = []
+    if numeric_cols:
+        has_nans = df.select(pl.col(numeric_cols).is_nan().any())
+        nan_columns = [col for col in has_nans.columns if has_nans[col][0]]
+
+    invalid_columns = list(set(null_columns + nan_columns))
+    if invalid_columns:
+        raise ValueError(f"{name} contains nan's in field(s) {invalid_columns}")
 
 
 def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
