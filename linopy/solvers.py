@@ -50,6 +50,17 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
+# Solvers that don't need a solution file when keep_files=False
+NO_SOLUTION_FILE_SOLVERS = [
+    "xpress",
+    "gurobi",
+    "highs",
+    "mosek",
+    "scip",
+    "copt",
+    "mindopt",
+]
+
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 

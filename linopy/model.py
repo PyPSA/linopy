@@ -59,7 +59,12 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.remote import OetcHandler, RemoteHandler
-from linopy.solvers import IO_APIS, available_solvers, quadratic_solvers
+from linopy.solvers import (
+    IO_APIS,
+    NO_SOLUTION_FILE_SOLVERS,
+    available_solvers,
+    quadratic_solvers,
+)
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -1190,11 +1195,7 @@ class Model:
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
         if solution_fn is None:
-            if (
-                solver_name
-                in ["xpress", "gurobi", "highs", "mosek", "scip", "copt", "mindopt"]
-                and not keep_files
-            ):
+            if solver_name in NO_SOLUTION_FILE_SOLVERS and not keep_files:
                 # these (solver, keep_files=False) combos do not need a solution file
                 solution_fn = None
             else:
