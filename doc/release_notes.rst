@@ -1,10 +1,14 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
-.. * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
-.. * Minor bugfix for multiplying variables with numpy type constants
+Upcoming Version
+----------------
+
+* Replace pandas-based LP file writing with polars implementation for significantly improved performance on large models
+* Consolidate "lp" and "lp-polars" io_api options - both now use the optimized polars backend
+* Reduced memory usage and faster file I/O operations when exporting models to LP format
+* Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
+* Minor bugfix for multiplying variables with numpy type constants
 
 Version 0.5.6
 --------------
