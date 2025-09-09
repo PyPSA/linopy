@@ -11,7 +11,8 @@ Upcoming Version
 * Minor bugfix for multiplying variables with numpy type constants
 
 **Breaking Changes**
-* With this release the behaviour of `m.add_variables` has been changed so that provided coords will always be respected. Previously data arrays used as lower/upper bounds would override the coords.
+* With this release the behaviour of `m.add_variables` has been changed so that provided coords will always be
+respected. Previously data arrays used as lower/upper bounds would override the coords.
 
 Version 0.5.6
 --------------
