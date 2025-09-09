@@ -1588,7 +1588,7 @@ class LinearExpression(BaseExpression):
         >>> y = m.add_variables(4, pd.Series([8, 10]))
         >>> expr = LinearExpression.from_tuples((10, x), (1, y), 1)
 
-        This is the same as calling ``10*x + y` + 1` but a bit more performant.
+        This is the same as calling ``10*x + y`` + 1 but a bit more performant.
         """
 
         def process_one(
