@@ -1,9 +1,14 @@
 Release Notes
 =============
 
-.. Upcoming Version
-.. ----------------
-.. * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
+Upcoming Version
+-----------------
+
+* Replace pandas-based LP file writing with polars implementation for significantly improved performance on large models
+* Consolidate "lp" and "lp-polars" io_api options - both now use the optimized polars backend
+* Reduced memory usage and faster file I/O operations when exporting models to LP format
+* Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
+* Minor bugfix for multiplying variables with numpy type constants
 
 Version 0.5.6
 --------------
@@ -33,7 +38,7 @@ Version 0.5.4
 **Bug Fixes**
 
 * Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
-`solver_options` to be ignored.
+  `solver_options` to be ignored.
 * Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
   gap tolerance.
 * Improve the mapping of termination conditions for the SCIP solver
@@ -61,8 +66,8 @@ Version 0.5.2
 **Bug Fixes**
 
 * Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
-This is mainly affecting operations where single numerical items from  pandas objects
-are selected and used for multiplication.
+  This is mainly affecting operations where single numerical items from  pandas objects
+  are selected and used for multiplication.
 
 Version 0.5.1
 --------------
@@ -195,7 +200,7 @@ Version 0.3.9
 
 * The constraint assignment with a `LinearExpression` and a constant value when using the pattern `model.add_constraints(lhs_with_constant, sign, rhs)` was fixed. Before, the constant value was not added to the right-hand-side properly which led to the wrong constraint behavior. This is fixed now.
 
-* `nan`s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of `nan`s with tools like numpy/pandas/xarray.
+* ``nan`` s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of ``nan`` s with tools like numpy/pandas/xarray.
 
 * Up to now the `rhs` argument in the `add_constraints` function was not supporting an expression as an input type. This is now added.
 
