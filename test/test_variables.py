@@ -9,11 +9,12 @@ import pytest
 import xarray as xr
 import xarray.core.indexes
 import xarray.core.utils
+from xarray import Coordinates
 
 import linopy
 from linopy import Model
 from linopy.testing import assert_varequal
-from linopy.variables import ScalarVariable
+from linopy.variables import ScalarVariable, Variable
 
 
 @pytest.fixture
@@ -122,3 +123,27 @@ def test_scalar_variable(m: Model) -> None:
     x = ScalarVariable(label=0, model=m)
     assert isinstance(x, ScalarVariable)
     assert x.__rmul__(x) is NotImplemented  # type: ignore
+
+
+def assert_coords_identical(a: Coordinates, b: Coordinates) -> None:
+    assert a.to_dataset().equals(b.to_dataset())
+
+
+def test_variable_coordinates(m: Model) -> None:
+    m = linopy.Model()
+    base = xr.DataArray(np.ones((3, 2)), [("x", ["a", "b", "c"]), ("y", ["X", "Y"])])
+
+    foo = m.add_variables(lower=0, upper=base.sum("y"), coords=base.coords, name="foo")
+    assert_coords_identical(foo.coords, base.coords)
+
+    bar = m.add_variables(
+        lower=-base.sum("y"), upper=base.sum("y"), coords=base.coords, name="bar"
+    )
+    assert_coords_identical(bar.coords, base.coords)
+
+    my_dim = pd.RangeIndex(2, name="my-dim")
+    var = m.add_variables(
+        lower=xr.DataArray(0), upper=xr.DataArray(10), coords=[my_dim]
+    )
+    assert isinstance(var, Variable)
+    assert var.shape == (2,)

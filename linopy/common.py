@@ -229,6 +229,7 @@ def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    force_broadcast: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -240,8 +241,12 @@ def as_dataarray(
             The input object.
         coords (Union[dict, list, None]):
             The coordinates for the DataArray. If None, default coordinates will be used.
+            If this are set, constant data will be broadcast to these coordinates. Pandas and xarray type data will not
+            be broadcast unless force_broadcast is set to True.
         dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+        force_broadcast (bool):
+            Ensures that data is broadcast to the given coordinates for any provided arr type.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
@@ -276,6 +281,11 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
+
+    if force_broadcast and coords is not None:
+        ones = DataArray(data=1.0, coords=coords)
+        return arr * ones
+
     return arr
 
 
