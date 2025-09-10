@@ -816,6 +816,29 @@ class Model:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
 
+    def remove_sos_constraints(self, variable: Variable) -> None:
+        """
+        Remove all sos constraints from a given variable.
+
+        Parameters
+        ----------
+        variable : Variable
+            Variable instance from which to remove all sos constraints.
+            Can be retrieved from `m.variables.sos`.
+
+        Returns
+        -------
+        None.
+        """
+        sos_type = variable.attrs.get("sos_type")
+        sos_dim = variable.attrs.get("sos_dim")
+
+        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+
+        logger.debug(
+            f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
+        )
+
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
