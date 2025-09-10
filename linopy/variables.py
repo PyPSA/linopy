@@ -1244,6 +1244,10 @@ class Variables:
                 if ds.coords
                 else ""
             )
+            if (sos_type := ds.attrs.get("sos_type")) in (1, 2) and (
+                sos_dim := ds.attrs.get("sos_dim")
+            ):
+                coords += f" - sos{sos_type} on {sos_dim}"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
