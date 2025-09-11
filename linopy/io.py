@@ -361,17 +361,26 @@ def constraints_to_file(
             if df.height == 0:
                 continue
 
-            # Ensure each constraint has both coefficient and RHS terms
+            # <= + inf and >= - inf are unbounded and skipped
+            rhs_unbounded = pl.col("rhs").is_infinite() & (
+                pl.when(pl.col("sign") == "<=")
+                .then(pl.col("rhs") >= 0)
+                .when(pl.col("sign") == "<=")
+                .then(pl.col("rhs") <= 0)
+                .otherwise(pl.lit(False))
+            )
+
+            # Ensure each constraint has both coefficient terms and a valid rhs
             analysis = df.group_by("labels").agg(
                 [
                     pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
-                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
+                    (pl.col("rhs").is_not_null() & ~rhs_unbounded)
+                    .any()
+                    .alias("has_rhs"),
                 ]
             )
 
-            valid = analysis.filter(
-                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
-            )
+            valid = analysis.filter((pl.col("coeff_rows") > 0) & pl.col("has_rhs"))
 
             if valid.height == 0:
                 continue
