@@ -495,9 +495,12 @@ class OetcHandler:
         """
         try:
             # Save model to temporary file and upload
+            model_dump_path = None
             with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
-                model.to_netcdf(fn.name)
-                input_file_name = self._upload_file_to_gcp(fn.name)
+                model_dump_path = fn.name
+
+            model.to_netcdf(model_dump_path)
+            input_file_name = self._upload_file_to_gcp(fn.name)
 
             # Submit job and wait for completion
             job_uuid = self._submit_job_to_compute_service(input_file_name)
