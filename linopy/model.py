@@ -520,8 +520,12 @@ class Model:
 
         data = Dataset(
             {
-                "lower": as_dataarray(lower, coords, **kwargs),
-                "upper": as_dataarray(upper, coords, **kwargs),
+                "lower": as_dataarray(
+                    arr=lower, coords=coords, force_broadcast=True, **kwargs
+                ),
+                "upper": as_dataarray(
+                    arr=upper, coords=coords, force_broadcast=True, **kwargs
+                ),
                 "labels": -1,
             }
         )
@@ -530,7 +534,9 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            mask = as_dataarray(
+                arr=mask, coords=data.coords, force_broadcast=True, dims=data.dims
+            ).astype(bool)
 
         start = self._xCounter
         end = start + data.labels.size

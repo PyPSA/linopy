@@ -104,6 +104,20 @@ def test_as_dataarray_with_series_override_coords() -> None:
     assert list(da.coords[target_dim].values) == target_index
 
 
+def test_as_dataarray_with_series_force_broadcast() -> None:
+    base = xr.DataArray(np.ones((3, 2)), [("x", ["a", "b", "c"]), ("y", ["M", "N"])])
+    x_only = base.sum("y")
+
+    series_index = pd.Index(data=["a", "b", "c"], name="x")
+    series = pd.Series(index=series_index, data=1.0)
+
+    da_force = as_dataarray(arr=series, coords=base.coords, force_broadcast=True)
+    assert da_force.coords.to_dataset().equals(base.coords.to_dataset())
+
+    da_no_force = as_dataarray(arr=series, coords=base.coords, force_broadcast=False)
+    assert da_no_force.coords.to_dataset().equals(x_only.coords.to_dataset())
+
+
 def test_as_dataarray_with_series_aligned_coords() -> None:
     """This should not give out a warning even though coords are given."""
     target_dim = "dim_0"
@@ -118,6 +132,17 @@ def test_as_dataarray_with_series_aligned_coords() -> None:
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
     assert list(da.coords[target_dim].values) == target_index
+
+
+def test_as_dataarray_with_datarray_force_broadcast() -> None:
+    base = xr.DataArray(np.ones((3, 2)), [("x", ["a", "b", "c"]), ("y", ["M", "N"])])
+    x_only = base.sum("y")
+
+    da_force = as_dataarray(arr=x_only, coords=base.coords, force_broadcast=True)
+    assert da_force.coords.to_dataset().equals(base.coords.to_dataset())
+
+    da_no_force = as_dataarray(arr=x_only, coords=base.coords, force_broadcast=False)
+    assert da_no_force.coords.to_dataset().equals(x_only.coords.to_dataset())
 
 
 def test_as_dataarray_dataframe_dims_default() -> None:
