@@ -109,6 +109,7 @@ This package is published under MIT license.
    creating-variables
    creating-expressions
    creating-constraints
+   sos-constraints
    manipulating-models
    testing-framework
    transport-tutorial
