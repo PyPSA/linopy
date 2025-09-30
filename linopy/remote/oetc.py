@@ -496,6 +496,7 @@ class OetcHandler:
         try:
             # Save model to temporary file and upload
             with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+                fn.file.close()
                 model.to_netcdf(fn.name)
                 input_file_name = self._upload_file_to_gcp(fn.name)
 
