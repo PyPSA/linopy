@@ -8,6 +8,7 @@ Upcoming Version
 * Reduced memory usage and faster file I/O operations when exporting models to LP format
 * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
 * Minor bugfix for multiplying variables with numpy type constants
+* Harmonize dtypes before concatenation in lp file writing to avoid dtype mismatch errors. This error occurred when creating and storing models in netcdf format using windows machines and loading and solving them on linux machines.
 
 Version 0.5.6
 --------------
