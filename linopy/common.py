@@ -442,6 +442,124 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+def harmonize_polars_dtypes(
+    df1: pl.DataFrame, df2: pl.DataFrame
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """
+    Harmonize dtypes of overlapping columns between two polars DataFrames.
+
+    For columns that appear in both dataframes but have different dtypes,
+    this function upcasts them to a compatible common dtype to avoid
+    concatenation errors.
+
+    Args:
+    ----
+        df1 (pl.DataFrame): First DataFrame
+        df2 (pl.DataFrame): Second DataFrame
+
+    Returns:
+    -------
+        tuple[pl.DataFrame, pl.DataFrame]: Both DataFrames with harmonized dtypes
+    """
+    # Find overlapping columns
+    common_cols = set(df1.columns) & set(df2.columns)
+
+    if not common_cols:
+        return df1, df2
+
+    # Build casting maps for both dataframes
+    cast_map1: dict[str, Any] = {}
+    cast_map2: dict[str, Any] = {}
+
+    for col in common_cols:
+        dtype1 = df1[col].dtype
+        dtype2 = df2[col].dtype
+
+        if dtype1 == dtype2:
+            continue
+
+        # Determine the common dtype by attempting to upcast
+        target_dtype = _get_common_polars_dtype(dtype1, dtype2)
+
+        if target_dtype is not None:
+            if dtype1 != target_dtype:
+                cast_map1[col] = target_dtype
+            if dtype2 != target_dtype:
+                cast_map2[col] = target_dtype
+
+    # Apply casts if needed
+    if cast_map1:
+        df1 = df1.cast(cast_map1)  # type: ignore
+    if cast_map2:
+        df2 = df2.cast(cast_map2)  # type: ignore
+
+    return df1, df2
+
+
+def _get_common_polars_dtype(dtype1: pl.DataType, dtype2: pl.DataType) -> Any:
+    """
+    Get the common dtype for two polars dtypes by upcasting.
+
+    Args:
+    ----
+        dtype1: First dtype
+        dtype2: Second dtype
+
+    Returns:
+    -------
+        pl.DataType | None: The common dtype, or None if no upcasting is needed
+    """
+    # If dtypes are the same, no conversion needed
+    if dtype1 == dtype2:
+        return None
+
+    # Handle numeric types
+    if dtype1.is_numeric() and dtype2.is_numeric():
+        # Define type hierarchy (smaller to larger)
+        int_hierarchy = [pl.Int8, pl.Int16, pl.Int32, pl.Int64]
+        uint_hierarchy = [pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64]
+
+        # Check if both are integers (signed or unsigned)
+        if dtype1.is_integer() and dtype2.is_integer():
+            # If mixing signed and unsigned, go to signed with larger width
+            all_types = int_hierarchy + uint_hierarchy
+
+            # Find positions in combined hierarchy
+            idx1 = next((i for i, t in enumerate(all_types) if dtype1 == t), -1)
+            idx2 = next((i for i, t in enumerate(all_types) if dtype2 == t), -1)
+
+            if idx1 >= 0 and idx2 >= 0:
+                # If mixing signed/unsigned, prefer signed and take the larger
+                if (dtype1 in int_hierarchy) != (dtype2 in int_hierarchy):
+                    # Mixed signed/unsigned - use Int64 to be safe
+                    return pl.Int64
+                else:
+                    # Same signedness, use the wider type
+                    wider_idx = max(idx1, idx2)
+                    return all_types[wider_idx]
+
+            # Fallback to Int64
+            return pl.Int64
+
+        # If one is float and one is int, use float
+        if dtype1.is_float() or dtype2.is_float():
+            # Use the wider float type
+            if dtype1 == pl.Float64 or dtype2 == pl.Float64:
+                return pl.Float64
+            return pl.Float32
+
+    # For non-numeric types, prefer String/Utf8 as a safe common type
+    if dtype1 == pl.Utf8 or dtype2 == pl.Utf8:
+        return pl.Utf8
+
+    if dtype1 == pl.String or dtype2 == pl.String:
+        return pl.String
+
+    # If we can't determine a common type, use the first dtype
+    # This maintains backward compatibility
+    return dtype1
+
+
 def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.

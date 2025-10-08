@@ -7,6 +7,7 @@ Created on Mon Jun 19 12:11:03 2023
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from test_linear_expression import m, u, x  # noqa: F401
@@ -20,6 +21,7 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
+    harmonize_polars_dtypes,
     iterate_slices,
 )
 from linopy.testing import assert_linequal, assert_varequal
@@ -700,3 +702,155 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     assert expr_obs.shape == (1, 1)  # _term dim
     assert isinstance(expr_obs, LinearExpression)
     assert_linequal(expr_obs, expr.loc[[1]])
+
+
+def test_harmonize_polars_dtypes_same_dtypes() -> None:
+    """Test when both dataframes have the same dtypes - no changes needed."""
+    df1 = pl.DataFrame({"a": [1, 2, 3], "b": [4.0, 5.0, 6.0]})
+    df2 = pl.DataFrame({"a": [7, 8, 9], "b": [10.0, 11.0, 12.0]})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    assert result1.dtypes == df1.dtypes
+    assert result2.dtypes == df2.dtypes
+
+
+def test_harmonize_polars_dtypes_no_overlap() -> None:
+    """Test when dataframes have no overlapping columns."""
+    df1 = pl.DataFrame({"a": [1, 2, 3]})
+    df2 = pl.DataFrame({"b": [4, 5, 6]})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    assert result1.dtypes == df1.dtypes
+    assert result2.dtypes == df2.dtypes
+
+
+def test_harmonize_polars_dtypes_int_upcast() -> None:
+    """Test upcasting different integer types."""
+    df1 = pl.DataFrame({"a": pl.Series([1, 2, 3], dtype=pl.Int32)})
+    df2 = pl.DataFrame({"a": pl.Series([4, 5, 6], dtype=pl.Int64)})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # Both should be Int64 (the wider type)
+    assert result1["a"].dtype == pl.Int64
+    assert result2["a"].dtype == pl.Int64
+
+
+def test_harmonize_polars_dtypes_mixed_signed_unsigned() -> None:
+    """Test mixing signed and unsigned integers."""
+    df1 = pl.DataFrame({"a": pl.Series([1, 2, 3], dtype=pl.Int32)})
+    df2 = pl.DataFrame({"a": pl.Series([4, 5, 6], dtype=pl.UInt32)})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # Should upcast to signed Int64 to be safe
+    assert result1["a"].dtype == pl.Int64
+    assert result2["a"].dtype == pl.Int64
+
+
+def test_harmonize_polars_dtypes_int_to_float() -> None:
+    """Test upcasting integer to float when mixed."""
+    df1 = pl.DataFrame({"a": pl.Series([1, 2, 3], dtype=pl.Int32)})
+    df2 = pl.DataFrame({"a": pl.Series([4.0, 5.0, 6.0], dtype=pl.Float64)})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # Both should be Float64
+    assert result1["a"].dtype == pl.Float64
+    assert result2["a"].dtype == pl.Float64
+
+
+def test_harmonize_polars_dtypes_float_upcast() -> None:
+    """Test upcasting Float32 to Float64."""
+    df1 = pl.DataFrame({"a": pl.Series([1.0, 2.0, 3.0], dtype=pl.Float32)})
+    df2 = pl.DataFrame({"a": pl.Series([4.0, 5.0, 6.0], dtype=pl.Float64)})
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # Both should be Float64
+    assert result1["a"].dtype == pl.Float64
+    assert result2["a"].dtype == pl.Float64
+
+
+def test_harmonize_polars_dtypes_multiple_columns() -> None:
+    """Test harmonizing multiple columns with different dtype mismatches."""
+    df1 = pl.DataFrame(
+        {
+            "a": pl.Series([1, 2], dtype=pl.Int32),
+            "b": pl.Series([3.0, 4.0], dtype=pl.Float32),
+            "c": pl.Series([5, 6], dtype=pl.Int64),
+        }
+    )
+    df2 = pl.DataFrame(
+        {
+            "a": pl.Series([7, 8], dtype=pl.Int64),
+            "b": pl.Series([9.0, 10.0], dtype=pl.Float64),
+            "c": pl.Series([11, 12], dtype=pl.Int64),
+        }
+    )
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # "a" should be upcasted to Int64
+    assert result1["a"].dtype == pl.Int64
+    assert result2["a"].dtype == pl.Int64
+
+    # "b" should be upcasted to Float64
+    assert result1["b"].dtype == pl.Float64
+    assert result2["b"].dtype == pl.Float64
+
+    # "c" should remain Int64 (already the same)
+    assert result1["c"].dtype == pl.Int64
+    assert result2["c"].dtype == pl.Int64
+
+
+def test_harmonize_polars_dtypes_partial_overlap() -> None:
+    """Test harmonizing when only some columns overlap."""
+    df1 = pl.DataFrame(
+        {"a": pl.Series([1, 2], dtype=pl.Int32), "b": [3.0, 4.0], "d": [5, 6]}
+    )
+    df2 = pl.DataFrame(
+        {"a": pl.Series([7, 8], dtype=pl.Int64), "b": [9.0, 10.0], "e": [11, 12]}
+    )
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # Overlapping columns should be harmonized
+    assert result1["a"].dtype == pl.Int64
+    assert result2["a"].dtype == pl.Int64
+
+    # Non-overlapping columns should remain unchanged
+    assert "d" in result1.columns
+    assert "d" not in result2.columns
+    assert "e" not in result1.columns
+    assert "e" in result2.columns
+
+
+def test_harmonize_polars_dtypes_concat_compatibility() -> None:
+    """Test that harmonized dataframes can be successfully concatenated."""
+    # This simulates the actual use case in the to_polars function
+    df1 = pl.DataFrame(
+        {
+            "labels": pl.Series([0, 1], dtype=pl.Int32),
+            "coeffs": [1.0, 2.0],
+            "vars": pl.Series([10, 20], dtype=pl.Int32),
+        }
+    )
+    df2 = pl.DataFrame(
+        {
+            "labels": pl.Series([2, 3], dtype=pl.Int64),
+            "coeffs": [3.0, 4.0],
+            "vars": pl.Series([30, 40], dtype=pl.Int64),
+        }
+    )
+
+    result1, result2 = harmonize_polars_dtypes(df1, df2)
+
+    # This should not raise an error
+    concatenated = pl.concat([result1, result2], how="diagonal")
+
+    assert len(concatenated) == 4
+    assert concatenated["labels"].dtype == pl.Int64
+    assert concatenated["vars"].dtype == pl.Int64

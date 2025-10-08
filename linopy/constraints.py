@@ -40,6 +40,7 @@ from linopy.common import (
     get_dims_with_index_levels,
     get_label_position,
     group_terms_polars,
+    harmonize_polars_dtypes,
     has_optimized_model,
     infer_schema_polars,
     is_constant,
@@ -630,6 +631,9 @@ class Constraint:
         short = to_polars(short_ds, schema=schema)
         short = filter_nulls_polars(short)
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
+
+        # Harmonize dtypes before concatenation to avoid dtype mismatch errors
+        short, long = harmonize_polars_dtypes(short, long)
 
         df = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
         # delete subsequent non-null rhs (happens is all vars per label are -1)
