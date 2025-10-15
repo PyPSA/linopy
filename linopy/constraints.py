@@ -7,13 +7,12 @@ This module contains implementations for the Constraint{s} class.
 from __future__ import annotations
 
 import functools
-from collections.abc import Hashable, ItemsView, Iterator, Sequence
+from collections.abc import Callable, Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import product
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     overload,
 )
 
@@ -460,7 +459,7 @@ class Constraint:
     @is_constant
     def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
-        self.data["sign"] = value
+        self._data = assign_multiindex_safe(self.data, sign=value)
 
     @property
     def rhs(self) -> DataArray:
@@ -478,7 +477,7 @@ class Constraint:
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
         self.lhs = self.lhs - value.reset_const()
-        self.data["rhs"] = value.const
+        self._data = assign_multiindex_safe(self.data, rhs=value.const)
 
     @property
     @has_optimized_model
@@ -632,7 +631,7 @@ class Constraint:
         short = filter_nulls_polars(short)
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
 
-        df = pl.concat([short, long], how="diagonal").sort(["labels", "rhs"])
+        df = pl.concat([short, long], how="diagonal_relaxed").sort(["labels", "rhs"])
         # delete subsequent non-null rhs (happens is all vars per label are -1)
         is_non_null = df["rhs"].is_not_null()
         prev_non_is_null = is_non_null.shift(1).fill_null(False)
@@ -755,6 +754,12 @@ class Constraints:
         raise AttributeError(
             f"Constraints has no attribute `{name}` or the attribute is not accessible, e.g. raises an error."
         )
+
+    def __getstate__(self) -> dict:
+        return self.__dict__
+
+    def __setstate__(self, d: dict) -> None:
+        self.__dict__.update(d)
 
     def __dir__(self) -> list[str]:
         base_attributes = list(super().__dir__())
@@ -935,7 +940,7 @@ class Constraints:
         name : str
             Name of the containing constraint.
         """
-        if not isinstance(label, (float, int)) or label < 0:
+        if not isinstance(label, float | int) or label < 0:
             raise ValueError("Label must be a positive number.")
         for name, ds in self.items():
             if label in ds.labels:
@@ -1000,7 +1005,7 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            constraint.data["blocks"] = res
+            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1079,7 +1084,7 @@ class AnonymousScalarConstraint:
         """
         Initialize a anonymous scalar constraint.
         """
-        if not isinstance(rhs, (int, float, np.floating, np.integer)):
+        if not isinstance(rhs, int | float | np.floating | np.integer):
             raise TypeError(f"Assigned rhs must be a constant, got {type(rhs)}).")
         self._lhs = lhs
         self._sign = sign

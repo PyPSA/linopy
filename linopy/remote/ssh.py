@@ -7,8 +7,9 @@ Created on Sun Feb 13 21:34:55 2022.
 
 import logging
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from linopy.io import read_netcdf
 
@@ -116,8 +117,8 @@ class RemoteHandler:
 
     hostname: str
     port: int = 22
-    username: Union[str, None] = None
-    password: Union[str, None] = None
+    username: str | None = None
+    password: str | None = None
     client: Union["paramiko.SSHClient", None] = None
 
     python_script: Callable = command.format

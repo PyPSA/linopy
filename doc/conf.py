@@ -90,7 +90,15 @@ nbsphinx_prolog = """
 
 """
 
-nbsphinx_allow_errors = False
+nbsphinx_allow_errors = True
+nbsphinx_execute = "auto"
+nbsphinx_execute_arguments = [
+    "--InlineBackend.figure_formats={'svg', 'pdf'}",
+    "--InlineBackend.rc={'figure.dpi': 96}",
+]
+
+# Exclude notebooks that require credentials or special setup
+nbsphinx_execute_never = ["**/solve-on-oetc*"]
 
 # -- Options for HTML output -------------------------------------------------
 

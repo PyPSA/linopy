@@ -1,6 +1,7 @@
 .coverage
 .eggs
 .DS_Store
+.mypy_cache
 linopy/__pycache__
 test/__pycache__
 linopy.egg-info
@@ -13,9 +14,14 @@ doc/_build
 doc/generated
 doc/api
 .vscode
+.idea
 Highs.log
 paper/
 monkeytype.sqlite3
+.github/copilot-instructions.md
+uv.lock
+*.pyc
+
 
 # Environments
 .env
@@ -34,3 +40,12 @@ benchmark/notebooks/.ipynb_checkpoints
 benchmark/scripts/__pycache__
 benchmark/scripts/benchmarks-pypsa-eur/__pycache__
 benchmark/scripts/leftovers/
+
+# IDE
+.idea/
+
+# Claude
+.claude/settings.local.json
+
+# direnv
+.envrc

@@ -13,13 +13,16 @@ import os
 import re
 import subprocess as sub
 import sys
+import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections import namedtuple
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
+from packaging.version import parse as parse_version
 
 from linopy.constants import (
     Result,
@@ -30,7 +33,11 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
+    import gurobipy
+
     from linopy.model import Model
+
+EnvType = TypeVar("EnvType")
 
 QUADRATIC_SOLVERS = [
     "gurobi",
@@ -39,6 +46,17 @@ QUADRATIC_SOLVERS = [
     "highs",
     "scip",
     "mosek",
+    "copt",
+    "mindopt",
+]
+
+# Solvers that don't need a solution file when keep_files=False
+NO_SOLUTION_FILE_SOLVERS = [
+    "xpress",
+    "gurobi",
+    "highs",
+    "mosek",
+    "scip",
     "copt",
     "mindopt",
 ]
@@ -62,7 +80,8 @@ with contextlib.suppress(ModuleNotFoundError):
     available_solvers.append("highs")
     from importlib.metadata import version
 
-    if version("highspy") < "1.7.1":
+    if parse_version(version("highspy")) < parse_version("1.7.1"):
+        # Fallback if parse_version is not available or version string is invalid
         _new_highspy_mps_layout = False
     else:
         _new_highspy_mps_layout = True
@@ -93,10 +112,8 @@ with contextlib.suppress(ModuleNotFoundError):
     import mosek
 
     with contextlib.suppress(mosek.Error):
-        with mosek.Env() as m:
-            t = m.Task()
-            t.optimize()
-            m.checkinall()
+        t = mosek.Task()
+        t.optimize()
 
         available_solvers.append("mosek")
 
@@ -111,10 +128,11 @@ with contextlib.suppress(ModuleNotFoundError):
 with contextlib.suppress(ModuleNotFoundError):
     import coptpy
 
-    with contextlib.suppress(coptpy.CoptError):
+    try:
         coptpy.Envr()
-
         available_solvers.append("copt")
+    except coptpy.CoptError:
+        pass
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
@@ -191,7 +209,7 @@ def maybe_adjust_objective_sign(
     return solution
 
 
-class Solver(ABC):
+class Solver(ABC, Generic[EnvType]):
     """
     Abstract base class for solving a given linear problem.
 
@@ -238,7 +256,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -258,7 +276,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a problem file.
@@ -277,7 +295,7 @@ class Solver(ABC):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -318,7 +336,7 @@ class Solver(ABC):
         return SolverName[self.__class__.__name__]
 
 
-class CBC(Solver):
+class CBC(Solver[None]):
     """
     Solver subclass for the CBC solver.
 
@@ -435,23 +453,37 @@ class CBC(Solver):
             p.stdout.close()
             p.wait()
         else:
-            log_f = open(log_fn, "w")
-            p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
-            p.wait()
+            with open(log_fn, "w") as log_f:
+                p = sub.Popen(command.split(" "), stdout=log_f, stderr=log_f)
+                p.wait()
 
         with open(solution_fn) as f:
-            data = f.readline()
+            first_line = f.readline()
 
-        if data.startswith("Optimal - objective value"):
+        if first_line.startswith("Optimal "):
             status = Status.from_termination_condition("optimal")
-        elif "Infeasible" in data:
+        elif "Infeasible" in first_line:
             status = Status.from_termination_condition("infeasible")
         else:
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-        status.legacy_status = data
+        status.legacy_status = first_line
+
+        # Use HiGHS to parse the problem file and find the set of variable names, needed to parse solution
+        if "highs" not in available_solvers:
+            raise ModuleNotFoundError(
+                f"highspy is not installed. Please install it to use {self.solver_name.name} solver."
+            )
+        h = highspy.Highs()
+        h.silent()
+        h.readModel(path_to_string(problem_fn))
+        variables = {v.name for v in h.getVariables()}
 
         def get_solver_solution() -> Solution:
-            objective = float(data[len("Optimal - objective value ") :])
+            m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
+            if m and len(m.groups()) == 1:
+                objective = float(m.group(1))
+            else:
+                objective = np.nan
 
             with open(solution_fn, "rb") as f:
                 trimmed_sol_fn = re.sub(rb"\*\*\s+", b"", f.read())
@@ -464,19 +496,33 @@ class CBC(Solver):
                 usecols=[1, 2, 3],
                 index_col=0,
             )
-            variables_b = df.index.str[0] == "x"
+            variables_b = df.index.isin(variables)
 
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
+
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        # Parse the output and get duality gap and solver runtime
+        mip_gap, runtime = None, None
+        if log_fn is not None:
+            with open(log_fn) as log_f:
+                output = "".join(log_f.readlines())
+        m = re.search(r"\nGap: +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            mip_gap = float(m.group(1))
+        m = re.search(r"\nTime \(Wallclock seconds\): +(\d+\.?\d*)\n", output)
+        if m and len(m.groups()) == 1:
+            runtime = float(m.group(1))
+        CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
+
+        return Result(status, solution, CbcModel(mip_gap, runtime))
 
 
-class GLPK(Solver):
+class GLPK(Solver[None]):
     """
     Solver subclass for the GLPK solver.
 
@@ -546,6 +592,7 @@ class GLPK(Solver):
         """
         CONDITION_MAP = {
             "integer optimal": "optimal",
+            "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
         }
         sense = read_sense_from_problem_file(problem_fn)
@@ -645,7 +692,7 @@ class GLPK(Solver):
         return Result(status, solution)
 
 
-class Highs(Solver):
+class Highs(Solver[None]):
     """
     Solver subclass for the Highs solver. Highs must be installed
     for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
@@ -723,14 +770,11 @@ class Highs(Solver):
             )
 
         h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
-
-        if log_fn is None and model is not None:
-            log_fn = model.solver_dir / "highs.log"
+        self._set_solver_params(h, log_fn)
 
         return self._solve(
             h,
             solution_fn,
-            log_fn,
             warmstart_fn,
             basis_fn,
             model=model,
@@ -775,23 +819,35 @@ class Highs(Solver):
 
         problem_fn_ = path_to_string(problem_fn)
         h = highspy.Highs()
+        self._set_solver_params(h, log_fn)
+
         h.readModel(problem_fn_)
 
         return self._solve(
             h,
             solution_fn,
-            log_fn,
             warmstart_fn,
             basis_fn,
             io_api=read_io_api_from_problem_file(problem_fn),
             sense=read_sense_from_problem_file(problem_fn),
         )
 
+    def _set_solver_params(
+        self,
+        highs_solver: highspy.Highs,
+        log_fn: Path | None = None,
+    ) -> None:
+        if log_fn is not None:
+            self.solver_options["log_file"] = path_to_string(log_fn)
+            logger.info(f"Log file at {self.solver_options['log_file']}")
+
+        for k, v in self.solver_options.items():
+            highs_solver.setOptionValue(k, v)
+
     def _solve(
         self,
         h: highspy.Highs,
         solution_fn: Path | None = None,
-        log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         model: Model | None = None,
@@ -825,14 +881,28 @@ class Highs(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
-
-        if log_fn is not None:
-            self.solver_options["log_file"] = path_to_string(log_fn)
-            logger.info(f"Log file at {self.solver_options['log_file']}")
-
-        for k, v in self.solver_options.items():
-            h.setOptionValue(k, v)
+        # https://ergo-code.github.io/HiGHS/dev/structures/enums/#HighsModelStatus
+        CONDITION_MAP: dict[highspy.HighsModelStatus, TerminationCondition] = {
+            highspy.HighsModelStatus.kNotset: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kLoadError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPresolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kSolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kPostsolveError: TerminationCondition.internal_solver_error,
+            highspy.HighsModelStatus.kModelEmpty: TerminationCondition.unknown,
+            highspy.HighsModelStatus.kMemoryLimit: TerminationCondition.resource_interrupt,
+            highspy.HighsModelStatus.kOptimal: TerminationCondition.optimal,
+            highspy.HighsModelStatus.kInfeasible: TerminationCondition.infeasible,
+            highspy.HighsModelStatus.kUnboundedOrInfeasible: TerminationCondition.infeasible_or_unbounded,
+            highspy.HighsModelStatus.kUnbounded: TerminationCondition.unbounded,
+            highspy.HighsModelStatus.kObjectiveBound: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kObjectiveTarget: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kTimeLimit: TerminationCondition.time_limit,
+            highspy.HighsModelStatus.kIterationLimit: TerminationCondition.iteration_limit,
+            highspy.HighsModelStatus.kSolutionLimit: TerminationCondition.terminated_by_limit,
+            highspy.HighsModelStatus.kInterrupt: TerminationCondition.user_interrupt,
+            highspy.HighsModelStatus.kUnknown: TerminationCondition.unknown,
+        }
 
         if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
             h.readSolution(path_to_string(warmstart_fn), 0)
@@ -841,10 +911,12 @@ class Highs(Solver):
 
         h.run()
 
-        condition = h.modelStatusToString(h.getModelStatus()).lower()
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        condition = h.getModelStatus()
+        termination_condition = CONDITION_MAP.get(
+            condition, TerminationCondition.unknown
+        )
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = h.modelStatusToString(condition)
 
         if basis_fn:
             h.writeBasis(path_to_string(basis_fn))
@@ -871,7 +943,7 @@ class Highs(Solver):
         return Result(status, solution, h)
 
 
-class Gurobi(Solver):
+class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
     Solver subclass for the gurobi solver.
 
@@ -894,7 +966,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
@@ -914,8 +986,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -926,6 +998,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
@@ -950,7 +1024,7 @@ class Gurobi(Solver):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -969,8 +1043,8 @@ class Gurobi(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Gurobi environment for the solver
+        env : gurobipy.Env or dict, optional
+            Gurobi environment for the solver, pass env directly or kwargs for creation.
 
         Returns
         -------
@@ -983,6 +1057,8 @@ class Gurobi(Solver):
         with contextlib.ExitStack() as stack:
             if env is None:
                 env_ = stack.enter_context(gurobipy.Env())
+            elif isinstance(env, dict):
+                env_ = stack.enter_context(gurobipy.Env(params=env))
             else:
                 env_ = env
 
@@ -1102,7 +1178,7 @@ class Gurobi(Solver):
         return Result(status, solution, m)
 
 
-class Cplex(Solver):
+class Cplex(Solver[None]):
     """
     Solver subclass for the Cplex solver.
 
@@ -1173,6 +1249,17 @@ class Cplex(Solver):
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
+            "integer infeasible": "infeasible",
+            "time limit exceeded": "time_limit",
+            "time limit exceeded, no integer solution": "infeasible",
+            "error termination": "error",
+            "error termination, no integer solution": "error",
+            "memory limit exceeded": "internal_solver_error",
+            "memory limit exceeded, no integer solution": "internal_solver_error",
+            "aborted": "user_interrupt",
+            "integer unbounded": "unbounded",
+            "integer infeasible or unbounded": "infeasible_or_unbounded",
+            "Unknown status value": "unknown",
         }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
@@ -1247,7 +1334,7 @@ class Cplex(Solver):
         return Result(status, solution, m)
 
 
-class SCIP(Solver):
+class SCIP(Solver[None]):
     """
     Solver subclass for the SCIP solver.
 
@@ -1309,7 +1396,23 @@ class SCIP(Solver):
         -------
         Result
         """
-        CONDITION_MAP: dict[str, str] = {}
+        CONDITION_MAP: dict[str, TerminationCondition] = {
+            # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
+            "inforunbd": TerminationCondition.infeasible_or_unbounded,
+            "userinterrupt": TerminationCondition.user_interrupt,
+            "terminate": TerminationCondition.user_interrupt,
+            "nodelimit": TerminationCondition.terminated_by_limit,
+            "totalnodelimit": TerminationCondition.terminated_by_limit,
+            "stallnodelimit": TerminationCondition.terminated_by_limit,
+            "timelimit": TerminationCondition.time_limit,
+            "memlimit": TerminationCondition.terminated_by_limit,
+            "gaplimit": TerminationCondition.optimal,
+            "primallimit": TerminationCondition.terminated_by_limit,
+            "duallimit": TerminationCondition.terminated_by_limit,
+            "sollimit": TerminationCondition.terminated_by_limit,
+            "bestsollimit": TerminationCondition.terminated_by_limit,
+            "restartlimit": TerminationCondition.terminated_by_limit,
+        }
 
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
@@ -1338,9 +1441,6 @@ class SCIP(Solver):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
-        # In order to retrieve the dual values, we need to turn off presolve
-        m.setPresolve(scip.SCIP_PARAMSETTING.OFF)
-
         m.optimize()
 
         if basis_fn:
@@ -1359,21 +1459,24 @@ class SCIP(Solver):
 
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
+            vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
-            sol = pd.Series({v.name: s[v] for v in m.getVars()})
-            sol.drop(
-                ["quadobjvar", "qmatrixvar"], errors="ignore", inplace=True, axis=0
+            sol = pd.Series(
+                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
             )
 
-            cons = m.getConss()
+            cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series({c.name: m.getDualSolVal(c) for c in cons})
-                dual = dual[
-                    dual.index.str.startswith("c") & ~dual.index.str.startswith("cf")
-                ]
+                dual = pd.Series(
+                    {
+                        c.name: m.getDualSolVal(c)
+                        for c in cons
+                        if c.name not in vars_to_ignore
+                    }
+                )
             else:
-                logger.warning("Dual values of MILP couldn't be parsed")
+                logger.warning("Dual values not available (is this an MILP?)")
                 dual = pd.Series(dtype=float)
 
             return Solution(sol, dual, objective)
@@ -1384,7 +1487,7 @@ class SCIP(Solver):
         return Result(status, solution, m)
 
 
-class Xpress(Solver):
+class Xpress(Solver[None]):
     """
     Solver subclass for the xpress solver.
 
@@ -1490,8 +1593,7 @@ class Xpress(Solver):
 
         if solution_fn is not None:
             try:
-                # TODO: possibly update saving of solution file
-                m.writesol(path_to_string(solution_fn))
+                m.writebinsol(path_to_string(solution_fn))
             except Exception as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -1503,13 +1605,15 @@ class Xpress(Solver):
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
 
-            var = [str(v) for v in m.getVariable()]
-
-            sol = pd.Series(m.getSolution(var), index=var, dtype=float)
+            var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                dual_ = [str(d) for d in m.getConstraint()]
-                dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
+                _dual = m.getDual()
+                constraints = m.getnamelist(
+                    xpress.Namespaces.ROW, 0, m.attributes.rows - 1
+                )
+                dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1525,7 +1629,7 @@ class Xpress(Solver):
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
 
 
-class Mosek(Solver):
+class Mosek(Solver[None]):
     """
     Solver subclass for the Mosek solver.
 
@@ -1576,8 +1680,9 @@ class Mosek(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
 
@@ -1585,24 +1690,27 @@ class Mosek(Solver):
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
 
-            with env_.Task() as m:
-                m = model.to_mosek(
-                    m, explicit_coordinate_names=explicit_coordinate_names
-                )
+        if env is not None:
+            warnings.warn(
+                "The 'env' parameter in solve_problem_from_model is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        with mosek.Task() as m:
+            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
 
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api="direct",
-                    sense=model.sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api="direct",
+                sense=model.sense,
+            )
 
     def solve_problem_from_file(
         self,
@@ -1629,34 +1737,39 @@ class Mosek(Solver):
             Path to the warmstart file.
         basis_fn : Path, optional
             Path to the basis file.
-        env : None, optional
-            Mosek environment for the solver
+        env : None, optional, deprecated
+            Deprecated. This parameter is ignored. MOSEK now uses the global
+            environment automatically. Will be removed in a future version.
 
         Returns
         -------
         Result
         """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(mosek.Env())
+        if env is not None:
+            warnings.warn(
+                "The 'env' parameter in solve_problem_from_file is deprecated and will be "
+                "removed in a future version. MOSEK now uses the global environment "
+                "automatically, avoiding unnecessary license checkouts.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        with mosek.Task() as m:
+            # read sense and io_api from problem file
+            sense = read_sense_from_problem_file(problem_fn)
+            io_api = read_io_api_from_problem_file(problem_fn)
+            # for Mosek solver, the path needs to be a string
+            problem_fn_ = path_to_string(problem_fn)
+            m.readdata(problem_fn_)
 
-            with env_.Task() as m:
-                # read sense and io_api from problem file
-                sense = read_sense_from_problem_file(problem_fn)
-                io_api = read_io_api_from_problem_file(problem_fn)
-                # for Mosek solver, the path needs to be a string
-                problem_fn_ = path_to_string(problem_fn)
-                m.readdata(problem_fn_)
-
-                return self._solve(
-                    m,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    warmstart_fn=warmstart_fn,
-                    basis_fn=basis_fn,
-                    io_api=io_api,
-                    sense=sense,
-                )
+            return self._solve(
+                m,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                io_api=io_api,
+                sense=sense,
+            )
 
     def _solve(
         self,
@@ -1855,7 +1968,7 @@ class Mosek(Solver):
         return Result(status, solution)
 
 
-class COPT(Solver):
+class COPT(Solver[None]):
     """
     Solver subclass for the COPT solver.
 
@@ -1970,9 +2083,9 @@ class COPT(Solver):
 
         # TODO: check if this suffices
         condition = m.MipStatus if m.ismip else m.LpStatus
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = CONDITION_MAP.get(condition, str(condition))
         status = Status.from_termination_condition(termination_condition)
-        status.legacy_status = condition
+        status.legacy_status = str(condition)
 
         def get_solver_solution() -> Solution:
             # TODO: check if this suffices
@@ -1996,7 +2109,7 @@ class COPT(Solver):
         return Result(status, solution, m)
 
 
-class MindOpt(Solver):
+class MindOpt(Solver[None]):
     """
     Solver subclass for the MindOpt solver.
 
@@ -2134,12 +2247,13 @@ class MindOpt(Solver):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        m.dispose()
         env_.dispose()
 
         return Result(status, solution, m)
 
 
-class PIPS(Solver):
+class PIPS(Solver[None]):
     """
     Solver subclass for the PIPS solver.
     """

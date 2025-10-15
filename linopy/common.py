@@ -9,18 +9,20 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Generator, Hashable, Iterable, Sequence
-from functools import reduce, wraps
+from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from functools import partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import arange, signedinteger
-from xarray import DataArray, Dataset, align, apply_ufunc, broadcast
-from xarray.core import indexing
+from xarray import DataArray, Dataset, apply_ufunc, broadcast
+from xarray import align as xr_align
+from xarray.core import dtypes, indexing
+from xarray.core.types import JoinOptions, T_Alignable
 from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
@@ -35,7 +37,7 @@ from linopy.types import CoordsLike, DimsLike
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
-    from linopy.expressions import LinearExpression
+    from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
 
@@ -115,7 +117,7 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     """
     if lst is None:
         return None
-    if isinstance(lst, (Sequence, Iterable)):
+    if isinstance(lst, Sequence | Iterable):
         lst = list(lst)
     else:
         lst = [lst]
@@ -203,8 +205,12 @@ def numpy_to_dataarray(
         DataArray:
             The converted DataArray.
     """
+    # fallback case for zero dim arrays
+    if arr.ndim == 0:
+        return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
+
     ndim = max(arr.ndim, 0 if coords is None else len(coords))
-    if isinstance(dims, (Iterable, Sequence)):
+    if isinstance(dims, Iterable | Sequence):
         dims = list(dims)
     elif dims is not None:
         dims = [dims]
@@ -244,11 +250,13 @@ def as_dataarray(
         DataArray:
             The converted DataArray.
     """
-    if isinstance(arr, (pd.Series, pd.DataFrame)):
+    if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, (np.number, int, float, str, bool, list)):
+    elif isinstance(arr, np.number):
+        arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
+    elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
@@ -355,22 +363,35 @@ def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
 
 def check_has_nulls_polars(df: pl.DataFrame, name: str = "") -> None:
     """
-    Checks if the given DataFrame contains any null values and raises a ValueError if it does.
+    Checks if the given DataFrame contains any null or NaN values and raises a ValueError if it does.
 
     Args:
     ----
-        df (pl.DataFrame): The DataFrame to check for null values.
+        df (pl.DataFrame): The DataFrame to check for null or NaN values.
         name (str): The name of the data container being checked.
 
     Raises:
     ------
-        ValueError: If the DataFrame contains null values,
-        a ValueError is raised with a message indicating the name of the constraint and the fields containing null values.
+        ValueError: If the DataFrame contains null or NaN values,
+        a ValueError is raised with a message indicating the name of the constraint and the fields containing null/NaN values.
     """
+    # Check for null values in all columns
     has_nulls = df.select(pl.col("*").is_null().any())
     null_columns = [col for col in has_nulls.columns if has_nulls[col][0]]
-    if null_columns:
-        raise ValueError(f"{name} contains nan's in field(s) {null_columns}")
+
+    # Check for NaN values only in numeric columns (avoid enum/categorical columns)
+    numeric_cols = [
+        col for col, dtype in zip(df.columns, df.dtypes) if dtype.is_numeric()
+    ]
+
+    nan_columns = []
+    if numeric_cols:
+        has_nans = df.select(pl.col(numeric_cols).is_nan().any())
+        nan_columns = [col for col in has_nans.columns if has_nans[col][0]]
+
+    invalid_columns = list(set(null_columns + nan_columns))
+    if invalid_columns:
+        raise ValueError(f"{name} contains nan's in field(s) {invalid_columns}")
 
 
 def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
@@ -426,13 +447,13 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
     """
     try:
-        arrs = align(*dataarrays, join="exact")
+        arrs = xr_align(*dataarrays, join="exact")
     except ValueError:
         warn(
             "Coordinates across variables not equal. Perform outer join.",
             UserWarning,
         )
-        arrs = align(*dataarrays, join="outer")
+        arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
             arrs = tuple([ds.fillna(-1).astype(int) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
@@ -487,7 +508,7 @@ def fill_missing_coords(
 
     """
     ds = ds.copy()
-    if not isinstance(ds, (Dataset, DataArray)):
+    if not isinstance(ds, Dataset | DataArray):
         raise TypeError(f"Expected xarray.DataArray or xarray.Dataset, got {type(ds)}.")
 
     skip_dims = [] if fill_helper_dims else HELPER_DIMS
@@ -801,7 +822,7 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     # Convert each coordinate component to string
     formatted = []
     for value in values:
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list | tuple):
             formatted.append(f"({', '.join(str(x) for x in value)})")
         else:
             formatted.append(str(value))
@@ -940,11 +961,9 @@ def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(self: Any, arg: Any) -> Any:
         if isinstance(
             arg,
-            (
-                variables.Variable,
-                variables.ScalarVariable,
-                expressions.LinearExpression,
-            ),
+            variables.Variable
+            | variables.ScalarVariable
+            | expressions.LinearExpression,
         ):
             raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
         return func(self, arg)
@@ -987,7 +1006,111 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
     return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
 
 
-LocT = TypeVar("LocT", "Dataset", "Variable", "LinearExpression", "Constraint")
+def align(
+    *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
+    join: JoinOptions = "inner",
+    copy: bool = True,
+    indexes: Any = None,
+    exclude: str | Iterable[Hashable] = frozenset(),
+    fill_value: Any = dtypes.NA,
+) -> tuple[LinearExpression | QuadraticExpression | Variable | T_Alignable, ...]:
+    """
+    Given any number of Variables, Expressions, Dataset and/or DataArray objects,
+    returns new objects with aligned indexes and dimension sizes.
+
+    Array from the aligned objects are suitable as input to mathematical
+    operators, because along each dimension they have the same index and size.
+
+    Missing values (if ``join != 'inner'``) are filled with ``fill_value``.
+    The default fill value is NaN.
+
+    This functions essentially wraps the xarray function
+    :py:func:`xarray.align`.
+
+    Parameters
+    ----------
+    *objects : Variable, LinearExpression, Dataset or DataArray
+        Objects to align.
+    join : {"outer", "inner", "left", "right", "exact", "override"}, optional
+        Method for joining the indexes of the passed objects along each
+        dimension:
+
+        - "outer": use the union of object indexes
+        - "inner": use the intersection of object indexes
+        - "left": use indexes from the first object with each dimension
+        - "right": use indexes from the last object with each dimension
+        - "exact": instead of aligning, raise `ValueError` when indexes to be
+        aligned are not equal
+        - "override": if indexes are of same size, rewrite indexes to be
+        those of the first object with that dimension. Indexes for the same
+        dimension must have the same size in all objects.
+
+    copy : bool, default: True
+        If ``copy=True``, data in the return values is always copied. If
+        ``copy=False`` and reindexing is unnecessary, or can be performed with
+        only slice operations, then the output may share memory with the input.
+        In either case, new xarray objects are always returned.
+    indexes : dict-like, optional
+        Any indexes explicitly provided with the `indexes` argument should be
+        used in preference to the aligned indexes.
+    exclude : str, iterable of hashable or None, optional
+        Dimensions that must be excluded from alignment
+    fill_value : scalar or dict-like, optional
+        Value to use for newly missing values. If a dict-like, maps
+        variable names to fill values. Use a data array's name to
+        refer to its values.
+
+    Returns
+    -------
+    aligned : tuple of DataArray or Dataset
+        Tuple of objects with the same type as `*objects` with aligned
+        coordinates.
+
+
+    """
+    from linopy.expressions import LinearExpression, QuadraticExpression
+    from linopy.variables import Variable
+
+    finisher: list[partial[Any] | Callable[[Any], Any]] = []
+    das: list[Any] = []
+    for obj in objects:
+        if isinstance(obj, LinearExpression | QuadraticExpression):
+            finisher.append(partial(obj.__class__, model=obj.model))
+            das.append(obj.data)
+        elif isinstance(obj, Variable):
+            finisher.append(
+                partial(
+                    obj.__class__,
+                    model=obj.model,
+                    name=obj.data.attrs["name"],
+                    skip_broadcast=True,
+                )
+            )
+            das.append(obj.data)
+        else:
+            finisher.append(lambda x: x)
+            das.append(obj)
+
+    exclude = frozenset(exclude).union(HELPER_DIMS)
+    aligned = xr_align(
+        *das,
+        join=join,
+        copy=copy,
+        indexes=indexes,
+        exclude=exclude,
+        fill_value=fill_value,
+    )
+    return tuple([f(da) for f, da in zip(finisher, aligned)])
+
+
+LocT = TypeVar(
+    "LocT",
+    "Dataset",
+    "Variable",
+    "LinearExpression",
+    "QuadraticExpression",
+    "Constraint",
+)
 
 
 class LocIndexer(Generic[LocT]):
@@ -1005,3 +1128,34 @@ class LocIndexer(Generic[LocT]):
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
         return self.object.sel(key)
+
+
+class EmptyDeprecationWrapper:
+    """
+    Temporary wrapper for a smooth transition from .empty() to .empty
+
+    Use `bool(expr.empty)` to explicitly unwrap.
+
+    See Also
+    --------
+    https://github.com/PyPSA/linopy/pull/425
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: bool):
+        self.value = value
+
+    def __bool__(self) -> bool:
+        return self.value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+    def __call__(self) -> bool:
+        warn(
+            "Calling `.empty()` is deprecated, use `.empty` property instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.value

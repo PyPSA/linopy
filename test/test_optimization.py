@@ -129,7 +129,7 @@ def model_with_inf() -> Model:
     m.add_constraints(x + y, GREATER_EQUAL, 10)
     m.add_constraints(1 * x, "<=", np.inf)
 
-    m.objective = 2 * x + y  # type: ignore
+    m.objective = 2 * x + y
 
     return m
 
@@ -142,7 +142,7 @@ def model_with_duplicated_variables() -> Model:
     x = m.add_variables(coords=[lower.index], name="x")
 
     m.add_constraints(x + x, GREATER_EQUAL, 10)
-    m.objective = 1 * x  # type: ignore
+    m.objective = 1 * x
 
     return m
 
@@ -157,7 +157,7 @@ def model_with_non_aligned_variables() -> Model:
     y = m.add_variables(lower=lower, coords=[lower.index], name="y")
 
     m.add_constraints(x + y, GREATER_EQUAL, 10.5)
-    m.objective = 1 * x + 0.5 * y  # type: ignore
+    m.objective = 1 * x + 0.5 * y
 
     return m
 
@@ -270,9 +270,9 @@ def modified_model() -> Model:
 
     c = m.add_constraints(x + y, GREATER_EQUAL, 10)
 
-    y.lower = 9  # type: ignore
+    y.lower = 9
     c.lhs = 2 * x + y
-    m.objective = 2 * x + y  # type: ignore
+    m.objective = 2 * x + y
 
     return m
 
@@ -386,7 +386,7 @@ def test_default_setting_expression_sol_accessor(
     qexpr = 4 * x**2
     assert_equal(qexpr.solution, 4 * x.solution**2)
 
-    qexpr = 4 * x * y
+    qexpr = 4 * (x * y)  # type: ignore
     assert_equal(qexpr.solution, 4 * x.solution * y.solution)
 
 
@@ -589,7 +589,7 @@ def test_infeasible_model(
     assert status == "warning"
     assert "infeasible" in condition
 
-    if solver == "gurobi":
+    if solver in ["gurobi", "xpress"]:
         # ignore deprecated warning
         with pytest.warns(DeprecationWarning):
             model.compute_set_of_infeasible_constraints()

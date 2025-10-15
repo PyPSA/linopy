@@ -9,15 +9,20 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
+from xarray.testing.assertions import assert_equal
 
+from linopy import LinearExpression, Variable
 from linopy.common import (
+    align,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
     iterate_slices,
 )
+from linopy.testing import assert_linequal, assert_varequal
 
 
 def test_as_dataarray_with_series_dims_default() -> None:
@@ -364,6 +369,14 @@ def test_as_dataarray_with_number() -> None:
     assert list(da.coords["dim1"].values) == ["a"]
 
 
+def test_as_dataarray_with_np_number() -> None:
+    num = np.float64(1)
+    da = as_dataarray(num, dims=["dim1"], coords=[["a"]])
+    assert isinstance(da, DataArray)
+    assert da.dims == ("dim1",)
+    assert list(da.coords["dim1"].values) == ["a"]
+
+
 def test_as_dataarray_with_number_default_dims_coords() -> None:
     num = 1
     da = as_dataarray(num)
@@ -644,3 +657,46 @@ def test_get_dims_with_index_levels() -> None:
     # Test case 5: Empty dataset
     ds5 = xr.Dataset()
     assert get_dims_with_index_levels(ds5) == []
+
+
+def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
+    alpha = xr.DataArray([1, 2], [[1, 2]])
+    beta = xr.DataArray(
+        [1, 2, 3],
+        [
+            (
+                "dim_3",
+                pd.MultiIndex.from_tuples(
+                    [(1, "b"), (2, "b"), (1, "c")], names=["level1", "level2"]
+                ),
+            )
+        ],
+    )
+
+    # inner join
+    x_obs, alpha_obs = align(x, alpha)
+    assert isinstance(x_obs, Variable)
+    assert x_obs.shape == alpha_obs.shape == (1,)
+    assert_varequal(x_obs, x.loc[[1]])
+
+    # left-join
+    x_obs, alpha_obs = align(x, alpha, join="left")
+    assert x_obs.shape == alpha_obs.shape == (2,)
+    assert isinstance(x_obs, Variable)
+    assert_varequal(x_obs, x)
+    assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
+
+    # multiindex
+    beta_obs, u_obs = align(beta, u)
+    assert u_obs.shape == beta_obs.shape == (2,)
+    assert isinstance(u_obs, Variable)
+    assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
+    assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
+
+    # with linear expression
+    expr = 20 * x
+    x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
+    assert x_obs.shape == alpha_obs.shape == (1,)
+    assert expr_obs.shape == (1, 1)  # _term dim
+    assert isinstance(expr_obs, LinearExpression)
+    assert_linequal(expr_obs, expr.loc[[1]])

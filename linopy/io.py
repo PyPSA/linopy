@@ -8,18 +8,17 @@ from __future__ import annotations
 import logging
 import shutil
 import time
-from collections.abc import Iterable
-from io import BufferedWriter, TextIOWrapper
+from collections.abc import Callable
+from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
 from numpy import ones_like, zeros_like
-from pandas.core.frame import DataFrame
 from scipy.sparse import tril, triu
 from tqdm import tqdm
 
@@ -42,16 +41,6 @@ concat_kwargs = dict(dim=CONCAT_DIM, coords="minimal")
 TQDM_COLOR = "#80bfff"
 
 
-def handle_batch(batch: list[str], f: TextIOWrapper, batch_size: int) -> list[str]:
-    """
-    Write out a batch to a file and reset the batch.
-    """
-    if len(batch) >= batch_size:
-        f.writelines(batch)  # write out a batch
-        batch = []  # reset batch
-    return batch
-
-
 name_sanitizer = str.maketrans("-+*^[] ", "_______")
 
 
@@ -69,9 +58,10 @@ def print_coord(coord: str) -> str:
     return coord
 
 
-def get_printers(
+def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
+    """Get printer functions for scalar values (non-polars)."""
     if explicit_coordinate_names:
 
         def print_variable(var: Any) -> str:
@@ -96,9 +86,10 @@ def get_printers(
         return print_variable, print_constraint
 
 
-def get_printers_polars(
+def get_printers(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
+    """Get printer functions for polars dataframes."""
     if explicit_coordinate_names:
 
         def print_variable(var: Any) -> str:
@@ -111,394 +102,30 @@ def get_printers_polars(
             name = clean_name(name)  # type: ignore
             return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
 
-        def print_variable_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
+        def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
                 print_variable, return_dtype=pl.String
             )
 
-        def print_constraint_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
+        def print_constraint_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(None), series.map_elements(
                 print_constraint, return_dtype=pl.String
             )
 
-        return print_variable_polars, print_constraint_polars
+        return print_variable_series, print_constraint_series
 
     else:
 
-        def print_variable_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
+        def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" x").alias("x"), series.cast(pl.String)
 
-        def print_constraint_polars(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
+        def print_constraint_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit("c").alias("c"), series.cast(pl.String)
 
-        return print_variable_polars, print_constraint_polars
+        return print_variable_series, print_constraint_series
 
 
 def objective_write_linear_terms(
-    df: DataFrame,
-    f: TextIOWrapper,
-    batch: list[str],
-    batch_size: int,
-    print_variable: Callable,
-) -> list[str]:
-    """
-    Write the linear terms of the objective to a file.
-    """
-    coeffs = df.coeffs.values
-    vars = df.vars.values
-    for idx in range(len(coeffs)):
-        coeff = coeffs[idx]
-        var = vars[idx]
-        name = print_variable(var)
-        batch.append(f"{coeff:+.12g} {name}\n")
-        batch = handle_batch(batch, f, batch_size)
-    return batch
-
-
-def objective_write_quad_terms(
-    quadratic: DataFrame,
-    f: TextIOWrapper,
-    batch: list[str],
-    batch_size: int,
-    print_variable: Callable,
-) -> list[str]:
-    """
-    Write the cross terms of the objective to a file.
-    """
-    coeffs = quadratic.coeffs.values
-    vars1 = quadratic.vars1.values
-    vars2 = quadratic.vars2.values
-    for idx in range(len(coeffs)):
-        coeff = coeffs[idx]
-        var1 = vars1[idx]
-        var2 = vars2[idx]
-        name1 = print_variable(var1)
-        name2 = print_variable(var2)
-        batch.append(f"{coeff:+.12g} {name1} * {name2}\n")
-        batch = handle_batch(batch, f, batch_size)
-    return batch
-
-
-def objective_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    progress: bool = False,
-    batch_size: int = 10000,
-    explicit_coordinate_names: bool = False,
-) -> None:
-    """
-    Write out the objective of a model to a lp file.
-    """
-    if progress:
-        logger.info("Writing objective.")
-
-    print_variable, _ = get_printers(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    sense = m.objective.sense
-    f.write(f"{sense}\n\nobj:\n\n")
-    df = m.objective.flat
-
-    if np.isnan(df.coeffs).any():
-        logger.warning(
-            "Objective coefficients are missing (nan) where variables are not (-1)."
-        )
-
-    if m.is_linear:
-        batch = objective_write_linear_terms(df, f, [], batch_size, print_variable)
-
-    elif m.is_quadratic:
-        is_linear = (df.vars1 == -1) | (df.vars2 == -1)
-        linear = df[is_linear]
-        linear = linear.assign(
-            vars=linear.vars1.where(linear.vars1 != -1, linear.vars2)
-        )
-        batch = objective_write_linear_terms(linear, f, [], batch_size, print_variable)
-
-        if not is_linear.all():
-            batch.append("+ [\n")
-            quadratic = df[~is_linear]
-            quadratic = quadratic.assign(coeffs=2 * quadratic.coeffs)
-            batch = objective_write_quad_terms(
-                quadratic, f, batch, batch_size, print_variable
-            )
-            batch.append("] / 2\n")
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def constraints_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    progress: bool = False,
-    batch_size: int = 50_000,
-    slice_size: int = 100_000,
-    explicit_coordinate_names: bool = False,
-) -> None:
-    if not len(m.constraints):
-        return
-
-    print_variable, print_constraint = get_printers(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    f.write("\n\ns.t.\n\n")
-    names: Iterable = m.constraints
-    if progress:
-        names = tqdm(
-            list(names),
-            desc="Writing constraints.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []
-    for name in names:
-        con = m.constraints[name]
-        for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.flat
-
-            labels = df.labels.values
-            vars = df.vars.values
-            coeffs = df.coeffs.values
-            rhs = df.rhs.values
-            sign = df.sign.values
-
-            len_df = len(df)  # compute length once
-            if not len_df:
-                continue
-
-            # write out the start to enable a fast loop afterwards
-            idx = 0
-            label = labels[idx]
-            coeff = coeffs[idx]
-            var = vars[idx]
-            name = print_variable(var)
-            cname = print_constraint(label)
-            batch.append(f"{cname}:\n{coeff:+.12g} {name}\n")
-            prev_label = label
-            prev_sign = sign[idx]
-            prev_rhs = rhs[idx]
-
-            for idx in range(1, len_df):
-                label = labels[idx]
-                coeff = coeffs[idx]
-                var = vars[idx]
-                name = print_variable(var)
-
-                if label != prev_label:
-                    cname = print_constraint(label)
-                    batch.append(
-                        f"{prev_sign} {prev_rhs:+.12g}\n\n{cname}:\n{coeff:+.12g} {name}\n"
-                    )
-                    prev_sign = sign[idx]
-                    prev_rhs = rhs[idx]
-                else:
-                    batch.append(f"{coeff:+.12g} {name}\n")
-
-                batch = handle_batch(batch, f, batch_size)
-
-                prev_label = label
-
-            batch.append(f"{prev_sign} {prev_rhs:+.12g}\n")
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def bounds_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    progress: bool = False,
-    batch_size: int = 10000,
-    slice_size: int = 100_000,
-    explicit_coordinate_names: bool = False,
-) -> None:
-    """
-    Write out variables of a model to a lp file.
-    """
-    names: Iterable = list(m.variables.continuous) + list(m.variables.integers)
-    if not len(list(names)):
-        return
-
-    print_variable, _ = get_printers(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    f.write("\n\nbounds\n\n")
-    if progress:
-        names = tqdm(
-            list(names),
-            desc="Writing continuous variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            labels = df.labels.values
-            lowers = df.lower.values
-            uppers = df.upper.values
-
-            for idx in range(len(df)):
-                label = labels[idx]
-                lower = lowers[idx]
-                upper = uppers[idx]
-                name = print_variable(label)
-                batch.append(f"{lower:+.12g} <= {name} <= {upper:+.12g}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def binaries_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    progress: bool = False,
-    batch_size: int = 1000,
-    slice_size: int = 100_000,
-    explicit_coordinate_names: bool = False,
-) -> None:
-    """
-    Write out binaries of a model to a lp file.
-    """
-    names: Iterable = m.variables.binaries
-    if not len(list(names)):
-        return
-
-    print_variable, _ = get_printers(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    f.write("\n\nbinary\n\n")
-    if progress:
-        names = tqdm(
-            list(names),
-            desc="Writing binary variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            for label in df.labels.values:
-                name = print_variable(label)
-                batch.append(f"{name}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def integers_to_file(
-    m: Model,
-    f: TextIOWrapper,
-    progress: bool = False,
-    batch_size: int = 1000,
-    slice_size: int = 100_000,
-    integer_label: str = "general",
-    explicit_coordinate_names: bool = False,
-) -> None:
-    """
-    Write out integers of a model to a lp file.
-    """
-    names: Iterable = m.variables.integers
-    if not len(list(names)):
-        return
-
-    print_variable, _ = get_printers(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    f.write(f"\n\n{integer_label}\n\n")
-    if progress:
-        names = tqdm(
-            list(names),
-            desc="Writing integer variables.",
-            colour=TQDM_COLOR,
-        )
-
-    batch = []  # to store batch of lines
-    for name in names:
-        var = m.variables[name]
-        for var_slice in var.iterate_slices(slice_size):
-            df = var_slice.flat
-
-            for label in df.labels.values:
-                name = print_variable(label)
-                batch.append(f"{name}\n")
-                batch = handle_batch(batch, f, batch_size)
-
-    if batch:  # write the remaining lines
-        f.writelines(batch)
-
-
-def to_lp_file(
-    m: Model,
-    fn: Path,
-    integer_label: str,
-    slice_size: int = 10_000_000,
-    progress: bool = True,
-    explicit_coordinate_names: bool = False,
-) -> None:
-    batch_size = 5000
-
-    with open(fn, mode="w") as f:
-        start = time.time()
-
-        if isinstance(f, int):
-            raise ValueError("File not found.")
-
-        objective_to_file(
-            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
-        )
-        constraints_to_file(
-            m,
-            f=f,
-            progress=progress,
-            batch_size=batch_size,
-            slice_size=slice_size,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-        bounds_to_file(
-            m,
-            f=f,
-            progress=progress,
-            batch_size=batch_size,
-            slice_size=slice_size,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-        binaries_to_file(
-            m,
-            f=f,
-            progress=progress,
-            batch_size=batch_size,
-            slice_size=slice_size,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-        integers_to_file(
-            m,
-            integer_label=integer_label,
-            f=f,
-            progress=progress,
-            batch_size=batch_size,
-            slice_size=slice_size,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-        f.write("end\n")
-
-        logger.info(f" Writing time: {round(time.time() - start, 2)}s")
-
-
-def objective_write_linear_terms_polars(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
@@ -512,7 +139,7 @@ def objective_write_linear_terms_polars(
     )
 
 
-def objective_write_quadratic_terms_polars(
+def objective_write_quadratic_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
@@ -530,7 +157,7 @@ def objective_write_quadratic_terms_polars(
     f.write(b"] / 2\n")
 
 
-def objective_to_file_polars(
+def objective_to_file(
     m: Model,
     f: BufferedWriter,
     progress: bool = False,
@@ -542,7 +169,7 @@ def objective_to_file_polars(
     if progress:
         logger.info("Writing objective.")
 
-    print_variable, _ = get_printers_polars(
+    print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -551,7 +178,7 @@ def objective_to_file_polars(
     df = m.objective.to_polars()
 
     if m.is_linear:
-        objective_write_linear_terms_polars(f, df, print_variable)
+        objective_write_linear_terms(f, df, print_variable)
 
     elif m.is_quadratic:
         linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
@@ -561,13 +188,13 @@ def objective_to_file_polars(
             .otherwise(pl.col("vars1"))
             .alias("vars")
         )
-        objective_write_linear_terms_polars(f, linear_terms, print_variable)
+        objective_write_linear_terms(f, linear_terms, print_variable)
 
         quads = df.filter(pl.col("vars1").ne(-1) & pl.col("vars2").ne(-1))
-        objective_write_quadratic_terms_polars(f, quads, print_variable)
+        objective_write_quadratic_terms(f, quads, print_variable)
 
 
-def bounds_to_file_polars(
+def bounds_to_file(
     m: Model,
     f: BufferedWriter,
     progress: bool = False,
@@ -581,7 +208,7 @@ def bounds_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = get_printers_polars(
+    print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -615,7 +242,7 @@ def bounds_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def binaries_to_file_polars(
+def binaries_to_file(
     m: Model,
     f: BufferedWriter,
     progress: bool = False,
@@ -629,7 +256,7 @@ def binaries_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = get_printers_polars(
+    print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -657,7 +284,7 @@ def binaries_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def integers_to_file_polars(
+def integers_to_file(
     m: Model,
     f: BufferedWriter,
     progress: bool = False,
@@ -672,7 +299,7 @@ def integers_to_file_polars(
     if not len(list(names)):
         return
 
-    print_variable, _ = get_printers_polars(
+    print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -700,7 +327,7 @@ def integers_to_file_polars(
             formatted.write_csv(f, **kwargs)
 
 
-def constraints_to_file_polars(
+def constraints_to_file(
     m: Model,
     f: BufferedWriter,
     progress: bool = False,
@@ -711,7 +338,7 @@ def constraints_to_file_polars(
     if not len(m.constraints):
         return
 
-    print_variable, print_constraint = get_printers_polars(
+    print_variable, print_constraint = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -731,28 +358,55 @@ def constraints_to_file_polars(
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
 
-            # df = df.lazy()
-            # filter out repeated label values
-            df = df.with_columns(
-                pl.when(pl.col("labels").is_first_distinct())
-                .then(pl.col("labels"))
-                .otherwise(pl.lit(None))
-                .alias("labels")
+            if df.height == 0:
+                continue
+
+            # Ensure each constraint has both coefficient and RHS terms
+            analysis = df.group_by("labels").agg(
+                [
+                    pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
+                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
+                ]
             )
 
-            row_labels = print_constraint(pl.col("labels"))
+            valid = analysis.filter(
+                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
+            )
+
+            if valid.height == 0:
+                continue
+
+            # Keep only constraints that have both parts
+            df = df.join(valid.select("labels"), on="labels", how="inner")
+
+            # Sort by labels and mark first/last occurrences
+            df = df.sort("labels").with_columns(
+                [
+                    pl.when(pl.col("labels").is_first_distinct())
+                    .then(pl.col("labels"))
+                    .otherwise(pl.lit(None))
+                    .alias("labels_first"),
+                    (pl.col("labels") != pl.col("labels").shift(-1))
+                    .fill_null(True)
+                    .alias("is_last_in_group"),
+                ]
+            )
+
+            row_labels = print_constraint(pl.col("labels_first"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels").is_not_null()).then(row_labels[0]),
-                pl.when(pl.col("labels").is_not_null()).then(row_labels[1]),
-                pl.when(pl.col("labels").is_not_null()).then(pl.lit(":\n")).alias(":"),
+                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[0]),
+                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[1]),
+                pl.when(pl.col("labels_first").is_not_null())
+                .then(pl.lit(":\n"))
+                .alias(":"),
                 pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
                 pl.col("coeffs").cast(pl.String),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
-                "sign",
-                pl.lit(" "),
-                pl.col("rhs").cast(pl.String),
+                pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
+                pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
+                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
             ]
 
             kwargs: Any = dict(
@@ -767,7 +421,7 @@ def constraints_to_file_polars(
             # formatted.sink_csv(f,  **kwargs)
 
 
-def to_lp_file_polars(
+def to_lp_file(
     m: Model,
     fn: Path,
     integer_label: str = "general",
@@ -778,31 +432,31 @@ def to_lp_file_polars(
     with open(fn, mode="wb") as f:
         start = time.time()
 
-        objective_to_file_polars(
+        objective_to_file(
             m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
         )
-        constraints_to_file_polars(
+        constraints_to_file(
             m,
             f=f,
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
-        bounds_to_file_polars(
+        bounds_to_file(
             m,
             f=f,
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
-        binaries_to_file_polars(
+        binaries_to_file(
             m,
             f=f,
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
-        integers_to_file_polars(
+        integers_to_file(
             m,
             integer_label=integer_label,
             f=f,
@@ -840,17 +494,8 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
-    if io_api == "lp":
+    if io_api == "lp" or io_api == "lp-polars":
         to_lp_file(
-            m,
-            fn,
-            integer_label,
-            slice_size=slice_size,
-            progress=progress,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-    elif io_api == "lp-polars":
-        to_lp_file_polars(
             m,
             fn,
             integer_label,
@@ -897,7 +542,7 @@ def to_mosek(
 
     import mosek
 
-    print_variable, print_constraint = get_printers(
+    print_variable, print_constraint = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -1010,7 +655,7 @@ def to_gurobipy(
     """
     import gurobipy
 
-    print_variable, print_constraint = get_printers(
+    print_variable, print_constraint = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
@@ -1061,7 +706,7 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     """
     import highspy
 
-    print_variable, print_constraint = get_printers(
+    print_variable, print_constraint = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 

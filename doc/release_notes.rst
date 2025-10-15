@@ -2,9 +2,92 @@ Release Notes
 =============
 
 Upcoming Version
-----------------
+
+* Replace pandas-based LP file writing with polars implementation for significantly improved performance on large models
+* Consolidate "lp" and "lp-polars" io_api options - both now use the optimized polars backend
+* Reduced memory usage and faster file I/O operations when exporting models to LP format
+* Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
+* Minor bugfix for multiplying variables with numpy type constants
+* Harmonize dtypes before concatenation in lp file writing to avoid dtype mismatch errors. This error occurred when creating and storing models in netcdf format using windows machines and loading and solving them on linux machines.
+
+Version 0.5.6
+--------------
+
+* Improved variable/expression arithmetic methods so that they correctly handle types
+* Gurobi: Pass dictionary as env argument `env={...}` through to gurobi env creation
+* Added integration with OETC platform
+* Mosek: Remove explicit use of Env, use global env instead
+* Objectives can now be created from variables via `linopy.Model.add_objective`.
+
+**Breaking Changes**
+
+* With this release, the package support for Python 3.9 was dropped and support for Python 3.10 was officially added.
+* The selection of a single item in `__getitem__` now returns a `Variable` instead of a `ScalarVariable`.
+
+
+Version 0.5.5
+--------------
+
+* Internally assign new data fields to expressions with a multiindexed-safe routine.
+
+Version 0.5.4
+--------------
+
+
+**Bug Fixes**
+
+* Remove default highs log file when `log_fn=None` and `io_api="direct"`. This caused `log_file` in
+  `solver_options` to be ignored.
+* Fix the parsing of solutions returned by the CBC solver when setting a MIP duality
+  gap tolerance.
+* Improve the mapping of termination conditions for the SCIP solver
+* Treat GLPK's `integer undefined` status as not-OK
+* Internally assign new data fields to `Variable` and `Constraint` with a multiindexed-safe routine. Before the
+  assignment when using multi-indexed coordinates, an deprecation warning was raised. This is fixed now.
+
+
+Version 0.5.3
+--------------
+
+**Bug Fixes**
+
+* Fix the parsing of solutions returned by the CBC solver when solving from a file to not
+  assume that variables start with `x`.
+* Fix the retrieval of solutions from the SCIP solver, and do not turn off presolve.
+
+**Minor Improvements**
+
+* Support pickling models.
+
+Version 0.5.2
+--------------
+
+**Bug Fixes**
+
+* Fix the multiplication with of zero dimensional numpy arrays with linopy objects.
+  This is mainly affecting operations where single numerical items from  pandas objects
+  are selected and used for multiplication.
+
+Version 0.5.1
+--------------
+
+**Deprecations**
+
+* Renamed `expression.empty()` to `expression.empty` to align with the use of empty in
+  pandas. A custom wrapper ensures that `expression.empty()` continues to work, but emits
+  a DeprecationWarning.
+
+**Features**
+
+** Features **
 
 * Added support for arithmetic operations with custom classes.
+* Added `align` function as a wrapper around :func:`xr.align`.
+* Avoid allocating a floating license for COPT during the initial solver check
+
+**Bug fixes**
+
+* Ensure compatibility with xarray >= v2025.03.00
 
 Version 0.5.0
 --------------
@@ -116,7 +199,7 @@ Version 0.3.9
 
 * The constraint assignment with a `LinearExpression` and a constant value when using the pattern `model.add_constraints(lhs_with_constant, sign, rhs)` was fixed. Before, the constant value was not added to the right-hand-side properly which led to the wrong constraint behavior. This is fixed now.
 
-* `nan`s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of `nan`s with tools like numpy/pandas/xarray.
+* ``nan`` s in constants is now handled more consistently. These are ignored when in the addition of expressions (effectively filled by zero). In a future version, this might change to align the propagation of ``nan`` s with tools like numpy/pandas/xarray.
 
 * Up to now the `rhs` argument in the `add_constraints` function was not supporting an expression as an input type. This is now added.
 

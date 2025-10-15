@@ -106,6 +106,7 @@ class TerminationCondition(Enum):
     iteration_limit = "iteration_limit"
     terminated_by_limit = "terminated_by_limit"
     suboptimal = "suboptimal"
+    imprecise = "imprecise"
 
     # WARNING
     unbounded = "unbounded"
@@ -141,6 +142,7 @@ STATUS_TO_TERMINATION_CONDITION_MAP: dict[SolverStatus, list[TerminationConditio
         TerminationCondition.time_limit,
         TerminationCondition.terminated_by_limit,
         TerminationCondition.suboptimal,
+        TerminationCondition.imprecise,
     ],
     SolverStatus.warning: [
         TerminationCondition.unbounded,
@@ -169,7 +171,7 @@ class Status:
 
     status: SolverStatus
     termination_condition: TerminationCondition
-    legacy_status: Union[tuple[str, str], str] = ""
+    legacy_status: tuple[str, str] | str = ""
 
     @classmethod
     def process(cls, status: str, termination_condition: str) -> "Status":
@@ -214,7 +216,7 @@ class Result:
     """
 
     status: Status
-    solution: Union[Solution, None] = None
+    solution: Solution | None = None
     solver_model: Any = None
 
     def __repr__(self) -> str:
