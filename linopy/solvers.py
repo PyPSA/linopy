@@ -103,7 +103,7 @@ with contextlib.suppress(ModuleNotFoundError):
 
     available_solvers.append("cplex")
 
-with contextlib.suppress(ModuleNotFoundError):
+with contextlib.suppress(ModuleNotFoundError,ImportError):
     import xpress
 
     available_solvers.append("xpress")
