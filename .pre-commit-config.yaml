@@ -24,6 +24,7 @@ repos:
     rev: v0.4.1
     hooks:
     -   id: blackdoc
+        additional_dependencies: ['black==24.8.0']
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
