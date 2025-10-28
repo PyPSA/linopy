@@ -254,6 +254,8 @@ def as_dataarray(
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.ndarray):
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
+    elif isinstance(arr, pl.Series):
+        arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.number):
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
@@ -269,6 +271,7 @@ def as_dataarray(
             pd.DataFrame,
             np.ndarray,
             DataArray,
+            pl.Series,
         ]
         supported_types_str = ", ".join([t.__name__ for t in supported_types])
         raise TypeError(

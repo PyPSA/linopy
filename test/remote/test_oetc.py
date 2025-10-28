@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import datetime
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -511,6 +512,246 @@ class TestAuthenticationResult:
         mock_datetime.now.return_value = datetime(2024, 1, 15, 13, 0, 0)
 
         assert auth_result.is_expired is True
+
+
+class TestGetJobLogs:
+    @pytest.fixture
+    def handler_with_auth_setup(self, sample_jwt_token: str) -> OetcHandler:
+        """Create handler with authentication setup for testing log fetching"""
+        credentials = OetcCredentials(
+            email="test@example.com", password="test_password"
+        )
+        settings = OetcSettings(
+            credentials=credentials,
+            name="Test Job",
+            authentication_server_url="https://auth.example.com",
+            orchestrator_server_url="https://orchestrator.example.com",
+            compute_provider=ComputeProvider.GCP,
+        )
+
+        mock_auth_result = AuthenticationResult(
+            token=sample_jwt_token,
+            token_type="Bearer",
+            expires_in=3600,
+            authenticated_at=datetime.now(),
+        )
+
+        handler = OetcHandler.__new__(OetcHandler)
+        handler.settings = settings
+        handler.jwt = mock_auth_result
+        handler.cloud_provider_credentials = Mock()
+
+        return handler
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_get_job_logs_success(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test successful job logs fetching"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+        expected_logs = "Error: Solver failed\nTraceback: ...\nSolver output: ..."
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"content": expected_logs}
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        # Execute
+        result = handler_with_auth_setup._get_job_logs(job_uuid)
+
+        # Verify request
+        mock_get.assert_called_once_with(
+            f"https://orchestrator.example.com/compute-job/{job_uuid}/get-logs",
+            headers={
+                "Authorization": f"Bearer {handler_with_auth_setup.jwt.token}",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+
+        # Verify result
+        assert result == expected_logs
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_get_job_logs_http_error(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test job logs fetching with HTTP error"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found")
+        mock_get.return_value = mock_response
+
+        # Execute
+        result = handler_with_auth_setup._get_job_logs(job_uuid)
+
+        # Verify - should return error message instead of raising
+        assert "[Unable to fetch logs:" in result
+        assert "404 Not Found" in result
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_get_job_logs_empty_content(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test job logs fetching with empty content"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+        mock_response = Mock()
+        mock_response.json.return_value = {"content": ""}
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        # Execute
+        result = handler_with_auth_setup._get_job_logs(job_uuid)
+
+        # Verify
+        assert result == ""
+
+
+class TestWaitAndGetJobDataWithLogs:
+    @pytest.fixture
+    def handler_with_auth_setup(self, sample_jwt_token: str) -> OetcHandler:
+        """Create handler with authentication setup for testing job waiting"""
+        credentials = OetcCredentials(
+            email="test@example.com", password="test_password"
+        )
+        settings = OetcSettings(
+            credentials=credentials,
+            name="Test Job",
+            authentication_server_url="https://auth.example.com",
+            orchestrator_server_url="https://orchestrator.example.com",
+            compute_provider=ComputeProvider.GCP,
+        )
+
+        mock_auth_result = AuthenticationResult(
+            token=sample_jwt_token,
+            token_type="Bearer",
+            expires_in=3600,
+            authenticated_at=datetime.now(),
+        )
+
+        handler = OetcHandler.__new__(OetcHandler)
+        handler.settings = settings
+        handler.jwt = mock_auth_result
+        handler.cloud_provider_credentials = Mock()
+
+        return handler
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_wait_runtime_error_with_logs(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test wait_and_get_job_data for RUNTIME_ERROR with successful log fetching"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+        expected_logs = "Error: Solver crashed\nMemory limit exceeded\nExit code: 137"
+
+        # First call returns RUNTIME_ERROR status
+        mock_status_response = Mock()
+        mock_status_response.json.return_value = {
+            "uuid": job_uuid,
+            "status": "RUNTIME_ERROR",
+            "name": "Test Job",
+        }
+        mock_status_response.raise_for_status.return_value = None
+
+        # Second call returns logs
+        mock_logs_response = Mock()
+        mock_logs_response.json.return_value = {"content": expected_logs}
+        mock_logs_response.raise_for_status.return_value = None
+
+        mock_get.side_effect = [mock_status_response, mock_logs_response]
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_auth_setup.wait_and_get_job_data(job_uuid)
+
+        # Verify exception contains logs
+        error_message = str(exc_info.value)
+        assert "Job failed during execution" in error_message
+        assert "RUNTIME_ERROR" in error_message
+        assert expected_logs in error_message
+
+        # Verify both API calls were made
+        assert mock_get.call_count == 2
+        # First call - get job status
+        assert (
+            f"https://orchestrator.example.com/compute-job/{job_uuid}"
+            in mock_get.call_args_list[0][0][0]
+        )
+        # Second call - get logs
+        assert (
+            f"https://orchestrator.example.com/compute-job/{job_uuid}/get-logs"
+            in mock_get.call_args_list[1][0][0]
+        )
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_wait_runtime_error_logs_fetch_fails(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test wait_and_get_job_data for RUNTIME_ERROR when log fetching fails"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+
+        # First call returns RUNTIME_ERROR status
+        mock_status_response = Mock()
+        mock_status_response.json.return_value = {
+            "uuid": job_uuid,
+            "status": "RUNTIME_ERROR",
+            "name": "Test Job",
+        }
+        mock_status_response.raise_for_status.return_value = None
+
+        # Second call for logs fails
+        def side_effect_func(*args: Any, **kwargs: Any) -> Mock:
+            if "get-logs" in args[0]:
+                raise RequestException("Log service unavailable")
+            return mock_status_response
+
+        mock_get.side_effect = side_effect_func
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_auth_setup.wait_and_get_job_data(job_uuid)
+
+        # Verify exception contains error message about log fetching failure
+        error_message = str(exc_info.value)
+        assert "Job failed during execution" in error_message
+        assert "RUNTIME_ERROR" in error_message
+        assert "[Unable to fetch logs:" in error_message
+        assert "Log service unavailable" in error_message
+
+    @patch("linopy.remote.oetc.requests.get")
+    def test_wait_setup_error_no_logs_fetched(
+        self, mock_get: Mock, handler_with_auth_setup: OetcHandler
+    ) -> None:
+        """Test wait_and_get_job_data for SETUP_ERROR does not fetch logs"""
+        # Setup
+        job_uuid = "test-job-uuid-123"
+
+        # First call returns SETUP_ERROR status
+        mock_status_response = Mock()
+        mock_status_response.json.return_value = {
+            "uuid": job_uuid,
+            "status": "SETUP_ERROR",
+            "name": "Test Job",
+        }
+        mock_status_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_status_response
+
+        # Execute and verify exception
+        with pytest.raises(Exception) as exc_info:
+            handler_with_auth_setup.wait_and_get_job_data(job_uuid)
+
+        # Verify exception does not try to fetch logs
+        error_message = str(exc_info.value)
+        assert "Job failed during setup phase" in error_message
+        assert "SETUP_ERROR" in error_message
+
+        # Verify only one API call was made (status check, no logs fetch)
+        assert mock_get.call_count == 1
 
 
 class TestFileCompression:
