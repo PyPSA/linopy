@@ -1581,6 +1581,10 @@ class Xpress(Solver[None]):
 
         m.solve()
 
+        # if the solver is stopped (timelimit for example), postsolve the problem
+        if m.getAttrib("solvestatus") == xpress.solvestatus_stopped:
+            m.postsolve()
+
         if basis_fn is not None:
             try:
                 m.writebasis(path_to_string(basis_fn))
