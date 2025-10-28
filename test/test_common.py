@@ -7,6 +7,7 @@ Created on Mon Jun 19 12:11:03 2023
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 from test_linear_expression import m, u, x  # noqa: F401
@@ -143,6 +144,16 @@ def test_as_dataarray_with_datarray_force_broadcast() -> None:
 
     da_no_force = as_dataarray(arr=x_only, coords=base.coords, force_broadcast=False)
     assert da_no_force.coords.to_dataset().equals(x_only.coords.to_dataset())
+
+
+def test_as_dataarray_with_pl_series_dims_default() -> None:
+    target_dim = "dim_0"
+    target_index = [0, 1, 2]
+    s = pl.Series([1, 2, 3])
+    da = as_dataarray(s)
+    assert isinstance(da, DataArray)
+    assert da.dims == (target_dim,)
+    assert list(da.coords[target_dim].values) == target_index
 
 
 def test_as_dataarray_dataframe_dims_default() -> None:

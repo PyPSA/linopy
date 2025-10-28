@@ -8,6 +8,9 @@ Upcoming Version
 * Reduced memory usage and faster file I/O operations when exporting models to LP format
 * Improved constraint equality check in `linopy.testing.assert_conequal` to less strict optionally
 * Minor bugfix for multiplying variables with numpy type constants
+* Harmonize dtypes before concatenation in lp file writing to avoid dtype mismatch errors. This error occurred when creating and storing models in netcdf format using windows machines and loading and solving them on linux machines.
+* Add option to use polars series as constant input
+* Fix expression merge to explicitly use outer join when combining expressions with disjoint coordinates for consistent behavior across xarray versions
 
 **Breaking Changes**
 * With this release the behaviour of `m.add_variables` has been changed so that provided coords will always be
