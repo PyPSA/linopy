@@ -287,12 +287,7 @@ class Variable:
 
     def to_linexpr(
         self,
-        coefficient: int
-        | float
-        | pd.Series
-        | pd.DataFrame
-        | np.ndarray
-        | DataArray = 1,
+        coefficient: ConstantLike = 1,
     ) -> expressions.LinearExpression:
         """
         Create a linear expression from the variables.
