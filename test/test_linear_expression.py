@@ -111,6 +111,13 @@ def test_linexpr_from_constant_dataarray(m: Model) -> None:
     assert expr.nterm == 0
 
 
+def test_linexpr_from_constant_pl_series(m: Model) -> None:
+    const = pl.Series([1, 2])
+    expr = LinearExpression(const, m)
+    assert (expr.const == const.to_numpy()).all()
+    assert expr.nterm == 0
+
+
 def test_linexpr_from_constant_pandas_series(m: Model) -> None:
     const = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0"))
     expr = LinearExpression(const, m)
