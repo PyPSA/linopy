@@ -98,6 +98,7 @@ SUPPORTED_CONSTANT_TYPES = (
     pd.Series,
     pd.DataFrame,
     np.ndarray,
+    pl.Series,
 )
 
 

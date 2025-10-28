@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
 import numpy
-import numpy.typing
+import polars as pl
 from pandas import DataFrame, Index, Series
 from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
@@ -37,6 +37,7 @@ ConstantLike = Union[  # noqa: UP007
     DataArray,
     Series,
     DataFrame,
+    pl.Series,
 ]
 SignLike = Union[str, numpy.ndarray, DataArray, Series, DataFrame]  # noqa: UP007
 VariableLike = Union["ScalarVariable", "Variable"]
