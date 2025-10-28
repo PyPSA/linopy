@@ -2000,6 +2000,8 @@ def merge(
 
         if override:
             kwargs["join"] = "override"
+        else:
+            kwargs.setdefault("join", "outer")
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
