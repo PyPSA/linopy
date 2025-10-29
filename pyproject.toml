@@ -37,7 +37,7 @@ dependencies = [
     "tqdm",
     "deprecation",
     "google-cloud-storage",
-    "requests"
+    "requests",
 ]
 
 [project.urls]
@@ -81,6 +81,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    "cupdlpx>=0.1.2",
 ]
 
 [tool.setuptools.packages.find]
@@ -102,9 +103,7 @@ branch = true
 source = ["linopy"]
 omit = ["test/*"]
 [tool.coverage.report]
-exclude_also = [
-    "if TYPE_CHECKING:",
-]
+exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
 exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
