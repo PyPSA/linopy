@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from xarray.testing import assert_equal
+from xarray.testing import assert_allclose, assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
@@ -32,12 +32,12 @@ if "highs" in available_solvers:
     # mps io is only supported via highspy
     io_apis.append("mps")
 
-
+file_io_solvers = [s for s in available_solvers if s not in ["cupdlpx"]]
 params: list[tuple[str, str, bool]] = list(
-    itertools.product(available_solvers, io_apis, explicit_coordinate_names)
+    itertools.product(file_io_solvers, io_apis, explicit_coordinate_names)
 )
 
-direct_solvers: list[str] = ["gurobi", "highs", "mosek"]
+direct_solvers: list[str] = ["gurobi", "highs", "mosek", "cupdlpx"]
 for solver in direct_solvers:
     if solver in available_solvers:
         params.append((solver, "direct", False))
@@ -52,6 +52,9 @@ feasible_quadratic_solvers: list[str] = quadratic_solvers
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
 if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
+
+feasible_mip_solvers: list[str] = available_solvers.copy()
+feasible_mip_solvers.remove("cupdlpx")  # cuPDLPx does not support MIP yet
 
 
 def test_print_solvers(capsys: Any) -> None:
@@ -407,7 +410,7 @@ def test_anonymous_constraint(
     model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
-    assert_equal(model.solution, model_anonymous_constraint.solution)
+    assert_allclose(model.solution, model_anonymous_constraint.solution)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -475,6 +478,7 @@ def test_solver_time_limit_options(
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
+        "cupdlpx": {"TimeLimit": 1},
     }
     status, condition = model.solve(
         solver,
@@ -508,7 +512,7 @@ def test_duplicated_variables(
 ) -> None:
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert all(model_with_duplicated_variables.solution["x"] == 5)
+    assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=1e-4))
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -523,9 +527,15 @@ def test_non_aligned_variables(
     )
     assert status == "ok"
     with pytest.warns(UserWarning):
-        assert model_with_non_aligned_variables.solution["x"][0] == 0
-        assert model_with_non_aligned_variables.solution["x"][-1] == 10.5
-        assert model_with_non_aligned_variables.solution["y"][0] == 10.5
+        assert np.isclose(
+            model_with_non_aligned_variables.solution["x"][0], 0, rtol=1e-4
+        )
+        assert np.isclose(
+            model_with_non_aligned_variables.solution["x"][-1], 10.5, rtol=1e-4
+        )
+        assert np.isclose(
+            model_with_non_aligned_variables.solution["y"][0], 10.5, rtol=1e-4
+        )
         assert np.isnan(model_with_non_aligned_variables.solution["y"][-1])
 
         for dtype in model_with_non_aligned_variables.solution.dtypes.values():
@@ -540,16 +550,17 @@ def test_set_files(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    status, condition = model.solve(
-        solver,
-        io_api=io_api,
-        explicit_coordinate_names=explicit_coordinate_names,
-        problem_fn=tmp_path / "problem.lp",
-        solution_fn=tmp_path / "solution.sol",
-        log_fn=tmp_path / "logging.log",
-        keep_files=False,
-    )
-    assert status == "ok"
+    if solver in file_io_solvers:
+        status, condition = model.solve(
+            solver,
+            io_api=io_api,
+            explicit_coordinate_names=explicit_coordinate_names,
+            problem_fn=tmp_path / "problem.lp",
+            solution_fn=tmp_path / "solution.sol",
+            log_fn=tmp_path / "logging.log",
+            keep_files=False,
+        )
+        assert status == "ok"
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -560,26 +571,33 @@ def test_set_files_and_keep_files(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    status, condition = model.solve(
-        solver,
-        io_api=io_api,
-        explicit_coordinate_names=explicit_coordinate_names,
-        problem_fn=tmp_path / "problem.lp",
-        solution_fn=tmp_path / "solution.sol",
-        log_fn=tmp_path / "logging.log",
-        keep_files=True,
-    )
-    assert status == "ok"
-    if io_api != "direct" and solver != "xpress":
-        assert (tmp_path / "problem.lp").exists()
-        assert (tmp_path / "solution.sol").exists()
-    assert (tmp_path / "logging.log").exists()
+    if solver in file_io_solvers:
+        status, condition = model.solve(
+            solver,
+            io_api=io_api,
+            explicit_coordinate_names=explicit_coordinate_names,
+            problem_fn=tmp_path / "problem.lp",
+            solution_fn=tmp_path / "solution.sol",
+            log_fn=tmp_path / "logging.log",
+            keep_files=True,
+        )
+        assert status == "ok"
+        if io_api != "direct" and solver != "xpress":
+            assert (tmp_path / "problem.lp").exists()
+            assert (tmp_path / "solution.sol").exists()
+        assert (tmp_path / "logging.log").exists()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_infeasible_model(
     model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
+    if solver == "cupdlpx":
+        pytest.skip(
+            "Ongoing issue with cuPDLPx causes it to hang for some unbounded problems. "
+            "See https://github.com/MIT-Lu-Lab/cuPDLPx/issues/9."
+        )
+
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 
@@ -604,10 +622,11 @@ def test_infeasible_model(
 def test_model_with_inf(
     model_with_inf: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    status, condition = model_with_inf.solve(solver, io_api=io_api)
-    assert condition == "optimal"
-    assert (model_with_inf.solution.x == 0).all()
-    assert (model_with_inf.solution.y == 10).all()
+    if solver in feasible_mip_solvers:
+        status, condition = model_with_inf.solve(solver, io_api=io_api)
+        assert condition == "optimal"
+        assert (model_with_inf.solution.x == 0).all()
+        assert (model_with_inf.solution.y == 10).all()
 
 
 @pytest.mark.parametrize(
@@ -617,13 +636,14 @@ def test_model_with_inf(
 def test_milp_binary_model(
     milp_binary_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    status, condition = milp_binary_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    assert condition == "optimal"
-    assert (
-        (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
-    ).all()
+    if solver in feasible_mip_solvers:
+        status, condition = milp_binary_model.solve(
+            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+        )
+        assert condition == "optimal"
+        assert (
+            (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
+        ).all()
 
 
 @pytest.mark.parametrize(
@@ -636,13 +656,15 @@ def test_milp_binary_model_r(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    status, condition = milp_binary_model_r.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    assert condition == "optimal"
-    assert (
-        (milp_binary_model_r.solution.x == 1) | (milp_binary_model_r.solution.x == 0)
-    ).all()
+    if solver in feasible_mip_solvers:
+        status, condition = milp_binary_model_r.solve(
+            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+        )
+        assert condition == "optimal"
+        assert (
+            (milp_binary_model_r.solution.x == 1)
+            | (milp_binary_model_r.solution.x == 0)
+        ).all()
 
 
 @pytest.mark.parametrize(
@@ -652,11 +674,12 @@ def test_milp_binary_model_r(
 def test_milp_model(
     milp_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    status, condition = milp_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-    assert condition == "optimal"
-    assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
+    if solver in feasible_mip_solvers:
+        status, condition = milp_model.solve(
+            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+        )
+        assert condition == "optimal"
+        assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
 
 
 @pytest.mark.parametrize(
@@ -666,14 +689,19 @@ def test_milp_model(
 def test_milp_model_r(
     milp_model_r: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
-    # skip it
-    if io_api != "mps":
-        status, condition = milp_model_r.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-        assert condition == "optimal"
-        assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
+    if solver in feasible_mip_solvers:
+        # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
+        # skip it
+        if io_api != "mps":
+            status, condition = milp_model_r.solve(
+                solver,
+                io_api=io_api,
+                explicit_coordinate_names=explicit_coordinate_names,
+            )
+            assert condition == "optimal"
+            assert (
+                (milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)
+            ).all()
 
 
 @pytest.mark.parametrize(
@@ -798,13 +826,13 @@ def test_quadratic_model_unbounded(
 def test_modified_model(
     modified_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    status, condition = modified_model.solve(
-        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-    )
-
-    assert condition == "optimal"
-    assert (modified_model.solution.x == 0).all()
-    assert (modified_model.solution.y == 10).all()
+    if solver in feasible_mip_solvers:
+        status, condition = modified_model.solve(
+            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+        )
+        assert condition == "optimal"
+        assert (modified_model.solution.x == 0).all()
+        assert (modified_model.solution.y == 10).all()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -822,7 +850,7 @@ def test_masked_variable_model(
     assert y.solution[-2:].isnull().all()
     assert y.solution[:-2].notnull().all()
     assert x.solution.notnull().all()
-    assert (x.solution[-2:] == 10).all()
+    assert (np.isclose(x.solution[-2:], 10, rtol=2.5e-4)).all()
     # Squeeze in solution getter for expressions with masked variables
     assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
@@ -837,8 +865,8 @@ def test_masked_constraint_model(
     masked_constraint_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
-    assert (masked_constraint_model.solution.y[:-2] == 10).all()
-    assert (masked_constraint_model.solution.y[-2:] == 5).all()
+    assert (np.isclose(masked_constraint_model.solution.y[:-2], 10, rtol=1e-4)).all()
+    assert (np.isclose(masked_constraint_model.solution.y[-2:], 5, rtol=2e-4)).all()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -849,6 +877,9 @@ def test_basis_and_warmstart(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
+    if solver == "cupdlpx":
+        pytest.skip("cuPDLPx does not yet support warmstart in the Python API.")
+
     basis_fn = tmp_path / "basis.bas"
     model.solve(
         solver,
@@ -872,14 +903,15 @@ def test_solution_fn_parent_dir_doesnt_exist(
     explicit_coordinate_names: bool,
     tmp_path: Any,
 ) -> None:
-    solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
-    status, condition = model.solve(
-        solver,
-        io_api=io_api,
-        explicit_coordinate_names=explicit_coordinate_names,
-        solution_fn=solution_fn,
-    )
-    assert status == "ok"
+    if solver in file_io_solvers:
+        solution_fn = tmp_path / "non_existent_dir" / "non_existent_file"
+        status, condition = model.solve(
+            solver,
+            io_api=io_api,
+            explicit_coordinate_names=explicit_coordinate_names,
+            solution_fn=solution_fn,
+        )
+        assert status == "ok"
 
 
 @pytest.mark.parametrize("solver", available_solvers)
@@ -892,7 +924,7 @@ def test_non_supported_solver_io(model: Model, solver: str) -> None:
 def test_solver_attribute_getter(
     model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    model.solve(solver)
+    model.solve(solver, io_api=io_api)
     if solver != "gurobi":
         with pytest.raises(NotImplementedError):
             model.variables.get_solver_attribute("RC")
@@ -921,7 +953,11 @@ def test_model_resolve(
     )
     assert status == "ok"
     # x = -0.75, y = 3.0
-    assert np.isclose(model.objective.value or 0, 5.25)
+
+    if solver == "cupdlpx":  # this solver has low resolution
+        assert np.isclose(model.objective.value or 0, 5.25, rtol=1e-3)
+    else:
+        assert np.isclose(model.objective.value or 0, 5.25)
 
 
 @pytest.mark.parametrize(
