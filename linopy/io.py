@@ -27,6 +27,7 @@ from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
+    from cupdlpx import Model as cupdlpxModel
     from highspy.highs import Highs
 
     from linopy.model import Model
@@ -754,6 +755,51 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
     return h
+
+
+def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxModel:
+    """
+    Export the model to cupdlpx.
+
+    This function does not write the model to intermediate files but directly
+    passes it to cupdlpx.
+
+    cuPDLPx does not support named variables and constraints, so names
+    are not tracked by this function.
+
+    Parameters
+    ----------
+    m : linopy.Model
+
+    Returns
+    -------
+    model : cupdlpx.Model
+    """
+    import cupdlpx
+
+    # build model using canonical form matrices and vectors
+    # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#modeling
+    M = m.matrices
+    A = M.A.tocsr()  # cuDPLPx only support CSR sparse matrix format
+    # linopy stores constraints as Ax ?= b and keeps track of inequality
+    # sense in M.sense. Convert to separate lower and upper bound vectors.
+    l = np.where(M.sense == ">", M.b, -np.inf)
+    u = np.where(M.sense == "<", M.b, np.inf)
+
+    cu_model = cupdlpx.Model(
+        objective_vector=M.c,
+        constraint_matrix=A,
+        constraint_lower_bound=l,
+        constraint_upper_bound=u,
+        variable_lower_bound=M.lb,
+        variable_upper_bound=M.ub,
+    )
+
+    # change objective sense
+    if m.objective.sense == "max":
+        cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
+
+    return cu_model
 
 
 def to_block_files(m: Model, fn: Path) -> None:
