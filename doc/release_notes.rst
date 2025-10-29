@@ -11,6 +11,7 @@ Upcoming Version
 * Harmonize dtypes before concatenation in lp file writing to avoid dtype mismatch errors. This error occurred when creating and storing models in netcdf format using windows machines and loading and solving them on linux machines.
 * Add option to use polars series as constant input
 * Fix expression merge to explicitly use outer join when combining expressions with disjoint coordinates for consistent behavior across xarray versions
+* Add support for GPU-accelerated solver [cuPDLPx](https://github.com/MIT-Lu-Lab/cuPDLPx)
 
 Version 0.5.6
 --------------
