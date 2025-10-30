@@ -783,8 +783,16 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     A = M.A.tocsr()  # cuDPLPx only support CSR sparse matrix format
     # linopy stores constraints as Ax ?= b and keeps track of inequality
     # sense in M.sense. Convert to separate lower and upper bound vectors.
-    l = np.where(M.sense == ">", M.b, -np.inf)
-    u = np.where(M.sense == "<", M.b, np.inf)
+    l = np.where(
+        np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
+        M.b,
+        -np.inf,
+    )
+    u = np.where(
+        np.logical_or(np.equal(M.sense, "<"), np.equal(M.sense, "=")),
+        M.b,
+        np.inf,
+    )
 
     cu_model = cupdlpx.Model(
         objective_vector=M.c,
