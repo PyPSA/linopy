@@ -46,7 +46,6 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp", False))
     params.append(("mosek", "lp", True))
 
-
 feasible_quadratic_solvers: list[str] = quadratic_solvers
 # There seems to be a bug in scipopt with quadratic models on windows, see
 # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
@@ -55,6 +54,11 @@ if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
 
 feasible_mip_solvers: list[str] = available_solvers.copy()
 feasible_mip_solvers.remove("cupdlpx")  # cuPDLPx does not support MIP yet
+
+gpu_solvers: list[str] = ["cupdlpx"]
+
+CPU_SOL_TOL: float = 1e-5  # numpy default
+GPU_SOL_TOL: float = 2.5e-4  # gpu solvers typically have lower numerical precision
 
 
 def test_print_solvers(capsys: Any) -> None:
@@ -512,7 +516,8 @@ def test_duplicated_variables(
 ) -> None:
     status, condition = model_with_duplicated_variables.solve(solver, io_api=io_api)
     assert status == "ok"
-    assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=1e-4))
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=tol))
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -526,15 +531,18 @@ def test_non_aligned_variables(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
     assert status == "ok"
+
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+
     with pytest.warns(UserWarning):
         assert np.isclose(
-            model_with_non_aligned_variables.solution["x"][0], 0, rtol=1e-4
+            model_with_non_aligned_variables.solution["x"][0], 0, rtol=tol
         )
         assert np.isclose(
-            model_with_non_aligned_variables.solution["x"][-1], 10.5, rtol=1e-4
+            model_with_non_aligned_variables.solution["x"][-1], 10.5, rtol=tol
         )
         assert np.isclose(
-            model_with_non_aligned_variables.solution["y"][0], 10.5, rtol=1e-4
+            model_with_non_aligned_variables.solution["y"][0], 10.5, rtol=tol
         )
         assert np.isnan(model_with_non_aligned_variables.solution["y"][-1])
 
@@ -850,7 +858,8 @@ def test_masked_variable_model(
     assert y.solution[-2:].isnull().all()
     assert y.solution[:-2].notnull().all()
     assert x.solution.notnull().all()
-    assert (np.isclose(x.solution[-2:], 10, rtol=2.5e-4)).all()
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert (np.isclose(x.solution[-2:], 10, rtol=tol)).all()
     # Squeeze in solution getter for expressions with masked variables
     assert_equal(x.add(y).solution, x.solution + y.solution.fillna(0))
 
@@ -865,8 +874,9 @@ def test_masked_constraint_model(
     masked_constraint_model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
-    assert (np.isclose(masked_constraint_model.solution.y[:-2], 10, rtol=1e-4)).all()
-    assert (np.isclose(masked_constraint_model.solution.y[-2:], 5, rtol=2e-4)).all()
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert (np.isclose(masked_constraint_model.solution.y[:-2], 10, rtol=tol)).all()
+    assert (np.isclose(masked_constraint_model.solution.y[-2:], 5, rtol=tol)).all()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -954,10 +964,8 @@ def test_model_resolve(
     assert status == "ok"
     # x = -0.75, y = 3.0
 
-    if solver == "cupdlpx":  # this solver has low resolution
-        assert np.isclose(model.objective.value or 0, 5.25, rtol=1e-3)
-    else:
-        assert np.isclose(model.objective.value or 0, 5.25)
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert np.isclose(model.objective.value or 0, 5.25, rtol=tol)
 
 
 @pytest.mark.parametrize(
