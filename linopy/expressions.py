@@ -1647,6 +1647,26 @@ class LinearExpression(BaseExpression):
 
         return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 
+    @classmethod
+    def from_constant(cls, model: Model, constant: ConstantLike) -> LinearExpression:
+        """
+        Create a linear expression from a constant value or series
+
+        Parameters
+        ----------
+        model : linopy.Model
+            The model to which the constant expression will belong.
+        constant : int/float/array_like
+            The constant value for the linear expression.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            A linear expression representing the constant value.
+        """
+        const_da = as_dataarray(constant)
+        return LinearExpression(const_da, model)
+
 
 class QuadraticExpression(BaseExpression):
     """

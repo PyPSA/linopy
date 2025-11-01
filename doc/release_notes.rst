@@ -2,7 +2,7 @@ Release Notes
 =============
 
 .. Upcoming Version
-
+* Add convenience function to create LinearExpression from constant
 
 Version 0.5.8
 --------------
