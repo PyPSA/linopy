@@ -1123,6 +1123,21 @@ def test_linear_expression_from_tuples_bad_calls(
         LinearExpression.from_tuples(10)
 
 
+def test_linear_expression_from_constant_scalar(m: Model) -> None:
+    expr = LinearExpression.from_constant(model=m, constant=10)
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
+def test_linear_expression_from_constant_array(m: Model) -> None:
+    arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
+    expr = LinearExpression.from_constant(model=m, constant=arr)
+    assert isinstance(expr, LinearExpression)
+    assert list(expr.coords.keys())[0] == "t"
+    assert expr.nterm == 0
+    assert (expr.const.values == [10, 20]).all()
+
+
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     assert isinstance(expr.sanitize(), LinearExpression)
