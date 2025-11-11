@@ -415,6 +415,7 @@ def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
         cond.append(reduce(operator.or_, [pl.col(c).ne(-1) for c in varcols]))
     if "coeffs" in df.columns:
         cond.append(pl.col("coeffs").ne(0))
+        cond.append(pl.col("coeffs").is_not_null())
     if "labels" in df.columns:
         cond.append(pl.col("labels").ne(-1))
 
