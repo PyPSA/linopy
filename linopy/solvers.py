@@ -113,7 +113,7 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
         from xpress import Namespaces as xpress_Namespaces
     except ImportError:
 
-        class xpress_Namespaces:
+        class xpress_Namespaces:  # type: ignore[no-redef]
             ROW = 1
             COLUMN = 2
             SET = 3
