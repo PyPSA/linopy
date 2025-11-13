@@ -3,6 +3,7 @@ Release Notes
 
 .. Upcoming Version
 
+* Fix compatibility for xpress versions below 9.6 (regression)
 
 Version 0.5.8
 --------------
