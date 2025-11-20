@@ -20,6 +20,7 @@ from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
+from linopy.scaling import ScaleOptions
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
@@ -530,6 +531,58 @@ def test_non_aligned_variables(
 
         for dtype in model_with_non_aligned_variables.solution.dtypes.values():
             assert np.issubdtype(dtype, np.floating)
+
+
+def _build_scaling_model() -> Model:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(1000 * x + 2 * y >= 10, name="c0")
+    m.add_constraints(0.1 * x + 0.5 * y >= 1, name="c1")
+    m.objective = 10 * x + y
+    return m
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highs not installed")
+def test_scaling_integration_row_only() -> None:
+    base = _build_scaling_model()
+    status, _ = base.solve("highs", io_api="direct")
+    assert status == "ok"
+    base_solution = base.solution.to_pandas()
+    base_obj = base.objective.value or 0.0
+
+    scaled = _build_scaling_model()
+    status, _ = scaled.solve("highs", io_api="direct", scale=True)
+    assert status == "ok"
+    scaled_solution = scaled.solution.to_pandas()
+    scaled_obj = scaled.objective.value or 0.0
+
+    assert np.allclose(base_solution.values, scaled_solution.values)
+    assert np.isclose(base_obj, scaled_obj)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highs not installed")
+def test_scaling_integration_row_and_column() -> None:
+    base = _build_scaling_model()
+    status, _ = base.solve("highs", io_api="direct")
+    assert status == "ok"
+    base_solution = base.solution.to_pandas()
+    base_obj = base.objective.value or 0.0
+
+    scaled = _build_scaling_model()
+    status, _ = scaled.solve(
+        "highs",
+        io_api="direct",
+        scale=ScaleOptions(
+            enabled=True, variable_scaling=True, scale_integer_variables=False
+        ),
+    )
+    assert status == "ok"
+    scaled_solution = scaled.solution.to_pandas()
+    scaled_obj = scaled.objective.value or 0.0
+
+    assert np.allclose(base_solution.values, scaled_solution.values)
+    assert np.isclose(base_obj, scaled_obj)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
