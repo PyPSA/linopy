@@ -25,7 +25,7 @@ def build_model(n_vars: int, n_cons: int, density: float) -> Model:
     m = Model()
     x = m.add_variables(lower=0, name="x", coords=[range(n_vars)])
 
-    data = rng.normal(loc=0.0, scale=1.0, size=int(n_vars * n_cons * density))
+    data = rng.lognormal(mean=0.0, sigma=2.0, size=int(n_vars * n_cons * density))
     rows = rng.integers(0, n_cons, size=data.size)
     cols = rng.integers(0, n_vars, size=data.size)
 
@@ -38,10 +38,10 @@ def build_model(n_vars: int, n_cons: int, density: float) -> Model:
         vars_idx = cols[mask]
         lhs = sum(coeff * x.isel(dim_0=idx) for coeff, idx in zip(coeffs, vars_idx))
         rhs = abs(coeffs).sum() * 0.1
-        m.add_constraints(lhs == rhs, name=f"c{i}")
+        m.add_constraints(lhs >= rhs, name=f"c{i}")
 
     obj_coeffs = rng.uniform(0.1, 1.0, size=n_vars)
-    m.objective = np.dot(obj_coeffs, x)
+    m.objective = (obj_coeffs * x).sum()
     return m
 
 
