@@ -84,20 +84,15 @@ def _row_norms(A: csc_matrix, method: ScaleMethod) -> ndarray:
     Compute per-row magnitudes for a sparse matrix.
     """
     A_csr = A.tocsr()
-    indptr = A_csr.indptr
-    data = np.abs(A_csr.data)
-    n_rows = A_csr.shape[0]
-    norms = np.ones(n_rows, dtype=float)
+    if method == "row-l2":
+        norms = np.sqrt(np.array(A_csr.power(2).mean(axis=1)).ravel(), dtype=float)
+    else:
+        A_abs = A_csr.copy()
+        A_abs.data = np.abs(A_abs.data)
+        norms = np.array(A_abs.max(axis=1).toarray()).ravel().astype(float)
 
-    for i in range(n_rows):
-        start, end = indptr[i], indptr[i + 1]
-        row_data = data[start:end]
-        if row_data.size == 0:
-            norms[i] = 1.0
-        elif method == "row-l2":
-            norms[i] = np.sqrt(np.mean(row_data**2))
-        else:
-            norms[i] = row_data.max()
+    # rows without entries yield 0 or nan; keep them unscaled
+    norms = np.where(np.isnan(norms) | (norms == 0), 1.0, norms)
     return norms
 
 
@@ -106,20 +101,14 @@ def _col_norms(A: csc_matrix, method: ScaleMethod) -> ndarray:
     Compute per-column magnitudes for a sparse matrix.
     """
     A_csc = A.tocsc()
-    indptr = A_csc.indptr
-    data = np.abs(A_csc.data)
-    n_cols = A_csc.shape[1]
-    norms = np.ones(n_cols, dtype=float)
+    if method == "row-l2":
+        norms = np.sqrt(np.array(A_csc.power(2).mean(axis=0)).ravel(), dtype=float)
+    else:
+        A_abs = A_csc.copy()
+        A_abs.data = np.abs(A_abs.data)
+        norms = np.array(A_abs.max(axis=0).toarray()).ravel().astype(float)
 
-    for j in range(n_cols):
-        start, end = indptr[j], indptr[j + 1]
-        col_data = data[start:end]
-        if col_data.size == 0:
-            norms[j] = 1.0
-        elif method == "row-l2":
-            norms[j] = np.sqrt(np.mean(col_data**2))
-        else:
-            norms[j] = col_data.max()
+    norms = np.where(np.isnan(norms) | (norms == 0), 1.0, norms)
     return norms
 
 
