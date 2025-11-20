@@ -25,11 +25,14 @@ from tqdm import tqdm
 from linopy import solvers
 from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
+from linopy.scaling import ScalingContext
 
 if TYPE_CHECKING:
     from highspy.highs import Highs
 
+    from linopy.matrices import MatrixAccessor
     from linopy.model import Model
+    from linopy.scaling import ScaledMatrices
 
 
 logger = logging.getLogger(__name__)
@@ -162,6 +165,7 @@ def objective_to_file(
     f: BufferedWriter,
     progress: bool = False,
     explicit_coordinate_names: bool = False,
+    scaling: ScalingContext | None = None,
 ) -> None:
     """
     Write out the objective of a model to a lp file.
@@ -176,6 +180,16 @@ def objective_to_file(
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
+    if scaling is not None and getattr(scaling, "col_inv", None) is not None:
+        scale_map = pl.DataFrame(
+            {"vars": pl.Series(scaling.matrices.vlabels), "col_inv": scaling.col_inv}
+        )
+        df = (
+            df.join(scale_map, on="vars", how="left")
+            .fill_null(1.0)
+            .with_columns(pl.col("coeffs") * pl.col("col_inv"))
+            .drop("col_inv")
+        )
 
     if m.is_linear:
         objective_write_linear_terms(f, df, print_variable)
@@ -200,6 +214,7 @@ def bounds_to_file(
     progress: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
+    scaling: ScalingContext | None = None,
 ) -> None:
     """
     Write out variables of a model to a lp file.
@@ -224,6 +239,24 @@ def bounds_to_file(
         var = m.variables[name]
         for var_slice in var.iterate_slices(slice_size):
             df = var_slice.to_polars()
+            if scaling is not None:
+                scale_map = pl.DataFrame(
+                    {
+                        "labels": pl.Series(scaling.matrices.vlabels),
+                        "col_scale": scaling.col_scale,
+                    }
+                )
+                df = (
+                    df.join(scale_map, on="labels", how="left")
+                    .fill_null(1.0)
+                    .with_columns(
+                        [
+                            pl.col("lower") * pl.col("col_scale"),
+                            pl.col("upper") * pl.col("col_scale"),
+                        ]
+                    )
+                    .drop("col_scale")
+                )
 
             columns = [
                 pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
@@ -334,6 +367,7 @@ def constraints_to_file(
     lazy: bool = False,
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
+    scaling: ScalingContext | None = None,
 ) -> None:
     if not len(m.constraints):
         return
@@ -357,6 +391,32 @@ def constraints_to_file(
         con = m.constraints[name]
         for con_slice in con.iterate_slices(slice_size):
             df = con_slice.to_polars()
+
+            if scaling is not None:
+                row_map = pl.DataFrame(
+                    {
+                        "labels": pl.Series(scaling.matrices.clabels),
+                        "row_scale": scaling.row_scale,
+                    }
+                )
+                col_map = pl.DataFrame(
+                    {
+                        "vars": pl.Series(scaling.matrices.vlabels),
+                        "col_inv": scaling.col_inv,
+                    }
+                )
+                df = (
+                    df.join(row_map, on="labels", how="left")
+                    .join(col_map, on="vars", how="left")
+                    .fill_null(1.0)
+                    .with_columns(
+                        [
+                            pl.col("coeffs") * pl.col("row_scale") * pl.col("col_inv"),
+                            pl.col("rhs") * pl.col("row_scale"),
+                        ]
+                    )
+                    .drop(["row_scale", "col_inv"])
+                )
 
             if df.height == 0:
                 continue
@@ -428,12 +488,17 @@ def to_lp_file(
     slice_size: int = 2_000_000,
     progress: bool = True,
     explicit_coordinate_names: bool = False,
+    scaling: ScalingContext | None = None,
 ) -> None:
     with open(fn, mode="wb") as f:
         start = time.time()
 
         objective_to_file(
-            m, f, progress=progress, explicit_coordinate_names=explicit_coordinate_names
+            m,
+            f,
+            progress=progress,
+            explicit_coordinate_names=explicit_coordinate_names,
+            scaling=scaling,
         )
         constraints_to_file(
             m,
@@ -441,6 +506,7 @@ def to_lp_file(
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
+            scaling=scaling,
         )
         bounds_to_file(
             m,
@@ -448,6 +514,7 @@ def to_lp_file(
             progress=progress,
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
+            scaling=scaling,
         )
         binaries_to_file(
             m,
@@ -477,6 +544,7 @@ def to_file(
     slice_size: int = 2_000_000,
     progress: bool | None = None,
     explicit_coordinate_names: bool = False,
+    scaling: ScalingContext | None = None,
 ) -> Path:
     """
     Write out a model to a lp or mps file.
@@ -502,6 +570,7 @@ def to_file(
             slice_size=slice_size,
             progress=progress,
             explicit_coordinate_names=explicit_coordinate_names,
+            scaling=scaling,
         )
 
     elif io_api == "mps":
@@ -512,7 +581,10 @@ def to_file(
 
         # Use very fast highspy implementation
         # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = m.to_highspy(
+            explicit_coordinate_names=explicit_coordinate_names,
+            matrices=scaling.matrices if scaling else None,
+        )
         h.writeModel(str(fn))
     else:
         raise ValueError(
@@ -523,7 +595,10 @@ def to_file(
 
 
 def to_mosek(
-    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    task: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    matrices: MatrixAccessor | ScaledMatrices | None = None,
 ) -> Any:
     """
     Export model to MOSEK.
@@ -552,7 +627,7 @@ def to_mosek(
     task.appendvars(m.nvars)
     task.appendcons(m.ncons)
 
-    M = m.matrices
+    M = m.matrices if matrices is None else matrices
     # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
     #    task.putvarname(j, n)
 
@@ -635,7 +710,10 @@ def to_mosek(
 
 
 def to_gurobipy(
-    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    env: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    matrices: MatrixAccessor | ScaledMatrices | None = None,
 ) -> Any:
     """
     Export the model to gurobipy.
@@ -662,7 +740,7 @@ def to_gurobipy(
     m.constraints.sanitize_missings()
     model = gurobipy.Model(env=env)
 
-    M = m.matrices
+    M = m.matrices if matrices is None else matrices
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
@@ -687,7 +765,11 @@ def to_gurobipy(
     return model
 
 
-def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
+def to_highspy(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    matrices: MatrixAccessor | ScaledMatrices | None = None,
+) -> Highs:
     """
     Export the model to highspy.
 
@@ -710,7 +792,7 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         m, explicit_coordinate_names=explicit_coordinate_names
     )
 
-    M = m.matrices
+    M = m.matrices if matrices is None else matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
     if len(m.binaries) + len(m.integers):
