@@ -39,12 +39,14 @@ GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
+QTERM_DIM = "_qterm"  # Quadratic term dimension for quadratic constraints
 HELPER_DIMS: list[str] = [
     TERM_DIM,
     STACKED_TERM_DIM,
     GROUPED_TERM_DIM,
     FACTOR_DIM,
     CONCAT_DIM,
+    QTERM_DIM,
 ]
 
 

@@ -73,6 +73,7 @@ from linopy.constants import (
     GROUPED_TERM_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
+    QTERM_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
@@ -86,7 +87,11 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import (
+        AnonymousScalarConstraint,
+        Constraint,
+        QuadraticConstraint,
+    )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
 
@@ -1802,10 +1807,78 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
-        raise NotImplementedError(
-            "Quadratic expressions cannot be used in constraints."
+    def to_constraint(self, sign: SignLike, rhs: ConstantLike) -> QuadraticConstraint:
+        """
+        Convert a quadratic expression to a quadratic constraint.
+
+        Parameters
+        ----------
+        sign : str
+            Constraint sense: '<=', '>=', or '='
+        rhs : float or array-like
+            Right-hand side constant
+
+        Returns
+        -------
+        QuadraticConstraint
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> y = m.add_variables(name="y")
+        >>> qc = (x**2 + y**2).to_constraint("<=", 25)  # x² + y² <= 25
+        """
+        # Move rhs to left-hand side to get: quadexpr - rhs {sign} 0
+        all_to_lhs = self - rhs
+
+        # Separate quadratic and linear terms
+        # QuadraticExpression has vars with shape (..., _factor, _term)
+        # where _factor has size 2 (vars1, vars2)
+        vars_data = all_to_lhs.vars
+        coeffs_data = all_to_lhs.coeffs
+
+        # Identify linear terms: where one of the factors is -1 (missing)
+        is_linear = (vars_data.isel({FACTOR_DIM: 0}) == -1) | (
+            vars_data.isel({FACTOR_DIM: 1}) == -1
         )
+
+        # Extract quadratic terms (neither var is -1)
+        is_quadratic = ~is_linear
+
+        # Get quadratic parts
+        quad_vars = vars_data.where(is_quadratic, -1)
+        quad_coeffs = coeffs_data.where(is_quadratic, 0)
+
+        # Rename TERM_DIM to QTERM_DIM for quadratic terms
+        quad_vars = quad_vars.rename({TERM_DIM: QTERM_DIM})
+        quad_coeffs = quad_coeffs.rename({TERM_DIM: QTERM_DIM})
+
+        # Get linear parts - extract the non-missing variable
+        lin_vars_factor0 = vars_data.isel({FACTOR_DIM: 0})
+        lin_vars_factor1 = vars_data.isel({FACTOR_DIM: 1})
+        # For linear terms, one factor is -1, use the other
+        lin_vars = xr.where(
+            is_linear & (lin_vars_factor0 != -1),
+            lin_vars_factor0,
+            xr.where(is_linear & (lin_vars_factor1 != -1), lin_vars_factor1, -1),
+        )
+        # Take coefficients from factor 0 (they should be identical for both factors)
+        lin_coeffs = coeffs_data.isel({FACTOR_DIM: 0}).where(is_linear, 0)
+
+        # Build the constraint data
+        data = Dataset(
+            {
+                "quad_coeffs": quad_coeffs,
+                "quad_vars": quad_vars,
+                "lin_coeffs": lin_coeffs,
+                "lin_vars": lin_vars,
+                "sign": sign,
+                "rhs": -all_to_lhs.const,  # Move constant to RHS
+            }
+        )
+
+        return constraints.QuadraticConstraint(data, model=self.model)
 
     @property
     def flat(self) -> DataFrame:

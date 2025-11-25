@@ -50,6 +50,17 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
+# Solvers that support quadratic constraints (QCP/QCQP)
+# Note: HiGHS does NOT support quadratic constraints
+QUADRATIC_CONSTRAINT_SOLVERS = [
+    "gurobi",
+    "xpress",
+    "cplex",
+    "scip",
+    "mosek",
+    "copt",
+]
+
 # Solvers that don't need a solution file when keep_files=False
 NO_SOLUTION_FILE_SOLVERS = [
     "xpress",
@@ -146,6 +157,9 @@ with contextlib.suppress(ModuleNotFoundError):
         pass
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
+quadratic_constraint_solvers = [
+    s for s in QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
+]
 logger = logging.getLogger(__name__)
 
 

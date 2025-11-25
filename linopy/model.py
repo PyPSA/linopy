@@ -42,7 +42,13 @@ from linopy.constants import (
     ModelStatus,
     TerminationCondition,
 )
-from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.constraints import (
+    AnonymousScalarConstraint,
+    Constraint,
+    Constraints,
+    QuadraticConstraint,
+    QuadraticConstraints,
+)
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
@@ -63,6 +69,7 @@ from linopy.solvers import (
     IO_APIS,
     NO_SOLUTION_FILE_SOLVERS,
     available_solvers,
+    quadratic_constraint_solvers,
     quadratic_solvers,
 )
 from linopy.types import (
@@ -98,6 +105,7 @@ class Model:
     solver_name: str
     _variables: Variables
     _constraints: Constraints
+    _quadratic_constraints: QuadraticConstraints
     _objective: Objective
     _parameters: Dataset
     _solution: Dataset
@@ -118,6 +126,7 @@ class Model:
         # containers
         "_variables",
         "_constraints",
+        "_quadratic_constraints",
         "_objective",
         "_parameters",
         "_solution",
@@ -128,8 +137,10 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
+        "_qcCounter",
         "_varnameCounter",
         "_connameCounter",
+        "_qconnameCounter",
         "_blocks",
         # TODO: check if these should not be mutable
         "_chunk",
@@ -171,6 +182,9 @@ class Model:
         """
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
+        self._quadratic_constraints: QuadraticConstraints = QuadraticConstraints(
+            {}, model=self
+        )
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
 
@@ -178,8 +192,10 @@ class Model:
         self._termination_condition: str = ""
         self._xCounter: int = 0
         self._cCounter: int = 0
+        self._qcCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
+        self._qconnameCounter: int = 0
         self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
@@ -203,6 +219,13 @@ class Model:
         Constraints assigned to the model.
         """
         return self._constraints
+
+    @property
+    def quadratic_constraints(self) -> QuadraticConstraints:
+        """
+        Quadratic constraints assigned to the model.
+        """
+        return self._quadratic_constraints
 
     @property
     def objective(self) -> Objective:
@@ -688,6 +711,120 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
+    def add_quadratic_constraints(
+        self,
+        lhs: QuadraticExpression | QuadraticConstraint | Callable,
+        sign: SignLike | None = None,
+        rhs: ConstantLike | None = None,
+        name: str | None = None,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
+        mask: MaskLike | None = None,
+    ) -> QuadraticConstraint:
+        """
+        Add a quadratic constraint to the model.
+
+        Quadratic constraints are of the form: x'Qx + a'x <= b (or >=, =)
+
+        Parameters
+        ----------
+        lhs : linopy.QuadraticExpression, linopy.QuadraticConstraint, or callable
+            Left hand side of the constraint(s) or a full quadratic constraint.
+            If a QuadraticExpression is passed, `sign` and `rhs` must be provided.
+            If a callable is passed, it is called for every combination of
+            coordinates given in `coords`.
+        sign : str or array_like, optional
+            Relation between the lhs and rhs: '=', '>=', or '<='.
+        rhs : float or array_like, optional
+            Right hand side constant(s) of the constraint.
+        name : str, optional
+            Reference name for the constraint. Default generates names like
+            "qcon0", "qcon1", etc.
+        coords : list or xarray.Coordinates, optional
+            Coordinates for the constraint array. Only used when lhs is a callable.
+        mask : array_like, optional
+            Boolean mask indicating which constraints to include.
+
+        Returns
+        -------
+        linopy.QuadraticConstraint
+            The quadratic constraint added to the model.
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> y = m.add_variables(name="y")
+        >>> qc = m.add_quadratic_constraints(x**2 + y**2, "<=", 25, name="circle")
+        """
+        if name in list(self.quadratic_constraints):
+            raise ValueError(f"Quadratic constraint '{name}' already assigned to model")
+        elif name is None:
+            name = f"qcon{self._qconnameCounter}"
+            self._qconnameCounter += 1
+
+        if sign is not None:
+            from linopy.common import maybe_replace_signs
+
+            sign = maybe_replace_signs(as_dataarray(sign))
+
+        if isinstance(lhs, QuadraticExpression):
+            if sign is None or rhs is None:
+                raise ValueError(
+                    "Arguments `sign` and `rhs` must be provided when lhs is a QuadraticExpression."
+                )
+            data = lhs.to_constraint(sign, rhs).data
+        elif isinstance(lhs, QuadraticConstraint):
+            if sign is not None or rhs is not None:
+                raise ValueError(
+                    "Arguments `sign` and `rhs` cannot be provided when lhs is a QuadraticConstraint."
+                )
+            data = lhs.data
+        elif callable(lhs):
+            raise NotImplementedError(
+                "Rule-based quadratic constraint creation is not yet implemented."
+            )
+        else:
+            raise ValueError(
+                f"Invalid type for `lhs` ({type(lhs)}). Expected QuadraticExpression, "
+                "QuadraticConstraint, or callable."
+            )
+
+        # Ensure helper dimensions are not set as coordinates
+        if drop_dims := set(HELPER_DIMS).intersection(data.coords):
+            data = data.drop_vars(drop_dims)
+
+        data["labels"] = -1
+        from linopy.constants import FACTOR_DIM, QTERM_DIM
+
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM, QTERM_DIM, FACTOR_DIM])
+
+        if mask is not None:
+            mask = as_dataarray(mask).astype(bool)
+            assert set(mask.dims).issubset(data.dims), (
+                "Dimensions of mask not a subset of resulting labels dimensions."
+            )
+
+        self.check_force_dim_names(data)
+
+        start = self._qcCounter
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._qcCounter += data.labels.size
+
+        if mask is not None:
+            data.labels.values = data.labels.where(mask, -1).values
+
+        data = data.assign_attrs(label_range=(start, end), name=name)
+
+        if self.chunk:
+            data = data.chunk(self.chunk)
+
+        constraint = QuadraticConstraint(
+            data, name=name, model=self, skip_broadcast=True
+        )
+        self.quadratic_constraints.add(constraint)
+        return constraint
+
     def add_objective(
         self,
         expr: Variable
@@ -809,14 +946,30 @@ class Model:
 
     @property
     def is_linear(self) -> bool:
-        return self.objective.is_linear
+        return self.objective.is_linear and not self.has_quadratic_constraints
 
     @property
     def is_quadratic(self) -> bool:
-        return self.objective.is_quadratic
+        return self.objective.is_quadratic or self.has_quadratic_constraints
+
+    @property
+    def has_quadratic_constraints(self) -> bool:
+        """Return True if the model has any quadratic constraints."""
+        return len(self.quadratic_constraints) > 0
 
     @property
     def type(self) -> str:
+        """
+        Return the problem type string.
+
+        Returns one of:
+        - LP: Linear Program
+        - QP: Quadratic Program (quadratic objective, linear constraints)
+        - QCP: Quadratically Constrained Program (linear objective, quadratic constraints)
+        - QCQP: Quadratically Constrained Quadratic Program
+        - ILP/IQP/IQCP/IQCQP: Integer versions
+        - MILP/MIQP/MIQCP/MIQCQP: Mixed-Integer versions
+        """
         if (len(self.binaries) or len(self.integers)) and len(self.continuous):
             variable_type = "MI"
         elif len(self.binaries) or len(self.integers):
@@ -824,9 +977,14 @@ class Model:
         else:
             variable_type = ""
 
-        objective_type = "Q" if self.is_quadratic else "L"
+        # Determine constraint type
+        has_qc = self.has_quadratic_constraints
+        constraint_type = "QC" if has_qc else ""
 
-        return f"{variable_type}{objective_type}P"
+        # Determine objective type
+        objective_type = "Q" if self.objective.is_quadratic else "L"
+
+        return f"{variable_type}{constraint_type}{objective_type}P"
 
     @property
     def nvars(self) -> int:
@@ -1211,6 +1369,15 @@ class Model:
         if self.is_quadratic and solver_name not in quadratic_solvers:
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
+            )
+
+        if (
+            self.has_quadratic_constraints
+            and solver_name not in quadratic_constraint_solvers
+        ):
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic constraints. "
+                f"Use one of: {quadratic_constraint_solvers}"
             )
 
         try:

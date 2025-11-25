@@ -56,9 +56,11 @@ from linopy.common import (
 from linopy.config import options
 from linopy.constants import (
     EQUAL,
+    FACTOR_DIM,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    QTERM_DIM,
     TERM_DIM,
     SIGNS_pretty,
 )
@@ -1123,3 +1125,714 @@ class AnonymousScalarConstraint:
     def to_constraint(self) -> Constraint:
         data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
         return Constraint(data=data, model=self.lhs.model)
+
+
+QFILL_VALUE = {
+    "labels": -1,
+    "rhs": np.nan,
+    "lin_coeffs": 0,
+    "lin_vars": -1,
+    "quad_coeffs": 0,
+    "quad_vars": -1,
+    "sign": "=",
+}
+
+
+def qconwrap(
+    method: Callable, *default_args: Any, **new_default_kwargs: Any
+) -> Callable:
+    @functools.wraps(method)
+    def _qconwrap(
+        con: QuadraticConstraint, *args: Any, **kwargs: Any
+    ) -> QuadraticConstraint:
+        for k, v in new_default_kwargs.items():
+            kwargs.setdefault(k, v)
+        return con.__class__(
+            method(con.data, *default_args, *args, **kwargs), con.model, con.name
+        )
+
+    _qconwrap.__doc__ = f"Wrapper for the xarray {method.__qualname__} function for linopy.QuadraticConstraint"
+    if new_default_kwargs:
+        _qconwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
+
+    return _qconwrap
+
+
+class QuadraticConstraint:
+    """
+    A quadratic constraint of the form: x'Qx + a'x <= b (or >=, =).
+
+    The QuadraticConstraint class stores quadratic constraints with both
+    quadratic and linear terms. It follows the same design patterns as the
+    linear Constraint class.
+
+    Dataset structure:
+    {
+        'quad_coeffs': DataArray[float]   # shape: (..., _factor, _qterm)
+        'quad_vars': DataArray[int]       # shape: (..., _factor, _qterm)
+        'lin_coeffs': DataArray[float]    # shape: (..., _term)
+        'lin_vars': DataArray[int]        # shape: (..., _term)
+        'sign': DataArray[str]            # '=', '<=', '>='
+        'rhs': DataArray[float]           # Right-hand side constant
+        'labels': DataArray[int]          # Constraint labels (-1 if masked)
+        'dual': DataArray[float]          # [OPTIONAL] Dual values (convex only)
+    }
+    """
+
+    __slots__ = ("_data", "_model", "_assigned")
+
+    _fill_value = QFILL_VALUE
+
+    def __init__(
+        self,
+        data: Dataset,
+        model: Model,
+        name: str = "",
+        skip_broadcast: bool = False,
+    ) -> None:
+        """
+        Initialize the QuadraticConstraint.
+
+        Parameters
+        ----------
+        data : xarray.Dataset
+            Dataset containing the constraint data.
+        model : linopy.Model
+            Underlying model.
+        name : str
+            Name of the constraint.
+        skip_broadcast : bool
+            Skip broadcasting of data arrays.
+        """
+        from linopy.model import Model
+
+        if not isinstance(data, Dataset):
+            raise ValueError(f"data must be a Dataset, got {type(data)}")
+
+        if not isinstance(model, Model):
+            raise ValueError(f"model must be a Model, got {type(model)}")
+
+        # Check required fields
+        for attr in (
+            "quad_coeffs",
+            "quad_vars",
+            "lin_coeffs",
+            "lin_vars",
+            "sign",
+            "rhs",
+        ):
+            if attr not in data:
+                raise ValueError(f"missing '{attr}' in data")
+
+        data = data.assign_attrs(name=name)
+
+        if not skip_broadcast:
+            (data,) = xr.broadcast(data, exclude=[TERM_DIM, QTERM_DIM, FACTOR_DIM])
+
+        self._assigned = "labels" in data
+        self._data = data
+        self._model = model
+
+    def __getitem__(
+        self, selector: str | int | slice | list | tuple | dict
+    ) -> QuadraticConstraint:
+        """
+        Get selection from the constraint.
+        """
+        data = Dataset({k: self.data[k][selector] for k in self.data}, attrs=self.attrs)
+        return self.__class__(data, self.model, self.name)
+
+    @property
+    def attrs(self) -> dict[str, Any]:
+        """Get the attributes of the constraint."""
+        return self.data.attrs
+
+    @property
+    def coords(self) -> DatasetCoordinates:
+        """Get the coordinates of the constraint."""
+        return self.data.coords
+
+    @property
+    def indexes(self) -> Indexes:
+        """Get the indexes of the constraint."""
+        return self.data.indexes
+
+    @property
+    def dims(self) -> Frozen[Hashable, int]:
+        """Get the dimensions of the constraint."""
+        return self.data.dims
+
+    @property
+    def sizes(self) -> Frozen[Hashable, int]:
+        """Get the sizes of the constraint."""
+        return self.data.sizes
+
+    @property
+    def nterm(self) -> int:
+        """Get the number of linear terms in the constraint."""
+        return self.data.sizes.get(TERM_DIM, 0)
+
+    @property
+    def nqterm(self) -> int:
+        """Get the number of quadratic terms in the constraint."""
+        return self.data.sizes.get(QTERM_DIM, 0)
+
+    @property
+    def ndim(self) -> int:
+        """Get the number of dimensions of the constraint."""
+        return self.rhs.ndim
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Get the shape of the constraint."""
+        return self.rhs.shape
+
+    @property
+    def size(self) -> int:
+        """Get the size of the constraint."""
+        return self.rhs.size
+
+    @property
+    def loc(self) -> LocIndexer:
+        return LocIndexer(self)
+
+    @property
+    def data(self) -> Dataset:
+        """Get the underlying Dataset."""
+        return self._data
+
+    @property
+    def labels(self) -> DataArray:
+        """Get the labels of the constraint."""
+        return self.data.get("labels", DataArray([]))
+
+    @property
+    def model(self) -> Model:
+        """Get the model of the constraint."""
+        return self._model
+
+    @property
+    def name(self) -> str:
+        """Return the name of the constraint."""
+        return self.attrs["name"]
+
+    @property
+    def coord_dims(self) -> tuple[Hashable, ...]:
+        return tuple(k for k in self.dims if k not in HELPER_DIMS)
+
+    @property
+    def coord_sizes(self) -> dict[Hashable, int]:
+        return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
+
+    @property
+    def coord_names(self) -> list[str]:
+        """Get the names of the coordinates."""
+        return get_dims_with_index_levels(self.data, self.coord_dims)
+
+    @property
+    def is_assigned(self) -> bool:
+        return self._assigned
+
+    @property
+    def type(self) -> str:
+        """Get the type of the constraint."""
+        return (
+            "QuadraticConstraint"
+            if self.is_assigned
+            else "QuadraticConstraint (unassigned)"
+        )
+
+    @property
+    def range(self) -> tuple[int, int]:
+        """Return the range of the constraint."""
+        return self.data.attrs["label_range"]
+
+    @property
+    def mask(self) -> DataArray | None:
+        """
+        Get the mask of the constraint.
+
+        The mask indicates on which coordinates the constraint is enabled
+        (True) and disabled (False).
+        """
+        if self.is_assigned:
+            return (self.data.labels != QFILL_VALUE["labels"]).astype(bool)
+        return None
+
+    @property
+    def quad_coeffs(self) -> DataArray:
+        """Get the quadratic coefficients of the constraint."""
+        return self.data.quad_coeffs
+
+    @property
+    def quad_vars(self) -> DataArray:
+        """Get the quadratic variables of the constraint."""
+        return self.data.quad_vars
+
+    @property
+    def lin_coeffs(self) -> DataArray:
+        """Get the linear coefficients of the constraint."""
+        return self.data.lin_coeffs
+
+    @property
+    def lin_vars(self) -> DataArray:
+        """Get the linear variables of the constraint."""
+        return self.data.lin_vars
+
+    @property
+    def lhs(self) -> expressions.QuadraticExpression:
+        """
+        Get the left-hand-side quadratic expression of the constraint.
+        """
+        # Reconstruct the QuadraticExpression from quad and lin parts
+        # QuadraticExpression stores vars with _factor dimension
+        quad_data = Dataset(
+            {
+                "coeffs": self.quad_coeffs.rename({QTERM_DIM: TERM_DIM}),
+                "vars": self.quad_vars.rename({QTERM_DIM: TERM_DIM}),
+                "const": xr.zeros_like(self.rhs),
+            }
+        )
+        return expressions.QuadraticExpression(quad_data, self.model)
+
+    @property
+    def sign(self) -> DataArray:
+        """Get the signs of the constraint."""
+        return self.data.sign
+
+    @sign.setter
+    @is_constant
+    def sign(self, value: SignLike) -> None:
+        value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
+        self._data = assign_multiindex_safe(self.data, sign=value)
+
+    @property
+    def rhs(self) -> DataArray:
+        """Get the right hand side constants of the constraint."""
+        return self.data.rhs
+
+    @rhs.setter
+    def rhs(self, value: ConstantLike) -> None:
+        value = DataArray(value).broadcast_like(self.rhs)
+        self._data = assign_multiindex_safe(self.data, rhs=value)
+
+    @property
+    @has_optimized_model
+    def dual(self) -> DataArray:
+        """
+        Get the dual values of the constraint.
+
+        Note: Dual values are only available for convex quadratic constraints.
+        """
+        if "dual" not in self.data:
+            raise AttributeError(
+                "Underlying is optimized but does not have dual values stored."
+            )
+        return self.data["dual"]
+
+    @dual.setter
+    def dual(self, value: ConstantLike) -> None:
+        """Set the dual values of the constraint."""
+        value = DataArray(value).broadcast_like(self.labels)
+        self._data = assign_multiindex_safe(self.data, dual=value)
+
+    def __repr__(self) -> str:
+        """Print the quadratic constraint arrays."""
+        max_lines = options["display_max_rows"]
+        dims = list(self.coord_sizes.keys())
+        ndim = len(dims)
+        dim_names = self.coord_names
+        dim_sizes = list(self.coord_sizes.values())
+        size = np.prod(dim_sizes) if dim_sizes else 1
+        masked_entries = (~self.mask).sum().values if self.mask is not None else 0
+        lines = []
+
+        header_string = f"{self.type} `{self.name}`" if self.name else f"{self.type}"
+
+        if size > 1 or ndim > 0:
+            for indices in generate_indices_for_printout(dim_sizes, max_lines):
+                if indices is None:
+                    lines.append("\t\t...")
+                else:
+                    coord = [
+                        self.data.indexes[dims[i]][int(ind)]
+                        for i, ind in enumerate(indices)
+                    ]
+                    if self.mask is None or self.mask.values[indices]:
+                        line = self._format_single_constraint(indices, coord)
+                    else:
+                        line = print_coord(coord) + ": None"
+                    lines.append(line)
+            lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
+
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
+            mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
+            lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
+        elif size == 1:
+            line = self._format_single_constraint((), None)
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n{line}")
+        else:
+            lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
+
+        return "\n".join(lines)
+
+    def _format_single_constraint(self, indices: tuple, coord: list | None) -> str:
+        """Format a single constraint for display."""
+        # Format quadratic terms
+        quad_parts = []
+        if indices:
+            qcoeffs = self.quad_coeffs.values[indices]
+            qvars = self.quad_vars.values[indices]
+        else:
+            qcoeffs = self.quad_coeffs.values
+            qvars = self.quad_vars.values
+
+        # qvars has shape (_factor, _qterm), qcoeffs has shape (_factor, _qterm) or just (_qterm,)
+        if qvars.ndim >= 2 and qvars.shape[0] == 2:
+            for t in range(qvars.shape[-1]):
+                v1, v2 = qvars[0, t], qvars[1, t]
+                c = qcoeffs[0, t] if qcoeffs.ndim >= 2 else qcoeffs[t]
+                if v1 != -1 and v2 != -1 and c != 0:
+                    v1_name = self.model.variables.get_label_position(v1)
+                    v2_name = self.model.variables.get_label_position(v2)
+                    if v1_name[0] is not None and v2_name[0] is not None:
+                        v1_str = f"{v1_name[0]}{print_coord(list(v1_name[1].values()))}"
+                        v2_str = f"{v2_name[0]}{print_coord(list(v2_name[1].values()))}"
+                        sign = "+" if c >= 0 and quad_parts else ""
+                        if v1 == v2:
+                            quad_parts.append(f"{sign}{c} {v1_str}²")
+                        else:
+                            quad_parts.append(f"{sign}{c} {v1_str}·{v2_str}")
+
+        # Format linear terms
+        lin_parts = []
+        if indices:
+            lcoeffs = self.lin_coeffs.values[indices]
+            lvars = self.lin_vars.values[indices]
+        else:
+            lcoeffs = self.lin_coeffs.values
+            lvars = self.lin_vars.values
+
+        for t in range(len(lvars)):
+            v, c = lvars[t], lcoeffs[t]
+            if v != -1 and c != 0:
+                v_name = self.model.variables.get_label_position(v)
+                if v_name[0] is not None:
+                    v_str = f"{v_name[0]}{print_coord(list(v_name[1].values()))}"
+                    sign = "+" if c >= 0 and (quad_parts or lin_parts) else ""
+                    lin_parts.append(f"{sign}{c} {v_str}")
+
+        expr_string = " ".join(quad_parts + lin_parts) or "0"
+        sign = SIGNS_pretty[self.sign.values[indices] if indices else self.sign.item()]
+        rhs = self.rhs.values[indices] if indices else self.rhs.item()
+
+        if coord is not None:
+            return print_coord(coord) + f": {expr_string} {sign} {rhs}"
+        return f"{expr_string} {sign} {rhs}"
+
+    def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
+        """
+        Print the quadratic constraint.
+
+        Parameters
+        ----------
+        display_max_rows : int
+            Maximum number of rows to be displayed.
+        display_max_terms : int
+            Maximum number of terms to be displayed.
+        """
+        with options as opts:
+            opts.set_value(
+                display_max_rows=display_max_rows, display_max_terms=display_max_terms
+            )
+            print(self)
+
+    def __contains__(self, value: Any) -> bool:
+        return self.data.__contains__(value)
+
+    @property
+    def flat(self) -> pd.DataFrame:
+        """
+        Convert the quadratic constraint to a pandas DataFrame.
+
+        Returns a long format DataFrame with columns for both quadratic
+        and linear terms.
+        """
+        ds = self.data
+
+        # Process quadratic terms
+        quad_df_list = []
+        if QTERM_DIM in ds.quad_vars.dims:
+            quad_vars = ds.quad_vars.assign_coords(
+                {FACTOR_DIM: ["vars1", "vars2"]}
+            ).to_dataset(FACTOR_DIM)
+            quad_ds = ds[["quad_coeffs", "labels"]].rename({"quad_coeffs": "coeffs"})
+            # Take first factor's coefficients (they're the same)
+            if FACTOR_DIM in quad_ds.coeffs.dims:
+                quad_ds["coeffs"] = quad_ds.coeffs.isel({FACTOR_DIM: 0})
+            quad_ds = quad_ds.assign(quad_vars)
+
+            def quad_mask_func(data: pd.DataFrame) -> pd.Series:
+                mask = ((data["vars1"] != -1) | (data["vars2"] != -1)) & (
+                    data["coeffs"] != 0
+                )
+                if "labels" in data:
+                    mask &= data["labels"] != -1
+                return mask
+
+            quad_df = to_dataframe(quad_ds, mask_func=quad_mask_func)
+            if not quad_df.empty:
+                quad_df["is_quadratic"] = True
+                quad_df_list.append(quad_df)
+
+        # Process linear terms
+        lin_df_list = []
+        if TERM_DIM in ds.lin_vars.dims:
+            lin_ds = ds[["lin_coeffs", "lin_vars", "labels"]].rename(
+                {"lin_coeffs": "coeffs", "lin_vars": "vars"}
+            )
+
+            def lin_mask_func(data: pd.DataFrame) -> pd.Series:
+                mask = (data["vars"] != -1) & (data["coeffs"] != 0)
+                if "labels" in data:
+                    mask &= data["labels"] != -1
+                return mask
+
+            lin_df = to_dataframe(lin_ds, mask_func=lin_mask_func)
+            if not lin_df.empty:
+                lin_df["is_quadratic"] = False
+                lin_df["vars1"] = -1
+                lin_df["vars2"] = -1
+                lin_df_list.append(lin_df)
+
+        # Combine
+        dfs = quad_df_list + lin_df_list
+        if not dfs:
+            return pd.DataFrame(
+                columns=["labels", "coeffs", "vars", "vars1", "vars2", "is_quadratic"]
+            )
+
+        df = pd.concat(dfs, ignore_index=True)
+        return df
+
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert the quadratic constraint to a polars DataFrame.
+        """
+        df = self.flat
+        return pl.from_pandas(df)
+
+    # Wrapped xarray functions
+    assign = qconwrap(Dataset.assign)
+    assign_multiindex_safe = qconwrap(assign_multiindex_safe)
+    assign_attrs = qconwrap(Dataset.assign_attrs)
+    assign_coords = qconwrap(Dataset.assign_coords)
+    broadcast_like = qconwrap(Dataset.broadcast_like)
+    chunk = qconwrap(Dataset.chunk)
+    drop_sel = qconwrap(Dataset.drop_sel)
+    drop_isel = qconwrap(Dataset.drop_isel)
+    expand_dims = qconwrap(Dataset.expand_dims)
+    sel = qconwrap(Dataset.sel)
+    isel = qconwrap(Dataset.isel)
+    shift = qconwrap(Dataset.shift)
+    swap_dims = qconwrap(Dataset.swap_dims)
+    set_index = qconwrap(Dataset.set_index)
+    reindex = qconwrap(Dataset.reindex, fill_value=_fill_value)
+    reindex_like = qconwrap(Dataset.reindex_like, fill_value=_fill_value)
+    rename = qconwrap(Dataset.rename)
+    rename_dims = qconwrap(Dataset.rename_dims)
+    roll = qconwrap(Dataset.roll)
+    stack = qconwrap(Dataset.stack)
+    unstack = qconwrap(Dataset.unstack)
+    iterate_slices = iterate_slices
+
+
+@dataclass(repr=False)
+class QuadraticConstraints:
+    """
+    A container for storing multiple quadratic constraint arrays.
+    """
+
+    data: dict[str, QuadraticConstraint]
+    model: Model
+
+    dataset_attrs = [
+        "labels",
+        "quad_coeffs",
+        "quad_vars",
+        "lin_coeffs",
+        "lin_vars",
+        "sign",
+        "rhs",
+    ]
+    dataset_names = [
+        "Labels",
+        "Quadratic coefficients",
+        "Quadratic variables",
+        "Linear coefficients",
+        "Linear variables",
+        "Signs",
+        "Right-hand-side constants",
+    ]
+
+    def _formatted_names(self) -> dict[str, str]:
+        """Get a dictionary of formatted names to proper constraint names."""
+        return {format_string_as_variable_name(n): n for n in self}
+
+    def __repr__(self) -> str:
+        """Return a string representation of the quadratic constraints."""
+        r = "linopy.model.QuadraticConstraints"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+
+        for name, ds in self.items():
+            coords = (
+                " (" + ", ".join([str(c) for c in ds.coords.keys()]) + ")"
+                if ds.coords
+                else ""
+            )
+            r += f" * {name}{coords}\n"
+        if not len(list(self)):
+            r += "<empty>\n"
+        return r
+
+    @overload
+    def __getitem__(self, names: str) -> QuadraticConstraint: ...
+
+    @overload
+    def __getitem__(self, names: list[str]) -> QuadraticConstraints: ...
+
+    def __getitem__(
+        self, names: str | list[str]
+    ) -> QuadraticConstraint | QuadraticConstraints:
+        if isinstance(names, str):
+            return self.data[names]
+        return QuadraticConstraints(
+            {name: self.data[name] for name in names}, self.model
+        )
+
+    def __getattr__(self, name: str) -> QuadraticConstraint:
+        if name in self.data:
+            return self.data[name]
+        else:
+            if name in (formatted_names := self._formatted_names()):
+                return self.data[formatted_names[name]]
+        raise AttributeError(
+            f"QuadraticConstraints has no attribute `{name}` or the attribute is not accessible."
+        )
+
+    def __getstate__(self) -> dict:
+        return self.__dict__
+
+    def __setstate__(self, d: dict) -> None:
+        self.__dict__.update(d)
+
+    def __dir__(self) -> list[str]:
+        base_attributes = list(super().__dir__())
+        formatted_names = [
+            n for n in self._formatted_names() if n not in base_attributes
+        ]
+        return base_attributes + formatted_names
+
+    def __len__(self) -> int:
+        return self.data.__len__()
+
+    def __iter__(self) -> Iterator[str]:
+        return self.data.__iter__()
+
+    def items(self) -> ItemsView[str, QuadraticConstraint]:
+        return self.data.items()
+
+    def _ipython_key_completions_(self) -> list[str]:
+        """Provide method for key-autocompletions in IPython."""
+        return list(self)
+
+    def add(self, constraint: QuadraticConstraint) -> None:
+        """Add a quadratic constraint to the container."""
+        self.data[constraint.name] = constraint
+
+    def remove(self, name: str) -> None:
+        """Remove quadratic constraint `name` from the container."""
+        self.data.pop(name)
+
+    @property
+    def labels(self) -> Dataset:
+        """Get the labels of all quadratic constraints."""
+        return save_join(
+            *[v.labels.rename(k) for k, v in self.items()],
+            integer_dtype=True,
+        )
+
+    @property
+    def ncons(self) -> int:
+        """Get the number of quadratic constraints effectively used by the model."""
+        if not len(self):
+            return 0
+        return len(self.flat.labels.unique())
+
+    @property
+    def flat(self) -> pd.DataFrame:
+        """Convert all quadratic constraints to a single pandas DataFrame."""
+        dfs = [self[k].flat for k in self]
+        if not len(dfs):
+            return pd.DataFrame(
+                columns=[
+                    "coeffs",
+                    "vars",
+                    "vars1",
+                    "vars2",
+                    "labels",
+                    "key",
+                    "is_quadratic",
+                ]
+            )
+        df = pd.concat(dfs, ignore_index=True)
+        unique_labels = df.labels.unique()
+        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        df["key"] = df.labels.map(map_labels)
+        return df
+
+    @property
+    def sign(self) -> Dataset:
+        """Get the signs of all quadratic constraints."""
+        return save_join(*[v.sign.rename(k) for k, v in self.items()])
+
+    @property
+    def rhs(self) -> Dataset:
+        """Get the right-hand-side constants of all quadratic constraints."""
+        return save_join(*[v.rhs.rename(k) for k, v in self.items()])
+
+    @property
+    def dual(self) -> Dataset:
+        """Get the dual values of all quadratic constraints."""
+        try:
+            return save_join(*[v.dual.rename(k) for k, v in self.items()])
+        except AttributeError:
+            return Dataset()
+
+    def get_name_by_label(self, label: int | float) -> str:
+        """Get the constraint name containing the passed label."""
+        if not isinstance(label, float | int) or label < 0:
+            raise ValueError("Label must be a positive number.")
+        for name, ds in self.items():
+            if label in ds.labels:
+                return name
+        raise ValueError(f"No quadratic constraint found containing the label {label}.")
+
+    def get_label_position(
+        self, values: int | ndarray
+    ) -> (
+        tuple[str, dict]
+        | tuple[None, None]
+        | list[tuple[str, dict] | tuple[None, None]]
+        | list[list[tuple[str, dict] | tuple[None, None]]]
+    ):
+        """Get tuple of name and coordinate for constraint labels."""
+        return get_label_position(self, values)
+
+    def reset_dual(self) -> None:
+        """Reset the stored dual values of quadratic constraints."""
+        for k, c in self.items():
+            if "dual" in c:
+                c._data = c.data.drop_vars("dual")
