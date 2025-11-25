@@ -301,31 +301,82 @@ class TestLPFileExport:
 class TestSolverValidation:
     """Tests for solver validation with quadratic constraints."""
 
-    def test_solver_validation_warning(
+    def test_highs_rejects_quadratic_constraints(
         self, m: Model, x: linopy.Variable, y: linopy.Variable
     ) -> None:
-        """Test that unsupported solvers raise an error for QC problems."""
-        m.add_objective(x + y)
+        """Test that HiGHS raises an error for quadratic constraints."""
+        if "highs" not in linopy.available_solvers:
+            pytest.skip("HiGHS not available")
+
+        m.add_objective(x + y)  # Linear objective
         m.add_quadratic_constraints(x * x + y * y, "<=", 100, name="qc1")
 
-        # HiGHS doesn't support quadratic constraints
+        # HiGHS supports QP (quadratic objective) but not QCP (quadratic constraints)
         from linopy.solvers import quadratic_constraint_solvers
 
         if "highs" not in quadratic_constraint_solvers:
-            with pytest.raises(ValueError, match="does not support quadratic"):
+            with pytest.raises(ValueError, match="does not support quadratic constraints"):
                 m.solve(solver_name="highs")
 
-    def test_to_highspy_raises_on_quadratic_constraints(
+    def test_highs_accepts_quadratic_objective(
         self, m: Model, x: linopy.Variable, y: linopy.Variable
     ) -> None:
-        """Test that to_highspy raises ValueError for quadratic constraints."""
-        m.add_objective(x + y)
-        m.add_quadratic_constraints(x * x + y * y, "<=", 100, name="qc1")
+        """Test that HiGHS accepts quadratic objectives (but not QC)."""
+        if "highs" not in linopy.available_solvers:
+            pytest.skip("HiGHS not available")
 
-        from linopy.io import to_highspy
+        # Quadratic objective, no quadratic constraints
+        m.add_objective(x * x + y * y)
+        m.add_constraints(x + y >= 1, name="c1")
 
-        with pytest.raises(ValueError, match="HiGHS does not support quadratic"):
-            to_highspy(m)
+        # This should work - HiGHS supports QP
+        status, _ = m.solve(solver_name="highs")
+        assert status == "ok"
+
+    def test_supported_solver_accepts_quadratic_constraints(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that supported solvers accept quadratic constraints."""
+        from linopy.solvers import quadratic_constraint_solvers
+
+        # Find a solver that supports QC
+        available_qc_solvers = [
+            s for s in quadratic_constraint_solvers if s in linopy.available_solvers
+        ]
+        if not available_qc_solvers:
+            pytest.skip("No QC-supporting solver available")
+
+        solver = available_qc_solvers[0]
+
+        m.add_objective(x + y, sense="max")
+        m.add_constraints(x + y <= 10, name="budget")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+
+        # Should succeed
+        status, _ = m.solve(solver_name=solver)
+        assert status == "ok"
+
+    def test_is_quadratic_with_qc_only(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that is_quadratic is True when only QC are present."""
+        m.add_objective(x + y)  # Linear objective
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+
+        assert m.has_quadratic_constraints is True
+        assert m.objective.is_quadratic is False
+        assert m.is_quadratic is True  # True because of QC
+
+    def test_is_quadratic_with_quadratic_objective_only(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that is_quadratic is True when only quadratic objective."""
+        m.add_objective(x * x + y * y)  # Quadratic objective
+        m.add_constraints(x + y <= 10, name="c")  # Linear constraint
+
+        assert m.has_quadratic_constraints is False
+        assert m.objective.is_quadratic is True
+        assert m.is_quadratic is True  # True because of objective
 
 
 class TestQuadraticConstraintRepr:
@@ -519,6 +570,45 @@ class TestNetCDFSerialization:
         assert len(m2.quadratic_constraints["circles"].labels.values.ravel()) == 3
 
         fn.unlink()
+
+
+class TestMOSEKExport:
+    """Tests for MOSEK direct API export with quadratic constraints."""
+
+    def test_to_mosek_with_quadratic_constraints(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that to_mosek works with quadratic constraints."""
+        if "mosek" not in linopy.available_solvers:
+            pytest.skip("MOSEK not available")
+
+        m.add_constraints(x + y <= 8, name="budget")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_objective(x + 2 * y, sense="max")
+
+        from linopy.io import to_mosek
+
+        task = to_mosek(m)
+        # If we got here without error, the export worked
+        assert task is not None
+
+    def test_to_mosek_multidimensional(self) -> None:
+        """Test MOSEK export with multi-dimensional quadratic constraints."""
+        if "mosek" not in linopy.available_solvers:
+            pytest.skip("MOSEK not available")
+
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+
+        m.add_constraints(x + y <= 8, name="budget")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+        m.add_objective((x + 2 * y).sum(), sense="max")
+
+        from linopy.io import to_mosek
+
+        task = to_mosek(m)
+        assert task is not None
 
 
 class TestDualValues:

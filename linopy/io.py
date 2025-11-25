@@ -745,6 +745,61 @@ def to_mosek(
         task.putobjsense(mosek.objsense.maximize)
     else:
         task.putobjsense(mosek.objsense.minimize)
+
+    ## Quadratic Constraints
+    if len(m.quadratic_constraints):
+        # Get the number of quadratic constraints
+        n_qcons = len(M.qclabels)
+
+        # Append quadratic constraints to the task
+        # In MOSEK, quadratic constraints are added to regular constraints
+        # with quadratic terms via putqconk
+        qc_start_idx = m.ncons  # Start after linear constraints
+        task.appendcons(n_qcons)
+
+        # Get matrices for QC
+        Qc_list = M.Qc
+        qc_linear = M.qc_linear
+        qc_sense = M.qc_sense
+        qc_rhs = M.qc_rhs
+
+        for i, label in enumerate(M.qclabels):
+            con_idx = qc_start_idx + i
+
+            # Set constraint name
+            task.putconname(con_idx, f"qc{label}")
+
+            # Set constraint bound based on sense
+            sense = qc_sense[i]
+            rhs = qc_rhs[i]
+            if sense == "<=":
+                bk = mosek.boundkey.up
+                bl, bu = 0.0, rhs
+            elif sense == ">=":
+                bk = mosek.boundkey.lo
+                bl, bu = rhs, 0.0
+            else:  # "="
+                bk = mosek.boundkey.fx
+                bl, bu = rhs, rhs
+            task.putconbound(con_idx, bk, bl, bu)
+
+            # Add linear terms if any
+            if qc_linear is not None:
+                row = qc_linear.getrow(i).tocoo()
+                if row.nnz > 0:
+                    task.putarow(con_idx, list(row.col), list(row.data))
+
+            # Add quadratic terms
+            # MOSEK expects lower triangular part only
+            Q = Qc_list[i]
+            if Q.nnz > 0:
+                # Get lower triangular part (MOSEK requirement)
+                Q_lower = tril(Q).tocoo()
+                # MOSEK uses 0.5 * x'Qx convention, but our Q is already doubled
+                # So we need to divide by 2
+                task.putqconk(con_idx, list(Q_lower.row), list(Q_lower.col),
+                              list(Q_lower.data / 2))
+
     return task
 
 

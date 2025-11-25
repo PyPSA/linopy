@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-import scipy.sparse
 from numpy import ndarray
 from pandas.core.indexes.base import Index
 from pandas.core.series import Series
@@ -330,6 +329,10 @@ class MatrixAccessor:
         con_map = pd.Series(index=labels, data=np.arange(n_cons))
 
         # Filter to linear terms only
+        # Note: 'vars' column may not exist if there are no linear terms
+        if "vars" not in df.columns:
+            return csc_matrix((n_cons, n_vars))
+
         linear_df = df[~df["is_quadratic"] & (df["vars"] >= 0)]
 
         if linear_df.empty:
