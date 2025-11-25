@@ -274,6 +274,29 @@ class TestLPFileExport:
         # Clean up
         fn.unlink()
 
+    def test_lp_file_with_multidimensional_constraint(self) -> None:
+        """Test LP export with multi-dimensional quadratic constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+
+        m.add_objective((x + y).sum())
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".lp", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn, progress=False)
+        content = fn.read_text()
+
+        # Should have 3 quadratic constraints (qc0, qc1, qc2)
+        assert "qc0:" in content
+        assert "qc1:" in content
+        assert "qc2:" in content
+
+        # Clean up
+        fn.unlink()
+
 
 class TestSolverValidation:
     """Tests for solver validation with quadratic constraints."""
@@ -291,6 +314,18 @@ class TestSolverValidation:
         if "highs" not in quadratic_constraint_solvers:
             with pytest.raises(ValueError, match="does not support quadratic"):
                 m.solve(solver_name="highs")
+
+    def test_to_highspy_raises_on_quadratic_constraints(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that to_highspy raises ValueError for quadratic constraints."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x + y * y, "<=", 100, name="qc1")
+
+        from linopy.io import to_highspy
+
+        with pytest.raises(ValueError, match="HiGHS does not support quadratic"):
+            to_highspy(m)
 
 
 class TestQuadraticConstraintRepr:
