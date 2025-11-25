@@ -368,3 +368,55 @@ class TestQuadraticConstraintRepr:
         m = Model()
         repr_str = repr(m.quadratic_constraints)
         assert "QuadraticConstraints" in repr_str
+
+
+class TestNetCDFSerialization:
+    """Tests for netCDF serialization of quadratic constraints."""
+
+    def test_netcdf_roundtrip(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test saving and loading a model with quadratic constraints."""
+        m.add_objective(x + y)
+        m.add_constraints(x + y <= 10, name="linear")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_quadratic_constraints(x * y, "<=", 10, name="mixed")
+
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_netcdf(fn)
+        m2 = linopy.read_netcdf(fn)
+
+        # Check quadratic constraints were loaded
+        assert len(m2.quadratic_constraints) == 2
+        assert "circle" in m2.quadratic_constraints
+        assert "mixed" in m2.quadratic_constraints
+        assert m2.type == "QCLP"
+
+        # Check constraint properties preserved
+        assert float(m2.quadratic_constraints["circle"].rhs.values) == 25.0
+        assert str(m2.quadratic_constraints["circle"].sign.values) == "<="
+
+        fn.unlink()
+
+    def test_netcdf_roundtrip_multidimensional(self) -> None:
+        """Test netCDF roundtrip with multi-dimensional quadratic constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+
+        m.add_objective((x + y).sum())
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_netcdf(fn)
+        m2 = linopy.read_netcdf(fn)
+
+        # Check constraint shape preserved
+        assert m2.quadratic_constraints["circles"].shape == (3,)
+        assert len(m2.quadratic_constraints["circles"].labels.values.ravel()) == 3
+
+        fn.unlink()

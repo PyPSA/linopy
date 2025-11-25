@@ -1100,6 +1100,10 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(con.data, f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
+    qcons = [
+        with_prefix(qcon.data, f"quadratic_constraints-{name}")
+        for name, qcon in m.quadratic_constraints.items()
+    ]
     objective = m.objective.data
     objective = objective.assign_attrs(sense=m.objective.sense)
     if m.objective.value is not None:
@@ -1108,7 +1112,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(vars + cons + qcons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs = non_bool_dict(ds.attrs)
 
@@ -1133,6 +1137,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     -------
     m : linopy.Model
     """
+    from linopy.constraints import QuadraticConstraint, QuadraticConstraints
     from linopy.model import (
         Constraint,
         Constraints,
@@ -1185,13 +1190,23 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._variables = Variables(variables, m)
 
-    cons = [str(k) for k in ds if str(k).startswith("constraints")]
+    cons = [str(k) for k in ds if str(k).startswith("constraints-")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
         constraints[name] = Constraint(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
+
+    qcons = [str(k) for k in ds if str(k).startswith("quadratic_constraints-")]
+    qcon_names = list({str(k).rsplit("-", 1)[0] for k in qcons})
+    quadratic_constraints = {}
+    for k in sorted(qcon_names):
+        name = remove_prefix(k, "quadratic_constraints")
+        quadratic_constraints[name] = QuadraticConstraint(
+            get_prefix(ds, k), m, name, skip_broadcast=True
+        )
+    m._quadratic_constraints = QuadraticConstraints(quadratic_constraints, m)
 
     objective = get_prefix(ds, "objective")
     m.objective = Objective(
