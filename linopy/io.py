@@ -672,7 +672,12 @@ def to_mosek(
 
     labels = np.vectorize(print_variable)(M.vlabels).astype(object)
     task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+        np.arange(0, len(labels), dtype=np.int32),
+        "%0",
+        [len(labels)],
+        None,
+        [0],
+        list(labels),
     )
 
     ## Variables
@@ -731,7 +736,12 @@ def to_mosek(
         if M.A is not None:
             A = M.A.tocsr()
             task.putarowslice(
-                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+                0,
+                m.ncons,
+                A.indptr[:-1].astype(np.int64),
+                A.indptr[1:].astype(np.int64),
+                A.indices.astype(np.int32),
+                A.data.astype(np.float64),
             )
             task.putconboundslice(0, m.ncons, bkc, blc, buc)
 

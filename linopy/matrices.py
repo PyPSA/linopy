@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import scipy.sparse
 from numpy import ndarray
 from pandas.core.indexes.base import Index
 from pandas.core.series import Series
