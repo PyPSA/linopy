@@ -1847,8 +1847,12 @@ class QuadraticExpression(BaseExpression):
         is_quadratic = ~is_linear
 
         # Get quadratic parts
+        # Note: coeffs only has _term dim, vars has both _factor and _term
         quad_vars = vars_data.where(is_quadratic, -1)
         quad_coeffs = coeffs_data.where(is_quadratic, 0)
+
+        # Expand quad_coeffs to have _factor dimension (for consistency with quad_vars)
+        quad_coeffs = quad_coeffs.expand_dims({FACTOR_DIM: 2}, axis=-2)
 
         # Rename TERM_DIM to QTERM_DIM for quadratic terms
         quad_vars = quad_vars.rename({TERM_DIM: QTERM_DIM})
@@ -1863,8 +1867,8 @@ class QuadraticExpression(BaseExpression):
             lin_vars_factor0,
             xr.where(is_linear & (lin_vars_factor1 != -1), lin_vars_factor1, -1),
         )
-        # Take coefficients from factor 0 (they should be identical for both factors)
-        lin_coeffs = coeffs_data.isel({FACTOR_DIM: 0}).where(is_linear, 0)
+        # Get linear coefficients (coeffs doesn't have _factor dim)
+        lin_coeffs = coeffs_data.where(is_linear, 0)
 
         # Build the constraint data
         data = Dataset(
