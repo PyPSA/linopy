@@ -469,7 +469,6 @@ class TestMatrixAccessor:
         assert m.matrices.qc_linear is None
 
 
-
 class TestNetCDFSerialization:
     """Tests for netCDF serialization of quadratic constraints."""
 
@@ -520,3 +519,47 @@ class TestNetCDFSerialization:
         assert len(m2.quadratic_constraints["circles"].labels.values.ravel()) == 3
 
         fn.unlink()
+
+
+class TestDualValues:
+    """Tests for dual value retrieval for quadratic constraints."""
+
+    def test_qc_dual_with_gurobi(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that dual values can be retrieved for convex QC with Gurobi."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        m.add_constraints(x + y <= 8, name="budget")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_objective(x + 2 * y, sense="max")
+
+        # Solve with QCPDual enabled
+        m.solve(solver_name="gurobi", QCPDual=1)
+
+        # Check dual values exist
+        dual = m.quadratic_constraints["circle"].dual
+        assert dual is not None
+        assert not dual.isnull().all()
+        # Dual should be positive for binding <= constraint
+        assert float(dual.values) > 0
+
+    def test_qc_dual_multidimensional(self) -> None:
+        """Test dual values for multi-dimensional quadratic constraints."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+
+        m.add_constraints(x + y <= 8, name="budget")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+        m.add_objective((x + 2 * y).sum(), sense="max")
+
+        m.solve(solver_name="gurobi", QCPDual=1)
+
+        dual = m.quadratic_constraints["circles"].dual
+        assert dual.shape == (3,)
+        assert not dual.isnull().all()

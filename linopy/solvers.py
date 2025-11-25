@@ -1195,7 +1195,19 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
 
-            return Solution(sol, dual, objective)
+            # Retrieve quadratic constraint dual values
+            qc_dual = pd.Series(dtype=float)
+            try:
+                qcs = m.getQConstrs()
+                if qcs:
+                    qc_dual = pd.Series(
+                        {qc.QCName: qc.QCPi for qc in qcs}, dtype=float
+                    )
+            except (AttributeError, gurobipy.GurobiError):
+                # QCPi not available (non-convex or QCPDual=0)
+                pass
+
+            return Solution(sol, dual, objective, qc_dual)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)

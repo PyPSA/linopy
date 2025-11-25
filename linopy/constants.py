@@ -209,6 +209,7 @@ class Solution:
     primal: pd.Series = field(default_factory=_pd_series_float)
     dual: pd.Series = field(default_factory=_pd_series_float)
     objective: float = field(default=np.nan)
+    qc_dual: pd.Series = field(default_factory=_pd_series_float)
 
 
 @dataclass

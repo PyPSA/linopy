@@ -1461,6 +1461,20 @@ class Model:
                     vals = dual.reindex(idx).values.reshape(con.labels.shape)
                 con.dual = xr.DataArray(vals, con.labels.coords)
 
+        # Assign quadratic constraint dual values
+        if not result.solution.qc_dual.empty:
+            qc_dual = result.solution.qc_dual.copy()
+            qc_dual = set_int_index(qc_dual)
+            qc_dual.loc[-1] = nan
+
+            for name, qcon in self.quadratic_constraints.items():
+                idx = np.ravel(qcon.labels)
+                try:
+                    vals = qc_dual[idx].values.reshape(qcon.labels.shape)
+                except KeyError:
+                    vals = qc_dual.reindex(idx).values.reshape(qcon.labels.shape)
+                qcon.dual = xr.DataArray(vals, qcon.labels.coords)
+
         return result.status.status.value, result.status.termination_condition.value
 
     def compute_infeasibilities(self) -> list[int]:
