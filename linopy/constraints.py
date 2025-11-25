@@ -1488,11 +1488,11 @@ class QuadraticConstraint:
             qcoeffs = self.quad_coeffs.values
             qvars = self.quad_vars.values
 
-        # qvars has shape (_factor, _qterm), qcoeffs has shape (_factor, _qterm) or just (_qterm,)
-        if qvars.ndim >= 2 and qvars.shape[0] == 2:
-            for t in range(qvars.shape[-1]):
-                v1, v2 = qvars[0, t], qvars[1, t]
-                c = qcoeffs[0, t] if qcoeffs.ndim >= 2 else qcoeffs[t]
+        # qvars has shape (_qterm, _factor), qcoeffs has shape (_qterm, _factor)
+        if qvars.ndim >= 2 and qvars.shape[-1] == 2:
+            for t in range(qvars.shape[0]):
+                v1, v2 = qvars[t, 0], qvars[t, 1]
+                c = qcoeffs[t, 0] if qcoeffs.ndim >= 2 else qcoeffs[t]
                 if v1 != -1 and v2 != -1 and c != 0:
                     v1_name = self.model.variables.get_label_position(v1)
                     v2_name = self.model.variables.get_label_position(v2)
