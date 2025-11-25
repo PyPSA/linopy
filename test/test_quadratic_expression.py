@@ -329,8 +329,10 @@ def test_matrices_matrix_mixed_linear_and_quadratic(
 
 
 def test_quadratic_to_constraint(x: Variable, y: Variable) -> None:
-    with pytest.raises(NotImplementedError):
-        x * y <= 10
+    from linopy.constraints import QuadraticConstraint
+
+    con = x * y <= 10
+    assert isinstance(con, QuadraticConstraint)
 
 
 def test_power_of_three(x: Variable) -> None:
