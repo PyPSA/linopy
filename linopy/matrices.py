@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import scipy.sparse
 from numpy import ndarray
 from pandas.core.indexes.base import Index
 from pandas.core.series import Series
@@ -177,3 +178,176 @@ class MatrixAccessor:
         if not isinstance(expr, expressions.QuadraticExpression):
             return None
         return expr.to_matrix()[self.vlabels][:, self.vlabels]
+
+    # Quadratic constraint accessors
+
+    @cached_property
+    def flat_qcons(self) -> pd.DataFrame:
+        """Flat DataFrame of all quadratic constraints."""
+        m = self._parent
+        return m.quadratic_constraints.flat
+
+    @property
+    def qclabels(self) -> ndarray:
+        """Vector of labels of all non-missing quadratic constraints."""
+        df: pd.DataFrame = self.flat_qcons
+        if df.empty:
+            return np.array([], dtype=int)
+        return np.sort(df["labels"].unique())
+
+    @property
+    def qc_sense(self) -> ndarray:
+        """Vector of senses of all non-missing quadratic constraints."""
+        m = self._parent
+        if not len(m.quadratic_constraints):
+            return np.array([], dtype="<U2")
+
+        labels = self.qclabels
+        senses = np.empty(len(labels), dtype="<U2")
+
+        for name in m.quadratic_constraints:
+            qcon = m.quadratic_constraints[name]
+            qc_labels = qcon.labels.values.ravel()
+            qc_signs = np.broadcast_to(qcon.sign.values, qcon.labels.shape).ravel()
+            for i, lab in enumerate(qc_labels):
+                if lab != -1:
+                    idx = np.searchsorted(labels, lab)
+                    senses[idx] = str(qc_signs[i])
+
+        return senses
+
+    @property
+    def qc_rhs(self) -> ndarray:
+        """Vector of right-hand-sides of all non-missing quadratic constraints."""
+        m = self._parent
+        if not len(m.quadratic_constraints):
+            return np.array([], dtype=float)
+
+        labels = self.qclabels
+        rhs = np.empty(len(labels), dtype=float)
+
+        for name in m.quadratic_constraints:
+            qcon = m.quadratic_constraints[name]
+            qc_labels = qcon.labels.values.ravel()
+            qc_rhs = np.broadcast_to(qcon.rhs.values, qcon.labels.shape).ravel()
+            for i, lab in enumerate(qc_labels):
+                if lab != -1:
+                    idx = np.searchsorted(labels, lab)
+                    rhs[idx] = float(qc_rhs[i])
+
+        return rhs
+
+    @property
+    def Qc(self) -> list[csc_matrix]:
+        """
+        List of Q matrices for quadratic constraints.
+
+        Returns a list where each element is a sparse matrix representing the
+        quadratic terms of one constraint. The matrix follows the convention
+        x'Qx, where Q is symmetric with doubled diagonal terms.
+        """
+        m = self._parent
+        if not len(m.quadratic_constraints):
+            return []
+
+        df = self.flat_qcons
+        labels = self.qclabels
+        n_vars = len(self.vlabels)
+
+        # Build variable label to index mapping
+        var_map = pd.Series(index=self.vlabels, data=np.arange(n_vars))
+
+        matrices = []
+        for label in labels:
+            label_df = df[(df["labels"] == label) & df["is_quadratic"]]
+
+            if label_df.empty:
+                # No quadratic terms - empty matrix
+                matrices.append(csc_matrix((n_vars, n_vars)))
+                continue
+
+            rows = []
+            cols = []
+            data = []
+
+            for _, row in label_df.iterrows():
+                var1 = int(row["vars1"])
+                var2 = int(row["vars2"])
+                coeff = row["coeffs"]
+
+                if var1 < 0 or var2 < 0:
+                    continue
+
+                # Map to matrix indices
+                i = var_map.get(var1, -1)
+                j = var_map.get(var2, -1)
+
+                if i < 0 or j < 0:
+                    continue
+
+                if i == j:
+                    # Diagonal term - double it for x'Qx convention
+                    rows.append(i)
+                    cols.append(j)
+                    data.append(coeff * 2)
+                else:
+                    # Off-diagonal - add symmetric entries
+                    rows.extend([i, j])
+                    cols.extend([j, i])
+                    data.extend([coeff, coeff])
+
+            Q = csc_matrix(
+                (data, (rows, cols)), shape=(n_vars, n_vars)
+            )
+            matrices.append(Q)
+
+        return matrices
+
+    @property
+    def qc_linear(self) -> csc_matrix | None:
+        """
+        Matrix of linear coefficients for quadratic constraints.
+
+        Returns a sparse matrix of shape (n_qconstraints, n_variables) where
+        each row contains the linear coefficients for one quadratic constraint.
+        """
+        m = self._parent
+        if not len(m.quadratic_constraints):
+            return None
+
+        df = self.flat_qcons
+        labels = self.qclabels
+        n_cons = len(labels)
+        n_vars = len(self.vlabels)
+
+        if n_cons == 0 or n_vars == 0:
+            return csc_matrix((n_cons, n_vars))
+
+        # Build variable label to index mapping
+        var_map = pd.Series(index=self.vlabels, data=np.arange(n_vars))
+
+        # Build constraint label to index mapping
+        con_map = pd.Series(index=labels, data=np.arange(n_cons))
+
+        # Filter to linear terms only
+        linear_df = df[~df["is_quadratic"] & (df["vars"] >= 0)]
+
+        if linear_df.empty:
+            return csc_matrix((n_cons, n_vars))
+
+        rows = []
+        cols = []
+        data = []
+
+        for _, row in linear_df.iterrows():
+            con_idx = con_map.get(row["labels"], -1)
+            var_idx = var_map.get(int(row["vars"]), -1)
+
+            if con_idx >= 0 and var_idx >= 0:
+                rows.append(con_idx)
+                cols.append(var_idx)
+                data.append(row["coeffs"])
+
+        return csc_matrix(
+            (data, (rows, cols)), shape=(n_cons, n_vars)
+        )

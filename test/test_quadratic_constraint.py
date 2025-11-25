@@ -370,6 +370,106 @@ class TestQuadraticConstraintRepr:
         assert "QuadraticConstraints" in repr_str
 
 
+class TestMatrixAccessor:
+    """Tests for matrix accessor with quadratic constraints."""
+
+    def test_qclabels(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test qclabels property."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
+        m.add_quadratic_constraints(y * y, ">=", 10, name="qc2")
+
+        labels = m.matrices.qclabels
+        assert len(labels) == 2
+        assert labels[0] == 0
+        assert labels[1] == 1
+
+    def test_qc_sense(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test qc_sense property."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
+        m.add_quadratic_constraints(y * y, ">=", 10, name="qc2")
+
+        senses = m.matrices.qc_sense
+        assert len(senses) == 2
+        assert senses[0] == "<="
+        assert senses[1] == ">="
+
+    def test_qc_rhs(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test qc_rhs property."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
+        m.add_quadratic_constraints(y * y, ">=", 10, name="qc2")
+
+        rhs = m.matrices.qc_rhs
+        assert len(rhs) == 2
+        assert rhs[0] == 25.0
+        assert rhs[1] == 10.0
+
+    def test_Qc_matrices(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test Qc property returns Q matrices."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+
+        Qc = m.matrices.Qc
+        assert len(Qc) == 1
+        Q = Qc[0].toarray()
+
+        # Should be symmetric with doubled diagonal
+        assert Q[0, 0] == 2.0  # x^2 coefficient doubled
+        assert Q[1, 1] == 2.0  # y^2 coefficient doubled
+
+    def test_Qc_cross_terms(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test Qc with cross product terms."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * y, "<=", 10, name="cross")
+
+        Qc = m.matrices.Qc
+        Q = Qc[0].toarray()
+
+        # Cross term should be symmetric
+        assert Q[0, 1] == 1.0
+        assert Q[1, 0] == 1.0
+        assert Q[0, 0] == 0.0  # No x^2 term
+        assert Q[1, 1] == 0.0  # No y^2 term
+
+    def test_qc_linear(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test qc_linear property."""
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x + 3 * x + 4 * y, "<=", 25, name="mixed")
+
+        A = m.matrices.qc_linear
+        assert A is not None
+        assert A.shape == (1, 2)  # 1 constraint, 2 variables
+
+        A_dense = A.toarray()
+        assert A_dense[0, 0] == 3.0  # coefficient of x
+        assert A_dense[0, 1] == 4.0  # coefficient of y
+
+    def test_empty_quadratic_constraints(self, m: Model) -> None:
+        """Test matrix accessors with no quadratic constraints."""
+        m.add_objective(m.variables["x"])
+
+        assert len(m.matrices.qclabels) == 0
+        assert len(m.matrices.qc_sense) == 0
+        assert len(m.matrices.qc_rhs) == 0
+        assert len(m.matrices.Qc) == 0
+        assert m.matrices.qc_linear is None
+
+
+
 class TestNetCDFSerialization:
     """Tests for netCDF serialization of quadratic constraints."""
 
