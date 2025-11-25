@@ -177,10 +177,11 @@ def objective_to_file(
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
 
-    if m.is_linear:
+    if m.objective.is_linear:
         objective_write_linear_terms(f, df, print_variable)
 
-    elif m.is_quadratic:
+    else:
+        # Quadratic objective
         linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
         linear_terms = linear_terms.with_columns(
             pl.when(pl.col("vars1").eq(-1))
@@ -421,6 +422,106 @@ def constraints_to_file(
             # formatted.sink_csv(f,  **kwargs)
 
 
+def quadratic_constraints_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out quadratic constraints of a model to an LP file.
+
+    LP format for quadratic constraints (Gurobi/CPLEX style):
+    qc0: 3.1 x + 4.5 y + [ x ^ 2 + 2 x * y + 3 y ^ 2 ] <= 10
+    """
+    if not len(m.quadratic_constraints):
+        return
+
+    print_variable, _ = get_printers_scalar(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    if progress:
+        logger.info("Writing quadratic constraints.")
+
+    names = list(m.quadratic_constraints)
+    if progress:
+        names = tqdm(
+            names,
+            desc="Writing quadratic constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        qcon = m.quadratic_constraints[name]
+        df = qcon.to_polars()
+
+        if df.height == 0:
+            continue
+
+        # Get constraint metadata
+        sign = str(qcon.sign.values)
+        rhs = float(qcon.rhs.values)
+
+        # Get unique labels (constraint indices)
+        labels = df["labels"].unique().to_list()
+
+        for label in labels:
+            label_df = df.filter(pl.col("labels") == label)
+
+            # Start constraint line with label
+            constraint_name = clean_name(name)
+            if explicit_coordinate_names:
+                label_pos = m.quadratic_constraints.get_label_position(label)
+                if label_pos:
+                    con_name, coord = label_pos
+                    constraint_name = (
+                        f"{clean_name(con_name)}{print_coord(coord)}#{label}"
+                    )
+                else:
+                    constraint_name = f"{constraint_name}#{label}"
+            else:
+                constraint_name = f"qc{label}"
+
+            f.write(f"{constraint_name}:\n".encode())
+
+            # Write linear terms first
+            linear_terms = label_df.filter(~pl.col("is_quadratic"))
+            for row in linear_terms.iter_rows(named=True):
+                coeff = row["coeffs"]
+                var_idx = int(row["vars"])
+                if var_idx >= 0:
+                    var_name = print_variable(var_idx)
+                    sign_char = "+" if coeff >= 0 else ""
+                    f.write(f"{sign_char}{coeff} {var_name}\n".encode())
+
+            # Write quadratic terms in brackets
+            quad_terms = label_df.filter(pl.col("is_quadratic"))
+            if quad_terms.height > 0:
+                f.write(b"+ [\n")
+                for i, row in enumerate(quad_terms.iter_rows(named=True)):
+                    coeff = row["coeffs"]
+                    var1 = int(row["vars1"])
+                    var2 = int(row["vars2"])
+                    var1_name = print_variable(var1)
+                    var2_name = print_variable(var2)
+
+                    sign_char = "+" if coeff >= 0 or i == 0 else ""
+                    if var1 == var2:
+                        # Squared term: x ^ 2
+                        f.write(f"{sign_char}{coeff} {var1_name} ^ 2\n".encode())
+                    else:
+                        # Cross term: x * y
+                        f.write(
+                            f"{sign_char}{coeff} {var1_name} * {var2_name}\n".encode()
+                        )
+                f.write(b"]\n")
+
+            # Write comparison and RHS
+            rhs_sign = "+" if rhs >= 0 else ""
+            f.write(f"{sign} {rhs_sign}{rhs}\n".encode())
+
+
 def to_lp_file(
     m: Model,
     fn: Path,
@@ -440,6 +541,12 @@ def to_lp_file(
             f=f,
             progress=progress,
             slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        quadratic_constraints_to_file(
+            m,
+            f=f,
+            progress=progress,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
@@ -670,7 +777,7 @@ def to_gurobipy(
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
-    if m.is_quadratic:
+    if not m.objective.is_linear:
         model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
     else:
         model.setObjective(M.c @ x)
@@ -682,6 +789,60 @@ def to_gurobipy(
         names = np.vectorize(print_constraint)(M.clabels).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         c.setAttr("ConstrName", list(names))  # type: ignore
+
+    # Add quadratic constraints
+    if len(m.quadratic_constraints):
+        for name in m.quadratic_constraints:
+            qcon = m.quadratic_constraints[name]
+            df = qcon.to_polars()
+
+            # Build QuadExpr for each constraint label
+            for label in df["labels"].unique().to_list():
+                label_df = df.filter(pl.col("labels") == label)
+
+                # Build the quadratic expression
+                qexpr = gurobipy.QuadExpr()
+
+                # Add linear terms
+                linear_terms = label_df.filter(~pl.col("is_quadratic"))
+                for row in linear_terms.iter_rows(named=True):
+                    coeff = row["coeffs"]
+                    var_idx = int(row["vars"])
+                    if var_idx >= 0:
+                        qexpr.addTerms(coeff, x[var_idx].item())
+
+                # Add quadratic terms
+                quad_terms = label_df.filter(pl.col("is_quadratic"))
+                for row in quad_terms.iter_rows(named=True):
+                    coeff = row["coeffs"]
+                    var1 = int(row["vars1"])
+                    var2 = int(row["vars2"])
+                    qexpr.addTerms(coeff, x[var1].item(), x[var2].item())
+
+                # Get sign and rhs
+                sign = str(qcon.sign.values)
+                rhs = float(qcon.rhs.values)
+
+                # Map sign to gurobipy sense
+                if sign == "<=":
+                    sense = gurobipy.GRB.LESS_EQUAL
+                elif sign == ">=":
+                    sense = gurobipy.GRB.GREATER_EQUAL
+                else:
+                    sense = gurobipy.GRB.EQUAL
+
+                # Determine constraint name
+                if explicit_coordinate_names:
+                    label_pos = m.quadratic_constraints.get_label_position(label)
+                    if label_pos:
+                        con_name, coord = label_pos
+                        qc_name = f"{clean_name(con_name)}{print_coord(coord)}#{label}"
+                    else:
+                        qc_name = f"{clean_name(name)}#{label}"
+                else:
+                    qc_name = f"qc{label}"
+
+                model.addQConstr(qexpr, sense, rhs, name=qc_name)
 
     model.update()
     return model
