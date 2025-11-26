@@ -23,6 +23,7 @@ def test_row_scaling_and_dual_unscale() -> None:
 
     assert np.isclose(ctx.row_scale[0], 0.25)
     assert np.isclose(ctx.row_scale[1], 2.0)
+    assert M.A is not None
     A = np.asarray(M.A.todense())
     # Row 0 scaled
     assert np.isclose(A[0, 0], 0.5)

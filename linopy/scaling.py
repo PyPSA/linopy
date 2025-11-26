@@ -126,7 +126,10 @@ def resolve_options(scale: bool | str | ScaleOptions | None) -> ScaleOptions:
     if scale is True:
         return ScaleOptions()
     if isinstance(scale, str):
-        return ScaleOptions(method=scale)
+        if scale not in ("row-max", "row-l2"):
+            msg = f"Invalid scale method: {scale!r}. Must be 'row-max' or 'row-l2'."
+            raise ValueError(msg)
+        return ScaleOptions(method=scale)  # type: ignore[arg-type]
     if isinstance(scale, ScaleOptions):
         return scale
 
