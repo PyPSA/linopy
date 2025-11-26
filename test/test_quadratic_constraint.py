@@ -350,6 +350,7 @@ class TestFileRoundtrip:
         direct_x = float(m.solution["x"].values)
         direct_y = float(m.solution["y"].values)
         direct_obj = m.objective.value
+        assert direct_obj is not None
 
         # Export to LP, read back with gurobipy, solve
         import gurobipy
@@ -361,8 +362,11 @@ class TestFileRoundtrip:
         gm = gurobipy.read(str(fn))
         gm.optimize()
 
-        file_x = gm.getVarByName("x0").X
-        file_y = gm.getVarByName("x1").X
+        var_x = gm.getVarByName("x0")
+        var_y = gm.getVarByName("x1")
+        assert var_x is not None and var_y is not None
+        file_x = var_x.X
+        file_y = var_y.X
         file_obj = gm.ObjVal
 
         fn.unlink()
@@ -370,7 +374,7 @@ class TestFileRoundtrip:
         # Compare solutions
         assert np.isclose(direct_x, file_x, atol=0.01)
         assert np.isclose(direct_y, file_y, atol=0.01)
-        assert np.isclose(direct_obj, file_obj, atol=0.01)
+        assert file_obj is not None and np.isclose(direct_obj, file_obj, atol=0.01)
 
     def test_mps_roundtrip_solve_compare(self) -> None:
         """Test MPS export -> read with Gurobi -> solve -> compare solutions."""
@@ -389,6 +393,7 @@ class TestFileRoundtrip:
         direct_x = float(m.solution["x"].values)
         direct_y = float(m.solution["y"].values)
         direct_obj = m.objective.value
+        assert direct_obj is not None
 
         # Export to MPS, read back with gurobipy, solve
         import gurobipy
@@ -400,8 +405,11 @@ class TestFileRoundtrip:
         gm = gurobipy.read(str(fn))
         gm.optimize()
 
-        file_x = gm.getVarByName("x0").X
-        file_y = gm.getVarByName("x1").X
+        var_x = gm.getVarByName("x0")
+        var_y = gm.getVarByName("x1")
+        assert var_x is not None and var_y is not None
+        file_x = var_x.X
+        file_y = var_y.X
         file_obj = gm.ObjVal
 
         fn.unlink()
@@ -409,7 +417,7 @@ class TestFileRoundtrip:
         # Compare solutions
         assert np.isclose(direct_x, file_x, atol=0.01)
         assert np.isclose(direct_y, file_y, atol=0.01)
-        assert np.isclose(direct_obj, file_obj, atol=0.01)
+        assert file_obj is not None and np.isclose(direct_obj, file_obj, atol=0.01)
 
     def test_lp_roundtrip_multidim_qc(self) -> None:
         """Test LP roundtrip with multi-dimensional quadratic constraints."""
@@ -426,6 +434,7 @@ class TestFileRoundtrip:
         # Solve directly
         m.solve("gurobi", io_api="direct")
         direct_obj = m.objective.value
+        assert direct_obj is not None
 
         # Export to LP, read back, solve
         import gurobipy
@@ -441,7 +450,7 @@ class TestFileRoundtrip:
         fn.unlink()
 
         # Compare objective values (3 independent problems, each with obj ≈ 11.18)
-        assert np.isclose(direct_obj, file_obj, atol=0.05)
+        assert file_obj is not None and np.isclose(direct_obj, file_obj, atol=0.05)
         assert np.isclose(direct_obj, 3 * 11.18, atol=0.1)
 
     def test_lp_roundtrip_mixed_linear_qc(self) -> None:
@@ -460,6 +469,7 @@ class TestFileRoundtrip:
         # Solve directly
         m.solve("gurobi", io_api="direct")
         direct_obj = m.objective.value
+        assert direct_obj is not None
 
         # Export to LP, read back, solve
         import gurobipy
@@ -475,7 +485,7 @@ class TestFileRoundtrip:
         fn.unlink()
 
         # Compare objective values
-        assert np.isclose(direct_obj, file_obj, atol=0.01)
+        assert file_obj is not None and np.isclose(direct_obj, file_obj, atol=0.01)
 
     def test_mps_roundtrip_with_linear_terms_in_qc(self) -> None:
         """Test MPS roundtrip with QC that has linear terms."""
@@ -502,7 +512,9 @@ class TestFileRoundtrip:
         gm = gurobipy.read(str(fn))
         gm.optimize()
 
-        file_x = gm.getVarByName("x0").X
+        var_x = gm.getVarByName("x0")
+        assert var_x is not None
+        file_x = var_x.X
         fn.unlink()
 
         # Solution should be x = 1
@@ -983,6 +995,7 @@ class TestQuadraticConstraintSolving:
         x_val = float(qc_circle_model.solution["x"].values)
         y_val = float(qc_circle_model.solution["y"].values)
         obj_val = qc_circle_model.objective.value
+        assert obj_val is not None
 
         assert np.isclose(x_val, 2.236, atol=0.01)
         assert np.isclose(y_val, 4.472, atol=0.01)
@@ -1001,6 +1014,7 @@ class TestQuadraticConstraintSolving:
         x_vals = qc_multidim_model.solution["x"].values
         y_vals = qc_multidim_model.solution["y"].values
         obj_val = qc_multidim_model.objective.value
+        assert obj_val is not None
 
         assert np.allclose(x_vals, 2.236, atol=0.01)
         assert np.allclose(y_vals, 4.472, atol=0.01)
@@ -1037,6 +1051,7 @@ class TestQuadraticConstraintSolving:
         x_val = float(qc_cross_terms_model.solution["x"].values)
         y_val = float(qc_cross_terms_model.solution["y"].values)
         obj_val = qc_cross_terms_model.objective.value
+        assert obj_val is not None
 
         # Verify constraint is satisfied
         assert x_val * y_val <= 4.0 + 0.01
@@ -1061,6 +1076,7 @@ class TestQuadraticConstraintSolving:
         x_val = float(qc_geq_model.solution["x"].values)
         y_val = float(qc_geq_model.solution["y"].values)
         obj_val = qc_geq_model.objective.value
+        assert obj_val is not None
 
         # Verify constraint is satisfied
         assert x_val**2 + y_val**2 >= 4.0 - 0.01
@@ -1084,6 +1100,7 @@ class TestQuadraticConstraintSolving:
         x_val = float(qc_equality_model.solution["x"].values)
         y_val = float(qc_equality_model.solution["y"].values)
         obj_val = qc_equality_model.objective.value
+        assert obj_val is not None
 
         # Verify constraint is satisfied (x² + y² = 25)
         assert np.isclose(x_val**2 + y_val**2, 25.0, atol=0.1)
