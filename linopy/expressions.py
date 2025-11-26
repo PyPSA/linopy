@@ -1824,6 +1824,7 @@ class QuadraticExpression(BaseExpression):
 
         Examples
         --------
+        >>> from linopy import Model
         >>> m = Model()
         >>> x = m.add_variables(name="x")
         >>> y = m.add_variables(name="y")
