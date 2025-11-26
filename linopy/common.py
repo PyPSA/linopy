@@ -876,9 +876,24 @@ def print_single_expression(
                 coeff_string = f"{coeff_string[0]} {coeff_string[1:]}"
 
             if isinstance(var, list):
-                var_string = ""
-                for name, coords in var:
-                    if name is not None:
+                # Quadratic term - check if it's a squared term (same variable twice)
+                var_parts = [
+                    (name, coords) for name, coords in var if name is not None
+                ]
+                if len(var_parts) == 2:
+                    (name1, coords1), (name2, coords2) = var_parts
+                    coord_string1 = print_coord(coords1)
+                    coord_string2 = print_coord(coords2)
+                    if name1 == name2 and coord_string1 == coord_string2:
+                        # Squared term: x² instead of x x
+                        var_string = f" {name1}{coord_string1}²"
+                    else:
+                        # Cross term: x·y
+                        var_string = f" {name1}{coord_string1}·{name2}{coord_string2}"
+                else:
+                    # Fallback for other cases
+                    var_string = ""
+                    for name, coords in var_parts:
                         coord_string = print_coord(coords)
                         var_string += f" {name}{coord_string}"
             else:
@@ -927,6 +942,21 @@ def print_single_expression(
 
 
 def print_single_constraint(model: Any, label: int) -> str:
+    """
+    Print a single linear constraint by its label.
+
+    Parameters
+    ----------
+    model : linopy.Model
+        The model containing the constraint.
+    label : int
+        The label of the constraint to print.
+
+    Returns
+    -------
+    str
+        Formatted string representation of the constraint.
+    """
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -968,53 +998,20 @@ def print_single_quadratic_constraint(model: Any, label: int) -> str:
     sign = qcon.sign.sel(coord).item()
     rhs = qcon.rhs.sel(coord).item()
 
-    parts = []
+    # Combine quadratic and linear terms for print_single_expression
+    # Quadratic terms: coeffs shape (qterm,), vars shape (2, qterm)
+    # Linear terms: coeffs shape (term,), vars shape (term,) -> need to expand to (2, term)
+    n_lterms = len(lin_vars)
 
-    # Format quadratic terms - shape is (qterm, factor) where factor has 2 elements
-    for q in range(quad_vars.shape[0]):  # iterate over _qterm dimension
-        var1_label = int(quad_vars[q, 0])
-        var2_label = int(quad_vars[q, 1])
-        coeff = float(quad_coeffs[q, 0])  # coeffs are same for both factors
+    # Stack coefficients
+    coeffs = np.concatenate([quad_coeffs[:, 0], lin_coeffs])
 
-        if var1_label == -1 or var2_label == -1:
-            continue
+    # Stack vars: quad_vars is (qterm, 2), need (2, qterm); lin_vars needs -1 padding
+    quad_vars_t = quad_vars.T  # shape (2, qterm)
+    lin_vars_expanded = np.stack([lin_vars, np.full(n_lterms, -1)], axis=0)  # shape (2, term)
+    vars_combined = np.concatenate([quad_vars_t, lin_vars_expanded], axis=1)  # shape (2, total)
 
-        var1_name = model.variables.get_label_position(var1_label)
-        var2_name = model.variables.get_label_position(var2_label)
-
-        if var1_name[0] is None or var2_name[0] is None:
-            continue
-
-        v1_str = f"{var1_name[0]}{print_coord(var1_name[1])}"
-        v2_str = f"{var2_name[0]}{print_coord(var2_name[1])}"
-
-        if var1_label == var2_label:
-            # Squared term
-            term = f"{coeff:+.4g} {v1_str}²" if coeff != 1 else f"+{v1_str}²"
-        else:
-            # Cross product
-            term = f"{coeff:+.4g} {v1_str}·{v2_str}" if coeff != 1 else f"+{v1_str}·{v2_str}"
-        parts.append(term)
-
-    # Format linear terms
-    for t in range(len(lin_vars)):
-        var_label = int(lin_vars[t])
-        coeff = float(lin_coeffs[t])
-
-        if var_label == -1:
-            continue
-
-        var_name = model.variables.get_label_position(var_label)
-        if var_name[0] is None:
-            continue
-
-        v_str = f"{var_name[0]}{print_coord(var_name[1])}"
-        term = f"{coeff:+.4g} {v_str}" if coeff != 1 else f"+{v_str}"
-        parts.append(term)
-
-    expr = " ".join(parts).lstrip("+").strip()
-    if not expr:
-        expr = "0"
+    expr = print_single_expression(coeffs, vars_combined, 0, model)
     sign_pretty = SIGNS_pretty[sign]
 
     return f"{name}{print_coord(coord)}: {expr} {sign_pretty} {rhs:.12g}"
