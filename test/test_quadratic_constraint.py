@@ -16,7 +16,11 @@ import pytest
 import linopy
 from linopy import Model
 from linopy.constraints import QuadraticConstraint
-from linopy.solvers import available_solvers, quadratic_constraint_solvers
+from linopy.solvers import (
+    available_solvers,
+    nonconvex_quadratic_constraint_solvers,
+    quadratic_constraint_solvers,
+)
 
 # Build parameter list: (solver, io_api) for QC-capable solvers
 qc_solver_params: list[tuple[str, str]] = []
@@ -25,6 +29,14 @@ for solver in quadratic_constraint_solvers:
         qc_solver_params.append((solver, "lp"))
         if solver in ["gurobi", "mosek"]:
             qc_solver_params.append((solver, "direct"))
+
+# Build parameter list for nonconvex QC tests
+nonconvex_qc_solver_params: list[tuple[str, str]] = []
+for solver in nonconvex_quadratic_constraint_solvers:
+    if solver in available_solvers:
+        nonconvex_qc_solver_params.append((solver, "lp"))
+        if solver == "gurobi":
+            nonconvex_qc_solver_params.append((solver, "direct"))
 
 
 @pytest.fixture
@@ -1020,15 +1032,11 @@ class TestQuadraticConstraintSolving:
         assert np.allclose(y_vals, 4.472, atol=0.01)
         assert np.isclose(obj_val, 3 * 11.18, atol=0.05)  # 3x single solution
 
-    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    @pytest.mark.parametrize("solver,io_api", nonconvex_qc_solver_params)
     def test_qc_mixed_linear_quad(
         self, qc_mixed_model: Model, solver: str, io_api: str
     ) -> None:
-        """Test QC with both quadratic and linear terms."""
-        # COPT does not handle this nonconvex constraint (x-1)² <= 0
-        if solver == "copt":
-            pytest.skip("COPT does not support this nonconvex constraint form")
-
+        """Test QC with both quadratic and linear terms (nonconvex)."""
         status, condition = qc_mixed_model.solve(solver, io_api=io_api)
         assert status == "ok"
         assert condition == "optimal"
@@ -1037,15 +1045,11 @@ class TestQuadraticConstraintSolving:
         x_val = float(qc_mixed_model.solution["x"].values)
         assert np.isclose(x_val, 1.0, atol=0.01)
 
-    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    @pytest.mark.parametrize("solver,io_api", nonconvex_qc_solver_params)
     def test_qc_cross_terms(
         self, qc_cross_terms_model: Model, solver: str, io_api: str
     ) -> None:
         """Test QC with cross product terms (xy) - nonconvex bilinear."""
-        # MOSEK and COPT do not support nonconvex problems
-        if solver in ("mosek", "copt"):
-            pytest.skip(f"{solver.upper()} does not support nonconvex bilinear constraints")
-
         status, condition = qc_cross_terms_model.solve(solver, io_api=io_api)
         assert status == "ok"
         assert condition == "optimal"
@@ -1062,15 +1066,11 @@ class TestQuadraticConstraintSolving:
         # Verify optimal objective value
         assert np.isclose(obj_val, 5.0, atol=0.01)
 
-    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    @pytest.mark.parametrize("solver,io_api", nonconvex_qc_solver_params)
     def test_qc_geq_constraint(
         self, qc_geq_model: Model, solver: str, io_api: str
     ) -> None:
         """Test >= quadratic constraint - nonconvex."""
-        # MOSEK and COPT do not support nonconvex problems
-        if solver in ("mosek", "copt"):
-            pytest.skip(f"{solver.upper()} does not support nonconvex >= quadratic constraints")
-
         status, condition = qc_geq_model.solve(solver, io_api=io_api)
         assert status == "ok"
         assert condition == "optimal"
@@ -1087,15 +1087,11 @@ class TestQuadraticConstraintSolving:
         # Verify optimal objective value
         assert np.isclose(obj_val, 2.0, atol=0.01)
 
-    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    @pytest.mark.parametrize("solver,io_api", nonconvex_qc_solver_params)
     def test_qc_equality_constraint(
         self, qc_equality_model: Model, solver: str, io_api: str
     ) -> None:
         """Test = quadratic constraint - nonconvex equality."""
-        # MOSEK does not support nonlinear equality constraints
-        if solver == "mosek":
-            pytest.skip("MOSEK does not support nonlinear equality constraints")
-
         status, condition = qc_equality_model.solve(solver, io_api=io_api)
         assert status == "ok"
         assert condition == "optimal"

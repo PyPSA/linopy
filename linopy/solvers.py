@@ -61,6 +61,15 @@ QUADRATIC_CONSTRAINT_SOLVERS = [
     "copt",
 ]
 
+# Solvers that support nonconvex quadratic constraints (bilinear terms, >= constraints)
+# MOSEK and COPT only support convex quadratic constraints
+NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS = [
+    "gurobi",
+    "xpress",
+    "cplex",
+    "scip",
+]
+
 # Solvers that don't need a solution file when keep_files=False
 NO_SOLUTION_FILE_SOLVERS = [
     "xpress",
@@ -159,6 +168,9 @@ with contextlib.suppress(ModuleNotFoundError):
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 quadratic_constraint_solvers = [
     s for s in QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
+]
+nonconvex_quadratic_constraint_solvers = [
+    s for s in NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
 ]
 logger = logging.getLogger(__name__)
 
