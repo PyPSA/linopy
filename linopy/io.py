@@ -492,11 +492,12 @@ def quadratic_constraints_to_file(
             constraint_name = clean_name(name)
             if explicit_coordinate_names:
                 label_pos = m.quadratic_constraints.get_label_position(label)
-                if label_pos:
+                if label_pos and label_pos[0] is not None:
                     con_name, coord = label_pos
-                    constraint_name = (
-                        f"{clean_name(con_name)}{print_coord(coord)}#{label}"
-                    )
+                    assert isinstance(con_name, str)
+                    assert isinstance(coord, dict)
+                    coord_str = print_coord(coord)
+                    constraint_name = f"{clean_name(con_name)}{coord_str}#{label}"
                 else:
                     constraint_name = f"{constraint_name}#{label}"
             else:
@@ -939,9 +940,12 @@ def to_gurobipy(
                 # Determine constraint name
                 if explicit_coordinate_names:
                     label_pos = m.quadratic_constraints.get_label_position(label)
-                    if label_pos:
+                    if label_pos and label_pos[0] is not None:
                         con_name, coord = label_pos
-                        qc_name = f"{clean_name(con_name)}{print_coord(coord)}#{label}"
+                        assert isinstance(con_name, str)
+                        assert isinstance(coord, dict)
+                        coord_str = print_coord(coord)
+                        qc_name = f"{clean_name(con_name)}{coord_str}#{label}"
                     else:
                         qc_name = f"{clean_name(name)}#{label}"
                 else:
