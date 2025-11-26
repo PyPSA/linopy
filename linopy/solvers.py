@@ -50,24 +50,19 @@ QUADRATIC_SOLVERS = [
     "mindopt",
 ]
 
-# Solvers that support quadratic constraints (QCP/QCQP)
+# Solvers that support quadratic constraints (QCP/QCQP) via LP file format
 # Note: HiGHS does NOT support quadratic constraints
+# Note: SCIP supports QC but its LP file reading doesnt work atm
+# Note: XPRESS support convex QC but are excluded due to licensing/config complexity with QCQP
 QUADRATIC_CONSTRAINT_SOLVERS = [
     "gurobi",
-    "xpress",
-    "cplex",
-    "scip",
     "mosek",
     "copt",
 ]
 
 # Solvers that support nonconvex quadratic constraints (bilinear terms, >= constraints)
-# MOSEK and COPT only support convex quadratic constraints
 NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS = [
     "gurobi",
-    "xpress",
-    "cplex",
-    "scip",
 ]
 
 # Solvers that don't need a solution file when keep_files=False
