@@ -204,6 +204,8 @@ class MatrixAccessor:
 
         labels = self.qclabels
         senses = np.empty(len(labels), dtype="<U2")
+        # Track which labels have been set to detect duplicates
+        seen_labels: set[int] = set()
 
         for name in m.quadratic_constraints:
             qcon = m.quadratic_constraints[name]
@@ -211,6 +213,11 @@ class MatrixAccessor:
             qc_signs = np.broadcast_to(qcon.sign.values, qcon.labels.shape).ravel()
             for i, lab in enumerate(qc_labels):
                 if lab != -1:
+                    assert lab not in seen_labels, (
+                        f"Duplicate quadratic constraint label {lab} found. "
+                        "Labels must be unique across all quadratic constraints."
+                    )
+                    seen_labels.add(lab)
                     idx = np.searchsorted(labels, lab)
                     senses[idx] = str(qc_signs[i])
 
@@ -225,6 +232,8 @@ class MatrixAccessor:
 
         labels = self.qclabels
         rhs = np.empty(len(labels), dtype=float)
+        # Track which labels have been set to detect duplicates
+        seen_labels: set[int] = set()
 
         for name in m.quadratic_constraints:
             qcon = m.quadratic_constraints[name]
@@ -232,6 +241,11 @@ class MatrixAccessor:
             qc_rhs = np.broadcast_to(qcon.rhs.values, qcon.labels.shape).ravel()
             for i, lab in enumerate(qc_labels):
                 if lab != -1:
+                    assert lab not in seen_labels, (
+                        f"Duplicate quadratic constraint label {lab} found. "
+                        "Labels must be unique across all quadratic constraints."
+                    )
+                    seen_labels.add(lab)
                     idx = np.searchsorted(labels, lab)
                     rhs[idx] = float(qc_rhs[i])
 
@@ -245,6 +259,17 @@ class MatrixAccessor:
         Returns a list where each element is a sparse matrix representing the
         quadratic terms of one constraint. The matrix follows the convention
         x'Qx, where Q is symmetric with doubled diagonal terms.
+
+        Notes
+        -----
+        This method assumes that flat_qcons stores each quadratic term exactly
+        once (i.e., for off-diagonal terms, only one of (i,j) or (j,i) appears).
+        The method then constructs a symmetric Q matrix by:
+        - Doubling diagonal terms (x_i^2 coefficient becomes 2*coeff)
+        - Adding both (i,j) and (j,i) entries for off-diagonal terms
+
+        If flat_qcons semantics change to store already-symmetric entries,
+        this logic would need adjustment to avoid double-counting.
         """
         m = self._parent
         if not len(m.quadratic_constraints):
@@ -342,6 +367,7 @@ class MatrixAccessor:
         rows = []
         cols = []
         data = []
+        skipped_rows = 0
 
         for _, row in linear_df.iterrows():
             con_idx = con_map.get(row["labels"], -1)
@@ -351,6 +377,14 @@ class MatrixAccessor:
                 rows.append(con_idx)
                 cols.append(var_idx)
                 data.append(row["coeffs"])
+            else:
+                skipped_rows += 1
+
+        assert skipped_rows == 0, (
+            f"Skipped {skipped_rows} linear term(s) in qc_linear due to "
+            "missing variable or constraint labels. This indicates a mismatch "
+            "between flat_qcons and the global variable/constraint indexing."
+        )
 
         return csc_matrix(
             (data, (rows, cols)), shape=(n_cons, n_vars)

@@ -1210,7 +1210,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             return Solution(sol, dual, objective, qc_dual)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 

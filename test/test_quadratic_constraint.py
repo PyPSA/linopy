@@ -8,6 +8,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
@@ -15,6 +16,15 @@ import pytest
 import linopy
 from linopy import Model
 from linopy.constraints import QuadraticConstraint
+from linopy.solvers import available_solvers, quadratic_constraint_solvers
+
+# Build parameter list: (solver, io_api) for QC-capable solvers
+qc_solver_params: list[tuple[str, str]] = []
+for solver in quadratic_constraint_solvers:
+    if solver in available_solvers:
+        qc_solver_params.append((solver, "lp"))
+        if solver in ["gurobi", "mosek"]:
+            qc_solver_params.append((solver, "direct"))
 
 
 @pytest.fixture
@@ -653,3 +663,235 @@ class TestDualValues:
         dual = m.quadratic_constraints["circles"].dual
         assert dual.shape == (3,)
         assert not dual.isnull().all()
+
+
+# ============================================================================
+# Fixtures for solver correctness tests
+# ============================================================================
+
+
+@pytest.fixture
+def qc_circle_model() -> Model:
+    """
+    Model: max x + 2y s.t. x² + y² <= 25, x,y >= 0
+
+    This is a convex QCP. The optimal point is where the gradient of the
+    objective (1, 2) is parallel to the gradient of the constraint (2x, 2y).
+    Solution: x = 1/√5 * 5 ≈ 2.236, y = 2/√5 * 5 ≈ 4.472, obj ≈ 11.18
+    """
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+    m.add_objective(x + 2 * y, sense="max")
+    return m
+
+
+@pytest.fixture
+def qc_multidim_model() -> Model:
+    """
+    Multi-dimensional model: 3 independent circle constraints.
+    max sum(x + 2y) s.t. x[i]² + y[i]² <= 25 for each i
+    Each dimension has same solution as qc_circle_model.
+    """
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    y = m.add_variables(lower=0, coords=[range(3)], name="y")
+    m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+    m.add_objective((x + 2 * y).sum(), sense="max")
+    return m
+
+
+@pytest.fixture
+def qc_mixed_model() -> Model:
+    """
+    QC with both quadratic and linear terms.
+    min x s.t. x² - 2x + 1 <= 0, x >= 0
+    This is (x-1)² <= 0, so x = 1 exactly.
+    """
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_quadratic_constraints(x * x - 2 * x + 1, "<=", 0, name="qc")
+    m.add_objective(x, sense="min")
+    return m
+
+
+@pytest.fixture
+def qc_cross_terms_model() -> Model:
+    """
+    Model with cross product constraint: xy <= 4.
+    max x + y s.t. xy <= 4, x,y >= 0, x <= 4, y <= 4
+
+    This is a NONCONVEX bilinear constraint. The optimal solutions are
+    corners like (4, 1) or (1, 4) with objective value 5 and xy = 4.
+    """
+    m = Model()
+    x = m.add_variables(lower=0, upper=4, name="x")
+    y = m.add_variables(lower=0, upper=4, name="y")
+    m.add_quadratic_constraints(x * y, "<=", 4, name="cross")
+    m.add_objective(x + y, sense="max")
+    return m
+
+
+@pytest.fixture
+def qc_geq_model() -> Model:
+    """
+    Greater-than quadratic constraint: x² + y² >= 4.
+    min x + y s.t. x² + y² >= 4, x,y >= 0
+
+    This is NONCONVEX. The optimal solution is at an extreme point on
+    the constraint boundary: either x=0,y=2 or x=2,y=0, giving obj=2.
+    """
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_quadratic_constraints(x * x + y * y, ">=", 4, name="circle_geq")
+    m.add_objective(x + y, sense="min")
+    return m
+
+
+@pytest.fixture
+def qc_equality_model() -> Model:
+    """
+    Equality quadratic constraint: x² + y² = 25.
+    max x + 2y s.t. x² + y² = 25, x,y >= 0
+    Same solution as qc_circle_model since constraint is binding.
+    """
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_quadratic_constraints(x * x + y * y, "=", 25, name="circle_eq")
+    m.add_objective(x + 2 * y, sense="max")
+    return m
+
+
+# ============================================================================
+# Solver correctness tests
+# ============================================================================
+
+
+@pytest.mark.skipif(len(qc_solver_params) == 0, reason="No QC solver available")
+class TestQuadraticConstraintSolving:
+    """Tests that verify QC solutions are mathematically correct."""
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_circle_solution(
+        self, qc_circle_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test basic convex QC produces correct solution."""
+        status, condition = qc_circle_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # Expected: x = 5/√5 ≈ 2.236, y = 10/√5 ≈ 4.472, obj ≈ 11.18
+        x_val = float(qc_circle_model.solution["x"].values)
+        y_val = float(qc_circle_model.solution["y"].values)
+        obj_val = qc_circle_model.objective.value
+
+        assert np.isclose(x_val, 2.236, atol=0.01)
+        assert np.isclose(y_val, 4.472, atol=0.01)
+        assert np.isclose(obj_val, 11.18, atol=0.01)
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_multidim_solution(
+        self, qc_multidim_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test multi-dimensional QC with broadcasting."""
+        status, condition = qc_multidim_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # Each dimension should have same solution
+        x_vals = qc_multidim_model.solution["x"].values
+        y_vals = qc_multidim_model.solution["y"].values
+        obj_val = qc_multidim_model.objective.value
+
+        assert np.allclose(x_vals, 2.236, atol=0.01)
+        assert np.allclose(y_vals, 4.472, atol=0.01)
+        assert np.isclose(obj_val, 3 * 11.18, atol=0.05)  # 3x single solution
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_mixed_linear_quad(
+        self, qc_mixed_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test QC with both quadratic and linear terms."""
+        status, condition = qc_mixed_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # (x-1)² <= 0 means x = 1 exactly
+        x_val = float(qc_mixed_model.solution["x"].values)
+        assert np.isclose(x_val, 1.0, atol=0.01)
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_cross_terms(
+        self, qc_cross_terms_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test QC with cross product terms (xy) - nonconvex bilinear."""
+        # MOSEK does not support nonconvex problems
+        if solver == "mosek":
+            pytest.skip("MOSEK does not support nonconvex bilinear constraints")
+
+        status, condition = qc_cross_terms_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # Nonconvex - verify constraint satisfaction rather than exact values
+        # Optimal is x+y = 5 with xy = 4 (e.g., x=4,y=1 or x=1,y=4)
+        x_val = float(qc_cross_terms_model.solution["x"].values)
+        y_val = float(qc_cross_terms_model.solution["y"].values)
+        obj_val = qc_cross_terms_model.objective.value
+
+        # Verify constraint is satisfied
+        assert x_val * y_val <= 4.0 + 0.01
+        # Verify optimal objective value
+        assert np.isclose(obj_val, 5.0, atol=0.01)
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_geq_constraint(
+        self, qc_geq_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test >= quadratic constraint - nonconvex."""
+        # MOSEK does not support nonconvex problems
+        if solver == "mosek":
+            pytest.skip("MOSEK does not support nonconvex >= quadratic constraints")
+
+        status, condition = qc_geq_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # min x+y s.t. x²+y² >= 4, x,y >= 0
+        # Optimal: either (0,2) or (2,0) with obj=2
+        x_val = float(qc_geq_model.solution["x"].values)
+        y_val = float(qc_geq_model.solution["y"].values)
+        obj_val = qc_geq_model.objective.value
+
+        # Verify constraint is satisfied
+        assert x_val**2 + y_val**2 >= 4.0 - 0.01
+        # Verify optimal objective value
+        assert np.isclose(obj_val, 2.0, atol=0.01)
+
+    @pytest.mark.parametrize("solver,io_api", qc_solver_params)
+    def test_qc_equality_constraint(
+        self, qc_equality_model: Model, solver: str, io_api: str
+    ) -> None:
+        """Test = quadratic constraint - nonconvex equality."""
+        # MOSEK does not support nonlinear equality constraints
+        if solver == "mosek":
+            pytest.skip("MOSEK does not support nonlinear equality constraints")
+
+        status, condition = qc_equality_model.solve(solver, io_api=io_api)
+        assert status == "ok"
+        assert condition == "optimal"
+
+        # Same as circle model since constraint is binding
+        x_val = float(qc_equality_model.solution["x"].values)
+        y_val = float(qc_equality_model.solution["y"].values)
+        obj_val = qc_equality_model.objective.value
+
+        # Verify constraint is satisfied (x² + y² = 25)
+        assert np.isclose(x_val**2 + y_val**2, 25.0, atol=0.1)
+        # Verify optimal solution
+        assert np.isclose(x_val, 2.236, atol=0.01)
+        assert np.isclose(y_val, 4.472, atol=0.01)
+        assert np.isclose(obj_val, 11.18, atol=0.01)

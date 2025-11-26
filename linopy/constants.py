@@ -227,8 +227,11 @@ class Result:
             "not available" if self.solver_model is None else "available"
         )
         if self.solution is not None:
+            n_qc_duals = len(self.solution.qc_dual)
+            qc_dual_str = f", {n_qc_duals} qc_duals" if n_qc_duals > 0 else ""
             solution_string = (
-                f"Solution: {len(self.solution.primal)} primals, {len(self.solution.dual)} duals\n"
+                f"Solution: {len(self.solution.primal)} primals, "
+                f"{len(self.solution.dual)} duals{qc_dual_str}\n"
                 f"Objective: {self.solution.objective:.2e}\n"
             )
         else:
