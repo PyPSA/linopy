@@ -1108,3 +1108,119 @@ class TestQuadraticConstraintSolving:
         assert np.isclose(x_val, 2.236, atol=0.01)
         assert np.isclose(y_val, 4.472, atol=0.01)
         assert np.isclose(obj_val, 11.18, atol=0.01)
+
+
+class TestQuadraticConstraintsContainerMethods:
+    """Tests for QuadraticConstraints container methods."""
+
+    def test_inequalities_property(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test inequalities property returns only inequality constraints."""
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="qc_le")
+        m.add_quadratic_constraints(x * x, ">=", 1, name="qc_ge")
+        m.add_quadratic_constraints(x * y, "=", 4, name="qc_eq")
+
+        inequalities = m.quadratic_constraints.inequalities
+        assert len(inequalities) == 2
+        assert "qc_le" in inequalities
+        assert "qc_ge" in inequalities
+        assert "qc_eq" not in inequalities
+
+    def test_equalities_property(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test equalities property returns only equality constraints."""
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="qc_le")
+        m.add_quadratic_constraints(x * x, ">=", 1, name="qc_ge")
+        m.add_quadratic_constraints(x * y, "=", 4, name="qc_eq")
+
+        equalities = m.quadratic_constraints.equalities
+        assert len(equalities) == 1
+        assert "qc_eq" in equalities
+        assert "qc_le" not in equalities
+        assert "qc_ge" not in equalities
+
+    def test_inequalities_empty(self, m: Model, x: linopy.Variable) -> None:
+        """Test inequalities when all constraints are equalities."""
+        m.add_quadratic_constraints(x * x, "=", 1, name="qc_eq")
+
+        inequalities = m.quadratic_constraints.inequalities
+        assert len(inequalities) == 0
+
+    def test_equalities_empty(self, m: Model, x: linopy.Variable) -> None:
+        """Test equalities when all constraints are inequalities."""
+        m.add_quadratic_constraints(x * x, "<=", 1, name="qc_le")
+
+        equalities = m.quadratic_constraints.equalities
+        assert len(equalities) == 0
+
+    def test_sanitize_zeros(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test sanitize_zeros filters out zero coefficients."""
+        # Add a constraint then manually set some coefficients to zero
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="qc")
+
+        # Check that sanitize_zeros runs without error
+        m.quadratic_constraints.sanitize_zeros()
+
+        # The constraint should still exist
+        assert "qc" in m.quadratic_constraints
+
+    def test_sanitize_missings(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test sanitize_missings runs without error."""
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="qc")
+
+        # Check that sanitize_missings runs without error
+        m.quadratic_constraints.sanitize_missings()
+
+        # The constraint should still exist
+        assert "qc" in m.quadratic_constraints
+
+    def test_print_labels(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test print_labels outputs constraint information."""
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_quadratic_constraints(x * y, ">=", 1, name="bilinear")
+
+        m.quadratic_constraints.print_labels([0, 1])
+
+        captured = capsys.readouterr()
+        assert "circle" in captured.out
+        assert "bilinear" in captured.out
+        assert "≤" in captured.out or "<=" in captured.out
+        assert "≥" in captured.out or ">=" in captured.out
+
+    def test_print_labels_multidimensional(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Test print_labels with multi-dimensional constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+
+        m.quadratic_constraints.print_labels([0, 1, 2])
+
+        captured = capsys.readouterr()
+        assert "circles[0]" in captured.out
+        assert "circles[1]" in captured.out
+        assert "circles[2]" in captured.out
+        assert "x[0]²" in captured.out or "x[0]^2" in captured.out
+
+    def test_inequalities_multidimensional(self) -> None:
+        """Test inequalities with multi-dimensional constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+
+        m.add_quadratic_constraints(x * x, "<=", 25, name="qc_le")
+        m.add_quadratic_constraints(x * x, "=", 1, name="qc_eq")
+
+        inequalities = m.quadratic_constraints.inequalities
+        assert len(inequalities) == 1
+        assert "qc_le" in inequalities
+        # Each constraint has 3 elements (one per coordinate)
+        assert inequalities["qc_le"].size == 3

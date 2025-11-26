@@ -941,6 +941,85 @@ def print_single_constraint(model: Any, label: int) -> str:
     return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
+def print_single_quadratic_constraint(model: Any, label: int) -> str:
+    """
+    Print a single quadratic constraint by its label.
+
+    Parameters
+    ----------
+    model : linopy.Model
+        The model containing the constraint.
+    label : int
+        The label of the constraint to print.
+
+    Returns
+    -------
+    str
+        Formatted string representation of the constraint.
+    """
+    qconstraints = model.quadratic_constraints
+    name, coord = qconstraints.get_label_position(label)
+
+    qcon = model.quadratic_constraints[name]
+    quad_coeffs = qcon.quad_coeffs.sel(coord).values  # shape: (qterm, factor)
+    quad_vars = qcon.quad_vars.sel(coord).values  # shape: (qterm, factor)
+    lin_coeffs = qcon.lin_coeffs.sel(coord).values  # shape: (term,)
+    lin_vars = qcon.lin_vars.sel(coord).values  # shape: (term,)
+    sign = qcon.sign.sel(coord).item()
+    rhs = qcon.rhs.sel(coord).item()
+
+    parts = []
+
+    # Format quadratic terms - shape is (qterm, factor) where factor has 2 elements
+    for q in range(quad_vars.shape[0]):  # iterate over _qterm dimension
+        var1_label = int(quad_vars[q, 0])
+        var2_label = int(quad_vars[q, 1])
+        coeff = float(quad_coeffs[q, 0])  # coeffs are same for both factors
+
+        if var1_label == -1 or var2_label == -1:
+            continue
+
+        var1_name = model.variables.get_label_position(var1_label)
+        var2_name = model.variables.get_label_position(var2_label)
+
+        if var1_name[0] is None or var2_name[0] is None:
+            continue
+
+        v1_str = f"{var1_name[0]}{print_coord(var1_name[1])}"
+        v2_str = f"{var2_name[0]}{print_coord(var2_name[1])}"
+
+        if var1_label == var2_label:
+            # Squared term
+            term = f"{coeff:+.4g} {v1_str}²" if coeff != 1 else f"+{v1_str}²"
+        else:
+            # Cross product
+            term = f"{coeff:+.4g} {v1_str}·{v2_str}" if coeff != 1 else f"+{v1_str}·{v2_str}"
+        parts.append(term)
+
+    # Format linear terms
+    for t in range(len(lin_vars)):
+        var_label = int(lin_vars[t])
+        coeff = float(lin_coeffs[t])
+
+        if var_label == -1:
+            continue
+
+        var_name = model.variables.get_label_position(var_label)
+        if var_name[0] is None:
+            continue
+
+        v_str = f"{var_name[0]}{print_coord(var_name[1])}"
+        term = f"{coeff:+.4g} {v_str}" if coeff != 1 else f"+{v_str}"
+        parts.append(term)
+
+    expr = " ".join(parts).lstrip("+").strip()
+    if not expr:
+        expr = "0"
+    sign_pretty = SIGNS_pretty[sign]
+
+    return f"{name}{print_coord(coord)}: {expr} {sign_pretty} {rhs:.12g}"
+
+
 def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Check if a reference model is set.

@@ -48,6 +48,7 @@ from linopy.common import (
     print_coord,
     print_single_constraint,
     print_single_expression,
+    print_single_quadratic_constraint,
     replace_by_map,
     save_join,
     to_dataframe,
@@ -1836,3 +1837,76 @@ class QuadraticConstraints:
         for k, c in self.items():
             if "dual" in c:
                 c._data = c.data.drop_vars("dual")
+
+    @property
+    def inequalities(self) -> QuadraticConstraints:
+        """
+        Get the subset of quadratic constraints which are purely inequalities.
+        """
+        return self[[n for n, s in self.items() if (s.sign != EQUAL).all()]]
+
+    @property
+    def equalities(self) -> QuadraticConstraints:
+        """
+        Get the subset of quadratic constraints which are purely equalities.
+        """
+        return self[[n for n, s in self.items() if (s.sign == EQUAL).all()]]
+
+    def sanitize_zeros(self) -> None:
+        """
+        Filter out terms with zero and close-to-zero coefficient.
+
+        For quadratic constraints, this filters both quadratic and linear terms.
+        """
+        for name in self:
+            con = self[name]
+            # Filter linear terms
+            not_zero_lin = abs(con.lin_coeffs) > 1e-10
+            con._data = assign_multiindex_safe(
+                con.data,
+                lin_vars=con.lin_vars.where(not_zero_lin, -1),
+                lin_coeffs=con.lin_coeffs.where(not_zero_lin),
+            )
+            # Filter quadratic terms
+            not_zero_quad = abs(con.quad_coeffs) > 1e-10
+            con._data = assign_multiindex_safe(
+                con.data,
+                quad_vars=con.quad_vars.where(not_zero_quad, -1),
+                quad_coeffs=con.quad_coeffs.where(not_zero_quad),
+            )
+
+    def sanitize_missings(self) -> None:
+        """
+        Set constraint labels to -1 where all variables in the lhs are missing.
+
+        For quadratic constraints, checks both quadratic and linear terms.
+        """
+        for name in self:
+            con = self[name]
+            # Check if any quadratic term has valid variables
+            contains_non_missing_quad = (con.quad_vars != -1).any([QTERM_DIM, FACTOR_DIM])
+            # Check if any linear term has valid variables
+            contains_non_missing_lin = (con.lin_vars != -1).any(TERM_DIM)
+            # Constraint is valid if it has either quadratic or linear terms
+            contains_non_missing = contains_non_missing_quad | contains_non_missing_lin
+            labels = con.labels.where(contains_non_missing, -1)
+            con._data = assign_multiindex_safe(con.data, labels=labels)
+
+    def print_labels(
+        self, values: Sequence[int], display_max_terms: int | None = None
+    ) -> None:
+        """
+        Print a selection of labels of the quadratic constraints.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        display_max_terms : int, optional
+            Maximum number of terms to display per constraint.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [print_single_quadratic_constraint(self.model, v) for v in values]
+        print("\n".join(res))
