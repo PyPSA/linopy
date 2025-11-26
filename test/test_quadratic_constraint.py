@@ -307,6 +307,208 @@ class TestLPFileExport:
         # Clean up
         fn.unlink()
 
+    def test_mps_export_with_quadratic_constraints(
+        self, m: Model, x: linopy.Variable, y: linopy.Variable
+    ) -> None:
+        """Test that MPS export works with quadratic constraints (using Gurobi)."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available for MPS export with QC")
+
+        m.add_objective(x + y)
+        m.add_quadratic_constraints(x * x + y * y, "<=", 100, name="qc1")
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".mps", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn, progress=False)
+        content = fn.read_text()
+
+        # Check that QCMATRIX section is present
+        assert "QCMATRIX" in content
+        assert "qc" in content.lower()
+
+        fn.unlink(missing_ok=True)
+
+
+class TestFileRoundtrip:
+    """Tests for export/import/solve roundtrip with quadratic constraints."""
+
+    def test_lp_roundtrip_solve_compare(self) -> None:
+        """Test LP export -> read with Gurobi -> solve -> compare solutions."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        # Create model with QC
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_objective(x + 2 * y, sense="max")
+
+        # Solve directly
+        m.solve("gurobi", io_api="direct")
+        direct_x = float(m.solution["x"].values)
+        direct_y = float(m.solution["y"].values)
+        direct_obj = m.objective.value
+
+        # Export to LP, read back with gurobipy, solve
+        import gurobipy
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn)
+        gm = gurobipy.read(str(fn))
+        gm.optimize()
+
+        file_x = gm.getVarByName("x0").X
+        file_y = gm.getVarByName("x1").X
+        file_obj = gm.ObjVal
+
+        fn.unlink()
+
+        # Compare solutions
+        assert np.isclose(direct_x, file_x, atol=0.01)
+        assert np.isclose(direct_y, file_y, atol=0.01)
+        assert np.isclose(direct_obj, file_obj, atol=0.01)
+
+    def test_mps_roundtrip_solve_compare(self) -> None:
+        """Test MPS export -> read with Gurobi -> solve -> compare solutions."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        # Create model with QC
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_objective(x + 2 * y, sense="max")
+
+        # Solve directly
+        m.solve("gurobi", io_api="direct")
+        direct_x = float(m.solution["x"].values)
+        direct_y = float(m.solution["y"].values)
+        direct_obj = m.objective.value
+
+        # Export to MPS, read back with gurobipy, solve
+        import gurobipy
+
+        with tempfile.NamedTemporaryFile(suffix=".mps", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn)
+        gm = gurobipy.read(str(fn))
+        gm.optimize()
+
+        file_x = gm.getVarByName("x0").X
+        file_y = gm.getVarByName("x1").X
+        file_obj = gm.ObjVal
+
+        fn.unlink()
+
+        # Compare solutions
+        assert np.isclose(direct_x, file_x, atol=0.01)
+        assert np.isclose(direct_y, file_y, atol=0.01)
+        assert np.isclose(direct_obj, file_obj, atol=0.01)
+
+    def test_lp_roundtrip_multidim_qc(self) -> None:
+        """Test LP roundtrip with multi-dimensional quadratic constraints."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        # Create model with multi-dim QC
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3)], name="y")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circles")
+        m.add_objective((x + 2 * y).sum(), sense="max")
+
+        # Solve directly
+        m.solve("gurobi", io_api="direct")
+        direct_obj = m.objective.value
+
+        # Export to LP, read back, solve
+        import gurobipy
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn)
+        gm = gurobipy.read(str(fn))
+        gm.optimize()
+
+        file_obj = gm.ObjVal
+        fn.unlink()
+
+        # Compare objective values (3 independent problems, each with obj ≈ 11.18)
+        assert np.isclose(direct_obj, file_obj, atol=0.05)
+        assert np.isclose(direct_obj, 3 * 11.18, atol=0.1)
+
+    def test_lp_roundtrip_mixed_linear_qc(self) -> None:
+        """Test LP roundtrip with both linear and quadratic constraints."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        # Create model with both linear and quadratic constraints
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        m.add_constraints(x + y <= 10, name="linear")
+        m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
+        m.add_objective(x + 2 * y, sense="max")
+
+        # Solve directly
+        m.solve("gurobi", io_api="direct")
+        direct_obj = m.objective.value
+
+        # Export to LP, read back, solve
+        import gurobipy
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn)
+        gm = gurobipy.read(str(fn))
+        gm.optimize()
+
+        file_obj = gm.ObjVal
+        fn.unlink()
+
+        # Compare objective values
+        assert np.isclose(direct_obj, file_obj, atol=0.01)
+
+    def test_mps_roundtrip_with_linear_terms_in_qc(self) -> None:
+        """Test MPS roundtrip with QC that has linear terms."""
+        if "gurobi" not in linopy.available_solvers:
+            pytest.skip("Gurobi not available")
+
+        # Create model: min x s.t. (x-1)² <= 0
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        m.add_quadratic_constraints(x * x - 2 * x + 1, "<=", 0, name="qc")
+        m.add_objective(x, sense="min")
+
+        # Solve directly
+        m.solve("gurobi", io_api="direct")
+        direct_x = float(m.solution["x"].values)
+
+        # Export to MPS, read back, solve
+        import gurobipy
+
+        with tempfile.NamedTemporaryFile(suffix=".mps", delete=False) as f:
+            fn = Path(f.name)
+
+        m.to_file(fn)
+        gm = gurobipy.read(str(fn))
+        gm.optimize()
+
+        file_x = gm.getVarByName("x0").X
+        fn.unlink()
+
+        # Solution should be x = 1
+        assert np.isclose(direct_x, 1.0, atol=0.01)
+        assert np.isclose(file_x, 1.0, atol=0.01)
+
 
 class TestSolverValidation:
     """Tests for solver validation with quadratic constraints."""

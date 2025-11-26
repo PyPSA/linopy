@@ -632,15 +632,23 @@ def to_file(
         )
 
     elif io_api == "mps":
-        if "highs" not in solvers.available_solvers:
-            raise RuntimeError(
-                "Package highspy not installed. This is required to exporting to MPS file."
-            )
-
-        # Use very fast highspy implementation
-        # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
-        h.writeModel(str(fn))
+        if m.has_quadratic_constraints:
+            # MPS with quadratic constraints requires Gurobi
+            if "gurobi" not in solvers.available_solvers:
+                raise RuntimeError(
+                    "Package Gurobipy not installed. This is requiredd for MPS export with quadratic constraints. "
+                    "Use LP format instead"
+                )
+            gm = m.to_gurobipy(explicit_coordinate_names=explicit_coordinate_names)
+            gm.write(str(fn))
+        else:
+            # Use fast HiGHS implementation for models without QC
+            if "highs" not in solvers.available_solvers:
+                raise RuntimeError(
+                    "Package highspy not installed. This is required for exporting to MPS file."
+                )
+            h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+            h.writeModel(str(fn))
     else:
         raise ValueError(
             f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
