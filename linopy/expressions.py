@@ -1689,9 +1689,11 @@ class QuadraticExpression(BaseExpression):
 
     @property
     def shape(self) -> tuple[int, ...]:
-        # TODO Implement this
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support shape property"
+        """
+        Get the shape of the expression (excluding term dimensions).
+        """
+        return tuple(
+            v for k, v in self.sizes.items() if k not in (TERM_DIM, FACTOR_DIM)
         )
 
     def __mul__(self, other: SideLike) -> QuadraticExpression:
