@@ -10,6 +10,7 @@ Release Notes
 * Add dual values for quadratic constraints (use `QCPDual=1` solver option with Gurobi).
 * Add `model.quadratic_constraints` container for inspecting quadratic constraints.
 * Add `model.matrices` accessor properties for quadratic constraints: `qclabels`, `qc_sense`, `qc_rhs`, `Qc`, `qc_linear`.
+* Fix `expression.shape`to always exclude the _term dimension
 * Fix compatibility for xpress versions below 9.6 (regression)
 
 Version 0.5.8
