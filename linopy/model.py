@@ -713,7 +713,7 @@ class Model:
 
     def add_quadratic_constraints(
         self,
-        lhs: QuadraticExpression | QuadraticConstraint | Callable,
+        lhs: QuadraticExpression | LinearExpression | QuadraticConstraint | Callable,
         sign: SignLike | None = None,
         rhs: ConstantLike | None = None,
         name: str | None = None,

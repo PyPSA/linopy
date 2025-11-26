@@ -1480,7 +1480,7 @@ class QuadraticConstraint:
     def _format_single_constraint(self, indices: tuple, coord: list | None) -> str:
         """Format a single constraint for display."""
         # Format quadratic terms
-        quad_parts = []
+        quad_parts: list[str] = []
         if indices:
             qcoeffs = self.quad_coeffs.values[indices]
             qvars = self.quad_vars.values[indices]
@@ -1506,7 +1506,7 @@ class QuadraticConstraint:
                             quad_parts.append(f"{sign}{c} {v1_str}·{v2_str}")
 
         # Format linear terms
-        lin_parts = []
+        lin_parts: list[str] = []
         if indices:
             lcoeffs = self.lin_coeffs.values[indices]
             lvars = self.lin_vars.values[indices]

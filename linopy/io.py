@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -51,11 +51,10 @@ def clean_name(name: str) -> str:
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
+    from linopy.common import print_coord as _print_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
-    return coord
+    return _print_coord(coord).translate(coord_sanitizer)
 
 
 def get_printers_scalar(

@@ -1807,7 +1807,7 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: ConstantLike) -> QuadraticConstraint:
+    def to_constraint(self, sign: SignLike, rhs: ConstantLike) -> QuadraticConstraint:  # type: ignore[override]
         """
         Convert a quadratic expression to a quadratic constraint.
 
