@@ -186,7 +186,7 @@ def objective_to_file(
         )
         df = (
             df.join(scale_map, on="vars", how="left")
-            .fill_null(1.0)
+            .with_columns(pl.col("col_inv").fill_null(1.0))
             .with_columns(pl.col("coeffs") * pl.col("col_inv"))
             .drop("col_inv")
         )
@@ -248,7 +248,7 @@ def bounds_to_file(
                 )
                 df = (
                     df.join(scale_map, on="labels", how="left")
-                    .fill_null(1.0)
+                    .with_columns(pl.col("col_scale").fill_null(1.0))
                     .with_columns(
                         [
                             pl.col("lower") * pl.col("col_scale"),
@@ -408,7 +408,12 @@ def constraints_to_file(
                 df = (
                     df.join(row_map, on="labels", how="left")
                     .join(col_map, on="vars", how="left")
-                    .fill_null(1.0)
+                    .with_columns(
+                        [
+                            pl.col("row_scale").fill_null(1.0),
+                            pl.col("col_inv").fill_null(1.0),
+                        ]
+                    )
                     .with_columns(
                         [
                             pl.col("coeffs") * pl.col("row_scale") * pl.col("col_inv"),

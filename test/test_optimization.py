@@ -586,6 +586,31 @@ def test_scaling_integration_row_and_column() -> None:
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highs not installed")
+def test_scaling_integration_lp_file_io() -> None:
+    """Test scaling with LP file-based IO to cover io.py scaling paths."""
+    base = _build_scaling_model()
+    status, _ = base.solve("highs", io_api="lp-polars")
+    assert status == "ok"
+    base_solution = base.solution.to_pandas()
+    base_obj = base.objective.value or 0.0
+
+    scaled = _build_scaling_model()
+    status, _ = scaled.solve(
+        "highs",
+        io_api="lp-polars",
+        scale=ScaleOptions(
+            enabled=True, variable_scaling=True, scale_integer_variables=False
+        ),
+    )
+    assert status == "ok"
+    scaled_solution = scaled.solution.to_pandas()
+    scaled_obj = scaled.objective.value or 0.0
+
+    assert np.allclose(base_solution.values, scaled_solution.values, rtol=1e-4)
+    assert np.isclose(base_obj, scaled_obj, rtol=1e-4)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highs not installed")
 def test_scaling_with_l2_norm() -> None:
     """Test scaling with row-l2 method."""
     base = _build_scaling_model()
