@@ -46,15 +46,18 @@ def Qc(self) -> list[scipy.sparse.csc_matrix]:
     # Each quadratic constraint has its own Q matrix
     pass
 
+
 @property
 def qc_linear(self) -> scipy.sparse.csc_matrix:
     """Return linear coefficients for quadratic constraints."""
     pass
 
+
 @property
 def qc_sense(self) -> np.ndarray:
     """Return sense array for quadratic constraints."""
     pass
+
 
 @property
 def qc_rhs(self) -> np.ndarray:
@@ -109,10 +112,7 @@ Example API:
 ```python
 # Should work with coordinates
 m.add_quadratic_constraints(
-    x * x + y * y,  # where x, y have dims=['time', 'node']
-    "<=",
-    100,
-    name="qc"
+    x * x + y * y, "<=", 100, name="qc"  # where x, y have dims=['time', 'node']
 )
 ```
 
@@ -123,6 +123,7 @@ Add methods to `QuadraticConstraint`:
 ```python
 def modify_rhs(self, new_rhs: ConstantLike) -> None:
     """Modify the right-hand side of the constraint."""
+
 
 def modify_coeffs(self, new_coeffs: xr.DataArray) -> None:
     """Modify coefficients of the constraint."""

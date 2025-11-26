@@ -1200,9 +1200,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             try:
                 qcs = m.getQConstrs()
                 if qcs:
-                    qc_dual = pd.Series(
-                        {qc.QCName: qc.QCPi for qc in qcs}, dtype=float
-                    )
+                    qc_dual = pd.Series({qc.QCName: qc.QCPi for qc in qcs}, dtype=float)
             except (AttributeError, gurobipy.GurobiError):
                 # QCPi not available (non-convex or QCPDual=0)
                 pass

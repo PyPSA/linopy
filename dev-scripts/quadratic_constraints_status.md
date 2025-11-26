@@ -26,25 +26,22 @@ import linopy
 m = linopy.Model()
 
 # Variables
-x = m.add_variables(lower=0, name='x')
-y = m.add_variables(lower=0, name='y')
+x = m.add_variables(lower=0, name="x")
+y = m.add_variables(lower=0, name="y")
 
 # Linear constraint (existing)
-m.add_constraints(x + y <= 10, name='budget')
+m.add_constraints(x + y <= 10, name="budget")
 
 # Quadratic constraint (NEW!)
 m.add_quadratic_constraints(
-    x*x + 2*x*y + y*y + 3*x + 4*y,
-    "<=",
-    100,
-    name='quadratic_budget'
+    x * x + 2 * x * y + y * y + 3 * x + 4 * y, "<=", 100, name="quadratic_budget"
 )
 
 # Objective
-m.add_objective(x + 2*y)
+m.add_objective(x + 2 * y)
 
 # Solve (with Gurobi, MOSEK, CPLEX, etc.)
-m.solve(solver_name='gurobi')
+m.solve(solver_name="gurobi")
 ```
 
 ## What Was Implemented

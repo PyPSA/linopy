@@ -325,7 +325,9 @@ class TestSolverValidation:
         from linopy.solvers import quadratic_constraint_solvers
 
         if "highs" not in quadratic_constraint_solvers:
-            with pytest.raises(ValueError, match="does not support quadratic constraints"):
+            with pytest.raises(
+                ValueError, match="does not support quadratic constraints"
+            ):
                 m.solve(solver_name="highs")
 
     def test_highs_accepts_quadratic_objective(
@@ -434,9 +436,7 @@ class TestQuadraticConstraintRepr:
 class TestMatrixAccessor:
     """Tests for matrix accessor with quadratic constraints."""
 
-    def test_qclabels(
-        self, m: Model, x: linopy.Variable, y: linopy.Variable
-    ) -> None:
+    def test_qclabels(self, m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
         """Test qclabels property."""
         m.add_objective(x + y)
         m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
@@ -447,9 +447,7 @@ class TestMatrixAccessor:
         assert labels[0] == 0
         assert labels[1] == 1
 
-    def test_qc_sense(
-        self, m: Model, x: linopy.Variable, y: linopy.Variable
-    ) -> None:
+    def test_qc_sense(self, m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
         """Test qc_sense property."""
         m.add_objective(x + y)
         m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
@@ -460,9 +458,7 @@ class TestMatrixAccessor:
         assert senses[0] == "<="
         assert senses[1] == ">="
 
-    def test_qc_rhs(
-        self, m: Model, x: linopy.Variable, y: linopy.Variable
-    ) -> None:
+    def test_qc_rhs(self, m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
         """Test qc_rhs property."""
         m.add_objective(x + y)
         m.add_quadratic_constraints(x * x, "<=", 25, name="qc1")
@@ -504,9 +500,7 @@ class TestMatrixAccessor:
         assert Q[0, 0] == 0.0  # No x^2 term
         assert Q[1, 1] == 0.0  # No y^2 term
 
-    def test_qc_linear(
-        self, m: Model, x: linopy.Variable, y: linopy.Variable
-    ) -> None:
+    def test_qc_linear(self, m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
         """Test qc_linear property."""
         m.add_objective(x + y)
         m.add_quadratic_constraints(x * x + 3 * x + 4 * y, "<=", 25, name="mixed")

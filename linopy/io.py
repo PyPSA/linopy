@@ -823,8 +823,9 @@ def to_mosek(
                 # MOSEK uses 0.5 * x'Qx convention, and our Q matrix is already
                 # built with doubled diagonal terms for this convention.
                 # So we pass Q directly without dividing.
-                task.putqconk(con_idx, list(Q_lower.row), list(Q_lower.col),
-                              list(Q_lower.data))
+                task.putqconk(
+                    con_idx, list(Q_lower.row), list(Q_lower.col), list(Q_lower.data)
+                )
 
     return task
 
