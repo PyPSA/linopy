@@ -1884,7 +1884,9 @@ class QuadraticConstraints:
         for name in self:
             con = self[name]
             # Check if any quadratic term has valid variables
-            contains_non_missing_quad = (con.quad_vars != -1).any([QTERM_DIM, FACTOR_DIM])
+            contains_non_missing_quad = (con.quad_vars != -1).any(
+                [QTERM_DIM, FACTOR_DIM]
+            )
             # Check if any linear term has valid variables
             contains_non_missing_lin = (con.lin_vars != -1).any(TERM_DIM)
             # Constraint is valid if it has either quadratic or linear terms

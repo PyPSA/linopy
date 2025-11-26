@@ -877,9 +877,7 @@ def print_single_expression(
 
             if isinstance(var, list):
                 # Quadratic term - check if it's a squared term (same variable twice)
-                var_parts = [
-                    (name, coords) for name, coords in var if name is not None
-                ]
+                var_parts = [(name, coords) for name, coords in var if name is not None]
                 if len(var_parts) == 2:
                     (name1, coords1), (name2, coords2) = var_parts
                     coord_string1 = print_coord(coords1)
@@ -1008,8 +1006,12 @@ def print_single_quadratic_constraint(model: Any, label: int) -> str:
 
     # Stack vars: quad_vars is (qterm, 2), need (2, qterm); lin_vars needs -1 padding
     quad_vars_t = quad_vars.T  # shape (2, qterm)
-    lin_vars_expanded = np.stack([lin_vars, np.full(n_lterms, -1)], axis=0)  # shape (2, term)
-    vars_combined = np.concatenate([quad_vars_t, lin_vars_expanded], axis=1)  # shape (2, total)
+    lin_vars_expanded = np.stack(
+        [lin_vars, np.full(n_lterms, -1)], axis=0
+    )  # shape (2, term)
+    vars_combined = np.concatenate(
+        [quad_vars_t, lin_vars_expanded], axis=1
+    )  # shape (2, total)
 
     expr = print_single_expression(coeffs, vars_combined, 0, model)
     sign_pretty = SIGNS_pretty[sign]

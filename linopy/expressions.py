@@ -1971,7 +1971,9 @@ class QuadraticExpression(BaseExpression):
         """
         ds = self.data
         kwargs_dict = dict(restore_coord_dims=restore_coord_dims, **kwargs)
-        return QuadraticExpressionGroupby(ds, group, model=self.model, kwargs=kwargs_dict)
+        return QuadraticExpressionGroupby(
+            ds, group, model=self.model, kwargs=kwargs_dict
+        )
 
     def rolling(
         self,

@@ -1181,7 +1181,11 @@ class TestQuadraticConstraintsContainerMethods:
         assert "qc" in m.quadratic_constraints
 
     def test_print_labels(
-        self, m: Model, x: linopy.Variable, y: linopy.Variable, capsys: pytest.CaptureFixture[str]
+        self,
+        m: Model,
+        x: linopy.Variable,
+        y: linopy.Variable,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Test print_labels outputs constraint information."""
         m.add_quadratic_constraints(x * x + y * y, "<=", 25, name="circle")
@@ -1195,7 +1199,9 @@ class TestQuadraticConstraintsContainerMethods:
         assert "≤" in captured.out or "<=" in captured.out
         assert "≥" in captured.out or ">=" in captured.out
 
-    def test_print_labels_multidimensional(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_print_labels_multidimensional(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Test print_labels with multi-dimensional constraints."""
         m = Model()
         x = m.add_variables(lower=0, coords=[range(3)], name="x")
