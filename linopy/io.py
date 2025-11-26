@@ -780,14 +780,16 @@ def to_mosek(
             task.putconname(con_idx, f"qc{label}")
 
             # Set constraint bound based on sense
+            # Note: For boundkey.up, bl is ignored; for boundkey.lo, bu is ignored
+            # We use -inf/+inf to match linear constraint handling pattern
             sense = qc_sense[i]
             rhs = qc_rhs[i]
             if sense == "<=":
                 bk = mosek.boundkey.up
-                bl, bu = 0.0, rhs
+                bl, bu = -np.inf, rhs
             elif sense == ">=":
                 bk = mosek.boundkey.lo
-                bl, bu = rhs, 0.0
+                bl, bu = rhs, np.inf
             else:  # "="
                 bk = mosek.boundkey.fx
                 bl, bu = rhs, rhs
