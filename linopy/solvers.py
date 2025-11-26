@@ -52,7 +52,7 @@ QUADRATIC_SOLVERS = [
 
 # Solvers that support quadratic constraints (QCP/QCQP) via LP file format
 # Note: HiGHS does NOT support quadratic constraints
-# Note: SCIP supports QC but its LP file reading doesnt work atm
+# Note: SCIP supports QC but its LP file reading doesn't work atm
 # Note: XPRESS support convex QC but are excluded due to licensing/config complexity with QCQP
 QUADRATIC_CONSTRAINT_SOLVERS = [
     "gurobi",
