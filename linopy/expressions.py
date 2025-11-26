@@ -1958,6 +1958,191 @@ class QuadraticExpression(BaseExpression):
         nvars = self.model.shape[1]
         return csc_matrix((data, (row, col)), shape=(nvars, nvars))
 
+    def groupby(
+        self,
+        group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame,
+        restore_coord_dims: bool = True,
+        **kwargs: Any,
+    ) -> QuadraticExpressionGroupby:
+        """
+        GroupBy operation for QuadraticExpression.
+
+        Returns a QuadraticExpressionGroupby object for performing grouped
+        operations.
+        """
+        ds = self.data
+        kwargs_dict = dict(restore_coord_dims=restore_coord_dims, **kwargs)
+        return QuadraticExpressionGroupby(ds, group, model=self.model, kwargs=kwargs_dict)
+
+    def rolling(
+        self,
+        dim: Mapping[Any, int] | None = None,
+        min_periods: int | None = None,
+        center: bool | Mapping[Any, bool] = False,
+        **window_kwargs: int,
+    ) -> QuadraticExpressionRolling:
+        """
+        Rolling window object for QuadraticExpression.
+
+        Returns a QuadraticExpressionRolling object for performing rolling
+        operations.
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return QuadraticExpressionRolling(rolling, model=self.model)
+
+    def cumsum(
+        self,
+        dim: DimsLike | None = None,
+        *,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
+        **kwargs: Any,
+    ) -> QuadraticExpression:
+        """
+        Cumulated sum along a given axis.
+
+        Returns
+        -------
+        QuadraticExpression
+        """
+        if not dim:
+            dim = self.coord_dims
+        if isinstance(dim, str):
+            dim = [dim]
+        elif isinstance(dim, EllipsisType) or dim is None:
+            dim = self.coord_dims
+        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
+        return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
+
+
+@dataclass
+@forward_as_properties(groupby=["dims", "groups"])
+class QuadraticExpressionGroupby:
+    """
+    GroupBy object specialized to grouping QuadraticExpression objects.
+    """
+
+    data: xr.Dataset
+    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame
+    model: Any
+    kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def groupby(self) -> xarray.core.groupby.DatasetGroupBy:
+        """
+        Groups the data using the specified group and kwargs.
+        """
+        if isinstance(self.group, pd.DataFrame):
+            raise ValueError(
+                "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
+            )
+        if isinstance(self.group, pd.Series):
+            group_name = self.group.name or "group"
+            group = DataArray(self.group, name=group_name)
+        else:
+            group = self.group  # type: ignore
+
+        return self.data.groupby(group=group, **self.kwargs)
+
+    def map(
+        self,
+        func: Callable[..., Dataset],
+        shortcut: bool = False,
+        args: tuple[()] = (),
+        **kwargs: Any,
+    ) -> QuadraticExpression:
+        """
+        Apply a specified function to the groupby object.
+        """
+        return QuadraticExpression(
+            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
+        )
+
+    def sum(self, use_fallback: bool = False, **kwargs: Any) -> QuadraticExpression:
+        """
+        Sum the groupby object.
+        """
+        non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
+        if isinstance(self.group, non_fallback_types) and not use_fallback:
+            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
+            if isinstance(group, pd.DataFrame):
+                final_group_name = "group"
+            else:
+                final_group_name = getattr(group, "name", "group") or "group"
+
+            if isinstance(group, DataArray):
+                group = group.to_pandas()
+
+            int_map = None
+            if isinstance(group, pd.DataFrame):
+                index_name = group.index.name
+                group = group.reindex(self.data.indexes[group.index.name])
+                group.index.name = index_name
+                int_map = get_index_map(*group.values.T)
+                orig_group = group
+                group = group.apply(tuple, axis=1).map(int_map)
+
+            assert isinstance(group, pd.Series)
+            group_dim = group.index.name
+
+            arrays = [group, group.groupby(group).cumcount()]
+            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
+            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
+            coords = self.data.indexes[group_dim]
+            names_to_drop = [coords.name]
+            if isinstance(coords, pd.MultiIndex):
+                names_to_drop += list(coords.names)
+            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
+            ds = ds.unstack(group_dim, fill_value=QuadraticExpression._fill_value)
+            ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
+
+            if int_map is not None:
+                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
+                index.names = [str(col) for col in orig_group.columns]
+                index.name = GROUP_DIM
+                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
+                ds = xr.Dataset(ds.assign_coords(new_coords))
+
+            ds = ds.rename({GROUP_DIM: final_group_name})
+            return QuadraticExpression(ds, self.model)
+
+        def func(ds: Dataset) -> Dataset:
+            ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+            return ds
+
+        return self.map(func, **kwargs, shortcut=True)
+
+    def roll(self, **kwargs: Any) -> QuadraticExpression:
+        """
+        Roll the groupby object.
+        """
+        return self.map(Dataset.roll, **kwargs)
+
+
+@dataclass
+@forward_as_properties(rolling=["center", "dim", "obj", "rollings", "window"])
+class QuadraticExpressionRolling:
+    """
+    Rolling object specialized to rolling QuadraticExpression objects.
+    """
+
+    rolling: DatasetRolling
+    model: Any
+
+    def sum(self, **kwargs: Any) -> QuadraticExpression:
+        data = self.rolling.construct("_rolling_term", keep_attrs=True)
+        ds = (
+            data[["coeffs", "vars"]]
+            .rename({TERM_DIM: STACKED_TERM_DIM})
+            .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
+        )
+        ds = assign_multiindex_safe(ds, const=data.const.sum("_rolling_term"))
+        return QuadraticExpression(ds, self.model)
+
 
 def as_expression(
     obj: Any, model: Model, **kwargs: Any
