@@ -585,6 +585,22 @@ def test_scaling_integration_row_and_column() -> None:
     assert np.isclose(base_obj, scaled_obj)
 
 
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highs not installed")
+def test_scaling_with_l2_norm() -> None:
+    """Test scaling with row-l2 method."""
+    base = _build_scaling_model()
+    status, _ = base.solve("highs", io_api="direct")
+    assert status == "ok"
+    base_obj = base.objective.value or 0.0
+
+    scaled = _build_scaling_model()
+    status, _ = scaled.solve("highs", io_api="direct", scale="row-l2")
+    assert status == "ok"
+    scaled_obj = scaled.objective.value or 0.0
+
+    assert np.isclose(base_obj, scaled_obj, rtol=1e-4)
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_set_files(
     tmp_path: Any,
