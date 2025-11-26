@@ -1025,6 +1025,10 @@ class TestQuadraticConstraintSolving:
         self, qc_mixed_model: Model, solver: str, io_api: str
     ) -> None:
         """Test QC with both quadratic and linear terms."""
+        # COPT does not handle this nonconvex constraint (x-1)² <= 0
+        if solver == "copt":
+            pytest.skip("COPT does not support this nonconvex constraint form")
+
         status, condition = qc_mixed_model.solve(solver, io_api=io_api)
         assert status == "ok"
         assert condition == "optimal"
@@ -1038,9 +1042,9 @@ class TestQuadraticConstraintSolving:
         self, qc_cross_terms_model: Model, solver: str, io_api: str
     ) -> None:
         """Test QC with cross product terms (xy) - nonconvex bilinear."""
-        # MOSEK does not support nonconvex problems
-        if solver == "mosek":
-            pytest.skip("MOSEK does not support nonconvex bilinear constraints")
+        # MOSEK and COPT do not support nonconvex problems
+        if solver in ("mosek", "copt"):
+            pytest.skip(f"{solver.upper()} does not support nonconvex bilinear constraints")
 
         status, condition = qc_cross_terms_model.solve(solver, io_api=io_api)
         assert status == "ok"
@@ -1063,9 +1067,9 @@ class TestQuadraticConstraintSolving:
         self, qc_geq_model: Model, solver: str, io_api: str
     ) -> None:
         """Test >= quadratic constraint - nonconvex."""
-        # MOSEK does not support nonconvex problems
-        if solver == "mosek":
-            pytest.skip("MOSEK does not support nonconvex >= quadratic constraints")
+        # MOSEK and COPT do not support nonconvex problems
+        if solver in ("mosek", "copt"):
+            pytest.skip(f"{solver.upper()} does not support nonconvex >= quadratic constraints")
 
         status, condition = qc_geq_model.solve(solver, io_api=io_api)
         assert status == "ok"
