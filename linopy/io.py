@@ -801,20 +801,20 @@ def to_mosek(
             task.putconname(con_idx, f"qc{label}")
 
             # Set constraint bound based on sense
-            # Note: For boundkey.up, bl is ignored; for boundkey.lo, bu is ignored
+            # Note: For boundkey.up, bound_lo is ignored; for boundkey.lo, bound_up is ignored
             # We use -inf/+inf to match linear constraint handling pattern
             sense = qc_sense[i]
             rhs = qc_rhs[i]
             if sense == "<=":
                 bk = mosek.boundkey.up
-                bl, bu = -np.inf, rhs
+                bound_lo, bound_up = -np.inf, rhs
             elif sense == ">=":
                 bk = mosek.boundkey.lo
-                bl, bu = rhs, np.inf
+                bound_lo, bound_up = rhs, np.inf
             else:  # "="
                 bk = mosek.boundkey.fx
-                bl, bu = rhs, rhs
-            task.putconbound(con_idx, bk, bl, bu)
+                bound_lo, bound_up = rhs, rhs
+            task.putconbound(con_idx, bk, bound_lo, bound_up)
 
             # Add linear terms if any
             if qc_linear is not None:
