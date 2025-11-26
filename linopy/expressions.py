@@ -1069,10 +1069,9 @@ class BaseExpression(ABC):
     @property
     def shape(self) -> tuple[int, ...]:
         """
-        Get the total shape of the linear expression.
+        Get the shape of the expression (excluding term dimension).
         """
-        assert self.vars.shape == self.coeffs.shape
-        return self.vars.shape
+        return tuple(v for k, v in self.sizes.items() if k != TERM_DIM)
 
     @property
     def size(self) -> int:
