@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-User-perspective benchmark for linopy printing functions.
+User-story benchmark for linopy printing functions.
 
-This benchmark measures the performance of printing operations from a user's
-perspective, focusing on realistic use cases:
-- Printing variables (repr, str)
-- Printing constraints (repr, str)
-- Printing expressions
-- Printing the model summary
+This benchmark compares OLD (O(n) linear search) vs NEW (O(log n) binary search)
+implementations from a user's perspective with realistic workflows.
+
+User Stories:
+-------------
+1. "I want to inspect my model" -> print(model) / repr(model)
+2. "I want to see all my variables" -> print(model.variables)
+3. "I want to see all my constraints" -> print(model.constraints)
+4. "I want to inspect a single variable array" -> print(model.variables["x"])
+5. "I want to inspect a single constraint" -> print(model.constraints["con0"])
+6. "I want to look up specific variable labels" -> variables.print_labels([...])
+7. "I want to look up specific constraint labels" -> constraints.print_labels([...])
+8. "I want to see an expression" -> print(x + y)
+9. "I want to see the objective" -> print(model.objective)
 
 Results are stored in an xarray Dataset for analysis.
 
@@ -22,12 +30,14 @@ import io
 import sys
 import time
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
 import xarray as xr
 
 from linopy import Model
+from linopy.common import get_label_position
 
 
 def build_model(n_vars: int, n_cons: int, terms_per_con: int = 8) -> Model:
@@ -84,126 +94,136 @@ def suppress_output(func: Callable[[], Any]) -> Callable[[], Any]:
     return wrapper
 
 
-def run_user_benchmarks(model: Model, repeats: int) -> xr.Dataset:
+@contextmanager
+def use_original_implementation():
     """
-    Run user-perspective benchmarks.
+    Context manager to temporarily use the original O(n) get_label_position.
 
-    Returns an xarray Dataset with timing results.
+    Monkey-patches Variables and Constraints to use the original implementation.
+    """
+    import linopy.constraints as constraints_module
+    import linopy.variables as variables_module
+
+    # Store optimized methods
+    optimized_var_method = variables_module.Variables.get_label_position
+    optimized_con_method = constraints_module.Constraints.get_label_position
+
+    # Replace with original O(n) implementation
+    def original_var_get_label_position(self, values):
+        return get_label_position(self, values)
+
+    def original_con_get_label_position(self, values):
+        return get_label_position(self, values)
+
+    variables_module.Variables.get_label_position = original_var_get_label_position
+    constraints_module.Constraints.get_label_position = original_con_get_label_position
+
+    try:
+        yield
+    finally:
+        # Restore optimized methods
+        variables_module.Variables.get_label_position = optimized_var_method
+        constraints_module.Constraints.get_label_position = optimized_con_method
+
+
+def run_benchmarks(model: Model, repeats: int) -> xr.Dataset:
+    """
+    Run user-story benchmarks comparing original vs optimized.
+
+    Returns an xarray Dataset with timing results for both implementations.
     """
     results = {}
 
-    # 1. Variable repr (single variable array)
-    x = model.variables["x"]
-
-    def bench_var_repr():
-        return repr(x)
-
-    times = np.fromiter(time_function(bench_var_repr, repeats), dtype=float)
-    results["variable_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of a single Variable array", "shape": str(x.shape)}
-    )
-
-    # 2. Variables container repr
-    def bench_variables_repr():
-        return repr(model.variables)
-
-    times = np.fromiter(time_function(bench_variables_repr, repeats), dtype=float)
-    results["variables_container_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of Variables container", "n_arrays": len(list(model.variables))}
-    )
-
-    # 3. Single constraint repr
-    con = model.constraints[list(model.constraints)[0]]
-
-    def bench_con_repr():
-        return repr(con)
-
-    times = np.fromiter(time_function(bench_con_repr, repeats), dtype=float)
-    results["constraint_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of a single Constraint"}
-    )
-
-    # 4. Constraints container repr
-    def bench_constraints_repr():
-        return repr(model.constraints)
-
-    times = np.fromiter(time_function(bench_constraints_repr, repeats), dtype=float)
-    results["constraints_container_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of Constraints container", "n_arrays": len(list(model.constraints))}
-    )
-
-    # 5. Model repr
-    def bench_model_repr():
-        return repr(model)
-
-    times = np.fromiter(time_function(bench_model_repr, repeats), dtype=float)
-    results["model_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of Model"}
-    )
-
-    # 6. Expression repr (sum of variables)
-    expr = x.sum()
-
-    def bench_expr_repr():
-        return repr(expr)
-
-    times = np.fromiter(time_function(bench_expr_repr, repeats), dtype=float)
-    results["expression_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of a summed expression"}
-    )
-
-    # 7. print_labels for variables (sample of labels)
+    # Prepare test data
     rng = np.random.default_rng(123)
-    var_labels = rng.integers(0, model._xCounter, size=20).tolist()
+    n_label_lookups = 20
+    var_labels = rng.integers(0, model._xCounter, size=n_label_lookups).tolist()
+    con_labels = rng.integers(0, model._cCounter, size=n_label_lookups).tolist()
 
-    def bench_var_print_labels():
-        model.variables.print_labels(var_labels)
+    x = model.variables["x"]
+    first_con_name = list(model.constraints)[0]
+    con = model.constraints[first_con_name]
 
-    times = np.fromiter(time_function(suppress_output(bench_var_print_labels), repeats), dtype=float)
-    results["variable_print_labels"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "print_labels() for 20 variable labels", "n_labels": 20}
-    )
+    # Define user-story benchmark operations
+    user_stories = {
+        # Story 1: Inspect the full model
+        "print_model": {
+            "func": lambda: repr(model),
+            "description": "print(model) - inspect full model",
+            "story": "I want to inspect my model",
+        },
+        # Story 2: See all variables (container repr)
+        "print_all_variables": {
+            "func": lambda: repr(model.variables),
+            "description": "print(model.variables) - list all variable arrays",
+            "story": "I want to see all my variables",
+        },
+        # Story 3: See all constraints (container repr)
+        "print_all_constraints": {
+            "func": lambda: repr(model.constraints),
+            "description": "print(model.constraints) - list all constraint arrays",
+            "story": "I want to see all my constraints",
+        },
+        # Story 4: Inspect a single variable array
+        "print_single_variable_array": {
+            "func": lambda: repr(x),
+            "description": "print(model.variables['x']) - inspect variable array",
+            "story": "I want to inspect a single variable array",
+        },
+        # Story 5: Inspect a single constraint array
+        "print_single_constraint_array": {
+            "func": lambda: repr(con),
+            "description": f"print(model.constraints['{first_con_name}']) - inspect constraint",
+            "story": "I want to inspect a single constraint",
+        },
+        # Story 6: Look up specific variable labels
+        "lookup_variable_labels": {
+            "func": suppress_output(lambda: model.variables.print_labels(var_labels)),
+            "description": f"variables.print_labels({n_label_lookups} labels)",
+            "story": "I want to look up specific variable labels",
+        },
+        # Story 7: Look up specific constraint labels
+        "lookup_constraint_labels": {
+            "func": suppress_output(lambda: model.constraints.print_labels(con_labels)),
+            "description": f"constraints.print_labels({n_label_lookups} labels)",
+            "story": "I want to look up specific constraint labels",
+        },
+        # Story 8: See an expression
+        "print_expression": {
+            "func": lambda: repr(x.sum()),
+            "description": "print(x.sum()) - inspect expression",
+            "story": "I want to see an expression",
+        },
+        # Story 9: See the objective
+        "print_objective": {
+            "func": lambda: repr(model.objective),
+            "description": "print(model.objective) - inspect objective",
+            "story": "I want to see the objective",
+        },
+    }
 
-    # 8. print_labels for constraints (sample of labels)
-    con_labels = rng.integers(0, model._cCounter, size=20).tolist()
+    # Run benchmarks for both implementations
+    for impl in ["original", "optimized"]:
+        if impl == "original":
+            ctx = use_original_implementation()
+        else:
+            ctx = contextmanager(lambda: (yield))()
 
-    def bench_con_print_labels():
-        model.constraints.print_labels(con_labels)
-
-    times = np.fromiter(time_function(suppress_output(bench_con_print_labels), repeats), dtype=float)
-    results["constraint_print_labels"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "print_labels() for 20 constraint labels", "n_labels": 20}
-    )
-
-    # 9. Sliced variable repr
-    x_slice = x.isel(dim_0=slice(0, 5), dim_1=slice(0, 3))
-
-    def bench_var_slice_repr():
-        return repr(x_slice)
-
-    times = np.fromiter(time_function(bench_var_slice_repr, repeats), dtype=float)
-    results["variable_slice_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of sliced Variable (5x3)", "shape": str(x_slice.shape)}
-    )
-
-    # 10. Objective repr
-    def bench_objective_repr():
-        return repr(model.objective)
-
-    times = np.fromiter(time_function(bench_objective_repr, repeats), dtype=float)
-    results["objective_repr"] = xr.DataArray(
-        times, dims=["repeat"],
-        attrs={"description": "repr() of model objective"}
-    )
+        with ctx:
+            for op_name, op_info in user_stories.items():
+                times = np.fromiter(
+                    time_function(op_info["func"], repeats), dtype=float
+                )
+                key = f"{op_name}_{impl}"
+                results[key] = xr.DataArray(
+                    times,
+                    dims=["repeat"],
+                    coords={"repeat": range(repeats)},
+                    attrs={
+                        "description": op_info["description"],
+                        "story": op_info["story"],
+                    },
+                )
 
     # Create dataset
     ds = xr.Dataset(results)
@@ -211,6 +231,7 @@ def run_user_benchmarks(model: Model, repeats: int) -> xr.Dataset:
     ds.attrs["n_constraints"] = model._cCounter
     ds.attrs["n_variable_arrays"] = len(list(model.variables))
     ds.attrs["n_constraint_arrays"] = len(list(model.constraints))
+    ds.attrs["n_label_lookups"] = n_label_lookups
 
     return ds
 
@@ -224,7 +245,8 @@ def compute_summary(ds: xr.Dataset) -> xr.Dataset:
         times = ds[var_name].values * 1000  # Convert to ms
         data[var_name] = xr.DataArray(
             [np.median(times), np.mean(times), np.std(times)],
-            dims=["stat"], coords={"stat": stats}
+            dims=["stat"],
+            coords={"stat": stats},
         )
 
     summary = xr.Dataset(data)
@@ -233,40 +255,90 @@ def compute_summary(ds: xr.Dataset) -> xr.Dataset:
 
 
 def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
-    """Print benchmark results."""
-    print("\n" + "=" * 70)
-    print("USER-PERSPECTIVE BENCHMARK RESULTS")
-    print("=" * 70)
+    """Print benchmark results comparing original vs optimized."""
+    print("\n" + "=" * 90)
+    print("USER-STORY BENCHMARK: Original vs Optimized")
+    print("=" * 90)
 
-    print(f"\nModel: {ds.attrs['n_variables']} variables, {ds.attrs['n_constraints']} constraints")
-    print(f"       {ds.attrs['n_variable_arrays']} variable arrays, {ds.attrs['n_constraint_arrays']} constraint arrays\n")
+    print(
+        f"\nModel: {ds.attrs['n_variables']} variables, "
+        f"{ds.attrs['n_constraints']} constraints"
+    )
+    print(
+        f"       {ds.attrs['n_variable_arrays']} variable arrays, "
+        f"{ds.attrs['n_constraint_arrays']} constraint arrays\n"
+    )
 
-    print("Printing Operations:")
-    print("-" * 70)
-    print(f"  {'Operation':<40s} {'Median':>10s} {'Std':>10s}")
-    print("-" * 70)
+    # Extract operation names
+    all_vars = list(ds.data_vars)
+    operations = sorted(set(v.rsplit("_", 1)[0] for v in all_vars if v.endswith("_original")))
 
-    # Group by category
+    # Group by user story category
     categories = {
-        "Variable Operations": [
-            "variable_repr", "variable_slice_repr", "variables_container_repr", "variable_print_labels"
-        ],
-        "Constraint Operations": [
-            "constraint_repr", "constraints_container_repr", "constraint_print_labels"
-        ],
-        "Model Operations": [
-            "model_repr", "expression_repr", "objective_repr"
-        ],
+        "Model Inspection": ["print_model"],
+        "Container Listing": ["print_all_variables", "print_all_constraints"],
+        "Single Array Inspection": ["print_single_variable_array", "print_single_constraint_array"],
+        "Label Lookup": ["lookup_variable_labels", "lookup_constraint_labels"],
+        "Expression/Objective": ["print_expression", "print_objective"],
     }
 
+    total_orig = 0.0
+    total_opt = 0.0
+
     for category, ops in categories.items():
-        print(f"\n  {category}:")
+        print(f"\n{category}:")
+        print("-" * 90)
+        print(f"  {'User Story':<45s} {'Original':>12s} {'Optimized':>12s} {'Speedup':>10s}")
+        print("-" * 90)
+
         for op in ops:
-            if op in summary.data_vars:
-                median = float(summary[op].sel(stat="median_ms"))
-                std = float(summary[op].sel(stat="std_ms"))
-                desc = ds[op].attrs.get("description", op)
-                print(f"    {desc:<38s} {median:>8.2f}ms {std:>8.2f}ms")
+            if op not in operations:
+                continue
+
+            orig_key = f"{op}_original"
+            opt_key = f"{op}_optimized"
+
+            if orig_key in summary.data_vars and opt_key in summary.data_vars:
+                orig_ms = float(summary[orig_key].sel(stat="median_ms"))
+                opt_ms = float(summary[opt_key].sel(stat="median_ms"))
+                speedup = orig_ms / opt_ms if opt_ms > 0 else float("inf")
+
+                total_orig += orig_ms
+                total_opt += opt_ms
+
+                story = ds[orig_key].attrs.get("story", op)
+                # Truncate long stories
+                if len(story) > 43:
+                    story = story[:40] + "..."
+                print(f"  {story:<45s} {orig_ms:>10.2f}ms {opt_ms:>10.2f}ms {speedup:>9.1f}x")
+
+    print("\n" + "=" * 90)
+    total_speedup = total_orig / total_opt if total_opt > 0 else float("inf")
+    print(f"  {'TOTAL':<45s} {total_orig:>10.2f}ms {total_opt:>10.2f}ms {total_speedup:>9.1f}x")
+
+    print("\n" + "=" * 90)
+    print("SUMMARY")
+    print("=" * 90)
+    print(f"\n  The optimized implementation is {total_speedup:.1f}x faster overall.")
+    print(f"  Total time reduced from {total_orig:.1f}ms to {total_opt:.1f}ms.")
+
+    # Highlight biggest improvements
+    print("\n  Biggest improvements:")
+    improvements = []
+    for op in operations:
+        orig_key = f"{op}_original"
+        opt_key = f"{op}_optimized"
+        if orig_key in summary.data_vars and opt_key in summary.data_vars:
+            orig_ms = float(summary[orig_key].sel(stat="median_ms"))
+            opt_ms = float(summary[opt_key].sel(stat="median_ms"))
+            speedup = orig_ms / opt_ms if opt_ms > 0 else float("inf")
+            story = ds[orig_key].attrs.get("story", op)
+            improvements.append((speedup, story, orig_ms, opt_ms))
+
+    improvements.sort(reverse=True)
+    for speedup, story, orig_ms, opt_ms in improvements[:3]:
+        if speedup > 1.1:  # Only show meaningful improvements
+            print(f"    - {story}: {speedup:.1f}x faster ({orig_ms:.1f}ms -> {opt_ms:.1f}ms)")
 
     print()
 
@@ -282,8 +354,8 @@ def main() -> None:
     print("Building model...")
     model = build_model(args.vars, args.cons)
 
-    print("Running user-perspective benchmarks...")
-    ds = run_user_benchmarks(model, args.repeats)
+    print("Running user-story benchmarks (original vs optimized)...")
+    ds = run_benchmarks(model, args.repeats)
     summary = compute_summary(ds)
 
     print_results(ds, summary)
