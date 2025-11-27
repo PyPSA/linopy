@@ -7,27 +7,26 @@ implementations from a user's perspective with realistic workflows.
 
 User Stories:
 -------------
-1. "I want to inspect my model" -> print(model) / repr(model)
-2. "I want to see all my variables" -> print(model.variables)
-3. "I want to see all my constraints" -> print(model.constraints)
+1. "I want to inspect my model" -> print(model)
+2. "I want to print all variables" -> {name: repr(v) for name, v in model.variables.items()}
+3. "I want to print all constraints" -> {name: repr(c) for name, c in model.constraints.items()}
 4. "I want to inspect a single variable array" -> print(model.variables["x"])
 5. "I want to inspect a single constraint" -> print(model.constraints["con0"])
-6. "I want to look up specific variable labels" -> variables.print_labels([...])
-7. "I want to look up specific constraint labels" -> constraints.print_labels([...])
-8. "I want to see an expression" -> print(x + y)
-9. "I want to see the objective" -> print(model.objective)
+6. "I want to see an expression" -> print(x + y)
+7. "I want to see the objective" -> print(model.objective)
+
+The optimization primarily helps when there are many variable/constraint arrays,
+since get_label_position searches through arrays to find which one contains a label.
 
 Results are stored in an xarray Dataset for analysis.
 
 Usage:
-    python dev-scripts/benchmark_printing.py [--vars N] [--cons N] [--repeats N]
+    python dev-scripts/benchmark_printing.py [--var-arrays N] [--con-arrays N] [--repeats N]
 """
 
 from __future__ import annotations
 
 import argparse
-import io
-import sys
 import time
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
@@ -40,34 +39,41 @@ from linopy import Model
 from linopy.common import get_label_position
 
 
-def build_model(n_vars: int, n_cons: int, terms_per_con: int = 8) -> Model:
-    """Build a model with specified number of variables and constraints."""
+def build_model(n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10) -> Model:
+    """
+    Build a model with specified number of variable and constraint arrays.
+
+    This structure better demonstrates the optimization benefit since
+    get_label_position searches through arrays (not individual variables).
+    """
     rng = np.random.default_rng(42)
     m = Model()
 
-    n_vars_per_dim = int(np.sqrt(n_vars)) + 1
-    x = m.add_variables(
-        lower=0, upper=100, name="x",
-        coords=[range(n_vars_per_dim), range(n_vars_per_dim)],
-    )
-    y = m.add_variables(
-        lower=-50, upper=50, name="y",
-        coords=[range(n_vars_per_dim), range(n_vars_per_dim)],
-    )
+    # Create many variable arrays (this is where the optimization helps!)
+    var_names = []
+    for i in range(n_var_arrays):
+        m.add_variables(
+            lower=0, upper=100, name=f"x{i}",
+            coords=[range(vars_per_array)],
+        )
+        var_names.append(f"x{i}")
 
-    for i in range(n_cons):
-        var_indices = rng.integers(0, n_vars_per_dim, size=(terms_per_con, 2))
-        coeffs = rng.uniform(-10, 10, size=terms_per_con)
+    # Create constraints that reference variables from different arrays
+    for i in range(n_con_arrays):
+        # Pick random variables from random arrays
+        n_terms = min(8, n_var_arrays)
+        array_indices = rng.integers(0, n_var_arrays, size=n_terms)
+        var_indices = rng.integers(0, vars_per_array, size=n_terms)
+        coeffs = rng.uniform(-10, 10, size=n_terms)
+
         lhs = sum(
-            coeffs[j] * (x if j % 2 == 0 else y).isel(
-                dim_0=var_indices[j, 0], dim_1=var_indices[j, 1]
-            )
-            for j in range(terms_per_con)
+            coeffs[j] * m.variables[f"x{array_indices[j]}"].isel(dim_0=var_indices[j])
+            for j in range(n_terms)
         )
         m.add_constraints(lhs >= rng.uniform(-100, 100), name=f"con{i}")
 
-    # Add an objective
-    m.objective = (x.sum() + y.sum()).sum()
+    # Add an objective using all variables
+    m.objective = sum(m.variables[name].sum() for name in var_names)
 
     return m
 
@@ -80,18 +86,6 @@ def time_function(func: Callable[[], Any], repeats: int, warmup: int = 2) -> Ite
         start = time.perf_counter()
         func()
         yield time.perf_counter() - start
-
-
-def suppress_output(func: Callable[[], Any]) -> Callable[[], Any]:
-    """Wrapper to suppress stdout output from a function."""
-    def wrapper():
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            return func()
-        finally:
-            sys.stdout = old_stdout
-    return wrapper
 
 
 @contextmanager
@@ -126,6 +120,32 @@ def use_original_implementation():
         constraints_module.Constraints.get_label_position = optimized_con_method
 
 
+def document_linopy_model(model: Model) -> dict[str, Any]:
+    """
+    Convert all model variables and constraints to a structured string representation.
+    This can take multiple seconds for large models.
+    The output can be saved to a yaml file with readable formatting applied.
+
+    This is a real-world use case that benefits from the get_label_position optimization.
+    """
+    documentation = {
+        'objective': model.objective.__repr__(),
+        'termination_condition': model.termination_condition,
+        'status': model.status,
+        'nvars': model.nvars,
+        'ncons': model.ncons,
+        'variables': {
+            variable_name: variable.__repr__()
+            for variable_name, variable in model.variables.items()
+        },
+        'constraints': {
+            constraint_name: constraint.__repr__()
+            for constraint_name, constraint in model.constraints.items()
+        },
+    }
+    return documentation
+
+
 def run_benchmarks(model: Model, repeats: int) -> xr.Dataset:
     """
     Run user-story benchmarks comparing original vs optimized.
@@ -134,70 +154,63 @@ def run_benchmarks(model: Model, repeats: int) -> xr.Dataset:
     """
     results = {}
 
-    # Prepare test data
-    rng = np.random.default_rng(123)
-    n_label_lookups = 20
-    var_labels = rng.integers(0, model._xCounter, size=n_label_lookups).tolist()
-    con_labels = rng.integers(0, model._cCounter, size=n_label_lookups).tolist()
-
-    x = model.variables["x"]
+    first_var_name = list(model.variables)[0]
+    first_var = model.variables[first_var_name]
     first_con_name = list(model.constraints)[0]
-    con = model.constraints[first_con_name]
+    first_con = model.constraints[first_con_name]
 
-    # Define user-story benchmark operations
+    # Define user-story benchmark operations (PUBLIC API only)
     user_stories = {
-        # Story 1: Inspect the full model
+        # Story 1: Document the full model (real-world use case!)
+        "document_model": {
+            "func": lambda: document_linopy_model(model),
+            "description": "document_linopy_model(model)",
+            "story": "I want to document my model",
+        },
+        # Story 2: Inspect the full model
         "print_model": {
             "func": lambda: repr(model),
-            "description": "print(model) - inspect full model",
+            "description": "print(model)",
             "story": "I want to inspect my model",
         },
-        # Story 2: See all variables (container repr)
+        # Story 3: Print ALL variables
         "print_all_variables": {
-            "func": lambda: repr(model.variables),
-            "description": "print(model.variables) - list all variable arrays",
-            "story": "I want to see all my variables",
+            "func": lambda: {
+                name: repr(var) for name, var in model.variables.items()
+            },
+            "description": "{name: repr(v) for name, v in variables.items()}",
+            "story": "I want to print all variables",
         },
-        # Story 3: See all constraints (container repr)
+        # Story 4: Print ALL constraints
         "print_all_constraints": {
-            "func": lambda: repr(model.constraints),
-            "description": "print(model.constraints) - list all constraint arrays",
-            "story": "I want to see all my constraints",
+            "func": lambda: {
+                name: repr(con) for name, con in model.constraints.items()
+            },
+            "description": "{name: repr(c) for name, c in constraints.items()}",
+            "story": "I want to print all constraints",
         },
-        # Story 4: Inspect a single variable array
-        "print_single_variable_array": {
-            "func": lambda: repr(x),
-            "description": "print(model.variables['x']) - inspect variable array",
-            "story": "I want to inspect a single variable array",
+        # Story 5: Inspect a single variable array
+        "print_single_variable": {
+            "func": lambda: repr(first_var),
+            "description": f"print(model.variables['{first_var_name}'])",
+            "story": "I want to inspect a single variable",
         },
-        # Story 5: Inspect a single constraint array
-        "print_single_constraint_array": {
-            "func": lambda: repr(con),
-            "description": f"print(model.constraints['{first_con_name}']) - inspect constraint",
+        # Story 6: Inspect a single constraint array
+        "print_single_constraint": {
+            "func": lambda: repr(first_con),
+            "description": f"print(model.constraints['{first_con_name}'])",
             "story": "I want to inspect a single constraint",
         },
-        # Story 6: Look up specific variable labels
-        "lookup_variable_labels": {
-            "func": suppress_output(lambda: model.variables.print_labels(var_labels)),
-            "description": f"variables.print_labels({n_label_lookups} labels)",
-            "story": "I want to look up specific variable labels",
-        },
-        # Story 7: Look up specific constraint labels
-        "lookup_constraint_labels": {
-            "func": suppress_output(lambda: model.constraints.print_labels(con_labels)),
-            "description": f"constraints.print_labels({n_label_lookups} labels)",
-            "story": "I want to look up specific constraint labels",
-        },
-        # Story 8: See an expression
+        # Story 7: See an expression
         "print_expression": {
-            "func": lambda: repr(x.sum()),
-            "description": "print(x.sum()) - inspect expression",
+            "func": lambda: repr(first_var.sum()),
+            "description": f"print({first_var_name}.sum())",
             "story": "I want to see an expression",
         },
-        # Story 9: See the objective
+        # Story 8: See the objective
         "print_objective": {
             "func": lambda: repr(model.objective),
-            "description": "print(model.objective) - inspect objective",
+            "description": "print(model.objective)",
             "story": "I want to see the objective",
         },
     }
@@ -231,7 +244,6 @@ def run_benchmarks(model: Model, repeats: int) -> xr.Dataset:
     ds.attrs["n_constraints"] = model._cCounter
     ds.attrs["n_variable_arrays"] = len(list(model.variables))
     ds.attrs["n_constraint_arrays"] = len(list(model.constraints))
-    ds.attrs["n_label_lookups"] = n_label_lookups
 
     return ds
 
@@ -266,8 +278,12 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
     )
     print(
         f"       {ds.attrs['n_variable_arrays']} variable arrays, "
-        f"{ds.attrs['n_constraint_arrays']} constraint arrays\n"
+        f"{ds.attrs['n_constraint_arrays']} constraint arrays"
     )
+    print(
+        "\nNote: The optimization helps when there are many arrays to search through."
+    )
+    print("      get_label_position finds which array contains a given label.\n")
 
     # Extract operation names
     all_vars = list(ds.data_vars)
@@ -275,10 +291,10 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
 
     # Group by user story category
     categories = {
+        "Document Model (real-world use case)": ["document_model"],
         "Model Inspection": ["print_model"],
-        "Container Listing": ["print_all_variables", "print_all_constraints"],
-        "Single Array Inspection": ["print_single_variable_array", "print_single_constraint_array"],
-        "Label Lookup": ["lookup_variable_labels", "lookup_constraint_labels"],
+        "Print All": ["print_all_variables", "print_all_constraints"],
+        "Single Item Inspection": ["print_single_variable", "print_single_constraint"],
         "Expression/Objective": ["print_expression", "print_objective"],
     }
 
@@ -344,17 +360,38 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--vars", type=int, default=1000, help="Number of variables")
-    parser.add_argument("--cons", type=int, default=500, help="Number of constraints")
-    parser.add_argument("--repeats", type=int, default=5, help="Number of repetitions")
-    parser.add_argument("--output", type=str, default=None, help="Output NetCDF file")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--var-arrays", type=int, default=100,
+        help="Number of variable arrays (default: 100)"
+    )
+    parser.add_argument(
+        "--con-arrays", type=int, default=200,
+        help="Number of constraint arrays (default: 200)"
+    )
+    parser.add_argument(
+        "--vars-per-array", type=int, default=10,
+        help="Variables per array (default: 10)"
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=5,
+        help="Number of repetitions (default: 5)"
+    )
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="Output NetCDF file"
+    )
     args = parser.parse_args()
 
     print("Building model...")
-    model = build_model(args.vars, args.cons)
+    print(f"  {args.var_arrays} variable arrays x {args.vars_per_array} vars each")
+    print(f"  {args.con_arrays} constraint arrays")
+    model = build_model(args.var_arrays, args.con_arrays, args.vars_per_array)
 
-    print("Running user-story benchmarks (original vs optimized)...")
+    print("\nRunning user-story benchmarks (original vs optimized)...")
     ds = run_benchmarks(model, args.repeats)
     summary = compute_summary(ds)
 
