@@ -820,6 +820,40 @@ class LabelPositionIndex:
         coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
         return name, coord
 
+    def find_single_with_index(
+        self, value: int
+    ) -> tuple[str, dict, tuple[int, ...]] | tuple[None, None, None]:
+        """
+        Find name, coordinates, and raw numpy index for a single label value.
+
+        Returns (name, coord, index) where index is a tuple of integers that
+        can be used for direct numpy indexing (e.g., arr.values[index]).
+        This avoids the overhead of xarray's .sel() method.
+        """
+        if value == -1:
+            return None, None, None
+
+        self._build_index()
+
+        # Binary search to find the right range
+        idx = int(np.searchsorted(self._starts, value, side="right")) - 1
+
+        if idx < 0 or idx >= len(self._starts):
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        name = self._names[idx]
+        val = self._obj[name]
+        start, stop = val.range
+
+        # Verify the value is in range
+        if value < start or value >= stop:
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        labels = val.labels
+        index = np.unravel_index(value - start, labels.shape)
+        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        return name, coord, index
+
 
 def get_label_position(
     obj: Any, values: int | np.ndarray
@@ -959,14 +993,16 @@ def print_single_variable(model: Any, label: int) -> str:
         return "None"
 
     variables = model.variables
-    name, coord = variables.get_label_position(label)
+    name, coord, index = variables.get_label_position_with_index(label)
 
-    lower = variables[name].lower.sel(coord).item()
-    upper = variables[name].upper.sel(coord).item()
+    var = variables[name]
+    # Use direct numpy indexing instead of .sel() for performance
+    lower = var.lower.values[index]
+    upper = var.upper.values[index]
 
-    if variables[name].attrs["binary"]:
+    if var.attrs["binary"]:
         bounds = " ∈ {0, 1}"
-    elif variables[name].attrs["integer"]:
+    elif var.attrs["integer"]:
         bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
     else:
         bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"

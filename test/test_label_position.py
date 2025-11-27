@@ -112,6 +112,34 @@ class TestLabelPositionIndex:
         with pytest.raises(ValueError, match="not existent"):
             var_index.find_single(99999)
 
+    def test_find_single_with_index(self, model):
+        """Test that find_single_with_index returns correct name, coord, and index."""
+        var_index = LabelPositionIndex(model.variables)
+
+        # Test first variable (x)
+        name, coord, index = var_index.find_single_with_index(0)
+        assert name == "x"
+        assert "dim_0" in coord
+        assert "dim_1" in coord
+        assert isinstance(index, tuple)
+
+        # Verify index can be used for direct numpy access
+        var = model.variables["x"]
+        label_via_index = var.labels.values[index]
+        assert label_via_index == 0
+
+        # Verify coord matches index
+        label_via_coord = int(var.labels.sel(coord).values)
+        assert label_via_coord == label_via_index
+
+    def test_find_single_with_index_minus_one(self, model):
+        """Test that find_single_with_index returns (None, None, None) for -1."""
+        var_index = LabelPositionIndex(model.variables)
+        name, coord, index = var_index.find_single_with_index(-1)
+        assert name is None
+        assert coord is None
+        assert index is None
+
 
 class TestGetLabelPositionOptimized:
     """Tests for the get_label_position_optimized function."""
