@@ -4,6 +4,7 @@ Release Notes
 .. Upcoming Version
 
 * Fix compatibility for xpress versions below 9.6 (regression)
+* Performance: 6x faster printing and repr() for models with many variable/constraint arrays via O(log n) label lookup and direct numpy indexing
 
 Version 0.5.8
 --------------
