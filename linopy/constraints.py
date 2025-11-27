@@ -39,7 +39,7 @@ from linopy.common import (
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position_optimized,
+    get_label_position,
     group_terms_polars,
     has_optimized_model,
     infer_schema_polars,
@@ -998,7 +998,7 @@ class Constraints:
         """
         if self._label_position_index is None:
             self._label_position_index = LabelPositionIndex(self)
-        return get_label_position_optimized(self, values, self._label_position_index)
+        return get_label_position(self, values, self._label_position_index)
 
     def print_labels(
         self, values: Sequence[int], display_max_terms: int | None = None

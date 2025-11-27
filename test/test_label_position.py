@@ -13,7 +13,7 @@ import pytest
 from linopy import Model
 from linopy.common import (
     LabelPositionIndex,
-    get_label_position,
+    _get_label_position_linear,
 )
 
 
@@ -189,7 +189,7 @@ class TestGetLabelPositionOptimized:
         labels = rng.integers(0, max_label, size=50)
 
         for label in labels:
-            original = get_label_position(model.variables, int(label))
+            original = _get_label_position_linear(model.variables, int(label))
             optimized = model.variables.get_label_position(int(label))
             assert original == optimized, f"Mismatch for label {label}"
 
@@ -197,7 +197,7 @@ class TestGetLabelPositionOptimized:
         """Test that batch lookup matches original."""
         labels = np.arange(min(20, model._xCounter))
 
-        original = get_label_position(model.variables, labels)
+        original = _get_label_position_linear(model.variables, labels)
         optimized = model.variables.get_label_position(labels)
 
         assert original == optimized
@@ -330,14 +330,14 @@ class TestEdgeCases:
         # Test variables
         max_var = large_model._xCounter
         for label in rng.integers(0, max_var, size=100):
-            original = get_label_position(large_model.variables, int(label))
+            original = _get_label_position_linear(large_model.variables, int(label))
             optimized = large_model.variables.get_label_position(int(label))
             assert original == optimized
 
         # Test constraints
         max_con = large_model._cCounter
         for label in rng.integers(0, max_con, size=100):
-            original = get_label_position(large_model.constraints, int(label))
+            original = _get_label_position_linear(large_model.constraints, int(label))
             optimized = large_model.constraints.get_label_position(int(label))
             assert original == optimized
 

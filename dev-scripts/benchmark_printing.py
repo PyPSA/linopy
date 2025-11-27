@@ -36,7 +36,7 @@ import numpy as np
 import xarray as xr
 
 from linopy import Model
-from linopy.common import get_label_position
+from linopy.common import _get_label_position_linear
 
 
 def build_model(n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10) -> Model:
@@ -108,10 +108,10 @@ def use_original_implementation():
 
     # Replace with original O(n) implementation
     def original_var_get_label_position(self, values):
-        return get_label_position(self, values)
+        return _get_label_position_linear(self, values)
 
     def original_con_get_label_position(self, values):
-        return get_label_position(self, values)
+        return _get_label_position_linear(self, values)
 
     # Original print_single_variable using .sel()
     def original_print_single_variable(model, label):
@@ -121,7 +121,7 @@ def use_original_implementation():
             return "None"
 
         variables = model.variables
-        name, coord = get_label_position(variables, label)
+        name, coord = _get_label_position_linear(variables, label)
 
         # Original: use .sel() which is slower
         lower = variables[name].lower.sel(coord).item()

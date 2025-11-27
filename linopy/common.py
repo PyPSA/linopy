@@ -855,7 +855,7 @@ class LabelPositionIndex:
         return name, coord, index
 
 
-def get_label_position(
+def _get_label_position_linear(
     obj: Any, values: int | np.ndarray
 ) -> (
     tuple[str, dict]
@@ -867,7 +867,7 @@ def get_label_position(
     Get tuple of name and coordinate for variable labels.
 
     This is the original O(n) implementation that scans through all items.
-    For better performance with many items, use LabelPositionIndex.
+    Used only for testing/benchmarking comparisons.
     """
 
     def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
@@ -903,7 +903,7 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def get_label_position_optimized(
+def get_label_position(
     obj: Any,
     values: int | np.ndarray,
     index: LabelPositionIndex | None = None,
@@ -914,14 +914,14 @@ def get_label_position_optimized(
     | list[list[tuple[str, dict] | tuple[None, None]]]
 ):
     """
-    Get tuple of name and coordinate for variable labels using binary search.
+    Get tuple of name and coordinate for variable labels.
 
-    This is an optimized O(log n) implementation using a pre-built index.
+    Uses O(log n) binary search with a cached index for fast lookups.
 
     Parameters
     ----------
     obj : Any
-        Container object with items() method.
+        Container object with items() method (Variables or Constraints).
     values : int or np.ndarray
         Label value(s) to look up.
     index : LabelPositionIndex, optional

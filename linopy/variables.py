@@ -40,7 +40,7 @@ from linopy.common import (
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position_optimized,
+    get_label_position,
     has_optimized_model,
     is_constant,
     iterate_slices,
@@ -1439,7 +1439,7 @@ class Variables:
         """
         if self._label_position_index is None:
             self._label_position_index = LabelPositionIndex(self)
-        return get_label_position_optimized(self, values, self._label_position_index)
+        return get_label_position(self, values, self._label_position_index)
 
     def get_label_position_with_index(
         self, label: int
