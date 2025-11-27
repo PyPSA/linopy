@@ -91,16 +91,20 @@ def time_function(func: Callable[[], Any], repeats: int, warmup: int = 2) -> Ite
 @contextmanager
 def use_original_implementation():
     """
-    Context manager to temporarily use the original O(n) get_label_position.
+    Context manager to temporarily use the original implementations.
 
-    Monkey-patches Variables and Constraints to use the original implementation.
+    Monkey-patches:
+    - Variables/Constraints.get_label_position to use O(n) linear search
+    - print_single_variable to use .sel() instead of direct numpy indexing
     """
+    import linopy.common as common_module
     import linopy.constraints as constraints_module
     import linopy.variables as variables_module
 
     # Store optimized methods
     optimized_var_method = variables_module.Variables.get_label_position
     optimized_con_method = constraints_module.Constraints.get_label_position
+    optimized_print_single_variable = common_module.print_single_variable
 
     # Replace with original O(n) implementation
     def original_var_get_label_position(self, values):
@@ -109,8 +113,36 @@ def use_original_implementation():
     def original_con_get_label_position(self, values):
         return get_label_position(self, values)
 
+    # Original print_single_variable using .sel()
+    def original_print_single_variable(model, label):
+        from linopy.common import print_coord
+
+        if label == -1:
+            return "None"
+
+        variables = model.variables
+        name, coord = get_label_position(variables, label)
+
+        # Original: use .sel() which is slower
+        lower = variables[name].lower.sel(coord).item()
+        upper = variables[name].upper.sel(coord).item()
+
+        if variables[name].attrs["binary"]:
+            bounds = " ∈ {0, 1}"
+        elif variables[name].attrs["integer"]:
+            bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
+        else:
+            bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
+
+        return f"{name}{print_coord(coord)}{bounds}"
+
+    # Also save the module-level import in variables.py
+    optimized_var_print_single_variable = variables_module.print_single_variable
+
     variables_module.Variables.get_label_position = original_var_get_label_position
     constraints_module.Constraints.get_label_position = original_con_get_label_position
+    common_module.print_single_variable = original_print_single_variable
+    variables_module.print_single_variable = original_print_single_variable
 
     try:
         yield
@@ -118,6 +150,8 @@ def use_original_implementation():
         # Restore optimized methods
         variables_module.Variables.get_label_position = optimized_var_method
         constraints_module.Constraints.get_label_position = optimized_con_method
+        common_module.print_single_variable = optimized_print_single_variable
+        variables_module.print_single_variable = optimized_var_print_single_variable
 
 
 def document_linopy_model(model: Model) -> dict[str, Any]:
