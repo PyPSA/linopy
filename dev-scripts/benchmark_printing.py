@@ -9,9 +9,12 @@ This benchmark measures the performance of:
 4. print_single_constraint - Formatting a complete constraint
 5. print_coord - Formatting coordinate dictionaries
 
+The benchmark tests both original (O(n) linear search) and optimized (O(log n) binary
+search) implementations, verifying correctness by comparing outputs.
+
 Results are stored in an xarray Dataset with dimensions:
 - function: The function being benchmarked
-- implementation: Original vs optimized (where applicable)
+- implementation: "original" or "optimized"
 - repeat: Individual timing measurements
 
 Usage:
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -30,6 +34,8 @@ import xarray as xr
 
 from linopy import Model
 from linopy.common import (
+    LabelPositionIndex,
+    get_label_position_optimized,
     print_coord,
     print_single_constraint,
     print_single_expression,
@@ -109,6 +115,154 @@ def time_function(
         yield end - start
 
 
+@contextmanager
+def patch_get_label_position(use_optimized: bool = False):
+    """
+    Context manager to monkey-patch get_label_position in Variables and Constraints.
+
+    Parameters
+    ----------
+    use_optimized : bool
+        If True, use the optimized O(log n) implementation.
+        If False, use the original O(n) implementation.
+    """
+    import linopy.constraints as constraints_module
+    import linopy.variables as variables_module
+
+    # Store original methods
+    original_var_method = variables_module.Variables.get_label_position
+    original_con_method = constraints_module.Constraints.get_label_position
+
+    if use_optimized:
+        # Create index caches
+        _var_index_cache = {}
+        _con_index_cache = {}
+
+        def optimized_var_get_label_position(self, values):
+            if id(self) not in _var_index_cache:
+                _var_index_cache[id(self)] = LabelPositionIndex(self)
+            return get_label_position_optimized(
+                self, values, _var_index_cache[id(self)]
+            )
+
+        def optimized_con_get_label_position(self, values):
+            if id(self) not in _con_index_cache:
+                _con_index_cache[id(self)] = LabelPositionIndex(self)
+            return get_label_position_optimized(
+                self, values, _con_index_cache[id(self)]
+            )
+
+        variables_module.Variables.get_label_position = optimized_var_get_label_position
+        constraints_module.Constraints.get_label_position = (
+            optimized_con_get_label_position
+        )
+
+    try:
+        yield
+    finally:
+        # Restore original methods
+        variables_module.Variables.get_label_position = original_var_method
+        constraints_module.Constraints.get_label_position = original_con_method
+
+
+def verify_correctness(model: Model, n_samples: int = 100) -> dict[str, bool]:
+    """
+    Verify that optimized implementation produces same results as original.
+
+    Parameters
+    ----------
+    model : Model
+        The model to test against.
+    n_samples : int
+        Number of random samples to test.
+
+    Returns
+    -------
+    dict
+        Dictionary with verification results for each function.
+    """
+    rng = np.random.default_rng(456)
+    results = {}
+
+    # Test variable label position
+    max_var_label = model._xCounter
+    var_labels = rng.integers(0, max_var_label, size=n_samples)
+
+    var_original = []
+    with patch_get_label_position(use_optimized=False):
+        for label in var_labels:
+            var_original.append(model.variables.get_label_position(int(label)))
+
+    var_optimized = []
+    with patch_get_label_position(use_optimized=True):
+        for label in var_labels:
+            var_optimized.append(model.variables.get_label_position(int(label)))
+
+    results["get_label_position_vars"] = var_original == var_optimized
+
+    # Test constraint label position
+    max_con_label = model._cCounter
+    con_labels = rng.integers(0, max_con_label, size=n_samples)
+
+    con_original = []
+    with patch_get_label_position(use_optimized=False):
+        for label in con_labels:
+            con_original.append(model.constraints.get_label_position(int(label)))
+
+    con_optimized = []
+    with patch_get_label_position(use_optimized=True):
+        for label in con_labels:
+            con_optimized.append(model.constraints.get_label_position(int(label)))
+
+    results["get_label_position_cons"] = con_original == con_optimized
+
+    # Test print_single_variable
+    var_print_original = []
+    with patch_get_label_position(use_optimized=False):
+        for label in var_labels[:20]:
+            var_print_original.append(print_single_variable(model, int(label)))
+
+    var_print_optimized = []
+    with patch_get_label_position(use_optimized=True):
+        for label in var_labels[:20]:
+            var_print_optimized.append(print_single_variable(model, int(label)))
+
+    results["print_single_variable"] = var_print_original == var_print_optimized
+
+    # Test print_single_constraint
+    con_print_original = []
+    with patch_get_label_position(use_optimized=False):
+        for label in con_labels[:20]:
+            con_print_original.append(print_single_constraint(model, int(label)))
+
+    con_print_optimized = []
+    with patch_get_label_position(use_optimized=True):
+        for label in con_labels[:20]:
+            con_print_optimized.append(print_single_constraint(model, int(label)))
+
+    results["print_single_constraint"] = con_print_original == con_print_optimized
+
+    # Test batch lookups (1D array)
+    batch_labels = var_labels[:50]
+    with patch_get_label_position(use_optimized=False):
+        batch_original = model.variables.get_label_position(batch_labels)
+    with patch_get_label_position(use_optimized=True):
+        batch_optimized = model.variables.get_label_position(batch_labels)
+
+    results["batch_lookup_1d"] = batch_original == batch_optimized
+
+    # Test 2D array lookups
+    labels_2d = var_labels[:20].reshape(4, 5)
+    with patch_get_label_position(use_optimized=False):
+        batch_2d_original = model.variables.get_label_position(labels_2d)
+    with patch_get_label_position(use_optimized=True):
+        batch_2d_optimized = model.variables.get_label_position(labels_2d)
+
+    results["batch_lookup_2d"] = batch_2d_original == batch_2d_optimized
+
+    return results
+
+
 def run_benchmarks(
     model: Model, n_lookups: int, terms_per_expr: int, repeats: int
 ) -> xr.Dataset:
@@ -129,9 +283,7 @@ def run_benchmarks(
     Returns
     -------
     xr.Dataset
-        Dataset with benchmark results. Dimensions:
-        - repeat: Individual timing measurements
-        Data variables include timing results for each function/step.
+        Dataset with benchmark results.
     """
     rng = np.random.default_rng(123)
     variables = model.variables
@@ -159,131 +311,88 @@ def run_benchmarks(
         coord = {f"dim_{i}": rng.integers(0, 100) for i in range(n_dims)}
         coords_list.append(coord)
 
-    # Prepare constraint breakdown data
-    positions = [constraints.get_label_position(int(label)) for label in con_labels]
-    all_var_labels = []
-    extracted_data = []
-    for name, coord in positions:
-        con = constraints[name]
-        vars_arr = con.vars.sel(coord).values.flatten()
-        vars_arr = vars_arr[vars_arr != -1]
-        all_var_labels.extend(vars_arr.tolist())
-        extracted_data.append((con.coeffs.sel(coord).values, con.vars.sel(coord).values))
-
-    # Build optimized lookup index
-    ranges = []
-    for name in constraints:
-        con = constraints[name]
-        start, stop = con.range
-        ranges.append((start, stop, name))
-    ranges.sort(key=lambda x: x[0])
-    starts = np.array([r[0] for r in ranges])
-    stops = np.array([r[1] for r in ranges])
-    names = [r[2] for r in ranges]
-
-    def optimized_find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
-        if value == -1:
-            return None, None
-        idx = np.searchsorted(starts, value, side="right") - 1
-        if idx < 0 or idx >= len(starts) or value < starts[idx] or value >= stops[idx]:
-            raise ValueError(f"Label {value} not found")
-        name = names[idx]
-        con = constraints[name]
-        labels_arr = con.labels
-        local_idx = value - starts[idx]
-        index = np.unravel_index(local_idx, labels_arr.shape)
-        coord = {
-            dim: labels_arr.indexes[dim][i] for dim, i in zip(labels_arr.dims, index)
-        }
-        return name, coord
-
-    # Define benchmark functions
-    benchmarks = {
-        # Main functions
-        "get_label_position_vars": lambda: [
-            variables.get_label_position(int(l)) for l in var_labels
-        ],
-        "get_label_position_cons": lambda: [
-            constraints.get_label_position(int(l)) for l in con_labels
-        ],
-        "get_label_position_cons_optimized": lambda: [
-            optimized_find_single(int(l)) for l in con_labels
-        ],
-        "print_single_variable": lambda: [
-            print_single_variable(model, int(l)) for l in var_labels
-        ],
-        "print_single_expression": lambda: [
-            print_single_expression(c, v, const, model) for c, v, const in expressions
-        ],
-        "print_single_constraint": lambda: [
-            print_single_constraint(model, int(l)) for l in con_labels
-        ],
-        "print_coord": lambda: [print_coord(c) for c in coords_list],
-        # Breakdown steps for print_single_constraint
-        "breakdown_constraint_lookup": lambda: [
-            constraints.get_label_position(int(l)) for l in con_labels
-        ],
-        "breakdown_sel_calls": lambda: [
-            (
-                constraints[name].coeffs.sel(coord).values,
-                constraints[name].vars.sel(coord).values,
-                constraints[name].sign.sel(coord).item(),
-                constraints[name].rhs.sel(coord).item(),
-            )
-            for name, coord in positions
-        ],
-        "breakdown_variable_lookup": lambda: [
-            variables.get_label_position(int(l)) for l in all_var_labels
-        ],
-        "breakdown_print_expression": lambda: [
-            print_single_expression(c, v, 0, model) for c, v in extracted_data
-        ],
-        "breakdown_string_format": lambda: [
-            f"{name}{print_coord(coord)}: expr sign 0.0" for name, coord in positions
-        ],
-        # __repr__ calls
-        "repr_variable": lambda: repr(variables[list(variables)[0]]),
-        "repr_constraint": lambda: repr(constraints[list(constraints)[0]]),
-    }
-
-    # Run benchmarks and collect results
+    # Define benchmarks with both implementations
+    implementations = ["original", "optimized"]
     results = {}
-    for name, func in benchmarks.items():
-        times = np.fromiter(time_function(func, repeats), dtype=float)
-        results[name] = xr.DataArray(
-            times,
-            dims=["repeat"],
-            coords={"repeat": range(repeats)},
-        )
+
+    for impl in implementations:
+        use_opt = impl == "optimized"
+
+        with patch_get_label_position(use_optimized=use_opt):
+            # get_label_position for variables
+            def bench_var_lookup():
+                return [variables.get_label_position(int(l)) for l in var_labels]
+
+            times = np.fromiter(time_function(bench_var_lookup, repeats), dtype=float)
+            results[f"get_label_position_vars_{impl}"] = xr.DataArray(
+                times, dims=["repeat"], coords={"repeat": range(repeats)}
+            )
+            results[f"get_label_position_vars_{impl}"].attrs["n_operations"] = n_lookups
+
+            # get_label_position for constraints
+            def bench_con_lookup():
+                return [constraints.get_label_position(int(l)) for l in con_labels]
+
+            times = np.fromiter(time_function(bench_con_lookup, repeats), dtype=float)
+            results[f"get_label_position_cons_{impl}"] = xr.DataArray(
+                times, dims=["repeat"], coords={"repeat": range(repeats)}
+            )
+            results[f"get_label_position_cons_{impl}"].attrs["n_operations"] = n_lookups
+
+            # print_single_variable
+            def bench_print_var():
+                return [print_single_variable(model, int(l)) for l in var_labels]
+
+            times = np.fromiter(time_function(bench_print_var, repeats), dtype=float)
+            results[f"print_single_variable_{impl}"] = xr.DataArray(
+                times, dims=["repeat"], coords={"repeat": range(repeats)}
+            )
+            results[f"print_single_variable_{impl}"].attrs["n_operations"] = n_lookups
+
+            # print_single_constraint
+            def bench_print_con():
+                return [print_single_constraint(model, int(l)) for l in con_labels]
+
+            times = np.fromiter(time_function(bench_print_con, repeats), dtype=float)
+            results[f"print_single_constraint_{impl}"] = xr.DataArray(
+                times, dims=["repeat"], coords={"repeat": range(repeats)}
+            )
+            results[f"print_single_constraint_{impl}"].attrs["n_operations"] = n_lookups
+
+            # print_single_expression (uses variable lookups internally)
+            def bench_print_expr():
+                return [
+                    print_single_expression(c, v, const, model)
+                    for c, v, const in expressions
+                ]
+
+            times = np.fromiter(time_function(bench_print_expr, repeats), dtype=float)
+            results[f"print_single_expression_{impl}"] = xr.DataArray(
+                times, dims=["repeat"], coords={"repeat": range(repeats)}
+            )
+            results[f"print_single_expression_{impl}"].attrs["n_operations"] = n_lookups
+
+    # print_coord (doesn't use get_label_position, no impl difference)
+    def bench_print_coord():
+        return [print_coord(c) for c in coords_list]
+
+    times = np.fromiter(time_function(bench_print_coord, repeats), dtype=float)
+    results["print_coord"] = xr.DataArray(
+        times, dims=["repeat"], coords={"repeat": range(repeats)}
+    )
+    results["print_coord"].attrs["n_operations"] = n_lookups * 10
 
     # Create dataset
     ds = xr.Dataset(results)
 
-    # Add metadata as attributes
+    # Add metadata
     ds.attrs["n_variables"] = model._xCounter
     ds.attrs["n_constraints"] = model._cCounter
     ds.attrs["n_variable_arrays"] = len(list(variables))
     ds.attrs["n_constraint_arrays"] = len(list(constraints))
     ds.attrs["n_lookups"] = n_lookups
     ds.attrs["terms_per_expr"] = terms_per_expr
-    ds.attrs["n_var_labels_in_breakdown"] = len(all_var_labels)
     ds.attrs["description"] = "Benchmark timings in seconds"
-
-    # Add per-variable attributes
-    ds["get_label_position_vars"].attrs["n_operations"] = n_lookups
-    ds["get_label_position_cons"].attrs["n_operations"] = n_lookups
-    ds["get_label_position_cons_optimized"].attrs["n_operations"] = n_lookups
-    ds["print_single_variable"].attrs["n_operations"] = n_lookups
-    ds["print_single_expression"].attrs["n_operations"] = n_lookups
-    ds["print_single_constraint"].attrs["n_operations"] = n_lookups
-    ds["print_coord"].attrs["n_operations"] = n_lookups * 10
-    ds["breakdown_constraint_lookup"].attrs["n_operations"] = n_lookups
-    ds["breakdown_sel_calls"].attrs["n_operations"] = n_lookups
-    ds["breakdown_variable_lookup"].attrs["n_operations"] = len(all_var_labels)
-    ds["breakdown_print_expression"].attrs["n_operations"] = n_lookups
-    ds["breakdown_string_format"].attrs["n_operations"] = n_lookups
-    ds["repr_variable"].attrs["n_operations"] = 1
-    ds["repr_constraint"].attrs["n_operations"] = 1
 
     return ds
 
@@ -292,39 +401,46 @@ def compute_summary(ds: xr.Dataset) -> xr.Dataset:
     """
     Compute summary statistics from benchmark results.
 
-    Parameters
-    ----------
-    ds : xr.Dataset
-        Raw benchmark results from run_benchmarks.
-
-    Returns
-    -------
-    xr.Dataset
-        Summary statistics with dimensions:
-        - function: Name of the benchmarked function
-        - stat: Statistic type (median, mean, std, per_op_median)
+    Returns a Dataset with a 2D DataArray indexed by (function, stat).
     """
-    functions = list(ds.data_vars)
+    # Extract unique function names (without _original/_optimized suffix)
+    all_vars = list(ds.data_vars)
+    functions = sorted(
+        set(
+            v.replace("_original", "").replace("_optimized", "")
+            for v in all_vars
+        )
+    )
+    implementations = ["original", "optimized"]
     stats = ["median_s", "mean_s", "std_s", "per_op_us"]
 
-    data = np.zeros((len(functions), len(stats)))
+    # Build summary data
+    data = {}
+    for func in functions:
+        for impl in implementations:
+            key = f"{func}_{impl}"
+            if key not in ds.data_vars:
+                # Function doesn't have impl variants (e.g., print_coord)
+                if func in ds.data_vars and impl == "original":
+                    key = func
+                else:
+                    continue
 
-    for i, func in enumerate(functions):
-        times = ds[func].values
-        n_ops = ds[func].attrs.get("n_operations", 1)
-        data[i, 0] = np.median(times)
-        data[i, 1] = np.mean(times)
-        data[i, 2] = np.std(times)
-        data[i, 3] = (np.median(times) / n_ops) * 1_000_000  # Convert to microseconds
+            times = ds[key].values
+            n_ops = ds[key].attrs.get("n_operations", 1)
 
-    summary = xr.DataArray(
-        data,
-        dims=["function", "stat"],
-        coords={"function": functions, "stat": stats},
-        name="timing_summary",
-    )
+            row_data = [
+                np.median(times),
+                np.mean(times),
+                np.std(times),
+                (np.median(times) / n_ops) * 1_000_000,
+            ]
 
-    summary_ds = xr.Dataset({"timing_summary": summary})
+            data[f"{func}_{impl}"] = xr.DataArray(
+                row_data, dims=["stat"], coords={"stat": stats}
+            )
+
+    summary_ds = xr.Dataset(data)
     summary_ds.attrs = ds.attrs.copy()
     summary_ds.attrs["stat_units"] = {
         "median_s": "seconds",
@@ -336,69 +452,62 @@ def compute_summary(ds: xr.Dataset) -> xr.Dataset:
     return summary_ds
 
 
-def print_summary(ds: xr.Dataset, summary: xr.Dataset) -> None:
+def print_summary(ds: xr.Dataset, summary: xr.Dataset, verification: dict) -> None:
     """Print a concise summary of benchmark results."""
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 75)
     print("BENCHMARK RESULTS")
-    print("=" * 70)
+    print("=" * 75)
 
-    print(f"\nModel: {ds.attrs['n_variables']} variables, "
-          f"{ds.attrs['n_constraints']} constraints")
-    print(f"       {ds.attrs['n_variable_arrays']} variable arrays, "
-          f"{ds.attrs['n_constraint_arrays']} constraint arrays")
-    print(f"       {ds.attrs['n_lookups']} lookups, "
-          f"{ds.attrs['terms_per_expr']} terms/expr\n")
+    print(
+        f"\nModel: {ds.attrs['n_variables']} variables, "
+        f"{ds.attrs['n_constraints']} constraints"
+    )
+    print(
+        f"       {ds.attrs['n_variable_arrays']} variable arrays, "
+        f"{ds.attrs['n_constraint_arrays']} constraint arrays"
+    )
+    print(
+        f"       {ds.attrs['n_lookups']} lookups, "
+        f"{ds.attrs['terms_per_expr']} terms/expr\n"
+    )
 
-    timing = summary["timing_summary"]
+    # Verification results
+    print("Correctness Verification:")
+    print("-" * 75)
+    all_passed = all(verification.values())
+    for func, passed in verification.items():
+        status = "PASS" if passed else "FAIL"
+        print(f"  {func:40s}: {status}")
+    print(f"\n  Overall: {'ALL TESTS PASSED' if all_passed else 'SOME TESTS FAILED'}\n")
 
-    # Main functions
-    print("Main Functions:")
-    print("-" * 70)
-    main_funcs = [
+    # Performance comparison
+    print("Performance Comparison (Original vs Optimized):")
+    print("-" * 75)
+    print(f"  {'Function':<35s} {'Original':>12s} {'Optimized':>12s} {'Speedup':>10s}")
+    print("-" * 75)
+
+    functions = [
         "get_label_position_vars",
         "get_label_position_cons",
         "print_single_variable",
         "print_single_expression",
         "print_single_constraint",
-        "print_coord",
     ]
-    for func in main_funcs:
-        median_ms = float(timing.sel(function=func, stat="median_s")) * 1000
-        per_op = float(timing.sel(function=func, stat="per_op_us"))
-        print(f"  {func:35s}: {median_ms:8.2f} ms  ({per_op:8.2f} µs/op)")
 
-    # Optimization comparison
-    print("\nOptimization Comparison (get_label_position_cons):")
-    print("-" * 70)
-    orig = float(timing.sel(function="get_label_position_cons", stat="median_s"))
-    opt = float(timing.sel(function="get_label_position_cons_optimized", stat="median_s"))
-    speedup = orig / opt if opt > 0 else float("inf")
-    print(f"  Original (linear):   {orig * 1000:8.2f} ms")
-    print(f"  Optimized (binary):  {opt * 1000:8.2f} ms")
-    print(f"  Speedup:             {speedup:8.1f}x")
+    for func in functions:
+        orig_key = f"{func}_original"
+        opt_key = f"{func}_optimized"
 
-    # Breakdown
-    print("\nprint_single_constraint Breakdown:")
-    print("-" * 70)
-    total_time = float(timing.sel(function="print_single_constraint", stat="median_s"))
-    breakdown_funcs = [
-        ("breakdown_constraint_lookup", "Constraint label lookup"),
-        ("breakdown_sel_calls", ".sel() calls"),
-        ("breakdown_variable_lookup", "Variable label lookup"),
-        ("breakdown_print_expression", "print_expression"),
-        ("breakdown_string_format", "String formatting"),
-    ]
-    for func, label in breakdown_funcs:
-        t = float(timing.sel(function=func, stat="median_s"))
-        pct = (t / total_time) * 100 if total_time > 0 else 0
-        print(f"  {label:30s}: {t * 1000:8.2f} ms  ({pct:5.1f}%)")
+        if orig_key in summary.data_vars and opt_key in summary.data_vars:
+            orig_ms = float(summary[orig_key].sel(stat="median_s")) * 1000
+            opt_ms = float(summary[opt_key].sel(stat="median_s")) * 1000
+            speedup = orig_ms / opt_ms if opt_ms > 0 else float("inf")
+            print(f"  {func:<35s} {orig_ms:>10.2f}ms {opt_ms:>10.2f}ms {speedup:>9.1f}x")
 
-    # __repr__ calls
-    print("\n__repr__ Calls:")
-    print("-" * 70)
-    for func in ["repr_variable", "repr_constraint"]:
-        median_ms = float(timing.sel(function=func, stat="median_s")) * 1000
-        print(f"  {func:35s}: {median_ms:8.2f} ms")
+    # print_coord (no impl variants)
+    if "print_coord_original" in summary.data_vars:
+        pc_ms = float(summary["print_coord_original"].sel(stat="median_s")) * 1000
+        print(f"  {'print_coord':<35s} {pc_ms:>10.2f}ms {'N/A':>12s} {'N/A':>10s}")
 
     print()
 
@@ -424,22 +533,23 @@ def main() -> None:
     print("Building model...")
     model = build_model(args.vars, args.cons, args.terms)
 
+    print("Verifying correctness...")
+    verification = verify_correctness(model)
+
     print("Running benchmarks...")
     ds = run_benchmarks(model, args.lookups, args.terms, args.repeats)
     summary = compute_summary(ds)
 
     # Print summary
-    print_summary(ds, summary)
+    print_summary(ds, summary, verification)
 
     # Save to file if requested
     if args.output:
-        # Combine raw and summary into one dataset
         combined = xr.merge([ds, summary])
         combined.to_netcdf(args.output)
         print(f"Results saved to {args.output}")
 
-    # Return datasets for interactive use
-    return ds, summary
+    return ds, summary, verification
 
 
 if __name__ == "__main__":
