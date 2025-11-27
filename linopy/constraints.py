@@ -878,9 +878,36 @@ class Constraints:
         """
         Get the number all constraints effectively used by the model.
 
-        These excludes constraints with missing labels.
+        This excludes constraints with missing labels or where all variables
+        are masked (vars == -1).
         """
-        return len(self.flat.labels.unique())
+        total = 0
+        for con in self.data.values():
+            labels = con.labels.values
+            vars_arr = con.vars.values
+
+            # Handle scalar constraint (single constraint, labels is 0-d)
+            if labels.ndim == 0:
+                # Scalar: valid if label != -1 and any var != -1
+                if labels != -1 and (vars_arr != -1).any():
+                    total += 1
+                continue
+
+            # Array constraint: labels has constraint dimensions, vars has
+            # constraint dimensions + _term dimension
+            valid_labels = labels != -1
+
+            # Check if any variable in each constraint is valid (not -1)
+            # vars has shape (..., n_terms) where ... matches labels shape
+            has_valid_var = (vars_arr != -1).any(axis=-1)
+
+            active = valid_labels & has_valid_var
+
+            if con.mask is not None:
+                active = active & con.mask.values
+
+            total += int(active.sum())
+        return total
 
     @property
     def inequalities(self) -> Constraints:
