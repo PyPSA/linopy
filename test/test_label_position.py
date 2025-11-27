@@ -14,7 +14,6 @@ from linopy import Model
 from linopy.common import (
     LabelPositionIndex,
     get_label_position,
-    get_label_position_optimized,
 )
 
 
