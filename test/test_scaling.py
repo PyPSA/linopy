@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from linopy.constants import Result, Solution, Status
+from linopy.constants import (
+    Result,
+    Solution,
+    SolverStatus,
+    Status,
+    TerminationCondition,
+)
 from linopy.model import Model
 from linopy.scaling import ScaleOptions, ScalingContext, resolve_options
 
@@ -157,10 +163,12 @@ def test_unscale_solution_none_solution() -> None:
     ctx = ScalingContext.from_model(m.matrices, opts)
 
     # Result with None solution returns unchanged
-    result = Result(Status("warning", "infeasible"), solution=None)
+    result = Result(
+        Status(SolverStatus.warning, TerminationCondition.infeasible), solution=None
+    )
     unscaled = ctx.unscale_solution(result)
     assert unscaled is result
-    assert unscaled.solution is None
+    assert unscaled is not None and unscaled.solution is None
 
 
 def test_unscale_solution_empty_primal_dual() -> None:
@@ -170,8 +178,8 @@ def test_unscale_solution_empty_primal_dual() -> None:
 
     # Empty primal/dual should not fail
     sol = Solution(primal=pd.Series(dtype=float), dual=pd.Series(dtype=float))
-    result = Result(Status("ok", "optimal"), solution=sol)
+    result = Result(Status(SolverStatus.ok, TerminationCondition.optimal), solution=sol)
     unscaled = ctx.unscale_solution(result)
-    assert unscaled.solution is not None
+    assert unscaled is not None and unscaled.solution is not None
     assert unscaled.solution.primal.empty
     assert unscaled.solution.dual.empty
