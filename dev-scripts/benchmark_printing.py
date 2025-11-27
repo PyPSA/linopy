@@ -39,7 +39,9 @@ from linopy import Model
 from linopy.common import _get_label_position_linear
 
 
-def build_model(n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10) -> Model:
+def build_model(
+    n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10
+) -> Model:
     """
     Build a model with specified number of variable and constraint arrays.
 
@@ -53,7 +55,9 @@ def build_model(n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10) 
     var_names = []
     for i in range(n_var_arrays):
         m.add_variables(
-            lower=0, upper=100, name=f"x{i}",
+            lower=0,
+            upper=100,
+            name=f"x{i}",
             coords=[range(vars_per_array)],
         )
         var_names.append(f"x{i}")
@@ -78,7 +82,9 @@ def build_model(n_var_arrays: int, n_con_arrays: int, vars_per_array: int = 10) 
     return m
 
 
-def time_function(func: Callable[[], Any], repeats: int, warmup: int = 2) -> Iterable[float]:
+def time_function(
+    func: Callable[[], Any], repeats: int, warmup: int = 2
+) -> Iterable[float]:
     """Time a function over multiple iterations."""
     for _ in range(warmup):
         func()
@@ -163,16 +169,16 @@ def document_linopy_model(model: Model) -> dict[str, Any]:
     This is a real-world use case that benefits from the get_label_position optimization.
     """
     documentation = {
-        'objective': model.objective.__repr__(),
-        'termination_condition': model.termination_condition,
-        'status': model.status,
-        'nvars': model.nvars,
-        'ncons': model.ncons,
-        'variables': {
+        "objective": model.objective.__repr__(),
+        "termination_condition": model.termination_condition,
+        "status": model.status,
+        "nvars": model.nvars,
+        "ncons": model.ncons,
+        "variables": {
             variable_name: variable.__repr__()
             for variable_name, variable in model.variables.items()
         },
-        'constraints': {
+        "constraints": {
             constraint_name: constraint.__repr__()
             for constraint_name, constraint in model.constraints.items()
         },
@@ -209,9 +215,7 @@ def run_benchmarks(model: Model, repeats: int) -> xr.Dataset:
         },
         # Story 3: Print ALL variables
         "print_all_variables": {
-            "func": lambda: {
-                name: repr(var) for name, var in model.variables.items()
-            },
+            "func": lambda: {name: repr(var) for name, var in model.variables.items()},
             "description": "{name: repr(v) for name, v in variables.items()}",
             "story": "I want to print all variables",
         },
@@ -321,7 +325,9 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
 
     # Extract operation names
     all_vars = list(ds.data_vars)
-    operations = sorted(set(v.rsplit("_", 1)[0] for v in all_vars if v.endswith("_original")))
+    operations = sorted(
+        set(v.rsplit("_", 1)[0] for v in all_vars if v.endswith("_original"))
+    )
 
     # Group by user story category
     categories = {
@@ -338,7 +344,9 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
     for category, ops in categories.items():
         print(f"\n{category}:")
         print("-" * 90)
-        print(f"  {'User Story':<45s} {'Original':>12s} {'Optimized':>12s} {'Speedup':>10s}")
+        print(
+            f"  {'User Story':<45s} {'Original':>12s} {'Optimized':>12s} {'Speedup':>10s}"
+        )
         print("-" * 90)
 
         for op in ops:
@@ -360,11 +368,15 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
                 # Truncate long stories
                 if len(story) > 43:
                     story = story[:40] + "..."
-                print(f"  {story:<45s} {orig_ms:>10.2f}ms {opt_ms:>10.2f}ms {speedup:>9.1f}x")
+                print(
+                    f"  {story:<45s} {orig_ms:>10.2f}ms {opt_ms:>10.2f}ms {speedup:>9.1f}x"
+                )
 
     print("\n" + "=" * 90)
     total_speedup = total_orig / total_opt if total_opt > 0 else float("inf")
-    print(f"  {'TOTAL':<45s} {total_orig:>10.2f}ms {total_opt:>10.2f}ms {total_speedup:>9.1f}x")
+    print(
+        f"  {'TOTAL':<45s} {total_orig:>10.2f}ms {total_opt:>10.2f}ms {total_speedup:>9.1f}x"
+    )
 
     print("\n" + "=" * 90)
     print("SUMMARY")
@@ -388,7 +400,9 @@ def print_results(ds: xr.Dataset, summary: xr.Dataset) -> None:
     improvements.sort(reverse=True)
     for speedup, story, orig_ms, opt_ms in improvements[:3]:
         if speedup > 1.1:  # Only show meaningful improvements
-            print(f"    - {story}: {speedup:.1f}x faster ({orig_ms:.1f}ms -> {opt_ms:.1f}ms)")
+            print(
+                f"    - {story}: {speedup:.1f}x faster ({orig_ms:.1f}ms -> {opt_ms:.1f}ms)"
+            )
 
     print()
 
@@ -399,25 +413,27 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--var-arrays", type=int, default=100,
-        help="Number of variable arrays (default: 100)"
+        "--var-arrays",
+        type=int,
+        default=100,
+        help="Number of variable arrays (default: 100)",
     )
     parser.add_argument(
-        "--con-arrays", type=int, default=200,
-        help="Number of constraint arrays (default: 200)"
+        "--con-arrays",
+        type=int,
+        default=200,
+        help="Number of constraint arrays (default: 200)",
     )
     parser.add_argument(
-        "--vars-per-array", type=int, default=10,
-        help="Variables per array (default: 10)"
+        "--vars-per-array",
+        type=int,
+        default=10,
+        help="Variables per array (default: 10)",
     )
     parser.add_argument(
-        "--repeats", type=int, default=5,
-        help="Number of repetitions (default: 5)"
+        "--repeats", type=int, default=5, help="Number of repetitions (default: 5)"
     )
-    parser.add_argument(
-        "--output", type=str, default=None,
-        help="Output NetCDF file"
-    )
+    parser.add_argument("--output", type=str, default=None, help="Output NetCDF file")
     args = parser.parse_args()
 
     print("Building model...")

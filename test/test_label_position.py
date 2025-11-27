@@ -45,7 +45,7 @@ def large_model():
         idx1, idx2 = rng.integers(0, 20, size=2)
         m.add_constraints(
             x.isel(dim_0=idx1, dim_1=idx2) + y.isel(dim_0=idx1, dim_1=idx2) >= 0,
-            name=f"con{i}"
+            name=f"con{i}",
         )
 
     return m
@@ -282,7 +282,9 @@ class TestCacheInvalidation:
         """Test that cache handles repeated add/remove cycles."""
         for i in range(5):
             # Add variable
-            model.add_variables(lower=0, upper=1, name=f"temp_var_{i}", coords=[range(2)])
+            model.add_variables(
+                lower=0, upper=1, name=f"temp_var_{i}", coords=[range(2)]
+            )
 
             # Lookup should work
             result = model.variables.get_label_position(0)

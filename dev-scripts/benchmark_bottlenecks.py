@@ -37,11 +37,15 @@ def build_model(n_vars: int, n_cons: int, terms_per_con: int = 5) -> Model:
 
     n_vars_per_dim = int(np.sqrt(n_vars)) + 1
     x = m.add_variables(
-        lower=0, upper=100, name="x",
+        lower=0,
+        upper=100,
+        name="x",
         coords=[range(n_vars_per_dim), range(n_vars_per_dim)],
     )
     y = m.add_variables(
-        lower=-50, upper=50, name="y",
+        lower=-50,
+        upper=50,
+        name="y",
         coords=[range(n_vars_per_dim), range(n_vars_per_dim)],
     )
 
@@ -49,7 +53,8 @@ def build_model(n_vars: int, n_cons: int, terms_per_con: int = 5) -> Model:
         var_indices = rng.integers(0, n_vars_per_dim, size=(terms_per_con, 2))
         coeffs = rng.uniform(-10, 10, size=terms_per_con)
         lhs = sum(
-            coeffs[j] * (x if j % 2 == 0 else y).isel(
+            coeffs[j]
+            * (x if j % 2 == 0 else y).isel(
                 dim_0=var_indices[j, 0], dim_1=var_indices[j, 1]
             )
             for j in range(terms_per_con)
@@ -59,7 +64,9 @@ def build_model(n_vars: int, n_cons: int, terms_per_con: int = 5) -> Model:
     return m
 
 
-def time_function(func: Callable[[], Any], repeats: int, warmup: int = 2) -> Iterable[float]:
+def time_function(
+    func: Callable[[], Any], repeats: int, warmup: int = 2
+) -> Iterable[float]:
     """Time a function over multiple iterations."""
     for _ in range(warmup):
         func()
@@ -69,9 +76,7 @@ def time_function(func: Callable[[], Any], repeats: int, warmup: int = 2) -> Ite
         yield time.perf_counter() - start
 
 
-def run_bottleneck_analysis(
-    model: Model, n_lookups: int, repeats: int
-) -> xr.Dataset:
+def run_bottleneck_analysis(model: Model, n_lookups: int, repeats: int) -> xr.Dataset:
     """
     Run bottleneck analysis on individual methods.
 
@@ -122,7 +127,9 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_optimized_var, repeats), dtype=float)
     results["get_label_position_vars_optimized"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": n_lookups, "complexity": "O(log n)"}
+        times,
+        dims=["repeat"],
+        attrs={"n_operations": n_lookups, "complexity": "O(log n)"},
     )
 
     def bench_optimized_con():
@@ -130,7 +137,9 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_optimized_con, repeats), dtype=float)
     results["get_label_position_cons_optimized"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": n_lookups, "complexity": "O(log n)"}
+        times,
+        dims=["repeat"],
+        attrs={"n_operations": n_lookups, "complexity": "O(log n)"},
     )
 
     # 3. .sel() calls on constraints
@@ -144,7 +153,12 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_sel_calls, repeats), dtype=float)
     results["sel_calls_constraint"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": n_lookups, "description": "4 sel() calls per constraint"}
+        times,
+        dims=["repeat"],
+        attrs={
+            "n_operations": n_lookups,
+            "description": "4 sel() calls per constraint",
+        },
     )
 
     # 4. .sel() calls on variables
@@ -156,7 +170,9 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_sel_var, repeats), dtype=float)
     results["sel_calls_variable"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": n_lookups, "description": "2 sel() calls per variable"}
+        times,
+        dims=["repeat"],
+        attrs={"n_operations": n_lookups, "description": "2 sel() calls per variable"},
     )
 
     # 5. Nested variable lookups (as in print_single_constraint)
@@ -165,7 +181,12 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_nested_var_lookup, repeats), dtype=float)
     results["nested_var_lookup"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": len(nested_var_labels), "description": "Variable lookups from constraint terms"}
+        times,
+        dims=["repeat"],
+        attrs={
+            "n_operations": len(nested_var_labels),
+            "description": "Variable lookups from constraint terms",
+        },
     )
 
     # 6. print_coord formatting
@@ -176,7 +197,12 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_print_coord, repeats), dtype=float)
     results["print_coord"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": len(coords_list), "description": "Coordinate formatting"}
+        times,
+        dims=["repeat"],
+        attrs={
+            "n_operations": len(coords_list),
+            "description": "Coordinate formatting",
+        },
     )
 
     # 7. String formatting
@@ -186,7 +212,9 @@ def run_bottleneck_analysis(
 
     times = np.fromiter(time_function(bench_string_format, repeats), dtype=float)
     results["string_formatting"] = xr.DataArray(
-        times, dims=["repeat"], attrs={"n_operations": n_lookups, "description": "f-string formatting"}
+        times,
+        dims=["repeat"],
+        attrs={"n_operations": n_lookups, "description": "f-string formatting"},
     )
 
     # Create dataset
@@ -210,8 +238,14 @@ def compute_summary(ds: xr.Dataset) -> xr.Dataset:
         times = ds[var_name].values
         n_ops = ds[var_name].attrs.get("n_operations", 1)
         data[var_name] = xr.DataArray(
-            [np.median(times), np.mean(times), np.std(times), (np.median(times) / n_ops) * 1e6],
-            dims=["stat"], coords={"stat": stats}
+            [
+                np.median(times),
+                np.mean(times),
+                np.std(times),
+                (np.median(times) / n_ops) * 1e6,
+            ],
+            dims=["stat"],
+            coords={"stat": stats},
         )
 
     summary = xr.Dataset(data)
@@ -225,8 +259,12 @@ def print_analysis(ds: xr.Dataset, summary: xr.Dataset) -> None:
     print("BOTTLENECK ANALYSIS")
     print("=" * 80)
 
-    print(f"\nModel: {ds.attrs['n_variables']} variables, {ds.attrs['n_constraints']} constraints")
-    print(f"       {ds.attrs['n_variable_arrays']} variable arrays, {ds.attrs['n_constraint_arrays']} constraint arrays")
+    print(
+        f"\nModel: {ds.attrs['n_variables']} variables, {ds.attrs['n_constraints']} constraints"
+    )
+    print(
+        f"       {ds.attrs['n_variable_arrays']} variable arrays, {ds.attrs['n_constraint_arrays']} constraint arrays"
+    )
     print(f"       {ds.attrs['n_lookups']} lookups per benchmark\n")
 
     # get_label_position comparison
@@ -242,7 +280,9 @@ def print_analysis(ds: xr.Dataset, summary: xr.Dataset) -> None:
                 median_ms = float(summary[key].sel(stat="median_s")) * 1000
                 per_op = float(summary[key].sel(stat="per_op_us"))
                 complexity = ds[key].attrs.get("complexity", "")
-                print(f"  {key:<45s} {median_ms:>10.2f}ms {per_op:>10.2f}µs {complexity:<10s}")
+                print(
+                    f"  {key:<45s} {median_ms:>10.2f}ms {per_op:>10.2f}µs {complexity:<10s}"
+                )
 
     # Speedup calculation
     print("\nSpeedup (Optimized vs Original):")
@@ -262,7 +302,13 @@ def print_analysis(ds: xr.Dataset, summary: xr.Dataset) -> None:
     print(f"  {'Operation':<45s} {'Time':>12s} {'Per Op':>12s}")
     print("-" * 80)
 
-    other_ops = ["sel_calls_constraint", "sel_calls_variable", "nested_var_lookup", "print_coord", "string_formatting"]
+    other_ops = [
+        "sel_calls_constraint",
+        "sel_calls_variable",
+        "nested_var_lookup",
+        "print_coord",
+        "string_formatting",
+    ]
     for key in other_ops:
         if key in summary.data_vars:
             median_ms = float(summary[key].sel(stat="median_s")) * 1000
@@ -282,22 +328,36 @@ def print_analysis(ds: xr.Dataset, summary: xr.Dataset) -> None:
 
     total = orig_con + sel_con + nested + fmt
     print("\nprint_single_constraint breakdown (with original get_label_position):")
-    print(f"  Constraint lookup:     {orig_con*1000:>8.2f}ms ({orig_con/total*100:>5.1f}%)")
-    print(f"  .sel() calls:          {sel_con*1000:>8.2f}ms ({sel_con/total*100:>5.1f}%)")
-    print(f"  Nested var lookups:    {nested*1000:>8.2f}ms ({nested/total*100:>5.1f}%)")
-    print(f"  String formatting:     {fmt*1000:>8.2f}ms ({fmt/total*100:>5.1f}%)")
-    print(f"  Total:                 {total*1000:>8.2f}ms")
+    print(
+        f"  Constraint lookup:     {orig_con * 1000:>8.2f}ms ({orig_con / total * 100:>5.1f}%)"
+    )
+    print(
+        f"  .sel() calls:          {sel_con * 1000:>8.2f}ms ({sel_con / total * 100:>5.1f}%)"
+    )
+    print(
+        f"  Nested var lookups:    {nested * 1000:>8.2f}ms ({nested / total * 100:>5.1f}%)"
+    )
+    print(f"  String formatting:     {fmt * 1000:>8.2f}ms ({fmt / total * 100:>5.1f}%)")
+    print(f"  Total:                 {total * 1000:>8.2f}ms")
 
     # With optimized implementation
     opt_con = float(summary["get_label_position_cons_optimized"].sel(stat="median_s"))
     total_opt = opt_con + sel_con + nested + fmt
     print("\nWith optimized get_label_position:")
-    print(f"  Constraint lookup:     {opt_con*1000:>8.2f}ms ({opt_con/total_opt*100:>5.1f}%)")
-    print(f"  .sel() calls:          {sel_con*1000:>8.2f}ms ({sel_con/total_opt*100:>5.1f}%)")
-    print(f"  Nested var lookups:    {nested*1000:>8.2f}ms ({nested/total_opt*100:>5.1f}%)")
-    print(f"  String formatting:     {fmt*1000:>8.2f}ms ({fmt/total_opt*100:>5.1f}%)")
-    print(f"  Total:                 {total_opt*1000:>8.2f}ms")
-    print(f"\n  Overall speedup: {total/total_opt:.1f}x")
+    print(
+        f"  Constraint lookup:     {opt_con * 1000:>8.2f}ms ({opt_con / total_opt * 100:>5.1f}%)"
+    )
+    print(
+        f"  .sel() calls:          {sel_con * 1000:>8.2f}ms ({sel_con / total_opt * 100:>5.1f}%)"
+    )
+    print(
+        f"  Nested var lookups:    {nested * 1000:>8.2f}ms ({nested / total_opt * 100:>5.1f}%)"
+    )
+    print(
+        f"  String formatting:     {fmt * 1000:>8.2f}ms ({fmt / total_opt * 100:>5.1f}%)"
+    )
+    print(f"  Total:                 {total_opt * 1000:>8.2f}ms")
+    print(f"\n  Overall speedup: {total / total_opt:.1f}x")
     print()
 
 
