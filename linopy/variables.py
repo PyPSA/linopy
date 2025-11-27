@@ -30,6 +30,7 @@ from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
@@ -39,7 +40,7 @@ from linopy.common import (
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position,
+    get_label_position_optimized,
     has_optimized_model,
     is_constant,
     iterate_slices,
@@ -1166,6 +1167,7 @@ class Variables:
 
     data: dict[str, Variable]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1256,12 +1258,19 @@ class Variables:
         Add a variable to the variables container.
         """
         self.data[variable.name] = variable
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
 
     @property
     def attrs(self) -> dict[Any, Any]:
@@ -1418,8 +1427,12 @@ class Variables:
     def get_label_position(self, values: int | ndarray) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position_optimized(self, values, self._label_position_index)
 
     def print_labels(self, values: list[int]) -> None:
         """

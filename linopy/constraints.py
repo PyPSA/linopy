@@ -29,6 +29,7 @@ from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
     align_lines_by_delimiter,
     assign_multiindex_safe,
@@ -38,7 +39,7 @@ from linopy.common import (
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
-    get_label_position,
+    get_label_position_optimized,
     group_terms_polars,
     has_optimized_model,
     infer_schema_polars,
@@ -696,6 +697,7 @@ class Constraints:
 
     data: dict[str, Constraint]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
@@ -792,12 +794,19 @@ class Constraints:
         Add a constraint to the constraints constrainer.
         """
         self.data[constraint.name] = constraint
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove constraint `name` from the constraints.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
 
     @property
     def labels(self) -> Dataset:
@@ -957,8 +966,12 @@ class Constraints:
     ):
         """
         Get tuple of name and coordinate for constraint labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position_optimized(self, values, self._label_position_index)
 
     def print_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
