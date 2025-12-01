@@ -9,9 +9,6 @@ on:
   schedule:
     - cron: "0 5 * * *"
 
-env:
-  PACKAGE_NAME: "linopy"
-
 # Cancel any in-progress runs when a new run is triggered
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -89,8 +86,10 @@ jobs:
       - name: Install package from ref
         if: env.pinned == 'false'
         run: |
-          pixi remove ${{ env.PACKAGE_NAME }}
+          pixi remove pypsa
+          pixi remove linopy
           pixi add --pypi --git https://github.com/${{ github.repository }}.git ${{ github.event.repository.name }} --rev ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          pixi add pypsa
 
       - name: Run snakemake test workflows
         if: env.pinned == 'false'
