@@ -115,6 +115,7 @@ This package is published under MIT license.
    transport-tutorial
    infeasible-model
    solve-on-remote
+   solve-on-oetc
    migrating-from-pyomo
    gurobi-double-logging
 

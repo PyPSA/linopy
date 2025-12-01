@@ -103,10 +103,21 @@ with contextlib.suppress(ModuleNotFoundError):
 
     available_solvers.append("cplex")
 
-with contextlib.suppress(ModuleNotFoundError):
+with contextlib.suppress(ModuleNotFoundError, ImportError):
     import xpress
 
     available_solvers.append("xpress")
+
+    # xpress.Namespaces was added in xpress 9.6
+    try:
+        from xpress import Namespaces as xpress_Namespaces
+    except ImportError:
+
+        class xpress_Namespaces:  # type: ignore[no-redef]
+            ROW = 1
+            COLUMN = 2
+            SET = 3
+
 
 with contextlib.suppress(ModuleNotFoundError):
     import mosek
@@ -1581,6 +1592,10 @@ class Xpress(Solver[None]):
 
         m.solve()
 
+        # if the solver is stopped (timelimit for example), postsolve the problem
+        if m.getAttrib("solvestatus") == xpress.solvestatus_stopped:
+            m.postsolve()
+
         if basis_fn is not None:
             try:
                 m.writebasis(path_to_string(basis_fn))
@@ -1601,13 +1616,13 @@ class Xpress(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
 
-            var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
                 _dual = m.getDual()
                 constraints = m.getnamelist(
-                    xpress.Namespaces.ROW, 0, m.attributes.rows - 1
+                    xpress_Namespaces.ROW, 0, m.attributes.rows - 1
                 )
                 dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):

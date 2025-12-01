@@ -981,6 +981,7 @@ class Model:
 
             If args is a collection of coefficients-variables-tuples and constants, the resulting
             linear expression is built with the function LinearExpression.from_tuples.
+
             * coefficients : int/float/array_like
                 The coefficient(s) in the term, if the coefficients array
                 contains dimensions which do not appear in

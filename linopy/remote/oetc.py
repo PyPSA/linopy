@@ -268,6 +268,47 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Error submitting job to compute service: {e}")
 
+    def _get_job_logs(self, job_uuid: str) -> str:
+        """
+        Fetch logs for a compute job.
+
+        Args:
+            job_uuid: UUID of the job to fetch logs for
+
+        Returns:
+            str: The job logs content as a string
+
+        Raises:
+            Exception: If fetching logs fails
+        """
+        try:
+            logger.info(f"OETC - Fetching logs for job {job_uuid}...")
+
+            response = requests.get(
+                f"{self.settings.orchestrator_server_url}/compute-job/{job_uuid}/get-logs",
+                headers={
+                    "Authorization": f"{self.jwt.token_type} {self.jwt.token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+
+            response.raise_for_status()
+            logs_data = response.json()
+
+            # Extract content from the response structure
+            logs_content = logs_data.get("content", "")
+
+            logger.info(f"OETC - Successfully fetched logs for job {job_uuid}")
+            return logs_content
+
+        except RequestException as e:
+            logger.warning(f"OETC - Failed to fetch logs for job {job_uuid}: {e}")
+            return f"[Unable to fetch logs: {e}]"
+        except Exception as e:
+            logger.warning(f"OETC - Error fetching logs for job {job_uuid}: {e}")
+            return f"[Error fetching logs: {e}]"
+
     def wait_and_get_job_data(
         self,
         job_uuid: str,
@@ -342,7 +383,14 @@ class OetcHandler:
                     raise Exception(error_msg)
 
                 elif job_result.status == "RUNTIME_ERROR":
-                    error_msg = f"Job failed during execution (status: {job_result.status}). Please check the OETC logs for details."
+                    # Fetch and display logs
+                    logs = self._get_job_logs(job_uuid)
+                    logger.error(f"OETC - Job {job_uuid} logs:\n{logs}")
+
+                    error_msg = (
+                        f"Job failed during execution (status: {job_result.status}).\n"
+                        f"Logs:\n{logs}"
+                    )
                     logger.error(f"OETC Error: {error_msg}")
                     raise Exception(error_msg)
 
@@ -496,6 +544,7 @@ class OetcHandler:
         try:
             # Save model to temporary file and upload
             with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+                fn.file.close()
                 model.to_netcdf(fn.name)
                 input_file_name = self._upload_file_to_gcp(fn.name)
 
