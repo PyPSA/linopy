@@ -3,6 +3,7 @@ Release Notes
 
 .. Upcoming Version
 * Add convenience function to create LinearExpression from constant
+* Fix compatibility for xpress versions below 9.6 (regression)
 
 Version 0.5.8
 --------------
