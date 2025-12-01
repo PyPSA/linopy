@@ -800,14 +800,17 @@ class LabelPositionIndex:
             return None, None
 
         self._build_index()
+        starts = self._starts
+        names = self._names
+        assert starts is not None and names is not None
 
         # Binary search to find the right range
-        idx = int(np.searchsorted(self._starts, value, side="right")) - 1
+        idx = int(np.searchsorted(starts, value, side="right")) - 1
 
-        if idx < 0 or idx >= len(self._starts):
+        if idx < 0 or idx >= len(starts):
             raise ValueError(f"Label {value} is not existent in the model.")
 
-        name = self._names[idx]
+        name = names[idx]
         val = self._obj[name]
         start, stop = val.range
 
@@ -834,14 +837,17 @@ class LabelPositionIndex:
             return None, None, None
 
         self._build_index()
+        starts = self._starts
+        names = self._names
+        assert starts is not None and names is not None
 
         # Binary search to find the right range
-        idx = int(np.searchsorted(self._starts, value, side="right")) - 1
+        idx = int(np.searchsorted(starts, value, side="right")) - 1
 
-        if idx < 0 or idx >= len(self._starts):
+        if idx < 0 or idx >= len(starts):
             raise ValueError(f"Label {value} is not existent in the model.")
 
-        name = self._names[idx]
+        name = names[idx]
         val = self._obj[name]
         start, stop = val.range
 
