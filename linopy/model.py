@@ -1279,6 +1279,11 @@ class Model:
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
+        # SOS constraints are not supported by all solvers
+        SOS_UNSUPPORTED_SOLVERS = {"glpk", "mosek", "mindopt", "highs"}
+        if self.variables.sos and solver_name in SOS_UNSUPPORTED_SOLVERS:
+            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
+
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
             # initialize the solver as object of solver subclass <solver_class>

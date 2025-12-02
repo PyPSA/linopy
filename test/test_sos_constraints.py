@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -72,3 +73,88 @@ def test_to_gurobipy_emits_sos_constraints() -> None:
         pytest.skip(f"Gurobi environment unavailable: {exc}")
 
     assert model.NumSOS == 1
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_sos1_binary_maximize_lp_polars() -> None:
+    gurobipy = pytest.importorskip("gurobipy")
+
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
+    m.add_objective(build * [1, 2, 3], sense="max")
+
+    try:
+        m.solve(solver_name="gurobi", io_api="lp-polars")
+    except gurobipy.GurobiError as exc:  # pragma: no cover - depends on license setup
+        pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+    assert np.isclose(build.solution.values, [0, 0, 1]).all()
+    assert np.isclose(m.objective.value, 3)
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_sos2_binary_maximize_direct() -> None:
+    gurobipy = pytest.importorskip("gurobipy")
+
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
+    m.add_objective(build * [1, 2, 3], sense="max")
+
+    try:
+        m.solve(solver_name="gurobi", io_api="direct")
+    except gurobipy.GurobiError as exc:  # pragma: no cover - depends on license setup
+        pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+    assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert np.isclose(m.objective.value, 5)
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_sos2_binary_maximize_different_coeffs() -> None:
+    gurobipy = pytest.importorskip("gurobipy")
+
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
+    m.add_objective(build * [2, 1, 3], sense="max")
+
+    try:
+        m.solve(solver_name="gurobi", io_api="direct")
+    except gurobipy.GurobiError as exc:  # pragma: no cover - depends on license setup
+        pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+    assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert np.isclose(m.objective.value, 4)
+
+
+def test_unsupported_solver_raises_error() -> None:
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
+    m.add_objective(build * [1, 2, 3], sense="max")
+
+    for solver in ["glpk", "mosek", "mindopt", "highs"]:
+        if solver in available_solvers:
+            with pytest.raises(ValueError, match="does not support SOS constraints"):
+                m.solve(solver_name=solver)
+
+
+def test_to_highspy_raises_not_implemented() -> None:
+    pytest.importorskip("highspy")
+
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
+
+    with pytest.raises(
+        NotImplementedError,
+        match="SOS constraints are not supported by the HiGHS direct API",
+    ):
+        m.to_highspy()

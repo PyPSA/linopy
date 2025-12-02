@@ -123,7 +123,7 @@ Example 1: Facility Location (SOS1)
     m.add_objective(-((net_benefit * build).sum()))
 
     # Solve
-    m.solve(solver_name="highs")
+    m.solve(solver_name="gurobi")
 
     if m.status == "ok":
         solution = build.solution.to_pandas()
@@ -164,7 +164,7 @@ Example 2: Piecewise Linear Approximation (SOS2)
     m.add_objective(y)
 
     # Solve
-    m.solve(solver_name="highs")
+    m.solve(solver_name="gurobi")
 
 Working with Multi-dimensional Variables
 -----------------------------------------
@@ -237,7 +237,6 @@ SOS constraints are supported by most modern mixed-integer programming solvers t
 
 **Supported solvers (via LP file):**
 
-- HiGHS
 - Gurobi
 - CPLEX
 - COIN-OR CBC
@@ -248,7 +247,12 @@ SOS constraints are supported by most modern mixed-integer programming solvers t
 
 - Gurobi (via ``gurobipy``)
 
-**Note:** When using the direct API with other solvers (e.g., ``highspy``), SOS constraints are not currently supported. Use file-based export (LP format) instead.
+**Unsupported solvers:**
+
+- HiGHS (does not support SOS constraints)
+- GLPK
+- MOSEK
+- MindOpt
 
 Common Patterns
 ---------------

@@ -607,6 +607,8 @@ def to_mosek(
     -------
     task : MOSEK Task object
     """
+    if m.variables.sos:
+        raise NotImplementedError("SOS constraints are not supported by MOSEK.")
 
     import mosek
 
@@ -792,6 +794,12 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     -------
     model : highspy.Highs
     """
+    if m.variables.sos:
+        raise NotImplementedError(
+            "SOS constraints are not supported by the HiGHS direct API. "
+            "Use io_api='lp' instead."
+        )
+
     import highspy
 
     print_variable, print_constraint = get_printers_scalar(
