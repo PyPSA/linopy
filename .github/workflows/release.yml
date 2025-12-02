@@ -11,7 +11,7 @@ jobs:
     name: Build and verify package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: hynek/build-and-inspect-python-package@v2
 
   release:
@@ -20,7 +20,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
