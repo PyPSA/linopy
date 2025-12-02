@@ -53,7 +53,8 @@ if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
     feasible_quadratic_solvers.remove("scip")
 
 feasible_mip_solvers: list[str] = available_solvers.copy()
-feasible_mip_solvers.remove("cupdlpx")  # cuPDLPx does not support MIP yet
+if "cupdlpx" in feasible_mip_solvers:
+    feasible_mip_solvers.remove("cupdlpx")  # cuPDLPx does not support MIP yet
 
 gpu_solvers: list[str] = ["cupdlpx"]
 
@@ -630,11 +631,13 @@ def test_infeasible_model(
 def test_model_with_inf(
     model_with_inf: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    if solver in feasible_mip_solvers:
-        status, condition = model_with_inf.solve(solver, io_api=io_api)
-        assert condition == "optimal"
-        assert (model_with_inf.solution.x == 0).all()
-        assert (model_with_inf.solution.y == 10).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    status, condition = model_with_inf.solve(solver, io_api=io_api)
+    assert condition == "optimal"
+    assert (model_with_inf.solution.x == 0).all()
+    assert (model_with_inf.solution.y == 10).all()
 
 
 @pytest.mark.parametrize(
@@ -644,14 +647,16 @@ def test_model_with_inf(
 def test_milp_binary_model(
     milp_binary_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    if solver in feasible_mip_solvers:
-        status, condition = milp_binary_model.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-        assert condition == "optimal"
-        assert (
-            (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
-        ).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    status, condition = milp_binary_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert condition == "optimal"
+    assert (
+        (milp_binary_model.solution.y == 1) | (milp_binary_model.solution.y == 0)
+    ).all()
 
 
 @pytest.mark.parametrize(
@@ -664,15 +669,16 @@ def test_milp_binary_model_r(
     io_api: str,
     explicit_coordinate_names: bool,
 ) -> None:
-    if solver in feasible_mip_solvers:
-        status, condition = milp_binary_model_r.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-        assert condition == "optimal"
-        assert (
-            (milp_binary_model_r.solution.x == 1)
-            | (milp_binary_model_r.solution.x == 0)
-        ).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    status, condition = milp_binary_model_r.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert condition == "optimal"
+    assert (
+        (milp_binary_model_r.solution.x == 1) | (milp_binary_model_r.solution.x == 0)
+    ).all()
 
 
 @pytest.mark.parametrize(
@@ -682,12 +688,14 @@ def test_milp_binary_model_r(
 def test_milp_model(
     milp_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    if solver in feasible_mip_solvers:
-        status, condition = milp_model.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-        assert condition == "optimal"
-        assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    status, condition = milp_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert condition == "optimal"
+    assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
 
 
 @pytest.mark.parametrize(
@@ -697,19 +705,20 @@ def test_milp_model(
 def test_milp_model_r(
     milp_model_r: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    if solver in feasible_mip_solvers:
-        # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
-        # skip it
-        if io_api != "mps":
-            status, condition = milp_model_r.solve(
-                solver,
-                io_api=io_api,
-                explicit_coordinate_names=explicit_coordinate_names,
-            )
-            assert condition == "optimal"
-            assert (
-                (milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)
-            ).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    # MPS format by Highs wrong, see https://github.com/ERGO-Code/HiGHS/issues/1325
+    if io_api == "mps":
+        pytest.skip("MPS format bug in HiGHS")
+
+    status, condition = milp_model_r.solve(
+        solver,
+        io_api=io_api,
+        explicit_coordinate_names=explicit_coordinate_names,
+    )
+    assert condition == "optimal"
+    assert ((milp_model_r.solution.x == 11) | (milp_model_r.solution.y == 0)).all()
 
 
 @pytest.mark.parametrize(
@@ -834,13 +843,15 @@ def test_quadratic_model_unbounded(
 def test_modified_model(
     modified_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    if solver in feasible_mip_solvers:
-        status, condition = modified_model.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-        assert condition == "optimal"
-        assert (modified_model.solution.x == 0).all()
-        assert (modified_model.solution.y == 10).all()
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    status, condition = modified_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert condition == "optimal"
+    assert (modified_model.solution.x == 0).all()
+    assert (modified_model.solution.y == 10).all()
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

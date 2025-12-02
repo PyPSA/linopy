@@ -2487,6 +2487,9 @@ class cuPDLPx(Solver[None]):
         if basis_fn is not None:
             logger.warning("Basis files are not supported by cuPDLPx. Ignoring.")
 
+        if log_fn is not None:
+            logger.warning("Log files are not supported by cuPDLPx. Ignoring.")
+
         # solve
         cu_model.optimize()
 

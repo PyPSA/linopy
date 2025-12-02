@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import shutil
 import time
+import warnings
 from collections.abc import Callable
 from io import BufferedWriter
 from pathlib import Path
@@ -764,12 +765,14 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     This function does not write the model to intermediate files but directly
     passes it to cupdlpx.
 
-    cuPDLPx does not support named variables and constraints, so names
-    are not tracked by this function.
+    cuPDLPx does not support named variables and constraints, so the
+    `explicit_coordinate_names` parameter is ignored.
 
     Parameters
     ----------
     m : linopy.Model
+    explicit_coordinate_names : bool, optional
+        Ignored. cuPDLPx does not support named variables/constraints.
 
     Returns
     -------
@@ -777,10 +780,18 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     """
     import cupdlpx
 
+    if explicit_coordinate_names:
+        warnings.warn(
+            "cuPDLPx does not support named variables/constraints. "
+            "The explicit_coordinate_names parameter is ignored.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # build model using canonical form matrices and vectors
     # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#modeling
     M = m.matrices
-    A = M.A.tocsr()  # cuDPLPx only support CSR sparse matrix format
+    A = M.A.tocsr()  # cuPDLPx only supports CSR sparse matrix format
     # linopy stores constraints as Ax ?= b and keeps track of inequality
     # sense in M.sense. Convert to separate lower and upper bound vectors.
     l = np.where(
