@@ -336,7 +336,7 @@ def sos_to_file(
     explicit_coordinate_names: bool = False,
 ) -> None:
     """
-    Write out integers of a model to a lp file.
+    Write out SOS constraints of a model to an LP file.
     """
     names = m.variables.sos
     if not len(list(names)):
@@ -359,7 +359,7 @@ def sos_to_file(
         sos_type = var.attrs["sos_type"]
         sos_dim = var.attrs["sos_dim"]
 
-        other_dims = tuple([dim for dim in var.labels.dims if dim != sos_dim])
+        other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
             ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
@@ -754,19 +754,22 @@ def to_gurobipy(
     if m.variables.sos:
         for var_name in m.variables.sos:
             var = m.variables.sos[var_name]
-            sos_type = var.attrs["sos_type"]
-            sos_dim = var.attrs["sos_dim"]
+            sos_type: int = var.attrs["sos_type"]  # type: ignore[assignment]
+            sos_dim: str = var.attrs["sos_dim"]  # type: ignore[assignment]
 
-            def add_sos(s):
+            def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                 s = s.squeeze()
-                model.addSOS(sos_type, x[s].tolist(), s.coords[sos_dim].values)
+                indices = s.values.flatten().tolist()
+                weights = s.coords[sos_dim].values.tolist()
+                model.addSOS(sos_type, x[indices].tolist(), weights)
 
-            others = tuple(dim for dim in var.labels.dims if dim != sos_dim)
+            others = [dim for dim in var.labels.dims if dim != sos_dim]
             if not others:
-                add_sos(var.labels)
+                add_sos(var.labels, sos_type, sos_dim)
             else:
-                for _, s in var.labels.groupby(*others):
-                    add_sos(s)
+                stacked = var.labels.stack(_sos_group=others)
+                for _, s in stacked.groupby("_sos_group"):
+                    add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
 
     model.update()
     return model

@@ -556,7 +556,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
-    ):
+    ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
 
@@ -830,8 +830,11 @@ class Model:
         -------
         None.
         """
-        sos_type = variable.attrs.get("sos_type")
-        sos_dim = variable.attrs.get("sos_dim")
+        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+            raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
+
+        sos_type = variable.attrs["sos_type"]
+        sos_dim = variable.attrs["sos_dim"]
 
         del variable.attrs["sos_type"], variable.attrs["sos_dim"]
 

@@ -235,7 +235,8 @@ Solver Compatibility
 
 SOS constraints are supported by most modern mixed-integer programming solvers through the LP file format:
 
-**Supported solvers:**
+**Supported solvers (via LP file):**
+
 - HiGHS
 - Gurobi
 - CPLEX
@@ -243,7 +244,11 @@ SOS constraints are supported by most modern mixed-integer programming solvers t
 - SCIP
 - Xpress
 
-**Note:** Some solvers may have varying levels of SOS support. Check your solver's documentation for specific capabilities.
+**Direct API support:**
+
+- Gurobi (via ``gurobipy``)
+
+**Note:** When using the direct API with other solvers (e.g., ``highspy``), SOS constraints are not currently supported. Use file-based export (LP format) instead.
 
 Common Patterns
 ---------------
@@ -300,4 +305,3 @@ See Also
 - :doc:`creating-variables`: Creating variables with coordinates
 - :doc:`creating-constraints`: Adding regular constraints
 - :doc:`user-guide`: General linopy usage patterns
-- Example notebook: ``examples/sos-constraints-example.ipynb``
