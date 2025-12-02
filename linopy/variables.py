@@ -30,6 +30,7 @@ from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
@@ -1178,6 +1179,7 @@ class Variables:
 
     data: dict[str, Variable]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1272,12 +1274,19 @@ class Variables:
         Add a variable to the variables container.
         """
         self.data[variable.name] = variable
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
 
     @property
     def attrs(self) -> dict[Any, Any]:
@@ -1337,7 +1346,14 @@ class Variables:
 
         These excludes variables with missing labels.
         """
-        return len(self.flat.labels.unique())
+        total = 0
+        for var in self.data.values():
+            labels = var.labels.values
+            if var.mask is not None:
+                total += int((labels[var.mask.values] != -1).sum())
+            else:
+                total += int((labels != -1).sum())
+        return total
 
     @property
     def binaries(self) -> Variables:
@@ -1449,8 +1465,36 @@ class Variables:
     def get_label_position(self, values: int | ndarray) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position(self, values, self._label_position_index)
+
+    def get_label_position_with_index(
+        self, label: int
+    ) -> tuple[str, dict, tuple[int, ...]] | tuple[None, None, None]:
+        """
+        Get name, coordinate, and raw numpy index for a single variable label.
+
+        This is an optimized version that also returns the raw index for direct
+        numpy array access, avoiding xarray's .sel() overhead.
+
+        Parameters
+        ----------
+        label : int
+            The variable label to look up.
+
+        Returns
+        -------
+        tuple
+            (name, coord, index) where index is a tuple for numpy indexing,
+            or (None, None, None) if label is -1.
+        """
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return self._label_position_index.find_single_with_index(label)
 
     def print_labels(self, values: list[int]) -> None:
         """
