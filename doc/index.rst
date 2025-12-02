@@ -110,6 +110,7 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    manipulating-models
+   scaling
    testing-framework
    transport-tutorial
    infeasible-model
