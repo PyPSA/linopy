@@ -282,6 +282,9 @@ Replace:
 # Before (model.py:1199)
 if solver_name in NO_SOLUTION_FILE_SOLVERS:
 
+# Before (model.py:1211)
+if solver_name not in quadratic_solvers:
+
 # Before (model.py:1234)
 if solver_name in ["glpk", "cbc"]:
 
@@ -293,11 +296,12 @@ With:
 ```python
 # After
 if solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED):
+if not solver_supports(solver_name, SolverFeature.QUADRATIC_OBJECTIVE):
 if not solver_supports(solver_name, SolverFeature.LP_FILE_NAMES):
 if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
 ```
 
-**Note**: The quadratic solver check (`solver_name not in quadratic_solvers`) is NOT migrated to use `solver_supports()`. This is because tests may modify the `quadratic_solvers` list at runtime to exclude solvers with platform-specific bugs (e.g., SCIP on Windows). The list-based approach allows this runtime modification.
+**Note**: Platform-specific bugs (e.g., SCIP quadratic on Windows) are handled by adjusting the registry at import time in `solver_capabilities.py`, not by runtime list modification.
 
 ### Step 4: Update `variables.py`
 
@@ -326,10 +330,11 @@ Note: `io.py` doesn't need changes - the check at line 508 (`"highs" not in avai
 
 | File | Changes |
 |------|---------|
-| `linopy/solver_capabilities.py` | **NEW** - Core registry module (~150 lines) |
+| `linopy/solver_capabilities.py` | **NEW** - Core registry module (~170 lines) |
 | `linopy/solvers.py` | Import registry, generate compat lists (~10 lines changed) |
-| `linopy/model.py` | Replace 3 hardcoded checks (quadratic check kept as-is) |
+| `linopy/model.py` | Replace 4 hardcoded checks |
 | `linopy/variables.py` | Replace 1 hardcoded check |
+| `test/test_optimization.py` | Remove Windows SCIP workaround (handled in registry) |
 | `linopy/__init__.py` | Export `SolverFeature`, `solver_supports` (optional) |
 
 ---
