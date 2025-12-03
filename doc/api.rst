@@ -17,6 +17,7 @@ Creating a model
     model.Model
     model.Model.add_variables
     model.Model.add_constraints
+    model.Model.add_quadratic_constraints
     model.Model.add_objective
     model.Model.linexpr
     model.Model.remove_constraints
@@ -107,6 +108,50 @@ Constraints
     constraints.Constraints.sanitize_missings
     constraints.Constraints.flat
     constraints.Constraints.to_matrix
+
+
+QuadraticConstraint
+-------------------
+
+``QuadraticConstraint`` stores quadratic constraints of the form x'Qx + a'x <= b (or >=, =).
+
+.. autosummary::
+    :toctree: generated/
+
+    constraints.QuadraticConstraint
+    constraints.QuadraticConstraint.quad_coeffs
+    constraints.QuadraticConstraint.quad_vars
+    constraints.QuadraticConstraint.lin_coeffs
+    constraints.QuadraticConstraint.lin_vars
+    constraints.QuadraticConstraint.lhs
+    constraints.QuadraticConstraint.sign
+    constraints.QuadraticConstraint.rhs
+    constraints.QuadraticConstraint.dual
+    constraints.QuadraticConstraint.flat
+    constraints.QuadraticConstraint.to_polars
+
+
+QuadraticConstraints
+--------------------
+
+``QuadraticConstraints`` is a container for storing multiple quadratic constraint arrays.
+
+.. autosummary::
+    :toctree: generated/
+
+    constraints.QuadraticConstraints
+    constraints.QuadraticConstraints.add
+    constraints.QuadraticConstraints.remove
+    constraints.QuadraticConstraints.inequalities
+    constraints.QuadraticConstraints.equalities
+    constraints.QuadraticConstraints.sanitize_zeros
+    constraints.QuadraticConstraints.sanitize_missings
+    constraints.QuadraticConstraints.flat
+    constraints.QuadraticConstraints.ncons
+    constraints.QuadraticConstraints.labels
+    constraints.QuadraticConstraints.sign
+    constraints.QuadraticConstraints.rhs
+    constraints.QuadraticConstraints.dual
 
 
 IO functions
