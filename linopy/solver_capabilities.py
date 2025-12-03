@@ -23,6 +23,7 @@ class SolverFeature(Enum):
     QUADRATIC_OBJECTIVE = auto()
 
     # I/O capabilities
+    DIRECT_API = auto()  # Solve directly from Model without writing files
     LP_FILE_NAMES = auto()  # Support for named variables/constraints in LP files
     SOLUTION_FILE_NOT_NEEDED = auto()  # Solver doesn't need a solution file
 
@@ -58,6 +59,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         features=frozenset(
             {
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
@@ -71,6 +73,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         features=frozenset(
             {
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
@@ -132,6 +135,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         features=frozenset(
             {
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }

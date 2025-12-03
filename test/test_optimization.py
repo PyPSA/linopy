@@ -19,6 +19,11 @@ from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
@@ -36,10 +41,11 @@ params: list[tuple[str, str, bool]] = list(
     itertools.product(available_solvers, io_apis, explicit_coordinate_names)
 )
 
-direct_solvers: list[str] = ["gurobi", "highs", "mosek"]
+direct_solvers = get_available_solvers_with_feature(
+    SolverFeature.DIRECT_API, available_solvers
+)
 for solver in direct_solvers:
-    if solver in available_solvers:
-        params.append((solver, "direct", False))
+    params.append((solver, "direct", False))
 
 if "mosek" in available_solvers:
     params.append(("mosek", "lp", False))
@@ -977,7 +983,7 @@ def test_solver_classes_direct(
         with pytest.raises(ValueError):
             solver_.model = None
             solver_.solve_problem()
-    elif solver not in direct_solvers:
+    elif not solver_supports(solver, SolverFeature.DIRECT_API):
         with pytest.raises(NotImplementedError):
             solver_.solve_problem(model=model)
 
