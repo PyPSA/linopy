@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-import platform
 from typing import Any
 
 import numpy as np
@@ -47,11 +46,9 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp", True))
 
 
-feasible_quadratic_solvers: list[str] = quadratic_solvers
-# There seems to be a bug in scipopt with quadratic models on windows, see
-# https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
-if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
-    feasible_quadratic_solvers.remove("scip")
+# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# handled in linopy/solver_capabilities.py by adjusting the registry at import time.
+feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
 
 def test_print_solvers(capsys: Any) -> None:
