@@ -1,0 +1,214 @@
+"""
+Linopy module for solver capability tracking.
+
+This module provides a centralized registry of solver capabilities,
+replacing scattered hardcoded checks throughout the codebase.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+
+class SolverFeature(Enum):
+    """Enumeration of all solver capabilities tracked by linopy."""
+
+    # Objective function support
+    QUADRATIC_OBJECTIVE = auto()
+
+    # I/O capabilities
+    LP_FILE_NAMES = auto()  # Support for named variables/constraints in LP files
+    SOLUTION_FILE_NOT_NEEDED = auto()  # Solver doesn't need a solution file
+
+    # Advanced features
+    IIS_COMPUTATION = auto()  # Irreducible Infeasible Set computation
+
+    # Solver-specific
+    SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
+
+
+@dataclass(frozen=True)
+class SolverInfo:
+    """Information about a solver's capabilities."""
+
+    name: str
+    features: frozenset[SolverFeature]
+    display_name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.display_name:
+            object.__setattr__(self, "display_name", self.name.upper())
+
+    def supports(self, feature: SolverFeature) -> bool:
+        """Check if this solver supports a given feature."""
+        return feature in self.features
+
+
+# Define all solver capabilities
+SOLVER_REGISTRY: dict[str, SolverInfo] = {
+    "gurobi": SolverInfo(
+        name="gurobi",
+        display_name="Gurobi",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+                SolverFeature.IIS_COMPUTATION,
+                SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
+            }
+        ),
+    ),
+    "highs": SolverInfo(
+        name="highs",
+        display_name="HiGHS",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+    "glpk": SolverInfo(
+        name="glpk",
+        display_name="GLPK",
+        features=frozenset(),  # No LP_FILE_NAMES support
+    ),
+    "cbc": SolverInfo(
+        name="cbc",
+        display_name="CBC",
+        features=frozenset(),  # No LP_FILE_NAMES support
+    ),
+    "cplex": SolverInfo(
+        name="cplex",
+        display_name="CPLEX",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+            }
+        ),
+    ),
+    "xpress": SolverInfo(
+        name="xpress",
+        display_name="FICO Xpress",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+                SolverFeature.IIS_COMPUTATION,
+            }
+        ),
+    ),
+    "scip": SolverInfo(
+        name="scip",
+        display_name="SCIP",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+    "mosek": SolverInfo(
+        name="mosek",
+        display_name="MOSEK",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+    "copt": SolverInfo(
+        name="copt",
+        display_name="COPT",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+    "mindopt": SolverInfo(
+        name="mindopt",
+        display_name="MindOpt",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+}
+
+
+def solver_supports(solver_name: str, feature: SolverFeature) -> bool:
+    """
+    Check if a solver supports a given feature.
+
+    Parameters
+    ----------
+    solver_name : str
+        Name of the solver (e.g., "gurobi", "highs")
+    feature : SolverFeature
+        The feature to check for
+
+    Returns
+    -------
+    bool
+        True if the solver supports the feature, False otherwise.
+        Returns False for unknown solvers.
+    """
+    if solver_name not in SOLVER_REGISTRY:
+        return False
+    return SOLVER_REGISTRY[solver_name].supports(feature)
+
+
+def get_solvers_with_feature(feature: SolverFeature) -> list[str]:
+    """
+    Get all solvers that support a given feature.
+
+    Parameters
+    ----------
+    feature : SolverFeature
+        The feature to filter by
+
+    Returns
+    -------
+    list[str]
+        List of solver names supporting the feature
+    """
+    return [name for name, info in SOLVER_REGISTRY.items() if info.supports(feature)]
+
+
+def get_available_solvers_with_feature(
+    feature: SolverFeature, available_solvers: Sequence[str]
+) -> list[str]:
+    """
+    Get installed solvers that support a given feature.
+
+    Parameters
+    ----------
+    feature : SolverFeature
+        The feature to filter by
+    available_solvers : Sequence[str]
+        List of currently available/installed solvers
+
+    Returns
+    -------
+    list[str]
+        List of installed solver names supporting the feature
+    """
+    return [s for s in get_solvers_with_feature(feature) if s in available_solvers]
