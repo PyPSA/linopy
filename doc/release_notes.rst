@@ -3,6 +3,14 @@ Release Notes
 
 .. Upcoming Version
 
+* Add support for quadratic constraints (QCP/QCQP). Use `model.add_quadratic_constraints()` to add constraints of the form x'Qx + a'x <= b. Supported solvers: Gurobi, MOSEK, COPT. Gurobi also supports nonconvex quadratic constraints.
+* Add MPS export support for models with quadratic constraints (requires Gurobi).
+* Add netCDF serialization support for models with quadratic constraints.
+* Add MOSEK direct API support for quadratic constraints.
+* Add dual values for quadratic constraints (use `QCPDual=1` solver option with Gurobi).
+* Add `model.quadratic_constraints` container for inspecting quadratic constraints.
+* Add `model.matrices` accessor properties for quadratic constraints: `qclabels`, `qc_sense`, `qc_rhs`, `Qc`, `qc_linear`.
+* Fix `expression.shape`to always exclude the _term dimension
 * Fix compatibility for xpress versions below 9.6 (regression)
 * Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
 * Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting

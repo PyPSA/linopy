@@ -708,6 +708,6 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     expr = 20 * x
     x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
     assert x_obs.shape == alpha_obs.shape == (1,)
-    assert expr_obs.shape == (1, 1)  # _term dim
+    assert expr_obs.shape == (1,)  # _term dim excluded from shape
     assert isinstance(expr_obs, LinearExpression)
     assert_linequal(expr_obs, expr.loc[[1]])
