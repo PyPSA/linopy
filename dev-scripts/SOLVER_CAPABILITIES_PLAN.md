@@ -247,9 +247,10 @@ To maintain backward compatibility, we'll keep the existing module-level lists b
 ```python
 # These are generated from the registry for backward compatibility
 QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
-QUADRATIC_CONSTRAINT_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_CONSTRAINTS)
-NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS = get_solvers_with_feature(SolverFeature.NONCONVEX_QUADRATIC_CONSTRAINTS)
 NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+
+# Derived (filtered by availability) - also generated from registry
+quadratic_solvers = get_available_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
 ```
 
 No deprecation warnings - these lists remain fully supported and are simply generated from the registry now.
@@ -269,17 +270,25 @@ Create `linopy/solver_capabilities.py` with:
 ### Step 2: Update `solvers.py`
 
 - Import the new module
-- Generate existing lists from registry (backward compat)
-- Add deprecation warnings to direct list access (optional)
+- Generate existing lists from registry (backward compat):
+  - `QUADRATIC_SOLVERS`
+  - `NO_SOLUTION_FILE_SOLVERS`
+  - `quadratic_solvers` (filtered by availability)
 
 ### Step 3: Update `model.py`
 
 Replace:
 ```python
-# Before
+# Before (model.py:1199)
 if solver_name in NO_SOLUTION_FILE_SOLVERS:
+
+# Before (model.py:1211)
 if solver_name not in quadratic_solvers:
+
+# Before (model.py:1234)
 if solver_name in ["glpk", "cbc"]:
+
+# Before (model.py:1342)
 if solver_name in ["gurobi", "xpress"]:
 ```
 
@@ -292,26 +301,26 @@ if not solver_supports(solver_name, SolverFeature.LP_FILE_NAMES):
 if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
 ```
 
-### Step 4: Update `io.py`
-
-Replace hardcoded solver checks with capability checks.
-
-### Step 5: Update `variables.py`
+### Step 4: Update `variables.py`
 
 Replace:
 ```python
-if solver == "gurobi":
+# Before (variables.py:852)
+if self.model.solver_name != "gurobi":
 ```
 
 With:
 ```python
-if solver_supports(solver, SolverFeature.SOLVER_ATTRIBUTE_ACCESS):
+# After
+if not solver_supports(self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS):
 ```
 
-### Step 6: Update Tests
+### Step 5: Update Tests (optional for POC)
 
 - Update test parametrization to use `get_available_solvers_with_feature()`
 - Replace hardcoded solver lists in test files
+
+Note: `io.py` doesn't need changes - the check at line 508 (`"highs" not in available_solvers`) is about package availability, not solver features.
 
 ---
 
@@ -319,14 +328,11 @@ if solver_supports(solver, SolverFeature.SOLVER_ATTRIBUTE_ACCESS):
 
 | File | Changes |
 |------|---------|
-| `linopy/solver_capabilities.py` | **NEW** - Core registry module |
-| `linopy/solvers.py` | Import registry, generate compat lists |
-| `linopy/model.py` | Replace ~6 hardcoded checks |
-| `linopy/io.py` | Replace ~3 hardcoded checks |
+| `linopy/solver_capabilities.py` | **NEW** - Core registry module (~150 lines) |
+| `linopy/solvers.py` | Import registry, generate compat lists (~10 lines changed) |
+| `linopy/model.py` | Replace 4 hardcoded checks |
 | `linopy/variables.py` | Replace 1 hardcoded check |
-| `linopy/__init__.py` | Export `SolverFeature`, `solver_supports` |
-| `test/test_optimization.py` | Update solver parametrization |
-| `test/test_quadratic_constraint.py` | Update solver parametrization |
+| `linopy/__init__.py` | Export `SolverFeature`, `solver_supports` (optional) |
 
 ---
 
@@ -404,11 +410,9 @@ If we decide to extract this to a separate package:
 ## Implementation Order
 
 1. Create `solver_capabilities.py` with full registry
-2. Add backward compatibility exports to `solvers.py` (generate lists from registry)
-3. Update `model.py` (highest impact - ~6 checks)
-4. Update `io.py` (~3 checks)
-5. Update `variables.py` (1 check)
-6. Update test files to use registry helpers
-7. Run tests and verify everything works
+2. Update `solvers.py` to generate lists from registry
+3. Update `model.py` (4 checks)
+4. Update `variables.py` (1 check)
+5. Run tests and verify everything works
 
-Estimated scope: ~300-400 lines of new code, ~50 lines modified across existing files.
+Estimated scope: ~150 lines of new code, ~20 lines modified across existing files.
