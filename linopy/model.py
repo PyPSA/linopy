@@ -59,11 +59,10 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.remote import OetcHandler, RemoteHandler
+from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
-    NO_SOLUTION_FILE_SOLVERS,
     available_solvers,
-    quadratic_solvers,
 )
 from linopy.types import (
     ConstantLike,
@@ -1196,7 +1195,10 @@ class Model:
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
         if solution_fn is None:
-            if solver_name in NO_SOLUTION_FILE_SOLVERS and not keep_files:
+            if (
+                solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+                and not keep_files
+            ):
                 # these (solver, keep_files=False) combos do not need a solution file
                 solution_fn = None
             else:
@@ -1208,7 +1210,9 @@ class Model:
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
 
-        if self.is_quadratic and solver_name not in quadratic_solvers:
+        if self.is_quadratic and not solver_supports(
+            solver_name, SolverFeature.QUADRATIC_OBJECTIVE
+        ):
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
             )
@@ -1231,7 +1235,10 @@ class Model:
                     explicit_coordinate_names=explicit_coordinate_names,
                 )
             else:
-                if solver_name in ["glpk", "cbc"] and explicit_coordinate_names:
+                if (
+                    not solver_supports(solver_name, SolverFeature.LP_FILE_NAMES)
+                    and explicit_coordinate_names
+                ):
                     logger.warning(
                         f"{solver_name} does not support writing names to lp files, disabling it."
                     )
@@ -1339,10 +1346,10 @@ class Model:
         if solver_model is None:
             # Check if this is a supported solver without a stored model
             solver_name = getattr(self, "solver_name", "unknown")
-            if solver_name in ["gurobi", "xpress"]:
+            if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
                 raise ValueError(
                     "No solver model available. The model must be solved first with "
-                    "'gurobi' or 'xpress' solver and the result must be infeasible."
+                    "a solver that supports IIS computation and the result must be infeasible."
                 )
             else:
                 # This is an unsupported solver
