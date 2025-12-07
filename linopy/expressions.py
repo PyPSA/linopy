@@ -441,6 +441,11 @@ class BaseExpression(ABC):
 
         return "\n".join(lines)
 
+    @property
+    def is_constant(self) -> bool:
+        """This is true if the expression contains no variables"""
+        return self.data["coeffs"].values.size == 0
+
     def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
         Print the linear expression.
@@ -1439,12 +1444,18 @@ class LinearExpression(BaseExpression):
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
-        columns `coeffs`, `vars`.
+        columns `coeffs`, `vars`, `const`. The coeffs and vars columns will be null if the expression is constant.
 
         Returns
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            df = pl.DataFrame(
+                {"const": self.data["const"].values.reshape(-1)}
+            ).with_columns(pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars"))
+            return df.select(["vars", "coeffs", "const"])
+
         df = to_polars(self.data)
         df = filter_nulls_polars(df)
         df = group_terms_polars(df)
@@ -1855,12 +1866,22 @@ class QuadraticExpression(BaseExpression):
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
-        columns `coeffs`, `vars`.
+        columns `vars1`, `vars2`, `coeffs`, `const`. If the expression is constant, the `vars1` and `vars2` and `coeffs` columns will be null.
 
         Returns
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            df = pl.DataFrame(
+                {"const": self.data["const"].values.reshape(-1)}
+            ).with_columns(
+                pl.lit(None).alias("coeffs"),
+                pl.lit(None).alias("vars1"),
+                pl.lit(None).alias("vars2"),
+            )
+            return df.select(["vars1", "vars2", "coeffs", "const"])
+
         vars = self.data.vars.assign_coords(
             {FACTOR_DIM: ["vars1", "vars2"]}
         ).to_dataset(FACTOR_DIM)
