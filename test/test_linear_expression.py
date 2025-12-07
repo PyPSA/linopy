@@ -1139,14 +1139,8 @@ def test_linear_expression_from_constant_1D(m: Model) -> None:
     assert (expr.const.values == [10, 20]).all()
     assert expr.is_constant
 
-    exp_polars = expr.to_polars()
-    assert exp_polars.columns == ["const", "coeffs", "vars"]
-    assert exp_polars["const"].to_list() == [10, 20]
-    assert exp_polars["coeffs"].to_list() == [None, None]
-    assert exp_polars["vars"].to_list() == [None, None]
 
-
-def test_linear_expression_two_dimensional_from_constant_2D(m: Model) -> None:
+def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
     index_a = pd.Index([0, 1], name="a")
     index_b = pd.Index([0, 1, 2], name="b")
     arr = np.array([[10, 20, 30], [40, 50, 60]])
