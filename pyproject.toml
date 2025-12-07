@@ -58,6 +58,7 @@ docs = [
     "gurobipy==11.0.2",
     "ipykernel==6.29.5",
     "matplotlib==3.9.1",
+    "knitro>=15.0.1",
 ]
 dev = [
     "pytest",
@@ -70,6 +71,7 @@ dev = [
     "types-requests",
     "gurobipy",
     "highspy",
+    "knitro",
 ]
 solvers = [
     "gurobipy",
@@ -81,6 +83,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    "knitro>=15.0.1",
 ]
 
 [tool.setuptools.packages.find]
