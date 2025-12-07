@@ -48,6 +48,7 @@ QUADRATIC_SOLVERS = [
     "mosek",
     "copt",
     "mindopt",
+    "knitro"
 ]
 
 # Solvers that don't need a solution file when keep_files=False
@@ -145,6 +146,9 @@ with contextlib.suppress(ModuleNotFoundError):
     except coptpy.CoptError:
         pass
 
+with contextlib.suppress(ModuleNotFoundError, ImportError):
+    import knitro
+
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
@@ -176,6 +180,7 @@ class SolverName(enum.Enum):
     COPT = "copt"
     MindOpt = "mindopt"
     PIPS = "pips"
+    Knitro = "knitro"
 
 
 def path_to_string(path: Path) -> str:
