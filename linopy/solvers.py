@@ -48,7 +48,7 @@ QUADRATIC_SOLVERS = [
     "mosek",
     "copt",
     "mindopt",
-    "knitro"
+    "knitro",
 ]
 
 # Solvers that don't need a solution file when keep_files=False
@@ -147,7 +147,7 @@ with contextlib.suppress(ModuleNotFoundError):
         pass
 
 with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import knitro
+    pass
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
