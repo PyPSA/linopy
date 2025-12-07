@@ -58,6 +58,7 @@ from linopy.common import (
     get_index_map,
     group_terms_polars,
     has_optimized_model,
+    is_a_constant,
     iterate_slices,
     print_coord,
     print_single_expression,
@@ -845,9 +846,7 @@ class BaseExpression(ABC):
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
-    def to_constraint(
-        self, sign: SignLike, rhs: ConstantLike | VariableLike | ExpressionLike
-    ) -> Constraint:
+    def to_constraint(self, sign: SignLike, rhs: SideLike) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -864,6 +863,11 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
+        if self.is_constant and is_a_constant(rhs):
+            raise ValueError(
+                f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
+            )
+
         all_to_lhs = (self - rhs).data
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
