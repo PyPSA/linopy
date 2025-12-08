@@ -484,10 +484,18 @@ class CBC(Solver[None]):
             raise ModuleNotFoundError(
                 f"highspy is not installed. Please install it to use {self.solver_name.name} solver."
             )
-        h = highspy.Highs()
-        h.silent()
-        h.readModel(path_to_string(problem_fn))
-        variables = {v.name for v in h.getVariables()}
+        try:
+            h = highspy.Highs()
+            h.silent()
+            h.readModel(path_to_string(problem_fn))
+            variables = {v.name for v in h.getVariables()}
+
+            def filter_variables(df):
+                return df.index.isin(variables)
+        except AttributeError:
+            # If we're using an old version of highs, revert to old behavior
+            def filter_variables(df):
+                return df.index.str[0] == "x"
 
         def get_solver_solution() -> Solution:
             m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
@@ -507,7 +515,7 @@ class CBC(Solver[None]):
                 usecols=[1, 2, 3],
                 index_col=0,
             )
-            variables_b = df.index.isin(variables)
+            variables_b = filter_variables(df)
 
             sol = df[variables_b][2]
             dual = df[~variables_b][3]
