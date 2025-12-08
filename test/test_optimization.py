@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-import platform
 from typing import Any
 
 import numpy as np
@@ -20,6 +19,11 @@ from xarray.testing import assert_allclose, assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
@@ -37,20 +41,20 @@ params: list[tuple[str, str, bool]] = list(
     itertools.product(file_io_solvers, io_apis, explicit_coordinate_names)
 )
 
-direct_solvers: list[str] = ["gurobi", "highs", "mosek", "cupdlpx"]
+direct_solvers = get_available_solvers_with_feature(
+    SolverFeature.DIRECT_API, available_solvers
+)
 for solver in direct_solvers:
-    if solver in available_solvers:
-        params.append((solver, "direct", False))
+    params.append((solver, "direct", False))
 
 if "mosek" in available_solvers:
     params.append(("mosek", "lp", False))
     params.append(("mosek", "lp", True))
 
-feasible_quadratic_solvers: list[str] = quadratic_solvers
-# There seems to be a bug in scipopt with quadratic models on windows, see
-# https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
-if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
-    feasible_quadratic_solvers.remove("scip")
+
+# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# handled in linopy/solver_capabilities.py by adjusting the registry at import time.
+feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
 feasible_mip_solvers: list[str] = available_solvers.copy()
 if "cupdlpx" in feasible_mip_solvers:
@@ -1035,7 +1039,7 @@ def test_solver_classes_direct(
         with pytest.raises(ValueError):
             solver_.model = None
             solver_.solve_problem()
-    elif solver not in direct_solvers:
+    elif not solver_supports(solver, SolverFeature.DIRECT_API):
         with pytest.raises(NotImplementedError):
             solver_.solve_problem(model=model)
 
