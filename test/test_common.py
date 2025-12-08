@@ -10,6 +10,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
