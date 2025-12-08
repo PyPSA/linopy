@@ -909,7 +909,6 @@ class Highs(Solver[None]):
             highspy.HighsModelStatus.kSolveError: TerminationCondition.internal_solver_error,
             highspy.HighsModelStatus.kPostsolveError: TerminationCondition.internal_solver_error,
             highspy.HighsModelStatus.kModelEmpty: TerminationCondition.unknown,
-            highspy.HighsModelStatus.kMemoryLimit: TerminationCondition.resource_interrupt,
             highspy.HighsModelStatus.kOptimal: TerminationCondition.optimal,
             highspy.HighsModelStatus.kInfeasible: TerminationCondition.infeasible,
             highspy.HighsModelStatus.kUnboundedOrInfeasible: TerminationCondition.infeasible_or_unbounded,
@@ -918,10 +917,21 @@ class Highs(Solver[None]):
             highspy.HighsModelStatus.kObjectiveTarget: TerminationCondition.terminated_by_limit,
             highspy.HighsModelStatus.kTimeLimit: TerminationCondition.time_limit,
             highspy.HighsModelStatus.kIterationLimit: TerminationCondition.iteration_limit,
-            highspy.HighsModelStatus.kSolutionLimit: TerminationCondition.terminated_by_limit,
-            highspy.HighsModelStatus.kInterrupt: TerminationCondition.user_interrupt,
             highspy.HighsModelStatus.kUnknown: TerminationCondition.unknown,
         }
+        # Try adding the conditions that have been added in later highspy versions:
+        try:
+            CONDITION_MAP[highspy.HighsModelStatus.kInterrupt] = (
+                TerminationCondition.user_interrupt
+            )
+            CONDITION_MAP[highspy.HighsModelStatus.kSolutionLimit] = (
+                TerminationCondition.terminated_by_limit
+            )
+            CONDITION_MAP[highspy.HighsModelStatus.kMemoryLimit] = (
+                TerminationCondition.resource_interrupt
+            )
+        except AttributeError:
+            pass
 
         if warmstart_fn is not None and warmstart_fn.suffix == ".sol":
             h.readSolution(path_to_string(warmstart_fn), 0)
