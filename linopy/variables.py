@@ -53,6 +53,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -861,7 +862,9 @@ class Variable:
         xr.DataArray
         """
         solver_model = self.model.solver_model
-        if self.model.solver_name != "gurobi":
+        if not solver_supports(
+            self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+        ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."
             )
