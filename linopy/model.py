@@ -50,6 +50,7 @@ from linopy.expressions import (
 )
 from linopy.io import (
     to_block_files,
+    to_cupdlpx,
     to_file,
     to_gurobipy,
     to_highspy,
@@ -1516,5 +1517,7 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
