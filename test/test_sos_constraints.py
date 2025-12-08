@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -27,7 +29,7 @@ def test_add_sos_constraints_validation() -> None:
     m = Model()
     strings = pd.Index(["a", "b"], name="strings")
     with pytest.raises(ValueError, match="sos_type"):
-        m.add_sos_constraints(m.add_variables(name="x"), sos_type=3, sos_dim="i")
+        m.add_sos_constraints(m.add_variables(name="x"), sos_type=3, sos_dim="i")  # type: ignore[arg-type]
 
     variable = m.add_variables(coords=[strings], name="string_var")
 
@@ -43,7 +45,7 @@ def test_add_sos_constraints_validation() -> None:
         m.add_sos_constraints(numeric, sos_type=1, sos_dim="dim")
 
 
-def test_sos_constraints_written_to_lp(tmp_path) -> None:
+def test_sos_constraints_written_to_lp(tmp_path: Path) -> None:
     m = Model()
     breakpoints = pd.Index([0.0, 1.5, 3.5], name="bp")
     lambdas = m.add_variables(coords=[breakpoints], name="lambda")
@@ -83,7 +85,7 @@ def test_sos1_binary_maximize_lp_polars() -> None:
     locations = pd.Index([0, 1, 2], name="locations")
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
-    m.add_objective(build * [1, 2, 3], sense="max")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
 
     try:
         m.solve(solver_name="gurobi", io_api="lp-polars")
@@ -91,6 +93,7 @@ def test_sos1_binary_maximize_lp_polars() -> None:
         pytest.skip(f"Gurobi environment unavailable: {exc}")
 
     assert np.isclose(build.solution.values, [0, 0, 1]).all()
+    assert m.objective.value is not None
     assert np.isclose(m.objective.value, 3)
 
 
@@ -102,7 +105,7 @@ def test_sos2_binary_maximize_direct() -> None:
     locations = pd.Index([0, 1, 2], name="locations")
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
-    m.add_objective(build * [1, 2, 3], sense="max")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
 
     try:
         m.solve(solver_name="gurobi", io_api="direct")
@@ -110,6 +113,7 @@ def test_sos2_binary_maximize_direct() -> None:
         pytest.skip(f"Gurobi environment unavailable: {exc}")
 
     assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert m.objective.value is not None
     assert np.isclose(m.objective.value, 5)
 
 
@@ -121,7 +125,7 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
     locations = pd.Index([0, 1, 2], name="locations")
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
-    m.add_objective(build * [2, 1, 3], sense="max")
+    m.add_objective(build * np.array([2, 1, 3]), sense="max")
 
     try:
         m.solve(solver_name="gurobi", io_api="direct")
@@ -129,6 +133,7 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
         pytest.skip(f"Gurobi environment unavailable: {exc}")
 
     assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert m.objective.value is not None
     assert np.isclose(m.objective.value, 4)
 
 
@@ -137,7 +142,7 @@ def test_unsupported_solver_raises_error() -> None:
     locations = pd.Index([0, 1, 2], name="locations")
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
-    m.add_objective(build * [1, 2, 3], sense="max")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
 
     for solver in ["glpk", "mosek", "mindopt", "highs"]:
         if solver in available_solvers:
