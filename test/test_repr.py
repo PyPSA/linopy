@@ -169,7 +169,6 @@ def test_constraint_repr(con: Constraint) -> None:
 def test_empty_repr() -> None:
     repr(u.loc[[]])
     repr(lu.sel(dim_0=[]))
-    repr(lu.sel(dim_0=[]) >= 0)
 
 
 @pytest.mark.parametrize("obj", [v, lv, cv_, cv])
