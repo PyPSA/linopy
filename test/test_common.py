@@ -10,17 +10,17 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
-from linopy import LinearExpression, Variable
+from linopy import LinearExpression, Model, Variable
 from linopy.common import (
     align,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
+    is_a_constant,
     iterate_slices,
 )
 from linopy.testing import assert_linequal, assert_varequal
@@ -711,3 +711,27 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     assert expr_obs.shape == (1, 1)  # _term dim
     assert isinstance(expr_obs, LinearExpression)
     assert_linequal(expr_obs, expr.loc[[1]])
+
+
+def test_is_a_constant() -> None:
+    m = Model()
+    index = pd.Index(range(10), name="t")
+    a = m.add_variables(name="a", coords=[index])
+    b = a.sel(t=1)
+    c = a * 2
+    d = a * a
+
+    non_constant = [a, b, c, d]
+    for nc in non_constant:
+        assert not is_a_constant(nc)
+
+    constant_values = [
+        5,
+        3.14,
+        np.int32(7),
+        np.float64(2.71),
+        pd.Series([1, 2, 3]),
+        np.array([4, 5, 6], xr.DataArray([k for k in range(10)], coords=[index])),
+    ]
+    for cv in constant_values:
+        assert is_a_constant(cv)

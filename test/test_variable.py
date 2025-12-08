@@ -149,6 +149,11 @@ def test_variable_upper_setter_with_array_invalid_dim(x: linopy.Variable) -> Non
         x.upper = upper
 
 
+def test_variable_lower_setter_with_non_constant(z: linopy.Variable) -> None:
+    with pytest.raises(TypeError):
+        z.upper = z
+
+
 def test_variable_lower_setter_with_array(x: linopy.Variable) -> None:
     idx = pd.RangeIndex(10, name="first")
     lower = pd.Series(range(15, 25), index=idx)
