@@ -715,9 +715,9 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
 
 
 def test_is_a_constant() -> None:
-    m = Model()
+    model = Model()
     index = pd.Index(range(10), name="t")
-    a = m.add_variables(name="a", coords=[index])
+    a = model.add_variables(name="a", coords=[index])
     b = a.sel(t=1)
     c = a * 2
     d = a * a
