@@ -1284,8 +1284,9 @@ class Model:
             )
 
         # SOS constraints are not supported by all solvers
-        SOS_UNSUPPORTED_SOLVERS = {"glpk", "mosek", "mindopt", "highs"}
-        if self.variables.sos and solver_name in SOS_UNSUPPORTED_SOLVERS:
+        if self.variables.sos and not solver_supports(
+            solver_name, SolverFeature.SOS_CONSTRAINTS
+        ):
             raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
 
         try:
