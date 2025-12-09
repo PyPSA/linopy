@@ -1191,3 +1191,63 @@ def test_cumsum(m: Model, multiple: float) -> None:
     expr = m.variables["x"] + m.variables["y"]
     cumsum = (multiple * expr).cumsum()
     cumsum.nterm == 2
+
+
+def test_simplify_basic(x: Variable) -> None:
+    """Test basic simplification with duplicate terms."""
+    expr = 2 * x + 3 * x
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+
+    # Check that the coefficient is 5
+    coeffs: np.ndarray = simplified.coeffs.values
+    assert len(coeffs) == 1, f"Expected 1 valid coefficient, got {len(coeffs)}"
+    assert all(coeffs == 5.0), f"Expected coefficient 5.0, got {coeffs[0]}"
+
+
+def test_simplify_array(x: Variable) -> None:
+    """Test simplification with array variables."""
+    # Create expression with duplicate terms
+    expr = 2 * x + 3 * x + x
+    # Simplify
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert all(simplified.coeffs.values == 6), (
+        f"Expected coefficients of 6, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_with_different_variables(x: Variable, y: Variable) -> None:
+    """Test that different variables are kept separate."""
+    # Create expression: 2*x + 3*x + 4*y
+    expr = 2 * x + 3 * x + 4 * y
+
+    # Simplify
+    simplified = expr.simplify()
+    # Should have 2 terms (one for x with coeff 5, one for y with coeff 4)
+    assert simplified.nterm == 2, f"Expected 2 terms, got {simplified.nterm}"
+
+    coeffs: np.ndarray = simplified.coeffs.values
+    assert len(coeffs) == 2, f"Expected 2 valid coefficients, got {len(coeffs)}"
+    # Check that coefficients are 5 and 4 (in some order)
+    assert set(coeffs) == {5.0, 4.0}, (
+        f"Expected coefficients {{5.0, 4.0}}, got {set(coeffs)}"
+    )
+
+
+def test_simplify_with_constant(x: Variable) -> None:
+    """Test that constants are preserved."""
+    expr = 2 * x + 3 * x + 10
+
+    # Simplify
+    simplified = expr.simplify()
+
+    # Check constant is preserved
+    assert all(simplified.const.values == 10.0), (
+        f"Expected constant 10.0, got {simplified.const.values}"
+    )
+
+    # Check coefficients
+    assert all(simplified.coeffs.values == 5.0), (
+        f"Expected coefficient 5.0, got {simplified.coeffs.values}"
+    )
