@@ -1475,9 +1475,7 @@ class LinearExpression(BaseExpression):
 
         def _simplify_row(vars_row: np.ndarray, coeffs_row: np.ndarray) -> np.ndarray:
             """
-            Simplify a single row by grouping vars and summing coefficients.
-
-            Returns a 2D array of shape (2, input_len) where first row is vars, second is coeffs.
+            For a given combination of expression coordinates, try to simplify by reducing duplicate variables
             """
             input_len = len(vars_row)
 
@@ -1515,8 +1513,8 @@ class LinearExpression(BaseExpression):
 
             return np.vstack([result_vars, result_coeffs])
 
-        # Coeffs and vars have dimensions (.., TERM_DIM)
-        # A row-wise operation is applied over the .. dimensions on both coeffs and vars, which are stacked together over a new "CV_DIM" dimension
+        # Coeffs and vars have dimensions (.., TERM_DIM) where .. are the coordinate dimensions of the expression
+        # An operation is applied over the coordinate dimensions on both coeffs and vars, which are stacked together over a new "CV_DIM" dimension
         combined: xr.DataArray = xr.apply_ufunc(
             _simplify_row,
             self.vars,
@@ -1527,7 +1525,7 @@ class LinearExpression(BaseExpression):
         )
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
-        # Drop terms where all vars are -1 (i.e., empty terms across all positions)
+        # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
         vars = combined.isel({CV_DIM: 0}).astype(int)
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
