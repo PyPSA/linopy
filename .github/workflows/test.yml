@@ -124,4 +124,5 @@ jobs:
 
     - name: Run type checker (mypy)
       run: |
+        mypy --install-types
         mypy .
