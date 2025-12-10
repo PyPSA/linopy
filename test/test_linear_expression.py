@@ -1218,7 +1218,7 @@ def test_simplify_multiple_dimensions() -> None:
     simplified = expr.simplify()
     assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
     assert simplified.ndim == 2, f"Expected 2 dimensions, got {simplified.ndim}"
-    assert all(simplified.coeffs.values == 6), (
+    assert all(simplified.coeffs.values.reshape(-1) == 6), (
         f"Expected coefficients of 6, got {simplified.coeffs.values}"
     )
 
