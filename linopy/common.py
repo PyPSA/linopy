@@ -134,7 +134,7 @@ def try_to_convert_to_pd_datetime_index(
     try:
         if isinstance(coord, xr.DataArray):
             return coord.to_index()
-        return pd.DatetimeIndex(coord)  # type: ignore
+        return pd.DatetimeIndex(coord)
     except Exception:
         return coord
 

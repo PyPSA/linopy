@@ -145,6 +145,6 @@ def test_timezone_alignment_with_multiplication() -> None:
         warnings.simplefilter("error")
         expr = var1 * series1
 
-    index: pd.DatetimeIndex = expr.coords["time"].to_index()  # type: ignore
+    index: pd.DatetimeIndex = expr.coords["time"].to_index()
     assert index.equals(utc_index)
     assert index.tzinfo is UTC
