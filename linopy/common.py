@@ -18,6 +18,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
+import xarray as xr
 from numpy import arange, signedinteger
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
@@ -124,6 +125,17 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     return lst[index] if 0 <= index < len(lst) else None
 
 
+def try_to_convert_to_pd_datetime_index(
+    coord: xr.DataArray | Sequence | pd.Index | Any,
+) -> pd.DatetimeIndex | xr.DataArray | Sequence | pd.Index | Any:
+    try:
+        if isinstance(coord, xr.DataArray):
+            return coord.to_index()
+        return pd.DatetimeIndex(coord)  # type: ignore
+    except Exception:
+        return coord
+
+
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
     coords: CoordsLike | None = None,
@@ -164,7 +176,10 @@ def pandas_to_dataarray(
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
         for dim in shared_dims:
+            pd_coord = pandas_coords[dim]
             coord = coords[dim]
+            if isinstance(pd_coord, pd.DatetimeIndex):
+                coord = try_to_convert_to_pd_datetime_index(coord)
             if not isinstance(coord, pd.Index):
                 coord = pd.Index(coord)
             if not pandas_coords[dim].equals(coord):
