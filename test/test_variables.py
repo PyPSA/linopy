@@ -3,7 +3,6 @@
 This module aims at testing the correct behavior of the Variables class.
 """
 
-import sys
 import warnings
 from datetime import datetime
 
@@ -142,14 +141,10 @@ def test_timezone_alignment_with_multiplication() -> None:
     series1 = pd.Series(index=utc_index, data=1.0)
     var1 = model.add_variables(coords=[utc_index], name="var1")
 
-    if sys.version_info >= (3, 11):
-        with warnings.catch_warnings(category=CoordAlignWarning):
-            warnings.simplefilter("error")
-            expr = var1 * series1
-    else:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            expr = var1 * series1
+    # TODO increase coverage for datarray when coords are not dataarray
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", CoordAlignWarning)
+        expr = var1 * series1
 
     index: pd.DatetimeIndex = expr.coords["time"].to_index()
     assert index.equals(utc_index)

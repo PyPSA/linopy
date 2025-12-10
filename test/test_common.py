@@ -16,6 +16,7 @@ from xarray.testing.assertions import assert_equal
 
 from linopy import LinearExpression, Variable
 from linopy.common import (
+    CoordAlignWarning,
     align,
     as_dataarray,
     assign_multiindex_safe,
@@ -98,7 +99,7 @@ def test_as_dataarray_with_series_override_coords() -> None:
     target_dim = "dim_0"
     target_index = ["a", "b", "c"]
     s = pd.Series([1, 2, 3], index=target_index)
-    with pytest.warns(UserWarning):
+    with pytest.warns(CoordAlignWarning):
         da = as_dataarray(s, coords=[[1, 2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
@@ -217,7 +218,7 @@ def test_as_dataarray_dataframe_override_coords() -> None:
     target_index = ["a", "b"]
     target_columns = ["A", "B"]
     df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    with pytest.warns(UserWarning):
+    with pytest.warns(CoordAlignWarning):
         da = as_dataarray(df, coords=[[1, 2], [2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == target_dims
