@@ -42,6 +42,9 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
+class CoordAlignWarning(UserWarning): ...
+
+
 def set_int_index(series: pd.Series) -> pd.Series:
     """
     Convert string index to int index.
@@ -189,7 +192,8 @@ def pandas_to_dataarray(
                 f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
                 "Previously, the indexes of the pandas were ignored and overwritten in "
                 "these cases. Now, the pandas object's coordinates are taken considered"
-                " for alignment."
+                " for alignment.",
+                CoordAlignWarning,
             )
 
     return DataArray(arr, coords=None, dims=dims, **kwargs)
@@ -469,7 +473,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     except ValueError:
         warn(
             "Coordinates across variables not equal. Perform outer join.",
-            UserWarning,
+            CoordAlignWarning,
         )
         arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
