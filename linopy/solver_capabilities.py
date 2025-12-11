@@ -111,6 +111,17 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
             }
         ),
     ),
+    "knitro": SolverInfo(
+        name="knitro",
+        display_name="Artelys Knitro",
+        features=frozenset(
+            {
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
     "scip": SolverInfo(
         name="scip",
         display_name="SCIP",
