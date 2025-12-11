@@ -97,6 +97,14 @@ def test_as_datarray_with_tz_aware_series_index() -> None:
         result = as_dataarray(arr=panda_series, coords=data_array.coords)
     assert time_index.equals(result.coords["time"].to_index())
 
+    coords = {"time": time_index}
+    result = as_dataarray(arr=panda_series, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": [0, 1, 2, 3]}
+    result = as_dataarray(arr=panda_series, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
 
 def test_as_dataarray_with_series_dims_subset() -> None:
     target_dim = "dim_0"
