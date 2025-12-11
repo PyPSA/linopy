@@ -5,12 +5,14 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from test_linear_expression import m, u, x  # noqa: F401
+from pytz import UTC
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
@@ -71,6 +73,28 @@ def test_as_dataarray_with_series_dims_priority() -> None:
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
     assert list(da.coords[target_dim].values) == target_index
+
+
+def test_as_datarray_with_tz_aware_series_index() -> None:
+    time_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    other_index = pd.Index(name="time", data=[0, 1, 2, 3])
+
+    panda_series = pd.Series(index=time_index, data=1.0)
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[time_index])
+    result = as_dataarray(arr=panda_series, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[other_index])
+    with pytest.warns(CoordAlignWarning):
+        result = as_dataarray(arr=panda_series, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
 
 
 def test_as_dataarray_with_series_dims_subset() -> None:

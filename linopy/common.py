@@ -131,6 +131,8 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
 def try_to_convert_to_pd_datetime_index(
     coord: xr.DataArray | Sequence | pd.Index | Any,
 ) -> pd.DatetimeIndex | xr.DataArray | Sequence | pd.Index | Any:
+    if isinstance(coord, pd.DatetimeIndex):
+        return coord
     try:
         if isinstance(coord, xr.DataArray):
             return coord.to_index()
