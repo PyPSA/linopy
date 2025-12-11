@@ -141,7 +141,6 @@ def test_timezone_alignment_with_multiplication() -> None:
     series1 = pd.Series(index=utc_index, data=1.0)
     var1 = model.add_variables(coords=[utc_index], name="var1")
 
-    # TODO increase coverage for datarray when coords are not dataarray
     with warnings.catch_warnings():
         warnings.simplefilter("error", CoordAlignWarning)
         expr = var1 * series1
