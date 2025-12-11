@@ -70,6 +70,7 @@ dev = [
     "types-requests",
     "gurobipy",
     "highspy",
+    "types-pytz"
 ]
 solvers = [
     "gurobipy",

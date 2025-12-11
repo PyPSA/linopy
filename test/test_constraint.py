@@ -12,7 +12,6 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-import xarray.core
 from xarray.testing import assert_equal
 
 import linopy

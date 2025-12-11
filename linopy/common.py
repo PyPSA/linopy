@@ -18,6 +18,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
+import xarray as xr
 from numpy import arange, signedinteger
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
@@ -39,6 +40,9 @@ if TYPE_CHECKING:
     from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
+
+
+class CoordAlignWarning(UserWarning): ...
 
 
 def set_int_index(series: pd.Series) -> pd.Series:
@@ -124,6 +128,21 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     return lst[index] if 0 <= index < len(lst) else None
 
 
+def try_to_convert_to_pd_datetime_index(
+    coord: xr.DataArray | Sequence | pd.Index | Any,
+) -> pd.DatetimeIndex | xr.DataArray | Sequence | pd.Index | Any:
+    if isinstance(coord, pd.DatetimeIndex):
+        return coord
+    try:
+        if isinstance(coord, xr.DataArray):
+            index = coord.to_index()
+            assert isinstance(index, pd.DatetimeIndex)
+            return index
+        return pd.DatetimeIndex(coord)
+    except Exception:
+        return coord
+
+
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
     coords: CoordsLike | None = None,
@@ -164,7 +183,10 @@ def pandas_to_dataarray(
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
         for dim in shared_dims:
+            pd_coord = pandas_coords[dim]
             coord = coords[dim]
+            if isinstance(pd_coord, pd.DatetimeIndex):
+                coord = try_to_convert_to_pd_datetime_index(coord)
             if not isinstance(coord, pd.Index):
                 coord = pd.Index(coord)
             if not pandas_coords[dim].equals(coord):
@@ -174,7 +196,8 @@ def pandas_to_dataarray(
                 f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
                 "Previously, the indexes of the pandas were ignored and overwritten in "
                 "these cases. Now, the pandas object's coordinates are taken considered"
-                " for alignment."
+                " for alignment.",
+                CoordAlignWarning,
             )
 
     return DataArray(arr, coords=None, dims=dims, **kwargs)
@@ -454,7 +477,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     except ValueError:
         warn(
             "Coordinates across variables not equal. Perform outer join.",
-            UserWarning,
+            CoordAlignWarning,
         )
         arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
