@@ -68,6 +68,44 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver(tmp_path: Path) -> None:
+    """Test Knitro solver with a simple MPS problem."""
+    knitro = solvers.Knitro()
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_with_options(tmp_path: Path) -> None:
+    """Test Knitro solver with custom options."""
+    # Set some common Knitro options
+    knitro = solvers.Knitro(maxit=100, feastol=1e-6)
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+    log_file = tmp_path / "knitro.log"
+
+    result = knitro.solve_problem(
+        problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
+    )
+
+    assert result.status.is_ok
+    assert log_file.exists()
+
+
+@pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
 def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # noqa: F811
