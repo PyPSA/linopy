@@ -12,7 +12,7 @@ import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -63,7 +63,7 @@ class CatchDatetimeTypeError:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: Any,
-    ) -> bool:
+    ) -> Literal[False]:
         if exc_type is TypeError and exc_val is not None:
             if "Cannot interpret 'datetime" in str(exc_val):
                 raise TimezoneAlignError(
@@ -78,7 +78,8 @@ def catch_datetime_type_error_and_re_raise(func: Callable[P, R]) -> Callable[P, 
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         with CatchDatetimeTypeError():
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+        return result
 
     return wrapper
 
