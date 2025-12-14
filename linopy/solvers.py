@@ -1775,18 +1775,43 @@ class Knitro(Solver[None]):
         try:
             # Read the problem file
             problem_path = path_to_string(problem_fn)
-            if io_api is not None and io_api.startswith("lp"):
-                load_fn = getattr(knitro, "KN_load_lp_file", None)
-                if load_fn is None:
-                    msg = "Knitro Python API does not support loading LP files (missing KN_load_lp_file)."
-                    raise RuntimeError(msg)
+            suffix = problem_fn.suffix.lower()
+            if suffix == ".lp":
+                candidate_loaders = [
+                    "KN_load_lp_file",
+                    "KN_load_file",
+                    "KN_load_mps_file",
+                ]
+            elif suffix == ".mps":
+                candidate_loaders = [
+                    "KN_load_mps_file",
+                    "KN_load_file",
+                    "KN_load_lp_file",
+                ]
             else:
-                load_fn = getattr(knitro, "KN_load_mps_file", None)
-                if load_fn is None:
-                    msg = "Knitro Python API does not support loading MPS files (missing KN_load_mps_file)."
-                    raise RuntimeError(msg)
+                candidate_loaders = [
+                    "KN_load_file",
+                    "KN_load_mps_file",
+                    "KN_load_lp_file",
+                ]
 
-            ret = int(load_fn(kc, problem_path))
+            last_ret: int | None = None
+            for candidate in candidate_loaders:
+                load_fn = getattr(knitro, candidate, None)
+                if load_fn is None:
+                    continue
+                ret_val, _ret_rc = unpack_value_and_rc(load_fn(kc, problem_path))
+                last_ret = int(ret_val)
+                if last_ret == 0:
+                    break
+            else:
+                msg = (
+                    "Knitro Python API does not expose a suitable file loader for "
+                    f"{suffix or 'unknown'} problems (tried: {', '.join(candidate_loaders)})."
+                )
+                raise RuntimeError(msg)
+
+            ret = 0 if last_ret is None else last_ret
             if ret != 0:
                 msg = f"Failed to load problem file: Knitro error code {ret}"
                 raise RuntimeError(msg)

@@ -4,6 +4,7 @@ Release Notes
 .. Upcoming Version
 
 * Fix compatibility for xpress versions below 9.6 (regression)
+* Add support for the Artelys Knitro solver (via the Knitro Python API)
 * Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
 * Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
 

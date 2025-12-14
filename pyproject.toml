@@ -81,6 +81,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    "knitro"
 ]
 
 [tool.setuptools.packages.find]
