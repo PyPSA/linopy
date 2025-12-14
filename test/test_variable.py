@@ -149,7 +149,7 @@ def test_variable_upper_setter_with_array_invalid_dim(x: linopy.Variable) -> Non
         x.upper = upper
 
 
-def test_variable_lower_setter_with_non_constant(z: linopy.Variable) -> None:
+def test_variable_upper_setter_with_non_constant(z: linopy.Variable) -> None:
     with pytest.raises(TypeError):
         z.upper = z
 

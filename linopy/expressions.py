@@ -58,7 +58,7 @@ from linopy.common import (
     get_index_map,
     group_terms_polars,
     has_optimized_model,
-    is_a_constant,
+    is_constant,
     iterate_slices,
     print_coord,
     print_single_expression,
@@ -444,8 +444,8 @@ class BaseExpression(ABC):
 
     @property
     def is_constant(self) -> bool:
-        """This is true if the expression contains no variables"""
-        return self.data["coeffs"].values.size == 0
+        """True if the expression contains no variables."""
+        return self.data.sizes[TERM_DIM] == 0
 
     def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
@@ -863,7 +863,7 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
-        if self.is_constant and is_a_constant(rhs):
+        if self.is_constant and is_constant(rhs):
             raise ValueError(
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )

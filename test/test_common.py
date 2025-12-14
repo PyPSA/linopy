@@ -21,7 +21,7 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     get_dims_with_index_levels,
-    is_a_constant,
+    is_constant,
     iterate_slices,
 )
 from linopy.testing import assert_linequal, assert_varequal
@@ -714,7 +714,7 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     assert_linequal(expr_obs, expr.loc[[1]])
 
 
-def test_is_a_constant() -> None:
+def test_is_constant() -> None:
     model = Model()
     index = pd.Index(range(10), name="t")
     a = model.add_variables(name="a", coords=[index])
@@ -724,7 +724,7 @@ def test_is_a_constant() -> None:
 
     non_constant = [a, b, c, d]
     for nc in non_constant:
-        assert not is_a_constant(nc)
+        assert not is_constant(nc)
 
     constant_values = [
         5,
@@ -732,7 +732,8 @@ def test_is_a_constant() -> None:
         np.int32(7),
         np.float64(2.71),
         pd.Series([1, 2, 3]),
-        np.array([4, 5, 6], xr.DataArray([k for k in range(10)], coords=[index])),
+        np.array([4, 5, 6]),
+        xr.DataArray([k for k in range(10)], coords=[index]),
     ]
     for cv in constant_values:
-        assert is_a_constant(cv)
+        assert is_constant(cv)
