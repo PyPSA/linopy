@@ -7,14 +7,18 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from pytz import UTC
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
+from linopy.common import TimezoneAlignError
 from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -1191,3 +1195,27 @@ def test_cumsum(m: Model, multiple: float) -> None:
     expr = m.variables["x"] + m.variables["y"]
     cumsum = (multiple * expr).cumsum()
     cumsum.nterm == 2
+
+
+def test_timezone_alignment_failure() -> None:
+    utc_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    tz_naive_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=None,
+        name="time",
+    )
+    model = Model()
+    series1 = pd.Series(index=tz_naive_index, data=1.0)
+    expr = model.add_variables(coords=[utc_index], name="var1") * 1.0
+
+    with pytest.raises(TimezoneAlignError):
+        # We expect to get a useful error (TimezoneAlignError) instead of a not implemented error falsely claiming that we cannot multiply these types together
+        _ = expr * series1

@@ -13,7 +13,6 @@ import polars as pl
 import pytest
 import xarray as xr
 from pytz import UTC
-from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
@@ -103,6 +102,37 @@ def test_as_datarray_with_tz_aware_series_index() -> None:
 
     coords = {"time": [0, 1, 2, 3]}
     result = as_dataarray(arr=panda_series, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+
+def test_as_datarray_with_tz_aware_dataframe_columns_index() -> None:
+    time_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    other_index = pd.Index(name="time", data=[0, 1, 2, 3])
+
+    index = pd.Index([0, 1, 2, 3], name="x")
+    pandas_df = pd.DataFrame(index=index, columns=time_index, data=1.0)
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[time_index])
+    result = as_dataarray(arr=pandas_df, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[other_index])
+    with pytest.warns(CoordAlignWarning):
+        result = as_dataarray(arr=pandas_df, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": time_index}
+    result = as_dataarray(arr=pandas_df, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": [0, 1, 2, 3]}
+    result = as_dataarray(arr=pandas_df, coords=coords)
     assert time_index.equals(result.coords["time"].to_index())
 
 

@@ -47,6 +47,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    catch_datetime_type_error_and_re_raise,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -498,6 +499,7 @@ class BaseExpression(ABC):
         """
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
+    @catch_datetime_type_error_and_re_raise
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
     ) -> QuadraticExpression:
@@ -519,6 +521,7 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const
         return res
 
+    @catch_datetime_type_error_and_re_raise
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike
     ) -> GenericExpression:
@@ -1361,7 +1364,7 @@ class LinearExpression(BaseExpression):
                 return self._multiply_by_linear_expression(other)
             else:
                 return self._multiply_by_constant(other)
-        except TypeError:
+        except AssertionError:
             return NotImplemented
 
     def __pow__(self, other: int) -> QuadraticExpression:

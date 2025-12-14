@@ -12,7 +12,7 @@ import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -43,6 +43,44 @@ if TYPE_CHECKING:
 
 
 class CoordAlignWarning(UserWarning): ...
+
+
+class TimezoneAlignError(ValueError): ...
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class CatchDatetimeTypeError:
+    """Context manager that catches datetime-related TypeErrors and re-raises as TimezoneAlignError."""
+
+    def __enter__(self) -> CatchDatetimeTypeError:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> bool:
+        if exc_type is TypeError and exc_val is not None:
+            if "Cannot interpret 'datetime" in str(exc_val):
+                raise TimezoneAlignError(
+                    "Timezone information across datetime coordinates not aligned."
+                ) from exc_val
+        return False
+
+
+def catch_datetime_type_error_and_re_raise(func: Callable[P, R]) -> Callable[P, R]:
+    """Decorator that catches datetime-related TypeErrors and re-raises as TimezoneAlignError."""
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        with CatchDatetimeTypeError():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def set_int_index(series: pd.Series) -> pd.Series:
@@ -468,6 +506,7 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+@catch_datetime_type_error_and_re_raise
 def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
@@ -485,6 +524,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     return Dataset({ds.name: ds for ds in arrs})
 
 
+@catch_datetime_type_error_and_re_raise
 def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
     """
     Assign a field to a xarray Dataset while being safe against warnings about multiindex corruption.

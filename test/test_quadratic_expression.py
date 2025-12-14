@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
+from pytz import UTC
 from scipy.sparse import csc_matrix
 from xarray import DataArray
 
 from linopy import Model, Variable, merge
+from linopy.common import TimezoneAlignError
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.testing import assert_quadequal
@@ -344,3 +348,28 @@ def test_power_of_three(x: Variable) -> None:
         x**3
     with pytest.raises(TypeError):
         (x * x) * (x * x)
+
+
+def test_timezone_alignment_failure() -> None:
+    utc_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    tz_naive_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=None,
+        name="time",
+    )
+    model = Model()
+    series1 = pd.Series(index=tz_naive_index, data=1.0)
+    var = model.add_variables(coords=[utc_index], name="var1")
+    expr = var * var
+
+    with pytest.raises(TimezoneAlignError):
+        # We expect to get a useful error (TimezoneAlignError) instead of a not implemented error falsely claiming that we cannot multiply these types together
+        _ = expr * series1
