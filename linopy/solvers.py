@@ -96,11 +96,6 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
 
     available_solvers.append("xpress")
 
-with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import knitro
-
-    available_solvers.append("knitro")
-
     # xpress.Namespaces was added in xpress 9.6
     try:
         from xpress import Namespaces as xpress_Namespaces
@@ -111,6 +106,14 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             COLUMN = 2
             SET = 3
 
+
+with contextlib.suppress(ModuleNotFoundError, ImportError):
+    import knitro
+
+    with contextlib.suppress(Exception):
+        kc = knitro.KN_new()
+        knitro.KN_free(kc)
+        available_solvers.append("knitro")
 
 with contextlib.suppress(ModuleNotFoundError):
     import mosek
@@ -1702,26 +1705,67 @@ class Knitro(Solver[None]):
         Result
         """
         # Knitro status codes: https://www.artelys.com/app/docs/knitro/3_referenceManual/knitroReturnCodes.html
-        CONDITION_MAP = {
-            0: "optimal",
-            -100: "feasible_point",
-            -101: "infeasible",
-            -102: "feasible_point",
-            -200: "unbounded",
-            -201: "infeasible_or_unbounded",
-            -202: "iteration_limit",
-            -203: "time_limit",
-            -204: "function_evaluation_limit",
-            -300: "unbounded",
-            -400: "iteration_limit",
-            -401: "time_limit",
-            -410: "mip_node_limit",
-            -411: "mip_solution_limit",
+        CONDITION_MAP: dict[int, TerminationCondition] = {
+            0: TerminationCondition.optimal,
+            -100: TerminationCondition.suboptimal,
+            -101: TerminationCondition.infeasible,
+            -102: TerminationCondition.suboptimal,
+            -200: TerminationCondition.unbounded,
+            -201: TerminationCondition.infeasible_or_unbounded,
+            -202: TerminationCondition.iteration_limit,
+            -203: TerminationCondition.time_limit,
+            -204: TerminationCondition.terminated_by_limit,
+            -300: TerminationCondition.unbounded,
+            -400: TerminationCondition.iteration_limit,
+            -401: TerminationCondition.time_limit,
+            -410: TerminationCondition.terminated_by_limit,
+            -411: TerminationCondition.terminated_by_limit,
         }
 
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
+        def unpack_value_and_rc(obj: Any) -> tuple[Any, int]:
+            if isinstance(obj, tuple) and len(obj) == 2:
+                return obj[0], int(obj[1])
+            return obj, 0
+
+        def set_param_by_name(kc: Any, name: str, value: Any) -> None:
+            if isinstance(value, bool):
+                value = int(value)
+
+            if isinstance(value, int):
+                setter = getattr(knitro, "KN_set_int_param_by_name", None) or getattr(
+                    knitro, "KN_set_param_by_name", None
+                )
+            elif isinstance(value, float):
+                setter = getattr(
+                    knitro, "KN_set_double_param_by_name", None
+                ) or getattr(knitro, "KN_set_param_by_name", None)
+            elif isinstance(value, str):
+                setter = getattr(knitro, "KN_set_char_param_by_name", None)
+            else:
+                logger.warning(
+                    "Ignoring unsupported Knitro option %r=%r (type %s)",
+                    name,
+                    value,
+                    type(value).__name__,
+                )
+                return
+
+            if setter is None:
+                logger.warning(
+                    "Could not set Knitro option %r; required setter not available in knitro Python API.",
+                    name,
+                )
+                return
+
+            try:
+                setter(kc, name, value)
+            except Exception as e:
+                logger.warning("Could not set Knitro option %r=%r: %s", name, value, e)
+
+        kc = None
         try:
             kc = knitro.KN_new()
         except Exception as e:
@@ -1730,22 +1774,36 @@ class Knitro(Solver[None]):
 
         try:
             # Read the problem file
-            ret = knitro.KN_load_mps_file(kc, path_to_string(problem_fn))
+            problem_path = path_to_string(problem_fn)
+            if io_api is not None and io_api.startswith("lp"):
+                load_fn = getattr(knitro, "KN_load_lp_file", None)
+                if load_fn is None:
+                    msg = "Knitro Python API does not support loading LP files (missing KN_load_lp_file)."
+                    raise RuntimeError(msg)
+            else:
+                load_fn = getattr(knitro, "KN_load_mps_file", None)
+                if load_fn is None:
+                    msg = "Knitro Python API does not support loading MPS files (missing KN_load_mps_file)."
+                    raise RuntimeError(msg)
+
+            ret = int(load_fn(kc, problem_path))
             if ret != 0:
                 msg = f"Failed to load problem file: Knitro error code {ret}"
                 raise RuntimeError(msg)
 
             # Set log file if specified
             if log_fn is not None:
-                knitro.KN_set_param_by_name(kc, "outlev", 6)  # Enable detailed output
-                knitro.KN_set_param_by_name(kc, "outmode", path_to_string(log_fn))
+                log_fn.parent.mkdir(parents=True, exist_ok=True)
+                with open(path_to_string(log_fn), "w", encoding="utf-8") as f:
+                    f.write("linopy: knitro log\n")
+
+                set_param_by_name(kc, "outlev", 6)
+                set_param_by_name(kc, "outmode", 1)
+                set_param_by_name(kc, "outname", path_to_string(log_fn))
 
             # Set solver options
             for k, v in self.solver_options.items():
-                if isinstance(v, int | float):
-                    knitro.KN_set_param_by_name(kc, k, v)
-                elif isinstance(v, str):
-                    knitro.KN_set_char_param_by_name(kc, k, v)
+                set_param_by_name(kc, k, v)
 
             # Load warmstart if provided
             if warmstart_fn is not None:
@@ -1758,35 +1816,47 @@ class Knitro(Solver[None]):
                     logger.info("Warmstart could not be loaded. Error: %s", err)
 
             # Solve the problem
-            ret = knitro.KN_solve(kc)
+            ret = int(knitro.KN_solve(kc))
 
             # Get termination condition
-            termination_condition = CONDITION_MAP.get(ret, "unknown")
+            if ret in CONDITION_MAP:
+                termination_condition = CONDITION_MAP[ret]
+            elif ret > 0:
+                termination_condition = TerminationCondition.internal_solver_error
+            else:
+                termination_condition = TerminationCondition.unknown
+
             status = Status.from_termination_condition(termination_condition)
-            status.legacy_status = ret
+            status.legacy_status = str(ret)
 
             def get_solver_solution() -> Solution:
                 # Get objective value
                 try:
-                    obj_ptr = knitro.KN_get_obj_value(kc)
-                    objective = obj_ptr[0] if obj_ptr[1] == 0 else np.nan
+                    obj_val, obj_rc = unpack_value_and_rc(knitro.KN_get_obj_value(kc))
+                    objective = float(obj_val) if obj_rc == 0 else np.nan
                 except Exception:
                     objective = np.nan
 
                 # Get variable values
                 try:
-                    n_vars = knitro.KN_get_number_vars(kc)
-                    x_ptr = knitro.KN_get_var_primal_values(kc, n_vars)
-                    if x_ptr[1] == 0:
+                    n_vars_val, n_vars_rc = unpack_value_and_rc(
+                        knitro.KN_get_number_vars(kc)
+                    )
+                    n_vars = int(n_vars_val) if n_vars_rc == 0 else 0
+
+                    x_val, x_rc = unpack_value_and_rc(
+                        knitro.KN_get_var_primal_values(kc, n_vars)
+                    )
+                    if x_rc == 0 and n_vars > 0:
                         # Get variable names
                         var_names = []
                         for i in range(n_vars):
-                            name_ptr = knitro.KN_get_var_name(kc, i)
-                            if name_ptr[1] == 0:
-                                var_names.append(name_ptr[0])
-                            else:
-                                var_names.append(f"x{i}")
-                        sol = pd.Series(x_ptr[0], index=var_names, dtype=float)
+                            name_val, name_rc = unpack_value_and_rc(
+                                knitro.KN_get_var_name(kc, i)
+                            )
+                            var_names.append(str(name_val) if name_rc == 0 else f"x{i}")
+
+                        sol = pd.Series(x_val, index=var_names, dtype=float)
                     else:
                         sol = pd.Series(dtype=float)
                 except Exception as e:
@@ -1795,19 +1865,27 @@ class Knitro(Solver[None]):
 
                 # Get dual values (constraint multipliers)
                 try:
-                    n_cons = knitro.KN_get_number_cons(kc)
+                    n_cons_val, n_cons_rc = unpack_value_and_rc(
+                        knitro.KN_get_number_cons(kc)
+                    )
+                    n_cons = int(n_cons_val) if n_cons_rc == 0 else 0
+
                     if n_cons > 0:
-                        dual_ptr = knitro.KN_get_con_dual_values(kc, n_cons)
-                        if dual_ptr[1] == 0:
+                        dual_val, dual_rc = unpack_value_and_rc(
+                            knitro.KN_get_con_dual_values(kc, n_cons)
+                        )
+                        if dual_rc == 0:
                             # Get constraint names
                             con_names = []
                             for i in range(n_cons):
-                                name_ptr = knitro.KN_get_con_name(kc, i)
-                                if name_ptr[1] == 0:
-                                    con_names.append(name_ptr[0])
-                                else:
-                                    con_names.append(f"c{i}")
-                            dual = pd.Series(dual_ptr[0], index=con_names, dtype=float)
+                                name_val, name_rc = unpack_value_and_rc(
+                                    knitro.KN_get_con_name(kc, i)
+                                )
+                                con_names.append(
+                                    str(name_val) if name_rc == 0 else f"c{i}"
+                                )
+
+                            dual = pd.Series(dual_val, index=con_names, dtype=float)
                         else:
                             dual = pd.Series(dtype=float)
                     else:
@@ -1834,15 +1912,24 @@ class Knitro(Solver[None]):
             # Save solution if requested
             if solution_fn is not None:
                 try:
-                    knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
+                    write_sol = getattr(knitro, "KN_write_sol_file", None)
+                    if write_sol is None:
+                        logger.info(
+                            "Solution export not supported by Knitro interface; ignoring solution_fn=%s",
+                            solution_fn,
+                        )
+                    else:
+                        solution_fn.parent.mkdir(parents=True, exist_ok=True)
+                        write_sol(kc, path_to_string(solution_fn))
                 except Exception as err:
                     logger.info("Could not write solution file. Error: %s", err)
 
-            return Result(status, solution, kc)
+            return Result(status, solution)
 
         finally:
-            # Clean up Knitro context
-            knitro.KN_free(kc)
+            if kc is not None:
+                with contextlib.suppress(Exception):
+                    knitro.KN_free(kc)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
