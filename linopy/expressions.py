@@ -1364,7 +1364,7 @@ class LinearExpression(BaseExpression):
                 return self._multiply_by_linear_expression(other)
             else:
                 return self._multiply_by_constant(other)
-        except AssertionError:
+        except TypeError:
             return NotImplemented
 
     def __pow__(self, other: int) -> QuadraticExpression:
