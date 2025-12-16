@@ -1200,10 +1200,10 @@ def test_simplify_basic(x: Variable) -> None:
     assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
 
     x_len = len(x.coords["dim_0"])
-    # Check that the coefficient is 5
+    # Check that the coefficient is 6 (2 + 3 + 1)
     coeffs: np.ndarray = simplified.coeffs.values
     assert len(coeffs) == x_len, f"Expected {x_len} coefficients, got {len(coeffs)}"
-    assert all(coeffs == 6.0), f"Expected coefficient 5.0, got {coeffs[0]}"
+    assert all(coeffs == 6.0), f"Expected coefficient 6.0, got {coeffs[0]}"
 
 
 def test_simplify_multiple_dimensions() -> None:
@@ -1254,4 +1254,25 @@ def test_simplify_with_constant(x: Variable) -> None:
     # Check coefficients
     assert all(simplified.coeffs.values == 5.0), (
         f"Expected coefficient 5.0, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_cancellation(x: Variable) -> None:
+    """Test that terms cancel out correctly when coefficients sum to zero."""
+    expr = x - x
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 0, f"Expected 0 terms, got {simplified.nterm}"
+    assert simplified.coeffs.values.size == 0
+    assert simplified.vars.values.size == 0
+
+
+def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
+    """Test partial cancellation where some terms cancel but others remain."""
+    expr = 2 * x - 2 * x + 3 * y
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert all(simplified.coeffs.values == 3.0), (
+        f"Expected coefficient 3.0, got {simplified.coeffs.values}"
     )
