@@ -1127,6 +1127,43 @@ def test_linear_expression_from_tuples_bad_calls(
         LinearExpression.from_tuples(10)
 
 
+def test_linear_expression_from_constant_scalar(m: Model) -> None:
+    expr = LinearExpression.from_constant(model=m, constant=10)
+    assert expr.is_constant
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
+def test_linear_expression_from_constant_1D(m: Model) -> None:
+    arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
+    expr = LinearExpression.from_constant(model=m, constant=arr)
+    assert isinstance(expr, LinearExpression)
+    assert list(expr.coords.keys())[0] == "t"
+    assert expr.nterm == 0
+    assert (expr.const.values == [10, 20]).all()
+    assert expr.is_constant
+
+
+def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
+    index_a = pd.Index([0, 1], name="a")
+    index_b = pd.Index([0, 1, 2], name="b")
+    arr = np.array([[10, 20, 30], [40, 50, 60]])
+    const = xr.DataArray(data=arr, coords=[index_a, index_b])
+
+    le_variable = m.add_variables(name="var", coords=[index_a, index_b]) * 1 + const
+    assert not le_variable.is_constant
+    le_const = LinearExpression.from_constant(model=m, constant=const)
+    assert le_const.is_constant
+
+    var_pol = le_variable.to_polars()
+    const_pol = le_const.to_polars()
+    assert var_pol.shape == const_pol.shape
+    assert var_pol.columns == const_pol.columns
+    assert all(const_pol["const"] == var_pol["const"])
+    assert all(const_pol["coeffs"].is_null())
+    assert all(const_pol["vars"].is_null())
+
+
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     assert isinstance(expr.sanitize(), LinearExpression)
