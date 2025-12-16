@@ -42,10 +42,10 @@ from linopy.common import (
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
-    is_constant,
     iterate_slices,
     print_coord,
     print_single_variable,
+    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -776,7 +776,7 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @is_constant
+    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
         Set the upper bounds of the variables.
@@ -800,7 +800,7 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @is_constant
+    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
         Set the lower bounds of the variables.
