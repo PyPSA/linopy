@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-import platform
 from typing import Any
 
 import numpy as np
@@ -20,6 +19,12 @@ from xarray.testing import assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
+from linopy.expressions import LinearExpression
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
 from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
 
 logger = logging.getLogger(__name__)
@@ -37,21 +42,20 @@ params: list[tuple[str, str, bool]] = list(
     itertools.product(available_solvers, io_apis, explicit_coordinate_names)
 )
 
-direct_solvers: list[str] = ["gurobi", "highs", "mosek"]
+direct_solvers = get_available_solvers_with_feature(
+    SolverFeature.DIRECT_API, available_solvers
+)
 for solver in direct_solvers:
-    if solver in available_solvers:
-        params.append((solver, "direct", False))
+    params.append((solver, "direct", False))
 
 if "mosek" in available_solvers:
     params.append(("mosek", "lp", False))
     params.append(("mosek", "lp", True))
 
 
-feasible_quadratic_solvers: list[str] = quadratic_solvers
-# There seems to be a bug in scipopt with quadratic models on windows, see
-# https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
-if platform.system() == "Windows" and "scip" in feasible_quadratic_solvers:
-    feasible_quadratic_solvers.remove("scip")
+# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# handled in linopy/solver_capabilities.py by adjusting the registry at import time.
+feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
 
 def test_print_solvers(capsys: Any) -> None:
@@ -115,6 +119,18 @@ def model_maximization() -> Model:
     m.add_constraints(4 * x + 2 * y, LESS_EQUAL, 3)
 
     m.add_objective(2 * y + x, sense="max")
+    return m
+
+
+@pytest.fixture
+def model_with_constant_expression() -> Model:
+    m = Model(chunk=None)
+
+    x = m.add_variables(lower=0, name="x")
+    const = LinearExpression.from_constant(model=m, constant=2)
+
+    m.add_constraints(x + const, GREATER_EQUAL, 5)
+    m.add_objective(x)
     return m
 
 
@@ -388,6 +404,21 @@ def test_default_setting_expression_sol_accessor(
 
     qexpr = 4 * (x * y)  # type: ignore
     assert_equal(qexpr.solution, 4 * x.solution * y.solution)
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_constant_expression_in_constraint(
+    model_with_constant_expression: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    status, condition = model_with_constant_expression.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "ok"
+    assert np.isclose(model_with_constant_expression.objective.value or 0, 3.0)
+    assert np.isclose(model_with_constant_expression.solution["x"].item(), 3.0)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
@@ -980,7 +1011,7 @@ def test_solver_classes_direct(
         with pytest.raises(ValueError):
             solver_.model = None
             solver_.solve_problem()
-    elif solver not in direct_solvers:
+    elif not solver_supports(solver, SolverFeature.DIRECT_API):
         with pytest.raises(NotImplementedError):
             solver_.solve_problem(model=model)
 

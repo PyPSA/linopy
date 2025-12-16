@@ -31,6 +31,10 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_solvers_with_feature,
+)
 
 if TYPE_CHECKING:
     import gurobipy
@@ -39,27 +43,11 @@ if TYPE_CHECKING:
 
 EnvType = TypeVar("EnvType")
 
-QUADRATIC_SOLVERS = [
-    "gurobi",
-    "xpress",
-    "cplex",
-    "highs",
-    "scip",
-    "mosek",
-    "copt",
-    "mindopt",
-]
-
-# Solvers that don't need a solution file when keep_files=False
-NO_SOLUTION_FILE_SOLVERS = [
-    "xpress",
-    "gurobi",
-    "highs",
-    "mosek",
-    "scip",
-    "copt",
-    "mindopt",
-]
+# Generated from solver_capabilities registry for backward compatibility
+QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
+NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
+    SolverFeature.SOLUTION_FILE_NOT_NEEDED
+)
 
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
@@ -72,7 +60,11 @@ which = "where" if os.name == "nt" else "which"
 with contextlib.suppress(ModuleNotFoundError):
     import gurobipy
 
-    available_solvers.append("gurobi")
+    try:
+        with contextlib.closing(gurobipy.Env()):
+            available_solvers.append("gurobi")
+    except gurobipy.GurobiError:
+        pass
 with contextlib.suppress(ModuleNotFoundError):
     _new_highspy_mps_layout = None
     import highspy
