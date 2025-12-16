@@ -43,13 +43,13 @@ from linopy.common import (
     group_terms_polars,
     has_optimized_model,
     infer_schema_polars,
-    is_constant,
     iterate_slices,
     maybe_replace_signs,
     print_coord,
     print_single_constraint,
     print_single_expression,
     replace_by_map,
+    require_constant,
     save_join,
     to_dataframe,
     to_polars,
@@ -457,7 +457,7 @@ class Constraint:
         return self.data.sign
 
     @sign.setter
-    @is_constant
+    @require_constant
     def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self._data = assign_multiindex_safe(self.data, sign=value)

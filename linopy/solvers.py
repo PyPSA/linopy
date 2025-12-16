@@ -60,7 +60,11 @@ which = "where" if os.name == "nt" else "which"
 with contextlib.suppress(ModuleNotFoundError):
     import gurobipy
 
-    available_solvers.append("gurobi")
+    try:
+        with contextlib.closing(gurobipy.Env()):
+            available_solvers.append("gurobi")
+    except gurobipy.GurobiError:
+        pass
 with contextlib.suppress(ModuleNotFoundError):
     _new_highspy_mps_layout = None
     import highspy

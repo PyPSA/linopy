@@ -58,6 +58,7 @@ from linopy.common import (
     get_index_map,
     group_terms_polars,
     has_optimized_model,
+    is_constant,
     iterate_slices,
     print_coord,
     print_single_expression,
@@ -440,6 +441,11 @@ class BaseExpression(ABC):
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n<empty>")
 
         return "\n".join(lines)
+
+    @property
+    def is_constant(self) -> bool:
+        """True if the expression contains no variables."""
+        return self.data.sizes[TERM_DIM] == 0
 
     def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
@@ -840,9 +846,7 @@ class BaseExpression(ABC):
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
-    def to_constraint(
-        self, sign: SignLike, rhs: ConstantLike | VariableLike | ExpressionLike
-    ) -> Constraint:
+    def to_constraint(self, sign: SignLike, rhs: SideLike) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -859,6 +863,11 @@ class BaseExpression(ABC):
         which are moved to the left-hand-side and constant values which are moved
         to the right-hand side.
         """
+        if self.is_constant and is_constant(rhs):
+            raise ValueError(
+                f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
+            )
+
         all_to_lhs = (self - rhs).data
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
@@ -1439,12 +1448,18 @@ class LinearExpression(BaseExpression):
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
-        columns `coeffs`, `vars`.
+        columns `coeffs`, `vars`, `const`. The coeffs and vars columns will be null if the expression is constant.
 
         Returns
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            df = pl.DataFrame(
+                {"const": self.data["const"].values.reshape(-1)}
+            ).with_columns(pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars"))
+            return df.select(["vars", "coeffs", "const"])
+
         df = to_polars(self.data)
         df = filter_nulls_polars(df)
         df = group_terms_polars(df)
@@ -1647,6 +1662,26 @@ class LinearExpression(BaseExpression):
 
         return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 
+    @classmethod
+    def from_constant(cls, model: Model, constant: ConstantLike) -> LinearExpression:
+        """
+        Create a linear expression from a constant value or series
+
+        Parameters
+        ----------
+        model : linopy.Model
+            The model to which the constant expression will belong.
+        constant : int/float/array_like
+            The constant value for the linear expression.
+
+        Returns
+        -------
+        linopy.LinearExpression
+            A linear expression representing the constant value.
+        """
+        const_da = as_dataarray(constant)
+        return LinearExpression(const_da, model)
+
 
 class QuadraticExpression(BaseExpression):
     """
@@ -1835,12 +1870,22 @@ class QuadraticExpression(BaseExpression):
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
-        columns `coeffs`, `vars`.
+        columns `vars1`, `vars2`, `coeffs`, `const`. If the expression is constant, the `vars1` and `vars2` and `coeffs` columns will be null.
 
         Returns
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            df = pl.DataFrame(
+                {"const": self.data["const"].values.reshape(-1)}
+            ).with_columns(
+                pl.lit(None).alias("coeffs"),
+                pl.lit(None).alias("vars1"),
+                pl.lit(None).alias("vars2"),
+            )
+            return df.select(["vars1", "vars2", "coeffs", "const"])
+
         vars = self.data.vars.assign_coords(
             {FACTOR_DIM: ["vars1", "vars2"]}
         ).to_dataset(FACTOR_DIM)
