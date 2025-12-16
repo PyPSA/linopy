@@ -2,8 +2,8 @@ Release Notes
 =============
 
 .. Upcoming Version
-
 * Add ``mock_solve`` option to model.solve for quick testing without actual solving
+* Add convenience function to create LinearExpression from constant
 * Fix compatibility for xpress versions below 9.6 (regression)
 * Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
 * Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting

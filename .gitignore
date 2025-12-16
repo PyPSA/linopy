@@ -49,3 +49,4 @@ benchmark/scripts/leftovers/
 
 # direnv
 .envrc
+AGENTS.md
