@@ -31,6 +31,10 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_solvers_with_feature,
+)
 
 if TYPE_CHECKING:
     import gurobipy
@@ -39,27 +43,11 @@ if TYPE_CHECKING:
 
 EnvType = TypeVar("EnvType")
 
-QUADRATIC_SOLVERS = [
-    "gurobi",
-    "xpress",
-    "cplex",
-    "highs",
-    "scip",
-    "mosek",
-    "copt",
-    "mindopt",
-]
-
-# Solvers that don't need a solution file when keep_files=False
-NO_SOLUTION_FILE_SOLVERS = [
-    "xpress",
-    "gurobi",
-    "highs",
-    "mosek",
-    "scip",
-    "copt",
-    "mindopt",
-]
+# Generated from solver_capabilities registry for backward compatibility
+QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
+NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
+    SolverFeature.SOLUTION_FILE_NOT_NEEDED
+)
 
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
@@ -107,6 +95,17 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
     import xpress
 
     available_solvers.append("xpress")
+
+    # xpress.Namespaces was added in xpress 9.6
+    try:
+        from xpress import Namespaces as xpress_Namespaces
+    except ImportError:
+
+        class xpress_Namespaces:  # type: ignore[no-redef]
+            ROW = 1
+            COLUMN = 2
+            SET = 3
+
 
 with contextlib.suppress(ModuleNotFoundError):
     import mosek
@@ -1605,13 +1604,13 @@ class Xpress(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getObjVal()
 
-            var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
                 _dual = m.getDual()
                 constraints = m.getnamelist(
-                    xpress.Namespaces.ROW, 0, m.attributes.rows - 1
+                    xpress_Namespaces.ROW, 0, m.attributes.rows - 1
                 )
                 dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):

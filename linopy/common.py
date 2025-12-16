@@ -750,7 +750,118 @@ def get_dims_with_index_levels(
     return dims_with_levels
 
 
-def get_label_position(
+class LabelPositionIndex:
+    """
+    Index for fast O(log n) lookup of label positions using binary search.
+
+    This class builds a sorted index of label ranges and uses binary search
+    to find which container (variable/constraint) a label belongs to.
+
+    Parameters
+    ----------
+    obj : Any
+        Container object with items() method returning (name, val) pairs,
+        where val has .labels and .range attributes.
+    """
+
+    __slots__ = ("_starts", "_names", "_obj", "_built")
+
+    def __init__(self, obj: Any) -> None:
+        self._obj = obj
+        self._starts: np.ndarray | None = None
+        self._names: list[str] | None = None
+        self._built = False
+
+    def _build_index(self) -> None:
+        """Build the sorted index of label ranges."""
+        if self._built:
+            return
+
+        ranges = []
+        for name, val in self._obj.items():
+            start, stop = val.range
+            ranges.append((start, name))
+
+        # Sort by start value
+        ranges.sort(key=lambda x: x[0])
+        self._starts = np.array([r[0] for r in ranges])
+        self._names = [r[1] for r in ranges]
+        self._built = True
+
+    def invalidate(self) -> None:
+        """Invalidate the index (call when items are added/removed)."""
+        self._built = False
+        self._starts = None
+        self._names = None
+
+    def find_single(self, value: int) -> tuple[str, dict] | tuple[None, None]:
+        """Find the name and coordinates for a single label value."""
+        if value == -1:
+            return None, None
+
+        self._build_index()
+        starts = self._starts
+        names = self._names
+        assert starts is not None and names is not None
+
+        # Binary search to find the right range
+        idx = int(np.searchsorted(starts, value, side="right")) - 1
+
+        if idx < 0 or idx >= len(starts):
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        name = names[idx]
+        val = self._obj[name]
+        start, stop = val.range
+
+        # Verify the value is in range
+        if value < start or value >= stop:
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        labels = val.labels
+        index = np.unravel_index(value - start, labels.shape)
+        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        return name, coord
+
+    def find_single_with_index(
+        self, value: int
+    ) -> tuple[str, dict, tuple[int, ...]] | tuple[None, None, None]:
+        """
+        Find name, coordinates, and raw numpy index for a single label value.
+
+        Returns (name, coord, index) where index is a tuple of integers that
+        can be used for direct numpy indexing (e.g., arr.values[index]).
+        This avoids the overhead of xarray's .sel() method.
+        """
+        if value == -1:
+            return None, None, None
+
+        self._build_index()
+        starts = self._starts
+        names = self._names
+        assert starts is not None and names is not None
+
+        # Binary search to find the right range
+        idx = int(np.searchsorted(starts, value, side="right")) - 1
+
+        if idx < 0 or idx >= len(starts):
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        name = names[idx]
+        val = self._obj[name]
+        start, stop = val.range
+
+        # Verify the value is in range
+        if value < start or value >= stop:
+            raise ValueError(f"Label {value} is not existent in the model.")
+
+        labels = val.labels
+        index = np.unravel_index(value - start, labels.shape)
+        coord = {dim: labels.indexes[dim][i] for dim, i in zip(labels.dims, index)}
+        return name, coord, index
+
+
+def _get_label_position_linear(
     obj: Any, values: int | np.ndarray
 ) -> (
     tuple[str, dict]
@@ -760,6 +871,9 @@ def get_label_position(
 ):
     """
     Get tuple of name and coordinate for variable labels.
+
+    This is the original O(n) implementation that scans through all items.
+    Used only for testing/benchmarking comparisons.
     """
 
     def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
@@ -791,6 +905,53 @@ def get_label_position(
         return [find_single(v) for v in values]
     elif ndim == 2:
         return [[find_single(v) for v in _] for _ in values.T]
+    else:
+        raise ValueError("Array's with more than two dimensions is not supported")
+
+
+def get_label_position(
+    obj: Any,
+    values: int | np.ndarray,
+    index: LabelPositionIndex | None = None,
+) -> (
+    tuple[str, dict]
+    | tuple[None, None]
+    | list[tuple[str, dict] | tuple[None, None]]
+    | list[list[tuple[str, dict] | tuple[None, None]]]
+):
+    """
+    Get tuple of name and coordinate for variable labels.
+
+    Uses O(log n) binary search with a cached index for fast lookups.
+
+    Parameters
+    ----------
+    obj : Any
+        Container object with items() method (Variables or Constraints).
+    values : int or np.ndarray
+        Label value(s) to look up.
+    index : LabelPositionIndex, optional
+        Pre-built index for fast lookups. If None, one will be created.
+
+    Returns
+    -------
+    tuple or list
+        (name, coord) tuple for single values, or list of tuples for arrays.
+    """
+    if index is None:
+        index = LabelPositionIndex(obj)
+
+    if isinstance(values, int):
+        return index.find_single(values)
+
+    values = np.array(values)
+    ndim = values.ndim
+    if ndim == 0:
+        return index.find_single(values.item())
+    elif ndim == 1:
+        return [index.find_single(int(v)) for v in values]
+    elif ndim == 2:
+        return [[index.find_single(int(v)) for v in col] for col in values.T]
     else:
         raise ValueError("Array's with more than two dimensions is not supported")
 
@@ -838,14 +999,16 @@ def print_single_variable(model: Any, label: int) -> str:
         return "None"
 
     variables = model.variables
-    name, coord = variables.get_label_position(label)
+    name, coord, index = variables.get_label_position_with_index(label)
 
-    lower = variables[name].lower.sel(coord).item()
-    upper = variables[name].upper.sel(coord).item()
+    var = variables[name]
+    # Use direct numpy indexing instead of .sel() for performance
+    lower = var.lower.values[index]
+    upper = var.upper.values[index]
 
-    if variables[name].attrs["binary"]:
+    if var.attrs["binary"]:
         bounds = " ∈ {0, 1}"
-    elif variables[name].attrs["integer"]:
+    elif var.attrs["integer"]:
         bounds = f" ∈ Z ⋂ [{lower:.4g},...,{upper:.4g}]"
     else:
         bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
