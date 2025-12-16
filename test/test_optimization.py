@@ -436,14 +436,10 @@ def test_model_maximization(
         assert np.isclose(m.objective.value or 0, 3.3)
 
 
-
-def test_mock_solve(
-    model_maximization: Model
-) -> None:
+def test_mock_solve(model_maximization: Model) -> None:
     m = model_maximization
     assert m.objective.sense == "max"
     assert m.objective.value is None
-
 
     status, condition = m.solve(solver="some_non_existant_solver", mock_solve=True)
     assert status == "ok"

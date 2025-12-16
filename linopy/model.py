@@ -1138,7 +1138,9 @@ class Model:
             optimization process.
         """
         if mock_solve:
-            return self._mock_solve(sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities)
+            return self._mock_solve(
+                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+            )
 
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
@@ -1330,7 +1332,7 @@ class Model:
             self.constraints.sanitize_infinities()
 
         self.objective._value = 0.0
-        self.status ="ok"
+        self.status = "ok"
         self.termination_condition = TerminationCondition.optimal.value
         self.solver_model = None
         self.solver_name = solver_name
