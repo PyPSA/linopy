@@ -43,10 +43,10 @@ from linopy.common import (
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
-    is_constant,
     iterate_slices,
     print_coord,
     print_single_variable,
+    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -196,6 +196,14 @@ class Variable:
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
+        if "sos_type" in data.attrs or "sos_dim" in data.attrs:
+            if (sos_type := data.attrs.get("sos_type")) not in (1, 2):
+                raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
+            if (sos_dim := data.attrs.get("sos_dim")) not in data.dims:
+                raise ValueError(
+                    f"sos_dim must name a variable dimension, got {sos_dim}"
+                )
+
         self._data = data
         self._model = model
 
@@ -322,6 +330,8 @@ class Variable:
         dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
+        sos_type = self.attrs.get("sos_type")
+        sos_dim = self.attrs.get("sos_dim")
         lines = []
 
         if dims:
@@ -343,9 +353,11 @@ class Variable:
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            sos_str = f" - sos{sos_type} on {sos_dim}" if sos_type and sos_dim else ""
             lines.insert(
                 0,
-                f"Variable ({shape_str}){mask_str}\n{'-' * (len(shape_str) + len(mask_str) + 11)}",
+                f"Variable ({shape_str}){mask_str}{sos_str}\n"
+                f"{'-' * (len(shape_str) + len(mask_str) + len(sos_str) + 11)}",
             )
         else:
             lines.append(
@@ -766,7 +778,7 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @is_constant
+    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
         Set the upper bounds of the variables.
@@ -790,7 +802,7 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @is_constant
+    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
         Set the lower bounds of the variables.
@@ -1234,6 +1246,10 @@ class Variables:
                 if ds.coords
                 else ""
             )
+            if (sos_type := ds.attrs.get("sos_type")) in (1, 2) and (
+                sos_dim := ds.attrs.get("sos_dim")
+            ):
+                coords += f" - sos{sos_type} on {sos_dim}"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1374,6 +1390,21 @@ class Variables:
                 name: self.data[name]
                 for name in self
                 if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+            },
+            self.model,
+        )
+
+    @property
+    def sos(self) -> Variables:
+        """
+        Get all variables involved in an sos constraint.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("sos_dim")
+                and self[name].attrs.get("sos_type") in (1, 2)
             },
             self.model,
         )

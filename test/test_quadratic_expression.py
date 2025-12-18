@@ -291,13 +291,29 @@ def test_quadratic_expression_flat(x: Variable, y: Variable) -> None:
     assert len(expr.flat) == 2
 
 
-def test_linear_expression_to_polars(x: Variable, y: Variable) -> None:
+def test_quadratic_expression_to_polars(x: Variable, y: Variable) -> None:
     expr = x * y + x + 5
     df = expr.to_polars()
     assert isinstance(df, pl.DataFrame)
     assert "vars1" in df.columns
     assert "vars2" in df.columns
     assert len(df) == expr.nterm * 2
+
+
+def test_quadratic_expression_constant_to_polars() -> None:
+    m = Model()
+    arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
+    lin_expr = LinearExpression.from_constant(model=m, constant=arr)
+    quad_expr = lin_expr.to_quadexpr()
+
+    assert quad_expr.is_constant
+    df = quad_expr.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert df.columns == ["vars1", "vars2", "coeffs", "const"]
+    assert all(df["vars1"].is_null())
+    assert all(df["vars2"].is_null())
+    assert all(df["coeffs"].is_null())
+    assert all(arr.to_numpy() == df["const"].to_numpy())
 
 
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:

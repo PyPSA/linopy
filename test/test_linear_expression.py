@@ -1127,6 +1127,43 @@ def test_linear_expression_from_tuples_bad_calls(
         LinearExpression.from_tuples(10)
 
 
+def test_linear_expression_from_constant_scalar(m: Model) -> None:
+    expr = LinearExpression.from_constant(model=m, constant=10)
+    assert expr.is_constant
+    assert isinstance(expr, LinearExpression)
+    assert (expr.const == 10).all()
+
+
+def test_linear_expression_from_constant_1D(m: Model) -> None:
+    arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
+    expr = LinearExpression.from_constant(model=m, constant=arr)
+    assert isinstance(expr, LinearExpression)
+    assert list(expr.coords.keys())[0] == "t"
+    assert expr.nterm == 0
+    assert (expr.const.values == [10, 20]).all()
+    assert expr.is_constant
+
+
+def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
+    index_a = pd.Index([0, 1], name="a")
+    index_b = pd.Index([0, 1, 2], name="b")
+    arr = np.array([[10, 20, 30], [40, 50, 60]])
+    const = xr.DataArray(data=arr, coords=[index_a, index_b])
+
+    le_variable = m.add_variables(name="var", coords=[index_a, index_b]) * 1 + const
+    assert not le_variable.is_constant
+    le_const = LinearExpression.from_constant(model=m, constant=const)
+    assert le_const.is_constant
+
+    var_pol = le_variable.to_polars()
+    const_pol = le_const.to_polars()
+    assert var_pol.shape == const_pol.shape
+    assert var_pol.columns == const_pol.columns
+    assert all(const_pol["const"] == var_pol["const"])
+    assert all(const_pol["coeffs"].is_null())
+    assert all(const_pol["vars"].is_null())
+
+
 def test_linear_expression_sanitize(x: Variable, y: Variable, z: Variable) -> None:
     expr = 10 * x + y + z
     assert isinstance(expr.sanitize(), LinearExpression)
@@ -1219,3 +1256,88 @@ def test_timezone_alignment_failure() -> None:
     with pytest.raises(TimezoneAlignError):
         # We expect to get a useful error (TimezoneAlignError) instead of a not implemented error falsely claiming that we cannot multiply these types together
         _ = expr * series1
+
+
+def test_simplify_basic(x: Variable) -> None:
+    """Test basic simplification with duplicate terms."""
+    expr = 2 * x + 3 * x + 1 * x
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+
+    x_len = len(x.coords["dim_0"])
+    # Check that the coefficient is 6 (2 + 3 + 1)
+    coeffs: np.ndarray = simplified.coeffs.values
+    assert len(coeffs) == x_len, f"Expected {x_len} coefficients, got {len(coeffs)}"
+    assert all(coeffs == 6.0), f"Expected coefficient 6.0, got {coeffs[0]}"
+
+
+def test_simplify_multiple_dimensions() -> None:
+    model = Model()
+    a_index = pd.Index([0, 1, 2, 3], name="a")
+    b_index = pd.Index([0, 1, 2], name="b")
+    coords = [a_index, b_index]
+    x = model.add_variables(name="x", coords=coords)
+
+    expr = 2 * x + 3 * x + x
+    # Simplify
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert simplified.ndim == 2, f"Expected 2 dimensions, got {simplified.ndim}"
+    assert all(simplified.coeffs.values.reshape(-1) == 6), (
+        f"Expected coefficients of 6, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_with_different_variables(x: Variable, y: Variable) -> None:
+    """Test that different variables are kept separate."""
+    # Create expression: 2*x + 3*x + 4*y
+    expr = 2 * x + 3 * x + 4 * y
+
+    # Simplify
+    simplified = expr.simplify()
+    # Should have 2 terms (one for x with coeff 5, one for y with coeff 4)
+    assert simplified.nterm == 2, f"Expected 2 terms, got {simplified.nterm}"
+
+    coeffs: list[float] = simplified.coeffs.values.flatten().tolist()
+    assert set(coeffs) == {5.0, 4.0}, (
+        f"Expected coefficients {{5.0, 4.0}}, got {set(coeffs)}"
+    )
+
+
+def test_simplify_with_constant(x: Variable) -> None:
+    """Test that constants are preserved."""
+    expr = 2 * x + 3 * x + 10
+
+    # Simplify
+    simplified = expr.simplify()
+
+    # Check constant is preserved
+    assert all(simplified.const.values == 10.0), (
+        f"Expected constant 10.0, got {simplified.const.values}"
+    )
+
+    # Check coefficients
+    assert all(simplified.coeffs.values == 5.0), (
+        f"Expected coefficient 5.0, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_cancellation(x: Variable) -> None:
+    """Test that terms cancel out correctly when coefficients sum to zero."""
+    expr = x - x
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 0, f"Expected 0 terms, got {simplified.nterm}"
+    assert simplified.coeffs.values.size == 0
+    assert simplified.vars.values.size == 0
+
+
+def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
+    """Test partial cancellation where some terms cancel but others remain."""
+    expr = 2 * x - 2 * x + 3 * y
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert all(simplified.coeffs.values == 3.0), (
+        f"Expected coefficient 3.0, got {simplified.coeffs.values}"
+    )
