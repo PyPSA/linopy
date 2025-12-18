@@ -13,6 +13,7 @@ import os
 import re
 import subprocess as sub
 import sys
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -55,6 +56,73 @@ IO_APIS = FILE_IO_APIS + ["direct"]
 available_solvers = []
 
 which = "where" if os.name == "nt" else "which"
+
+
+def _run_highs_with_keyboard_interrupt(h: Any) -> None:
+    """
+    Run `highspy.Highs.run()` while ensuring Ctrl-C cancels the solve.
+
+    HiGHS can run for a long time inside a C-extension call. Running it in a
+    worker thread allows the main thread to reliably receive KeyboardInterrupt
+    and signal HiGHS to stop via `cancelSolve()`.
+    """
+
+    handle_keyboard_interrupt = getattr(h, "HandleKeyboardInterrupt", None)
+    handle_user_interrupt = getattr(h, "HandleUserInterrupt", None)
+
+    old_handle_keyboard_interrupt = (
+        handle_keyboard_interrupt if not callable(handle_keyboard_interrupt) else None
+    )
+    old_handle_user_interrupt = (
+        handle_user_interrupt if not callable(handle_user_interrupt) else None
+    )
+
+    try:
+        if callable(handle_keyboard_interrupt):
+            handle_keyboard_interrupt(True)
+        elif handle_keyboard_interrupt is not None:
+            h.HandleKeyboardInterrupt = True
+
+        if callable(handle_user_interrupt):
+            handle_user_interrupt(True)
+        elif handle_user_interrupt is not None:
+            h.HandleUserInterrupt = True
+
+        finished = threading.Event()
+        run_error: BaseException | None = None
+
+        def _target() -> None:
+            nonlocal run_error
+            try:
+                h.run()
+            except BaseException as exc:  # pragma: no cover
+                run_error = exc
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=_target, name="linopy-highs-run", daemon=True)
+        thread.start()
+
+        try:
+            while not finished.wait(0.1):
+                pass
+        except KeyboardInterrupt:
+            cancel_solve = getattr(h, "cancelSolve", None)
+            if callable(cancel_solve):
+                with contextlib.suppress(Exception):
+                    cancel_solve()
+            while not finished.wait(0.1):
+                pass
+            raise
+
+        if run_error is not None:
+            raise run_error
+    finally:
+        if old_handle_keyboard_interrupt is not None:
+            h.HandleKeyboardInterrupt = old_handle_keyboard_interrupt
+        if old_handle_user_interrupt is not None:
+            h.HandleUserInterrupt = old_handle_user_interrupt
+
 
 # the first available solver will be the default solver
 with contextlib.suppress(ModuleNotFoundError):
@@ -908,7 +976,7 @@ class Highs(Solver[None]):
         elif warmstart_fn:
             h.readBasis(path_to_string(warmstart_fn))
 
-        h.run()
+        _run_highs_with_keyboard_interrupt(h)
 
         condition = h.getModelStatus()
         termination_condition = CONDITION_MAP.get(
