@@ -1600,19 +1600,19 @@ class Xpress(Solver[None]):
             except Exception as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
-        condition = m.getProbStatusString()
+        condition: str = m.getAttrib("solstatus").name.lower()
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            objective = m.getObjVal()
+            objective: float = m.getAttrib("objval")
 
             var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDual()
+                _dual = m.getDuals()
                 constraints = m.getnamelist(
                     xpress_Namespaces.ROW, 0, m.attributes.rows - 1
                 )
