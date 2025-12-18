@@ -3,6 +3,7 @@ Release Notes
 
 .. Upcoming Version
 
+* Fix warning when multiplying variables with pd.Series containing time-zone aware index
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add simplify method to LinearExpression to combine duplicate terms
 * Add convenience function to create LinearExpression from constant
