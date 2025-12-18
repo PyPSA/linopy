@@ -33,7 +33,11 @@ from linopy.constants import (
     SIGNS_pretty,
     sign_replace_dict,
 )
-from linopy.types import CoordsLike, DimsLike
+from linopy.types import (
+    CoordsLike,
+    DimsLike,
+    SideLike,
+)
 
 if TYPE_CHECKING:
     from linopy.constraints import Constraint
@@ -1120,7 +1124,7 @@ def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
+def require_constant(func: Callable[..., Any]) -> Callable[..., Any]:
     from linopy import expressions, variables
 
     @wraps(func)
@@ -1129,7 +1133,8 @@ def is_constant(func: Callable[..., Any]) -> Callable[..., Any]:
             arg,
             variables.Variable
             | variables.ScalarVariable
-            | expressions.LinearExpression,
+            | expressions.LinearExpression
+            | expressions.QuadraticExpression,
         ):
             raise TypeError(f"Assigned rhs must be a constant, got {type(arg)}).")
         return func(self, arg)
@@ -1325,3 +1330,40 @@ class EmptyDeprecationWrapper:
             stacklevel=2,
         )
         return self.value
+
+
+def is_constant(x: SideLike) -> bool:
+    """
+    Check if the given object is a constant type or an expression type without
+    any variables.
+
+    Note that an expression such as ``x - x + 1`` will evaluate to ``False`` as
+    the expression is not simplified before evaluation.
+
+    Parameters
+    ----------
+    x : SideLike
+        The object to check.
+
+    Returns
+    -------
+    bool
+        True if the object is constant-like, False otherwise.
+    """
+    from linopy.expressions import (
+        SUPPORTED_CONSTANT_TYPES,
+        LinearExpression,
+        QuadraticExpression,
+    )
+    from linopy.variables import ScalarVariable, Variable
+
+    if isinstance(x, Variable | ScalarVariable):
+        return False
+    if isinstance(x, LinearExpression | QuadraticExpression):
+        return x.is_constant
+    if isinstance(x, SUPPORTED_CONSTANT_TYPES):
+        return True
+    raise TypeError(
+        "Expected a constant, variable, or expression on the constraint side, "
+        f"got {type(x)}."
+    )
