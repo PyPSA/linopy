@@ -1228,3 +1228,88 @@ def test_cumsum(m: Model, multiple: float) -> None:
     expr = m.variables["x"] + m.variables["y"]
     cumsum = (multiple * expr).cumsum()
     cumsum.nterm == 2
+
+
+def test_simplify_basic(x: Variable) -> None:
+    """Test basic simplification with duplicate terms."""
+    expr = 2 * x + 3 * x + 1 * x
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+
+    x_len = len(x.coords["dim_0"])
+    # Check that the coefficient is 6 (2 + 3 + 1)
+    coeffs: np.ndarray = simplified.coeffs.values
+    assert len(coeffs) == x_len, f"Expected {x_len} coefficients, got {len(coeffs)}"
+    assert all(coeffs == 6.0), f"Expected coefficient 6.0, got {coeffs[0]}"
+
+
+def test_simplify_multiple_dimensions() -> None:
+    model = Model()
+    a_index = pd.Index([0, 1, 2, 3], name="a")
+    b_index = pd.Index([0, 1, 2], name="b")
+    coords = [a_index, b_index]
+    x = model.add_variables(name="x", coords=coords)
+
+    expr = 2 * x + 3 * x + x
+    # Simplify
+    simplified = expr.simplify()
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert simplified.ndim == 2, f"Expected 2 dimensions, got {simplified.ndim}"
+    assert all(simplified.coeffs.values.reshape(-1) == 6), (
+        f"Expected coefficients of 6, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_with_different_variables(x: Variable, y: Variable) -> None:
+    """Test that different variables are kept separate."""
+    # Create expression: 2*x + 3*x + 4*y
+    expr = 2 * x + 3 * x + 4 * y
+
+    # Simplify
+    simplified = expr.simplify()
+    # Should have 2 terms (one for x with coeff 5, one for y with coeff 4)
+    assert simplified.nterm == 2, f"Expected 2 terms, got {simplified.nterm}"
+
+    coeffs: list[float] = simplified.coeffs.values.flatten().tolist()
+    assert set(coeffs) == {5.0, 4.0}, (
+        f"Expected coefficients {{5.0, 4.0}}, got {set(coeffs)}"
+    )
+
+
+def test_simplify_with_constant(x: Variable) -> None:
+    """Test that constants are preserved."""
+    expr = 2 * x + 3 * x + 10
+
+    # Simplify
+    simplified = expr.simplify()
+
+    # Check constant is preserved
+    assert all(simplified.const.values == 10.0), (
+        f"Expected constant 10.0, got {simplified.const.values}"
+    )
+
+    # Check coefficients
+    assert all(simplified.coeffs.values == 5.0), (
+        f"Expected coefficient 5.0, got {simplified.coeffs.values}"
+    )
+
+
+def test_simplify_cancellation(x: Variable) -> None:
+    """Test that terms cancel out correctly when coefficients sum to zero."""
+    expr = x - x
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 0, f"Expected 0 terms, got {simplified.nterm}"
+    assert simplified.coeffs.values.size == 0
+    assert simplified.vars.values.size == 0
+
+
+def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
+    """Test partial cancellation where some terms cancel but others remain."""
+    expr = 2 * x - 2 * x + 3 * y
+    simplified = expr.simplify()
+
+    assert simplified.nterm == 1, f"Expected 1 term, got {simplified.nterm}"
+    assert all(simplified.coeffs.values == 3.0), (
+        f"Expected coefficient 3.0, got {simplified.coeffs.values}"
+    )

@@ -67,6 +67,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
+    CV_DIM,
     EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
@@ -1465,6 +1466,94 @@ class LinearExpression(BaseExpression):
         df = group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
         return df
+
+    def simplify(self) -> LinearExpression:
+        """
+        Simplify the linear expression by combining terms with the same variable.
+
+        This method finds all terms that reference the same variable and adds
+        their coefficients together, reducing the number of terms in the expression.
+
+        Returns
+        -------
+        LinearExpression
+            A new LinearExpression with combined terms.
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> expr = 2 * x + 3 * x  # Creates two terms
+        >>> simplified = expr.simplify()  # Combines into one term: 5 * x
+        """
+
+        def _simplify_row(vars_row: np.ndarray, coeffs_row: np.ndarray) -> np.ndarray:
+            """
+            For a given combination of expression coordinates, try to simplify by reducing duplicate variables
+            """
+            input_len = len(vars_row)
+
+            # Filter out invalid entries
+            mask = (vars_row != -1) & (coeffs_row != 0) & ~np.isnan(coeffs_row)
+            valid_vars = vars_row[mask]
+            valid_coeffs = coeffs_row[mask]
+
+            if len(valid_vars) == 0:
+                # Return arrays filled with -1 and 0.0, same length as input
+                return np.vstack(
+                    [
+                        np.full(input_len, -1, dtype=float),
+                        np.zeros(input_len, dtype=float),
+                    ]
+                )
+
+            # Use bincount to sum coefficients for each variable ID efficiently
+            max_var = int(valid_vars.max())
+            summed = np.bincount(
+                valid_vars, weights=valid_coeffs, minlength=max_var + 1
+            )
+
+            # Get non-zero entries
+            unique_vars = np.where(summed != 0)[0]
+            unique_coeffs = summed[unique_vars]
+
+            # Pad to match input length
+            result_vars = np.full(input_len, -1, dtype=float)
+            result_coeffs = np.zeros(input_len, dtype=float)
+
+            n_unique = len(unique_vars)
+            result_vars[:n_unique] = unique_vars
+            result_coeffs[:n_unique] = unique_coeffs
+
+            return np.vstack([result_vars, result_coeffs])
+
+        # Coeffs and vars have dimensions (.., TERM_DIM) where .. are the coordinate dimensions of the expression
+        # An operation is applied over the coordinate dimensions on both coeffs and vars, which are stacked together over a new "CV_DIM" dimension
+        combined: xr.DataArray = xr.apply_ufunc(
+            _simplify_row,
+            self.vars,
+            self.coeffs,
+            input_core_dims=[[TERM_DIM], [TERM_DIM]],
+            output_core_dims=[[CV_DIM, TERM_DIM]],
+            vectorize=True,
+        )
+        # Combined has dimensions (.., CV_DIM, TERM_DIM)
+
+        # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
+        vars = combined.isel({CV_DIM: 0}).astype(int)
+        non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
+        combined = combined.isel({TERM_DIM: non_empty_terms})
+
+        # Extract vars and coeffs from the combined result
+        vars = combined.isel({CV_DIM: 0}).astype(int)
+        coeffs = combined.isel({CV_DIM: 1})
+
+        # Create new dataset with simplified data
+        new_data = self.data.copy()
+        new_data = assign_multiindex_safe(new_data, vars=vars, coeffs=coeffs)
+
+        return LinearExpression(new_data, self.model)
 
     @classmethod
     def _from_scalarexpression_list(
