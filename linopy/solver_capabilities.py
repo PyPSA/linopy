@@ -30,6 +30,9 @@ class SolverFeature(Enum):
     # Advanced features
     IIS_COMPUTATION = auto()  # Irreducible Infeasible Set computation
 
+    # Special constraint types
+    SOS_CONSTRAINTS = auto()  # Special Ordered Sets (SOS1/SOS2) constraints
+
     # Solver-specific
     SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
 
@@ -63,6 +66,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
+                SolverFeature.SOS_CONSTRAINTS,
                 SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
             }
         ),
@@ -96,6 +100,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
             {
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.SOS_CONSTRAINTS,
             }
         ),
     ),
