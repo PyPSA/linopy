@@ -23,6 +23,7 @@ from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
+from linopy.common import to_polars
 from linopy.constants import CONCAT_DIM
 from linopy.objective import Objective
 
@@ -327,6 +328,66 @@ def integers_to_file(
             formatted.write_csv(f, **kwargs)
 
 
+def sos_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out SOS constraints of a model to an LP file.
+    """
+    names = m.variables.sos
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsos\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing sos constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        sos_type = var.attrs["sos_type"]
+        sos_dim = var.attrs["sos_dim"]
+
+        other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+        for var_slice in var.iterate_slices(slice_size, other_dims):
+            ds = var_slice.labels.to_dataset()
+            ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
+            ds["weights"] = ds.coords[sos_dim]
+            df = to_polars(ds)
+
+            df = df.group_by("sos_labels").agg(
+                pl.concat_str(
+                    *print_variable(pl.col("labels")), pl.lit(":"), pl.col("weights")
+                )
+                .str.join(" ")
+                .alias("var_weights")
+            )
+
+            columns = [
+                pl.lit("s"),
+                pl.col("sos_labels"),
+                pl.lit(f": S{sos_type} :: "),
+                pl.col("var_weights"),
+            ]
+
+            kwargs: Any = dict(
+                separator=" ", null_value="", quote_style="never", include_header=False
+            )
+            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
+            formatted.write_csv(f, **kwargs)
+
+
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
@@ -464,6 +525,13 @@ def to_lp_file(
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
+        sos_to_file(
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
         f.write(b"end\n")
 
         logger.info(f" Writing time: {round(time.time() - start, 2)}s")
@@ -539,6 +607,8 @@ def to_mosek(
     -------
     task : MOSEK Task object
     """
+    if m.variables.sos:
+        raise NotImplementedError("SOS constraints are not supported by MOSEK.")
 
     import mosek
 
@@ -683,6 +753,26 @@ def to_gurobipy(
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         c.setAttr("ConstrName", list(names))  # type: ignore
 
+    if m.variables.sos:
+        for var_name in m.variables.sos:
+            var = m.variables.sos[var_name]
+            sos_type: int = var.attrs["sos_type"]  # type: ignore[assignment]
+            sos_dim: str = var.attrs["sos_dim"]  # type: ignore[assignment]
+
+            def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
+                s = s.squeeze()
+                indices = s.values.flatten().tolist()
+                weights = s.coords[sos_dim].values.tolist()
+                model.addSOS(sos_type, x[indices].tolist(), weights)
+
+            others = [dim for dim in var.labels.dims if dim != sos_dim]
+            if not others:
+                add_sos(var.labels, sos_type, sos_dim)
+            else:
+                stacked = var.labels.stack(_sos_group=others)
+                for _, s in stacked.groupby("_sos_group"):
+                    add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+
     model.update()
     return model
 
@@ -704,6 +794,12 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     -------
     model : highspy.Highs
     """
+    if m.variables.sos:
+        raise NotImplementedError(
+            "SOS constraints are not supported by the HiGHS direct API. "
+            "Use io_api='lp' instead."
+        )
+
     import highspy
 
     print_variable, print_constraint = get_printers_scalar(
