@@ -357,7 +357,7 @@ def sos_to_file(
     Write out SOS constraints of a model to an LP file.
     """
     names = m.variables.sos
-    if not len(list(names)):
+    if not len(names):
         return
 
     print_variable, _ = get_printers(
@@ -380,11 +380,24 @@ def sos_to_file(
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
-            ds["sos_labels"] = ds["labels"].isel({sos_dim: 0})
             ds["weights"] = ds.coords[sos_dim]
-            df = to_polars(ds)
+            sos_labels = (
+                ds["labels"]
+                .where(ds["labels"] != -1)
+                .min(dim=sos_dim, skipna=True)
+                .fillna(-1)
+                .astype(int)
+            )
+            ds["sos_labels"] = sos_labels
 
-            df = df.group_by("sos_labels").agg(
+            df = to_polars(ds)
+            df = df.filter(pl.col("labels").ne(-1) & pl.col("sos_labels").ne(-1))
+            if df.height == 0:
+                continue
+
+            df = df.sort(["sos_labels", "weights"])
+
+            df = df.group_by("sos_labels", maintain_order=True).agg(
                 pl.concat_str(
                     *print_variable(pl.col("labels")), pl.lit(":"), pl.col("weights")
                 )
@@ -394,7 +407,7 @@ def sos_to_file(
 
             columns = [
                 pl.lit("s"),
-                pl.col("sos_labels"),
+                pl.col("sos_labels").cast(pl.Int64),
                 pl.lit(f": S{sos_type} :: "),
                 pl.col("var_weights"),
             ]
@@ -787,7 +800,13 @@ def to_gurobipy(
                 s = s.squeeze()
                 indices = s.values.flatten().tolist()
                 weights = s.coords[sos_dim].values.tolist()
-                model.addSOS(sos_type, x[indices].tolist(), weights)
+                pairs = [(i, w) for i, w in zip(indices, weights) if i != -1]
+                if not pairs:
+                    return
+                indices_filtered, weights_filtered = zip(*pairs)
+                model.addSOS(
+                    sos_type, x[list(indices_filtered)].tolist(), list(weights_filtered)
+                )
 
             others = [dim for dim in var.labels.dims if dim != sos_dim]
             if not others:

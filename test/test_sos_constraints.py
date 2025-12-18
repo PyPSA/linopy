@@ -60,6 +60,22 @@ def test_sos_constraints_written_to_lp(tmp_path: Path) -> None:
     assert "3.5" in content
 
 
+def test_sos_constraints_written_to_lp_with_mask(tmp_path: Path) -> None:
+    m = Model()
+    breakpoints = pd.Index([0.0, 1.5, 3.5], name="bp")
+    mask = pd.Series([False, True, True], index=breakpoints)
+    lambdas = m.add_variables(coords=[breakpoints], name="lambda", mask=mask)
+    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="bp")
+
+    fn = tmp_path / "sos_mask.lp"
+    m.to_file(fn, io_api="lp")
+    content = fn.read_text()
+
+    sos_section = content.split("\nsos\n", 1)[1].split("\nend\n", 1)[0]
+    assert "s-1" not in sos_section
+    assert "0.0" not in sos_section
+
+
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy_emits_sos_constraints() -> None:
     gurobipy = pytest.importorskip("gurobipy")
