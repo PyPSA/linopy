@@ -1607,13 +1607,13 @@ class Xpress(Solver[None]):
 
         def get_solver_solution_new() -> Solution:
             # For xpress >= 9.6
-            objective = m.getObjVal()
+            objective: float = m.getAttrib("objval")
 
             var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDual()
+                _dual = m.getDuals()
                 constraints = m.getnamelist(
                     xpress.Namespaces.ROW, 0, m.attributes.rows - 1
                 )
@@ -1626,7 +1626,7 @@ class Xpress(Solver[None]):
 
         def get_solver_solution_legacy() -> Solution:
             # For xpress < 9.6
-            objective = m.getObjVal()
+            objective: float = m.getAttrib("objval")
 
             var = [str(v) for v in m.getVariable()]
 
@@ -1634,7 +1634,7 @@ class Xpress(Solver[None]):
 
             try:
                 dual_ = [str(d) for d in m.getConstraint()]
-                dual = pd.Series(m.getDual(dual_), index=dual_, dtype=float)
+                dual = pd.Series(m.getDuals(dual_), index=dual_, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
