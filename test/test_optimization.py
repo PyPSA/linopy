@@ -386,11 +386,16 @@ def test_default_setting_sol_and_dual_accessor(
     assert model.matrices.dual[0] == model.dual["con0"]
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress is not installed")
-def test_old_xpress_version(model: Model) -> None:
-    solver = "xpress"
+@pytest.mark.parametrize(
+    "solver,io_api,explicit_coordinate_names", [p for p in params if p[0] == "xpress"]
+)
+def test_old_xpress_version(
+    model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
     with patch("xpress.__version__", "9.5.0"):
-        status, _ = model.solve(solver)
+        status, _ = model.solve(
+            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+        )
     assert status == "ok"
     x = model["x"]
     assert_equal(x.solution, model.solution["x"])
