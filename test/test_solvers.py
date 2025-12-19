@@ -53,6 +53,9 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     except ValueError:
         raise ValueError(f"Solver '{solver}' is not recognized")
 
+    if solver_class == solvers.cuPDLPx:
+        pytest.skip("cuPDLPx does not currently support file IO.")
+
     # Write the MPS file to the temporary directory
     mps_file = tmp_path / "problem.mps"
     mps_file.write_text(free_mps_problem)
