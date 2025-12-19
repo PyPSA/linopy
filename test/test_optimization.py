@@ -386,9 +386,9 @@ def test_default_setting_sol_and_dual_accessor(
     assert model.matrices.dual[0] == model.dual["con0"]
 
 
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress is not installed")
 def test_old_xpress_version(model: Model) -> None:
     solver = "xpress"
-
     with patch("xpress.__version__", "9.5.0"):
         status, _ = model.solve(solver)
     assert status == "ok"
