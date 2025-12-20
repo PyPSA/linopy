@@ -1600,21 +1600,22 @@ class Xpress(Solver[None]):
             except Exception as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
-        condition = m.getProbStatusString()
+        condition: str = m.getAttrib("solstatus").name.lower()
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
-        def get_solver_solution() -> Solution:
-            objective = m.getObjVal()
+        def get_solver_solution_new() -> Solution:
+            # For xpress >= 9.6
+            objective: float = m.getAttrib("objval")
 
-            var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            var = m.getnamelist(xpress.Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDual()
+                _dual = m.getDuals()
                 constraints = m.getnamelist(
-                    xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    xpress.Namespaces.ROW, 0, m.attributes.rows - 1
                 )
                 dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
@@ -1622,6 +1623,29 @@ class Xpress(Solver[None]):
                 dual = pd.Series(dtype=float)
 
             return Solution(sol, dual, objective)
+
+        def get_solver_solution_legacy() -> Solution:
+            # For xpress < 9.6
+            objective: float = m.getAttrib("objval")
+
+            var = [str(v) for v in m.getVariable()]
+
+            sol = pd.Series(m.getSolution(var), index=var, dtype=float)
+
+            try:
+                dual_ = [str(d) for d in m.getConstraint()]
+                dual = pd.Series(m.getDuals(dual_), index=dual_, dtype=float)
+            except (xpress.SolverError, xpress.ModelError, SystemError):
+                logger.warning("Dual values of MILP couldn't be parsed")
+                dual = pd.Series(dtype=float)
+
+            return Solution(sol, dual, objective)
+
+        def get_solver_solution() -> Solution:
+            if parse_version(xpress.__version__) >= parse_version("9.6"):
+                return get_solver_solution_new()
+            else:
+                return get_solver_solution_legacy()
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)

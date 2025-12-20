@@ -2,7 +2,7 @@ Release Notes
 =============
 
 .. Upcoming Version
-
+* xpress: Fixed for xpress v9.5 (broken since linopy v0.5.8), upgraded deprecated xpress methods
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add simplify method to LinearExpression to combine duplicate terms
 * Add convenience function to create LinearExpression from constant
