@@ -386,26 +386,6 @@ def test_default_setting_sol_and_dual_accessor(
     assert model.matrices.dual[0] == model.dual["con0"]
 
 
-@pytest.mark.parametrize(
-    "solver,io_api,explicit_coordinate_names", [p for p in params if p[0] == "xpress"]
-)
-def test_old_xpress_version(
-    model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
-) -> None:
-    with patch("xpress.__version__", "9.5.0"):
-        status, _ = model.solve(
-            solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
-        )
-    assert status == "ok"
-    x = model["x"]
-    assert_equal(x.solution, model.solution["x"])
-    c = model.constraints["con1"]
-    assert_equal(c.dual, model.dual["con1"])
-    # squeeze in dual getter in matrix
-    assert len(model.matrices.dual) == model.ncons
-    assert model.matrices.dual[0] == model.dual["con0"]
-
-
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_default_setting_expression_sol_accessor(
     model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
@@ -660,6 +640,32 @@ def test_model_with_inf(
     assert condition == "optimal"
     assert (model_with_inf.solution.x == 0).all()
     assert (model_with_inf.solution.y == 10).all()
+
+
+@pytest.mark.skipif(
+    "xpress" not in available_solvers, reason="Xpress solver not available"
+)
+def test_old_xpress_version_no_dual(model_with_inf: Model) -> None:
+    # Confirm that the old code path for xpress 9.5.x still works (when duals are not available)
+    with patch("xpress.__version__", "9.5.0"):
+        _, condition = model_with_inf.solve("xpress")
+    assert condition == "optimal"
+    assert (model_with_inf.solution.x == 0).all()
+    assert (model_with_inf.solution.y == 10).all()
+    assert len(len(model_with_inf.dual.keys())) == 0
+
+
+@pytest.mark.skipif(
+    "xpress" not in available_solvers, reason="Xpress solver not available"
+)
+def test_old_xpress_version_with_dual(model: Model) -> None:
+    # Confirm that the old code path for xpress 9.5.x still works (when duals are available)
+    with patch("xpress.__version__", "9.5.0"):
+        status, condition = model.solve("xpress")
+    assert status == "ok"
+    assert condition == "optimal"
+    assert np.isclose(model.objective.value or 0, 3.3)
+    assert np.isclose(model.dual["con0"].values, 0.3)
 
 
 @pytest.mark.parametrize(
