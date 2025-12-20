@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import logging
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -639,6 +640,32 @@ def test_model_with_inf(
     assert condition == "optimal"
     assert (model_with_inf.solution.x == 0).all()
     assert (model_with_inf.solution.y == 10).all()
+
+
+@pytest.mark.skipif(
+    "xpress" not in available_solvers, reason="Xpress solver not available"
+)
+def test_old_xpress_version_no_dual(model_with_inf: Model) -> None:
+    # Confirm that the old code path for xpress 9.5.x still works (when duals are not available)
+    with patch("xpress.__version__", "9.5.0"):
+        _, condition = model_with_inf.solve("xpress")
+    assert condition == "optimal"
+    assert (model_with_inf.solution.x == 0).all()
+    assert (model_with_inf.solution.y == 10).all()
+    assert len(model_with_inf.dual.keys()) == 0
+
+
+@pytest.mark.skipif(
+    "xpress" not in available_solvers, reason="Xpress solver not available"
+)
+def test_old_xpress_version_with_dual(model: Model) -> None:
+    # Confirm that the old code path for xpress 9.5.x still works (when duals are available)
+    with patch("xpress.__version__", "9.5.0"):
+        status, condition = model.solve("xpress")
+    assert status == "ok"
+    assert condition == "optimal"
+    assert np.isclose(model.objective.value or 0, 3.3)
+    assert np.isclose(model.dual["con0"].values, 0.3)
 
 
 @pytest.mark.parametrize(
