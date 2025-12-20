@@ -652,7 +652,7 @@ def test_old_xpress_version_no_dual(model_with_inf: Model) -> None:
     assert condition == "optimal"
     assert (model_with_inf.solution.x == 0).all()
     assert (model_with_inf.solution.y == 10).all()
-    assert len(len(model_with_inf.dual.keys())) == 0
+    assert len(model_with_inf.dual.keys()) == 0
 
 
 @pytest.mark.skipif(
