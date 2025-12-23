@@ -116,9 +116,15 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
         constant = self.objective.expression.const
         model.objective.expression = self.objective.expression.drop_constant()
         args = (model, *args[1:])  # type: ignore
-        result = func(*args, **kwargs)
 
-        # Re-add the constant term
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            # Even if there is an exception, make sure the model returns to it's original state
+            model.objective.expression = model.objective.expression + constant
+            raise e
+
+        # Re-add the constant term to return the model objective to the original expression
         model.objective.expression = model.objective.expression + constant
         if model.objective.value is not None:
             model.objective.set_value(model.objective.value + constant)

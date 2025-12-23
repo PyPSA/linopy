@@ -956,7 +956,7 @@ def test_model_resolve(
     assert np.isclose(model.objective.value or 0, 5.25)
 
 
-def test_model_with_constant_in_objective(model: Model) -> None:
+def test_model_with_constant_in_objective_feasible(model: Model) -> None:
     objective = model.objective.expression + 1
     model.add_objective(expr=objective, overwrite=True)
 
@@ -967,6 +967,35 @@ def test_model_with_constant_in_objective(model: Model) -> None:
     assert model.objective.value == 4.3
     assert model.objective.expression.const == 1
     assert model.objective.expression.solution == 4.3
+
+
+def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    with pytest.warns(ConstantInObjectiveWarning):
+        status, condition = model.solve(solver_name="highs")
+
+    assert condition == "infeasible"
+    # Even though the problem was not solved, the constant term should still be accessible
+    assert model.objective.expression.const == 1
+
+
+def test_model_with_constant_in_objective_error(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    try:
+        status, condition = model.solve(solver_name="apples")
+    except AssertionError:
+        pass
+
+    # Even if something goes wrong, the model objective should return to the correct state
+    assert model.objective.expression.const == 1
 
 
 @pytest.mark.parametrize(

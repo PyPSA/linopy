@@ -192,5 +192,4 @@ def test_repr(linear_objective: Objective, quadratic_objective: Objective) -> No
 def test_objective_constant() -> None:
     m = Model()
     linear_expr = LinearExpression(None, m) + 1
-    with pytest.raises(ValueError):
-        m.objective = Objective(linear_expr, m)
+    m.objective = Objective(linear_expr, m)
