@@ -1230,6 +1230,21 @@ def test_cumsum(m: Model, multiple: float) -> None:
     cumsum.nterm == 2
 
 
+def test_drop_constant(x: Variable) -> None:
+    """Test that constants are removed"""
+    expr_a = 2 * x
+    expr_b = expr_a + [1, 2]
+    expr_c = expr_b + float("nan")
+    for expr in [expr_a, expr_b, expr_c]:
+        expr = 2 * x + 10
+        expr_2 = expr.drop_constant()
+
+        assert all(expr_2.const.values == 0.0), (
+            f"Expected constant 0.0, got {expr_2.const.values}"
+        )
+        assert not bool(expr_2.has_constant)
+
+
 def test_simplify_basic(x: Variable) -> None:
     """Test basic simplification with duplicate terms."""
     expr = 2 * x + 3 * x + 1 * x

@@ -10,9 +10,11 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Literal, overload
+from typing import Any, Literal, ParamSpec, TypeVar, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -75,6 +77,58 @@ from linopy.types import (
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class ConstantInObjectiveWarning(UserWarning): ...
+
+
+def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]:
+    """
+    Decorates a Model instance method.
+
+    If the model objective contains a constant term, this decorator will:
+    - Remove the constant term from the model objective
+    - Call the decorated method
+    - Add the constant term back to the model objective
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        assert args, "Expected at least one argument (self)"
+        self = args[0]
+        assert isinstance(self, Model), (
+            f"First argument must be a Model instance, got {type(self)}"
+        )
+        if not bool(self.objective.expression.has_constant):
+            return func(*args, **kwargs)
+
+        warn(
+            "The objective function contains a constant term. This will be temporarily removed",
+            ConstantInObjectiveWarning,
+        )
+
+        # Modify the model objective to drop the constant term
+        model = self
+        constant = self.objective.expression.const
+        model.objective.expression = self.objective.expression.drop_constant()
+        args = (model, *args[1:])  # type: ignore
+        result = func(*args, **kwargs)
+
+        # Re-add the constant term
+        model.objective.expression = model.objective.expression + constant
+        if model.objective.value is not None:
+            model.objective.set_value(model.objective.value + constant)
+        warn(
+            "The objective function constant term has been re-added to the result",
+            ConstantInObjectiveWarning,
+        )
+        return result
+
+    return wrapper
 
 
 class Model:
@@ -1107,6 +1161,7 @@ class Model:
         ) as f:
             return Path(f.name)
 
+    @strip_and_replace_constant_objective
     def solve(
         self,
         solver_name: str | None = None,
