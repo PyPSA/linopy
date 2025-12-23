@@ -104,6 +104,7 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
             f"First argument must be a Model instance, got {type(self)}"
         )
         if not bool(self.objective.expression.has_constant):
+            # Continue as normal if there is no constant term
             return func(*args, **kwargs)
 
         warn(
@@ -113,7 +114,7 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
 
         # Modify the model objective to drop the constant term
         model = self
-        constant = self.objective.expression.const
+        constant = float(self.objective.expression.const.values)
         model.objective.expression = self.objective.expression.drop_constant()
         args = (model, *args[1:])  # type: ignore
 
