@@ -192,6 +192,13 @@ class Objective:
         self._expression = expr
 
     @property
+    def has_constant(self) -> bool:
+        """
+        Returns whether the objective has a constant term.
+        """
+        return bool(self.expression.has_constant)
+
+    @property
     def model(self) -> Model:
         """
         Returns the model of the objective.
