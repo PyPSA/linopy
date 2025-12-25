@@ -1097,6 +1097,9 @@ class BaseExpression(ABC):
         """
         return EmptyDeprecationWrapper(not self.size)
 
+    def drop_constant(self: GenericExpression) -> GenericExpression:
+        return self - self.const  # type: ignore
+
     def densify_terms(self: GenericExpression) -> GenericExpression:
         """
         Move all non-zero term entries to the front and cut off all-zero

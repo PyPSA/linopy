@@ -189,10 +189,14 @@ class Objective:
         if len(expr.coord_dims):
             expr = expr.sum()
 
-        if (expr.const != 0.0) and not np.isnan(expr.const):
-            raise ValueError("Constant values in objective function not supported.")
-
         self._expression = expr
+
+    @property
+    def has_constant(self) -> bool:
+        """
+        Returns whether the objective has a constant term.
+        """
+        return bool(self.expression.has_constant)
 
     @property
     def model(self) -> Model:

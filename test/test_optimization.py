@@ -20,6 +20,7 @@ from xarray.testing import assert_equal
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
+from linopy.model import ConstantInObjectiveWarning, ConstantObjectiveError
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
@@ -953,6 +954,54 @@ def test_model_resolve(
     assert status == "ok"
     # x = -0.75, y = 3.0
     assert np.isclose(model.objective.value or 0, 5.25)
+
+
+def test_model_with_constant_in_objective_feasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+
+    with pytest.warns(ConstantInObjectiveWarning):
+        model.add_objective(expr=objective, overwrite=True)
+
+    with pytest.raises(ConstantObjectiveError):
+        status, _ = model.solve(solver_name="highs")
+
+    model.allow_constant_objective = True
+    status, _ = model.solve(solver_name="highs")
+    assert status == "ok"
+    # x = -0.1, y = 1.7
+    assert model.objective.value == 4.3
+    assert model.objective.expression.const == 1
+    assert model.objective.expression.solution == 4.3
+
+
+def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    model.allow_constant_objective = True
+    _, condition = model.solve(solver_name="highs")
+
+    assert condition == "infeasible"
+    # Even though the problem was not solved, the constant term should still be accessible
+    assert model.objective.expression.const == 1
+
+
+def test_model_with_constant_in_objective_error(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.allow_constant_objective = True
+    model.add_objective(expr=objective, overwrite=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    try:
+        _ = model.solve(solver_name="apples")
+    except AssertionError:
+        pass
+
+    # Even if something goes wrong, the model objective should return to the correct state
+    assert model.objective.expression.const == 1
 
 
 @pytest.mark.parametrize(

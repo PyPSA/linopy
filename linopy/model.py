@@ -10,9 +10,11 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Literal, overload
+from typing import Any, Literal, ParamSpec, TypeVar, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -77,6 +79,67 @@ from linopy.variables import ScalarVariable, Variable, Variables
 logger = logging.getLogger(__name__)
 
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class ConstantInObjectiveWarning(UserWarning): ...
+
+
+class ConstantObjectiveError(Exception): ...
+
+
+def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]:
+    """
+    Decorates a Model instance method.
+
+    If the model objective contains a constant term, this decorator will:
+    - Remove the constant term from the model objective
+    - Call the decorated method
+    - Add the constant term back to the model objective
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        assert args, "Expected at least one argument (self)"
+        self = args[0]
+        assert isinstance(self, Model), (
+            f"First argument must be a Model instance, got {type(self)}"
+        )
+        model = self
+        if not self.objective.has_constant:
+            # Continue as normal if there is no constant term
+            return func(*args, **kwargs)
+
+        # The objective contains a constant term
+        if not model.allow_constant_objective:
+            raise ConstantObjectiveError(
+                "Objective function contains constant terms. Please use LinearExpression.drop_constants()/QuadraticExpression.drop_constants() or set Model.allow_constant_objective=True."
+            )
+
+        # Modify the model objective to drop the constant term
+        model = self
+        constant = float(self.objective.expression.const.values)
+        model.objective.expression = self.objective.expression.drop_constant()
+        args = (model, *args[1:])  # type: ignore
+
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            # Even if there is an exception, make sure the model returns to it's original state
+            model.objective.expression = model.objective.expression + constant
+            raise e
+
+        # Re-add the constant term to return the model objective to the original expression
+        model.objective.expression = model.objective.expression + constant
+        if model.objective.value is not None:
+            model.objective.set_value(model.objective.value + constant)
+
+        return result
+
+    return wrapper
+
+
 class Model:
     """
     Linear optimization model.
@@ -103,6 +166,7 @@ class Model:
     _dual: Dataset
     _status: str
     _termination_condition: str
+    _allow_constant_objective: bool
     _xCounter: int
     _cCounter: int
     _varnameCounter: int
@@ -124,6 +188,7 @@ class Model:
         # hidden attributes
         "_status",
         "_termination_condition",
+        "_allow_constant_objective",
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
@@ -175,6 +240,7 @@ class Model:
 
         self._status: str = "initialized"
         self._termination_condition: str = ""
+        self._allow_constant_objective: bool = False
         self._xCounter: int = 0
         self._cCounter: int = 0
         self._varnameCounter: int = 0
@@ -727,6 +793,17 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
+    @property
+    def allow_constant_objective(self) -> bool:
+        """
+        Whether constant terms in the objective function are allowed.
+        """
+        return self._allow_constant_objective
+
+    @allow_constant_objective.setter
+    def allow_constant_objective(self, allow: bool) -> None:
+        self._allow_constant_objective = allow
+
     def add_objective(
         self,
         expr: Variable
@@ -748,7 +825,7 @@ class Model:
 
         Returns
         -------
-        linopy.LinearExpression
+        linopy.LinearExpression, linopy.QuadraticExpression
             The objective function assigned to the model.
         """
         if not overwrite:
@@ -758,8 +835,14 @@ class Model:
             )
         if isinstance(expr, Variable):
             expr = 1 * expr
+
         self.objective.expression = expr
         self.objective.sense = sense
+        if not self.allow_constant_objective and self.objective.has_constant:
+            warn(
+                "Objective function contains constant terms but this is not allowed as Model.allow_constant_objective=False, running solve will result in an error. Please either remove constants from the expression with expr.drop_constants() or set Model.allow_constant_objective=True.",
+                ConstantInObjectiveWarning,
+            )
 
     def remove_variables(self, name: str) -> None:
         """
@@ -1107,6 +1190,7 @@ class Model:
         ) as f:
             return Path(f.name)
 
+    @strip_and_replace_constant_objective
     def solve(
         self,
         solver_name: str | None = None,

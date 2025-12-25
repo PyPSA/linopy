@@ -312,6 +312,20 @@ def test_quadratic_expression_constant_to_polars() -> None:
     assert all(arr.to_numpy() == df["const"].to_numpy())
 
 
+def test_drop_constant(x: Variable) -> None:
+    """Test that constants are removed"""
+    expr_a = 2 * x * x
+    expr_b = expr_a + 1
+    for expr in [expr_a, expr_b]:
+        expr = 2 * x + 10
+        expr_2 = expr.drop_constant()
+
+        assert all(expr_2.const.values == 0.0), (
+            f"Expected constant 0.0, got {expr_2.const.values}"
+        )
+        assert not bool(expr_2.has_constant)
+
+
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:
     expr: QuadraticExpression = x * y + x + 5  # type: ignore
 
