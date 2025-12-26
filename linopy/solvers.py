@@ -482,7 +482,7 @@ class CBC(Solver[None]):
         variables = {v.name for v in h.getVariables()}
 
         def get_solver_solution() -> Solution:
-            m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
+            m = re.match(r"Optimal.* - objective value (-?\d+\.?\d*)$", first_line)
             if m and len(m.groups()) == 1:
                 objective = float(m.group(1))
             else:
