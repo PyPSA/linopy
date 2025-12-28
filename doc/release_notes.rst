@@ -3,7 +3,7 @@ Release Notes
 
 .. Upcoming Version
 
-* Allow constant values in objective cost function
+* Allow constant values in objective cost function. Refactored objective setting.
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add simplify method to LinearExpression to combine duplicate terms
 * Add convenience function to create LinearExpression from constant

@@ -266,7 +266,7 @@ class Model:
 
     @objective.setter
     def objective(
-        self, obj: Objective | LinearExpression | QuadraticExpression
+        self, obj: Objective | Variable | LinearExpression | QuadraticExpression
     ) -> Objective:
         self.add_objective(expr=obj, overwrite=True, allow_constant=False)
         return self._objective
@@ -779,7 +779,7 @@ class Model:
         return constraint
 
     @overload
-    def add_objective(
+    def add_objective(  # Set objective as Objective object
         self,
         expr: Objective,
         sense: None = None,
@@ -788,7 +788,7 @@ class Model:
     ) -> None: ...
 
     @overload
-    def add_objective(
+    def add_objective(  # Set objective as expression-like with sense
         self,
         expr: Variable
         | LinearExpression
@@ -833,6 +833,9 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
+
+        if isinstance(expr, list | tuple):
+            expr: LinearExpression = self.linexpr(*expr)
 
         if isinstance(expr, Objective):
             assert sense is None, "Cannot set sense if objective object is passed"

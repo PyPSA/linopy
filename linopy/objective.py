@@ -213,14 +213,14 @@ class Objective:
         return self._model
 
     @property
-    def sense(self) -> str:
+    def sense(self) -> Literal["min", "max"]:
         """
         Returns the sense of the objective.
         """
         return self._sense
 
     @sense.setter
-    def sense(self, sense: str) -> None:
+    def sense(self, sense: Literal["min", "max"]) -> None:
         """
         Sets the sense of the objective.
         """
