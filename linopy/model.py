@@ -268,11 +268,7 @@ class Model:
     def objective(
         self, obj: Objective | LinearExpression | QuadraticExpression
     ) -> Objective:
-        if not isinstance(obj, Objective):
-            expr = obj
-        else:
-            expr = obj.expression
-        self.add_objective(expr=expr, overwrite=True, allow_constant=False)
+        self.add_objective(expr=obj, overwrite=True, allow_constant=False)
         return self._objective
 
     @property
@@ -782,14 +778,36 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
+    @overload
+    def add_objective(
+        self,
+        expr: Objective,
+        sense: None = None,
+        overwrite: bool = False,
+        allow_constant: bool = False,
+    ) -> None: ...
+
+    @overload
     def add_objective(
         self,
         expr: Variable
         | LinearExpression
         | QuadraticExpression
         | Sequence[tuple[ConstantLike, VariableLike]],
+        sense: Literal["min", "max"] | None = None,
         overwrite: bool = False,
-        sense: str = "min",
+        allow_constant: bool = False,
+    ) -> None: ...
+
+    def add_objective(
+        self,
+        expr: Variable
+        | LinearExpression
+        | QuadraticExpression
+        | Sequence[tuple[ConstantLike, VariableLike]]
+        | Objective,
+        sense: Literal["min", "max"] | None = None,
+        overwrite: bool = False,
         allow_constant: bool = False,
     ) -> None:
         """
@@ -797,8 +815,9 @@ class Model:
 
         Parameters
         ----------
-        expr : linopy.LinearExpression, linopy.QuadraticExpression
+        expr : linopy.Variable, linopy.LinearExpression, linopy.QuadraticExpression, Objective
             Expression describing the objective function.
+        sense: "min" or "max", the sense to optimize for. Defaults to min. Cannot be set if passing Objective directly
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
         allow_constant: bool, optional
@@ -814,15 +833,20 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-        if isinstance(expr, Variable):
-            expr = 1 * expr
 
-        if not allow_constant and expr.has_constant:
+        if isinstance(expr, Objective):
+            assert sense is None, "Cannot set sense if objective object is passed"
+            objective = expr
+            assert objective.model == self
+        else:
+            sense = sense or "min"
+            objective = Objective(expression=expr, model=self, sense=sense)
+
+        if not allow_constant and objective.expression.has_constant:
             raise ConstantObjectiveError(
                 "Objective contains constant term. Either remove constants from the expression with expr.drop_constants() or use model.add_objective(..., allow_constant=True).",
             )
 
-        objective = Objective(expression=expr, model=self, sense=sense)
         self._objective = objective
 
     def remove_variables(self, name: str) -> None:

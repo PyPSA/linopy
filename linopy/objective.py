@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import polars as pl
@@ -24,6 +24,7 @@ from xarray.core.utils import Frozen
 
 from linopy import expressions
 from linopy.types import ConstantLike
+from linopy.variables import Variable
 
 if TYPE_CHECKING:
     from linopy.expressions import LinearExpression, QuadraticExpression
@@ -64,13 +65,19 @@ class Objective:
 
     def __init__(
         self,
-        expression: expressions.LinearExpression | expressions.QuadraticExpression,
+        expression: Variable
+        | expressions.LinearExpression
+        | expressions.QuadraticExpression,
         model: Model,
-        sense: str = "min",
+        sense: Literal["min", "max"] = "min",
     ) -> None:
         self._model: Model = model
         self._value: float | None = None
 
+        if isinstance(expression, Variable):
+            expression = 1 * expression
+
+        assert sense in ["min", "max"]
         self.sense: str = sense
         self.expression: (
             expressions.LinearExpression | expressions.QuadraticExpression

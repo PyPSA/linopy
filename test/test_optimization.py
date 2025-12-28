@@ -20,7 +20,6 @@ from xarray.testing import assert_equal
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
-from linopy.model import ConstantObjectiveError
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
@@ -954,20 +953,6 @@ def test_model_resolve(
     assert status == "ok"
     # x = -0.75, y = 3.0
     assert np.isclose(model.objective.value or 0, 5.25)
-
-
-def test_constant_not_allowed_unless_specified_explicitly(model: Model) -> None:
-    objective = model.objective.expression + 1
-
-    with pytest.raises(ConstantObjectiveError):
-        model.add_objective(expr=objective, overwrite=True, allow_constant=False)
-    with pytest.raises(ConstantObjectiveError):
-        model.add_objective(expr=objective, overwrite=True)
-
-    with pytest.raises(ConstantObjectiveError):
-        model.objective = objective
-
-    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
 
 
 def test_constant_feasible(model: Model) -> None:

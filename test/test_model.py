@@ -9,10 +9,12 @@ from pathlib import Path
 from tempfile import gettempdir
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
 from linopy import EQUAL, Model
+from linopy.model import ConstantObjectiveError
 from linopy.testing import assert_model_equal
 
 target_shape: tuple[int, int] = (10, 10)
@@ -67,7 +69,7 @@ def test_objective() -> None:
     y = m.add_variables(lower, upper, name="y")
 
     obj1 = (10 * x + 5 * y).sum()
-    m.add_objective(obj1)
+    m.add_objective(obj1, allow_constant=True)
     assert m.objective.vars.size == 200
 
     # test overwriting
@@ -82,8 +84,9 @@ def test_objective() -> None:
     assert m.objectiverange.min() == 2
     assert m.objectiverange.max() == 2
 
-    # test objective with constant which is supported
-    m.objective = m.objective + 3
+    # test setting constant term in objective with explicitly allowing it
+    with pytest.raises(ConstantObjectiveError):
+        m.objective = m.objective + 3
 
 
 def test_remove_variable() -> None:
@@ -162,3 +165,20 @@ def test_assert_model_equal() -> None:
     m.add_objective(obj)
 
     assert_model_equal(m, m)
+
+
+def test_constant_not_allowed_in_objective_unless_specified_explicitly() -> None:
+    model = Model()
+    days = pd.Index(["Mon", "Tue", "Wed", "Thu", "Fri"], name="day")
+    x = model.add_variables(name="x", coords=[days])
+    non_linear = x + 1
+
+    with pytest.raises(ConstantObjectiveError):
+        model.add_objective(expr=non_linear, overwrite=True, allow_constant=False)
+    with pytest.raises(ConstantObjectiveError):
+        model.add_objective(expr=non_linear, overwrite=True)
+
+    with pytest.raises(ConstantObjectiveError):
+        model.objective = non_linear
+
+    model.add_objective(expr=non_linear, overwrite=True, allow_constant=True)

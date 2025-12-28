@@ -187,9 +187,3 @@ def test_repr(linear_objective: Objective, quadratic_objective: Objective) -> No
 
     assert "Linear" in linear_objective.__repr__()
     assert "Quadratic" in quadratic_objective.__repr__()
-
-
-def test_objective_constant() -> None:
-    m = Model()
-    linear_expr = LinearExpression(None, m) + 1
-    m.objective = Objective(linear_expr, m)
