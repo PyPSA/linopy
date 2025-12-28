@@ -843,7 +843,9 @@ class Model:
             objective = Objective(expression=expr, model=self, sense=sense)
         else:
             sense = sense or "min"
-            objective = Objective(expression=self.linexpr(*expr), model=self, sense=sense)
+            objective = Objective(
+                expression=self.linexpr(*expr), model=self, sense=sense
+            )
 
         if not allow_constant and objective.expression.has_constant:
             raise ConstantObjectiveError(
