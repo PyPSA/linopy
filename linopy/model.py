@@ -838,13 +838,12 @@ class Model:
             assert sense is None, "Cannot set sense if objective object is passed"
             objective = expr
             assert objective.model == self
+        elif isinstance(expr, (Variable, LinearExpression, QuadraticExpression)):
+            sense = sense or "min"
+            objective = Objective(expression=expr, model=self, sense=sense)
         else:
             sense = sense or "min"
-            if isinstance(expr, list | tuple):
-                expr_2: LinearExpression = self.linexpr(*expr)
-            else:
-                expr_2 = expr
-            objective = Objective(expression=expr_2, model=self, sense=sense)
+            objective = Objective(expression=self.linexpr(*expr), model=self, sense=sense)
 
         if not allow_constant and objective.expression.has_constant:
             raise ConstantObjectiveError(
