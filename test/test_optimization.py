@@ -948,7 +948,7 @@ def test_model_resolve(
     # add another constraint after solve
     model.add_constraints(model.variables.y >= 3)
 
-    status, condition = model.solve(
+    status, _ = model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
     assert status == "ok"
@@ -958,7 +958,14 @@ def test_model_resolve(
 
 def test_model_with_constant_in_objective_feasible(model: Model) -> None:
     objective = model.objective.expression + 1
-    model.add_objective(expr=objective, overwrite=True)
+
+    with pytest.raises(ConstantObjectiveError):
+        model.add_objective(
+            expr=objective, overwrite=True, allow_constant_objective=False
+        )
+
+    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
+    model.allow_constant_objective = False
 
     with pytest.raises(ConstantObjectiveError):
         status, _ = model.solve(solver_name="highs")
@@ -974,11 +981,11 @@ def test_model_with_constant_in_objective_feasible(model: Model) -> None:
 
 def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
     objective = model.objective.expression + 1
-    model.add_objective(expr=objective, overwrite=True)
+    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 
-    _, condition = model.solve(solver_name="highs", allow_constant=True)
+    _, condition = model.solve(solver_name="highs")
 
     assert condition == "infeasible"
     # Even though the problem was not solved, the constant term should still be accessible
@@ -987,7 +994,7 @@ def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
 
 def test_model_with_constant_in_objective_error(model: Model) -> None:
     objective = model.objective.expression + 1
-    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 

@@ -110,7 +110,7 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
         # The objective contains a constant term
         if not model.allow_constant_objective:
             raise ConstantObjectiveError(
-                "Objective function contains constant terms. Please use LinearExpression.drop_constants()/QuadraticExpression.drop_constants() or set Model.allow_constant_objective=True."
+                "Objective function contains constant terms. Please use expr.drop_constants() or set model.allow_constant_objective=True."
             )
 
         # Modify the model objective to drop the constant term
@@ -808,7 +808,7 @@ class Model:
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
-        allow_constant: bool | None = None,
+        allow_constant_objective: bool | None = None,
     ) -> None:
         """
         Add an objective function to the model.
@@ -819,7 +819,7 @@ class Model:
             Expression describing the objective function.
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
-        allow_constant : bool, optional
+        allow_constant_objective : bool, optional
             Set the `Model.allow_constant_objective` attribute. If True, the objective is allowed to contain a constant term.
 
         Returns
@@ -837,12 +837,12 @@ class Model:
 
         self.objective.expression = expr
         self.objective.sense = sense
-        if allow_constant is not None:
-            self.allow_constant_objective = allow_constant
+        if allow_constant_objective is not None:
+            self.allow_constant_objective = allow_constant_objective
 
         if not self.allow_constant_objective and self.objective.has_constant:
             raise ConstantObjectiveError(
-                "Objective function contains constant terms but this is not allowed as Model.allow_constant_objective=False, running solve will result in an error. Please either remove constants from the expression with expr.drop_constants() or set Model.allow_constant_objective=True.",
+                "Objective function contains constant terms but this is not allowed as Model.allow_constant_objective=False. Either remove constants from the expression with expr.drop_constants() or pass allow_constant_objective=True.",
             )
 
     def remove_variables(self, name: str) -> None:
