@@ -956,21 +956,24 @@ def test_model_resolve(
     assert np.isclose(model.objective.value or 0, 5.25)
 
 
-def test_model_with_constant_in_objective_feasible(model: Model) -> None:
+def test_constant_not_allowed_unless_specified_explicitly(model: Model) -> None:
     objective = model.objective.expression + 1
 
     with pytest.raises(ConstantObjectiveError):
-        model.add_objective(
-            expr=objective, overwrite=True, allow_constant_objective=False
-        )
-
-    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
-    model.allow_constant_objective = False
+        model.add_objective(expr=objective, overwrite=True, allow_constant=False)
+    with pytest.raises(ConstantObjectiveError):
+        model.add_objective(expr=objective, overwrite=True)
 
     with pytest.raises(ConstantObjectiveError):
-        status, _ = model.solve(solver_name="highs")
+        model.objective = objective
 
-    model.allow_constant_objective = True
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+
+
+def test_constant_feasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+
     status, _ = model.solve(solver_name="highs")
     assert status == "ok"
     # x = -0.1, y = 1.7
@@ -979,9 +982,9 @@ def test_model_with_constant_in_objective_feasible(model: Model) -> None:
     assert model.objective.expression.solution == 4.3
 
 
-def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
+def test_constant_infeasible(model: Model) -> None:
     objective = model.objective.expression + 1
-    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 
@@ -992,9 +995,9 @@ def test_model_with_constant_in_objective_infeasible(model: Model) -> None:
     assert model.objective.expression.const == 1
 
 
-def test_model_with_constant_in_objective_error(model: Model) -> None:
+def test_constant_error(model: Model) -> None:
     objective = model.objective.expression + 1
-    model.add_objective(expr=objective, overwrite=True, allow_constant_objective=True)
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
     model.add_constraints([(1, "x")], "<=", 0)
     model.add_constraints([(1, "y")], "<=", 0)
 

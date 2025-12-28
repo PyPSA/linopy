@@ -108,11 +108,6 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
             return func(*args, **kwargs)
 
         # The objective contains a constant term
-        if not model.allow_constant_objective:
-            raise ConstantObjectiveError(
-                "Objective function contains constant terms. Please use expr.drop_constants() or set model.allow_constant_objective=True."
-            )
-
         # Modify the model objective to drop the constant term
         model = self
         constant = float(self.objective.expression.const.values)
@@ -162,7 +157,6 @@ class Model:
     _dual: Dataset
     _status: str
     _termination_condition: str
-    _allow_constant_objective: bool
     _xCounter: int
     _cCounter: int
     _varnameCounter: int
@@ -184,7 +178,6 @@ class Model:
         # hidden attributes
         "_status",
         "_termination_condition",
-        "_allow_constant_objective",
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
@@ -236,7 +229,6 @@ class Model:
 
         self._status: str = "initialized"
         self._termination_condition: str = ""
-        self._allow_constant_objective: bool = False
         self._xCounter: int = 0
         self._cCounter: int = 0
         self._varnameCounter: int = 0
@@ -277,9 +269,10 @@ class Model:
         self, obj: Objective | LinearExpression | QuadraticExpression
     ) -> Objective:
         if not isinstance(obj, Objective):
-            obj = Objective(obj, self)
-
-        self._objective = obj
+            expr = obj
+        else:
+            expr = obj.expression
+        self.add_objective(expr=expr, overwrite=True, allow_constant=False)
         return self._objective
 
     @property
@@ -789,17 +782,6 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
-    @property
-    def allow_constant_objective(self) -> bool:
-        """
-        Whether constant terms in the objective function are allowed.
-        """
-        return self._allow_constant_objective
-
-    @allow_constant_objective.setter
-    def allow_constant_objective(self, allow: bool) -> None:
-        self._allow_constant_objective = allow
-
     def add_objective(
         self,
         expr: Variable
@@ -808,7 +790,7 @@ class Model:
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
-        allow_constant_objective: bool | None = None,
+        allow_constant: bool = False,
     ) -> None:
         """
         Add an objective function to the model.
@@ -819,8 +801,8 @@ class Model:
             Expression describing the objective function.
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
-        allow_constant_objective : bool, optional
-            Set the `Model.allow_constant_objective` attribute. If True, the objective is allowed to contain a constant term.
+        allow_constant: bool, optional
+            If True, the objective is allowed to contain a constant term. The default is False
 
         Returns
         -------
@@ -835,15 +817,13 @@ class Model:
         if isinstance(expr, Variable):
             expr = 1 * expr
 
-        self.objective.expression = expr
-        self.objective.sense = sense
-        if allow_constant_objective is not None:
-            self.allow_constant_objective = allow_constant_objective
-
-        if not self.allow_constant_objective and self.objective.has_constant:
+        if not allow_constant and expr.has_constant:
             raise ConstantObjectiveError(
-                "Objective function contains constant terms but this is not allowed as Model.allow_constant_objective=False. Either remove constants from the expression with expr.drop_constants() or pass allow_constant_objective=True.",
+                "Objective contains constant term. Either remove constants from the expression with expr.drop_constants() or use model.add_objective(..., allow_constant=True).",
             )
+
+        objective = Objective(expression=expr, model=self, sense=sense)
+        self._objective = objective
 
     def remove_variables(self, name: str) -> None:
         """
