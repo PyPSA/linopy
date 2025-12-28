@@ -1242,7 +1242,7 @@ def test_drop_constant(x: Variable) -> None:
         assert all(expr_2.const.values == 0.0), (
             f"Expected constant 0.0, got {expr_2.const.values}"
         )
-        assert not bool(expr_2.has_constant)
+        assert not expr_2.has_constant
 
 
 def test_simplify_basic(x: Variable) -> None:

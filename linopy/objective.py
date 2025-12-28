@@ -196,7 +196,7 @@ class Objective:
         """
         Returns whether the objective has a constant term.
         """
-        return bool(self.expression.has_constant)
+        return self.expression.has_constant
 
     @property
     def model(self) -> Model:

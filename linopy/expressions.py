@@ -726,8 +726,8 @@ class BaseExpression(ABC):
         self._data = assign_multiindex_safe(self.data, const=value)
 
     @property
-    def has_constant(self) -> DataArray:
-        return self.const.any()
+    def has_constant(self) -> bool:
+        return bool(self.const.any())
 
     # create a dummy for a mask, which can be implemented later
     @property

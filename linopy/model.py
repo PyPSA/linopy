@@ -14,7 +14,6 @@ from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, Literal, ParamSpec, TypeVar, overload
-from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -81,9 +80,6 @@ logger = logging.getLogger(__name__)
 
 P = ParamSpec("P")
 R = TypeVar("R")
-
-
-class ConstantInObjectiveWarning(UserWarning): ...
 
 
 class ConstantObjectiveError(Exception): ...
@@ -812,6 +808,7 @@ class Model:
         | Sequence[tuple[ConstantLike, VariableLike]],
         overwrite: bool = False,
         sense: str = "min",
+        allow_constant: bool | None = None,
     ) -> None:
         """
         Add an objective function to the model.
@@ -822,6 +819,8 @@ class Model:
             Expression describing the objective function.
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
+        allow_constant : bool, optional
+            Set the `Model.allow_constant_objective` attribute. If True, the objective is allowed to contain a constant term.
 
         Returns
         -------
@@ -838,10 +837,12 @@ class Model:
 
         self.objective.expression = expr
         self.objective.sense = sense
+        if allow_constant is not None:
+            self.allow_constant_objective = allow_constant
+
         if not self.allow_constant_objective and self.objective.has_constant:
-            warn(
+            raise ConstantObjectiveError(
                 "Objective function contains constant terms but this is not allowed as Model.allow_constant_objective=False, running solve will result in an error. Please either remove constants from the expression with expr.drop_constants() or set Model.allow_constant_objective=True.",
-                ConstantInObjectiveWarning,
             )
 
     def remove_variables(self, name: str) -> None:
