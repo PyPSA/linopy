@@ -69,7 +69,7 @@ def test_set_sense_via_model(
 
 def test_sense_setter_error(linear_objective: Objective) -> None:
     with pytest.raises(ValueError):
-        linear_objective.sense = "not min or max"
+        linear_objective.sense = "not min or max"  # type: ignore
 
 
 def test_variables_inherited_properties(linear_objective: Objective) -> None:

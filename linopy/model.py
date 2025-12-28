@@ -272,14 +272,14 @@ class Model:
         return self._objective
 
     @property
-    def sense(self) -> str:
+    def sense(self) -> Literal["min", "max"]:
         """
         Sense of the objective function.
         """
         return self.objective.sense
 
     @sense.setter
-    def sense(self, value: str) -> None:
+    def sense(self, value: Literal["min", "max"]) -> None:
         self.objective.sense = value
 
     @property
@@ -834,16 +834,17 @@ class Model:
                 " Set `overwrite` to True to force overwriting."
             )
 
-        if isinstance(expr, list | tuple):
-            expr: LinearExpression = self.linexpr(*expr)
-
         if isinstance(expr, Objective):
             assert sense is None, "Cannot set sense if objective object is passed"
             objective = expr
             assert objective.model == self
         else:
             sense = sense or "min"
-            objective = Objective(expression=expr, model=self, sense=sense)
+            if isinstance(expr, list | tuple):
+                expr_2: LinearExpression = self.linexpr(*expr)
+            else:
+                expr_2 = expr
+            objective = Objective(expression=expr_2, model=self, sense=sense)
 
         if not allow_constant and objective.expression.has_constant:
             raise ConstantObjectiveError(
