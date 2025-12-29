@@ -947,12 +947,52 @@ def test_model_resolve(
     # add another constraint after solve
     model.add_constraints(model.variables.y >= 3)
 
-    status, condition = model.solve(
+    status, _ = model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
     assert status == "ok"
     # x = -0.75, y = 3.0
     assert np.isclose(model.objective.value or 0, 5.25)
+
+
+def test_constant_feasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+
+    status, _ = model.solve(solver_name="highs")
+    assert status == "ok"
+    # x = -0.1, y = 1.7
+    assert model.objective.value == 4.3
+    assert model.objective.expression.const == 1
+    assert model.objective.expression.solution == 4.3
+
+
+def test_constant_infeasible(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    _, condition = model.solve(solver_name="highs")
+
+    assert condition == "infeasible"
+    # Even though the problem was not solved, the constant term should still be accessible
+    assert model.objective.expression.const == 1
+
+
+def test_constant_error(model: Model) -> None:
+    objective = model.objective.expression + 1
+    model.add_objective(expr=objective, overwrite=True, allow_constant=True)
+    model.add_constraints([(1, "x")], "<=", 0)
+    model.add_constraints([(1, "y")], "<=", 0)
+
+    try:
+        _ = model.solve(solver_name="apples")
+    except AssertionError:
+        pass
+
+    # Even if something goes wrong, the model objective should return to the correct state
+    assert model.objective.expression.const == 1
 
 
 @pytest.mark.parametrize(

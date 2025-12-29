@@ -69,7 +69,7 @@ def test_set_sense_via_model(
 
 def test_sense_setter_error(linear_objective: Objective) -> None:
     with pytest.raises(ValueError):
-        linear_objective.sense = "not min or max"
+        linear_objective.sense = "not min or max"  # type: ignore
 
 
 def test_variables_inherited_properties(linear_objective: Objective) -> None:
@@ -187,10 +187,3 @@ def test_repr(linear_objective: Objective, quadratic_objective: Objective) -> No
 
     assert "Linear" in linear_objective.__repr__()
     assert "Quadratic" in quadratic_objective.__repr__()
-
-
-def test_objective_constant() -> None:
-    m = Model()
-    linear_expr = LinearExpression(None, m) + 1
-    with pytest.raises(ValueError):
-        m.objective = Objective(linear_expr, m)

@@ -726,8 +726,8 @@ class BaseExpression(ABC):
         self._data = assign_multiindex_safe(self.data, const=value)
 
     @property
-    def has_constant(self) -> DataArray:
-        return self.const.any()
+    def has_constant(self) -> bool:
+        return bool(self.const.any())
 
     # create a dummy for a mask, which can be implemented later
     @property
@@ -1096,6 +1096,9 @@ class BaseExpression(ABC):
            a DeprecationWarning when called.
         """
         return EmptyDeprecationWrapper(not self.size)
+
+    def drop_constant(self: GenericExpression) -> GenericExpression:
+        return self - self.const  # type: ignore
 
     def densify_terms(self: GenericExpression) -> GenericExpression:
         """

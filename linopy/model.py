@@ -10,9 +10,10 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Literal, overload
+from typing import Any, Literal, ParamSpec, TypeVar, overload
 
 import numpy as np
 import pandas as pd
@@ -75,6 +76,58 @@ from linopy.types import (
 from linopy.variables import ScalarVariable, Variable, Variables
 
 logger = logging.getLogger(__name__)
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class ConstantObjectiveError(Exception): ...
+
+
+def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]:
+    """
+    Decorates a Model instance method.
+
+    If the model objective contains a constant term, this decorator will:
+    - Remove the constant term from the model objective
+    - Call the decorated method
+    - Add the constant term back to the model objective
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        assert args, "Expected at least one argument (self)"
+        self = args[0]
+        assert isinstance(self, Model), (
+            f"First argument must be a Model instance, got {type(self)}"
+        )
+        model: Model = self
+        if not model.objective.has_constant:
+            # Continue as normal if there is no constant term
+            return func(*args, **kwargs)
+
+        # The objective contains a constant term
+        # Modify the model objective to drop the constant term
+        constant = float(model.objective.expression.const.values)
+        model.objective.expression = model.objective.expression.drop_constant()
+        args = (model, *args[1:])  # type: ignore
+
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            # Even if there is an exception, make sure the model returns to its original state
+            model.objective.expression = model.objective.expression + constant
+            raise e
+
+        # Re-add the constant term to return the model objective to the original expression
+        model.objective.expression = model.objective.expression + constant
+        if model.objective.value is not None:
+            model.objective.set_value(model.objective.value + constant)
+
+        return result
+
+    return wrapper
 
 
 class Model:
@@ -212,23 +265,20 @@ class Model:
 
     @objective.setter
     def objective(
-        self, obj: Objective | LinearExpression | QuadraticExpression
+        self, obj: Objective | Variable | LinearExpression | QuadraticExpression
     ) -> Objective:
-        if not isinstance(obj, Objective):
-            obj = Objective(obj, self)
-
-        self._objective = obj
+        self.add_objective(expr=obj, overwrite=True, allow_constant=False)
         return self._objective
 
     @property
-    def sense(self) -> str:
+    def sense(self) -> Literal["min", "max"]:
         """
         Sense of the objective function.
         """
         return self.objective.sense
 
     @sense.setter
-    def sense(self, value: str) -> None:
+    def sense(self, value: Literal["min", "max"]) -> None:
         self.objective.sense = value
 
     @property
@@ -727,28 +777,54 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
-    def add_objective(
+    @overload
+    def add_objective(  # Set objective as Objective object
+        self,
+        expr: Objective,
+        sense: None = None,
+        overwrite: bool = False,
+        allow_constant: bool = False,
+    ) -> None: ...
+
+    @overload
+    def add_objective(  # Set objective as expression-like with sense
         self,
         expr: Variable
         | LinearExpression
         | QuadraticExpression
         | Sequence[tuple[ConstantLike, VariableLike]],
+        sense: Literal["min", "max"] | None = None,
         overwrite: bool = False,
-        sense: str = "min",
+        allow_constant: bool = False,
+    ) -> None: ...
+
+    def add_objective(
+        self,
+        expr: Variable
+        | LinearExpression
+        | QuadraticExpression
+        | Sequence[tuple[ConstantLike, VariableLike]]
+        | Objective,
+        sense: Literal["min", "max"] | None = None,
+        overwrite: bool = False,
+        allow_constant: bool = False,
     ) -> None:
         """
         Add an objective function to the model.
 
         Parameters
         ----------
-        expr : linopy.LinearExpression, linopy.QuadraticExpression
+        expr : linopy.Variable, linopy.LinearExpression, linopy.QuadraticExpression, Objective
             Expression describing the objective function.
+        sense: "min" or "max", the sense to optimize for. Defaults to min. Cannot be set if passing Objective directly
         overwrite : False, optional
             Whether to overwrite the existing objective. The default is False.
+        allow_constant: bool, optional
+            If True, the objective is allowed to contain a constant term. The default is False
 
         Returns
         -------
-        linopy.LinearExpression
+        linopy.LinearExpression, linopy.QuadraticExpression
             The objective function assigned to the model.
         """
         if not overwrite:
@@ -756,10 +832,26 @@ class Model:
                 "Objective already defined."
                 " Set `overwrite` to True to force overwriting."
             )
-        if isinstance(expr, Variable):
-            expr = 1 * expr
-        self.objective.expression = expr
-        self.objective.sense = sense
+
+        if isinstance(expr, Objective):
+            assert sense is None, "Cannot set sense if objective object is passed"
+            objective = expr
+            assert objective.model == self
+        elif isinstance(expr, Variable | LinearExpression | QuadraticExpression):
+            sense = sense or "min"
+            objective = Objective(expression=expr, model=self, sense=sense)
+        else:
+            sense = sense or "min"
+            objective = Objective(
+                expression=self.linexpr(*expr), model=self, sense=sense
+            )
+
+        if not allow_constant and objective.expression.has_constant:
+            raise ConstantObjectiveError(
+                "Objective contains constant term. Either remove constants from the expression with expr.drop_constants() or use model.add_objective(..., allow_constant=True).",
+            )
+
+        self._objective = objective
 
     def remove_variables(self, name: str) -> None:
         """
@@ -1107,6 +1199,7 @@ class Model:
         ) as f:
             return Path(f.name)
 
+    @strip_and_replace_constant_objective
     def solve(
         self,
         solver_name: str | None = None,
