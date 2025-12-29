@@ -1015,7 +1015,14 @@ class Constraints:
             if display_max_terms is not None:
                 opts.set_value(display_max_terms=display_max_terms)
             res = [print_single_constraint(self.model, v) for v in values]
-        print("\n".join(res))
+
+        output = "\n".join(res)
+        try:
+            print(output)
+        except UnicodeEncodeError:
+            # Replace Unicode math symbols with ASCII equivalents for Windows console
+            output = output.replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
+            print(output)
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
