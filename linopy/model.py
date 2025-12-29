@@ -102,22 +102,21 @@ def strip_and_replace_constant_objective(func: Callable[P, R]) -> Callable[P, R]
         assert isinstance(self, Model), (
             f"First argument must be a Model instance, got {type(self)}"
         )
-        model = self
-        if not self.objective.has_constant:
+        model: Model = self
+        if not model.objective.has_constant:
             # Continue as normal if there is no constant term
             return func(*args, **kwargs)
 
         # The objective contains a constant term
         # Modify the model objective to drop the constant term
-        model = self
-        constant = float(self.objective.expression.const.values)
-        model.objective.expression = self.objective.expression.drop_constant()
+        constant = float(model.objective.expression.const.values)
+        model.objective.expression = model.objective.expression.drop_constant()
         args = (model, *args[1:])  # type: ignore
 
         try:
             result = func(*args, **kwargs)
         except Exception as e:
-            # Even if there is an exception, make sure the model returns to it's original state
+            # Even if there is an exception, make sure the model returns to its original state
             model.objective.expression = model.objective.expression + constant
             raise e
 
