@@ -8,11 +8,14 @@ Created on Thu Mar 18 09:03:35 2021.
 import pickle
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
+from linopy.io import signed_number_expr
 from linopy.testing import assert_model_equal
 
 
@@ -217,3 +220,118 @@ def test_to_blocks(tmp_path: Path) -> None:
 
     with pytest.raises(NotImplementedError):
         m.to_block_files(tmp_path)
+
+
+class TestSignedNumberExpr:
+    """Test the signed_number_expr helper function for LP file formatting."""
+
+    def test_positive_numbers(self) -> None:
+        """Positive numbers should get a '+' prefix."""
+        df = pl.DataFrame({"value": [1.0, 2.5, 100.0]})
+        result = df.select(pl.concat_str(signed_number_expr("value")))
+        values = result.to_series().to_list()
+        assert values == ["+1.0", "+2.5", "+100.0"]
+
+    def test_negative_numbers(self) -> None:
+        """Negative numbers should not get a '+' prefix (already have '-')."""
+        df = pl.DataFrame({"value": [-1.0, -2.5, -100.0]})
+        result = df.select(pl.concat_str(signed_number_expr("value")))
+        values = result.to_series().to_list()
+        assert values == ["-1.0", "-2.5", "-100.0"]
+
+    def test_positive_zero(self) -> None:
+        """Positive zero should get a '+' prefix."""
+        df = pl.DataFrame({"value": [0.0]})
+        result = df.select(pl.concat_str(signed_number_expr("value")))
+        values = result.to_series().to_list()
+        assert values == ["+0.0"]
+
+    def test_negative_zero(self) -> None:
+        """Negative zero should NOT get a '+' prefix - this is the bug fix."""
+        # Create negative zero using numpy
+        neg_zero = np.float64(-0.0)
+        df = pl.DataFrame({"value": [neg_zero]})
+        result = df.select(pl.concat_str(signed_number_expr("value")))
+        values = result.to_series().to_list()
+        # The key assertion: should NOT be "+-0.0"
+        assert values == ["-0.0"]
+        assert "+-" not in values[0]
+
+    def test_mixed_values_including_negative_zero(self) -> None:
+        """Test a mix of positive, negative, and zero values."""
+        neg_zero = np.float64(-0.0)
+        df = pl.DataFrame({"value": [1.0, -1.0, 0.0, neg_zero, 2.5, -2.5]})
+        result = df.select(pl.concat_str(signed_number_expr("value")))
+        values = result.to_series().to_list()
+        assert values == ["+1.0", "-1.0", "+0.0", "-0.0", "+2.5", "-2.5"]
+        # No value should contain "+-"
+        for v in values:
+            assert "+-" not in v
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_lp_with_negative_zero_bounds(tmp_path: Path) -> None:
+    """
+    Test that LP files with negative zero bounds are valid.
+
+    This is a regression test for the bug where -0.0 bounds would produce
+    invalid LP file syntax like "+-0.0 <= x1 <= +0.0".
+
+    See: https://github.com/PyPSA/linopy/issues/XXX
+    """
+    import gurobipy
+
+    m = Model()
+
+    # Create bounds that could produce -0.0
+    # Using numpy to ensure we can create actual negative zeros
+    lower = pd.Series([np.float64(-0.0), np.float64(0.0), np.float64(-0.0)])
+    upper = pd.Series([np.float64(0.0), np.float64(-0.0), np.float64(1.0)])
+
+    m.add_variables(lower, upper, name="x")
+    m.add_objective(m.variables["x"].sum())
+
+    fn = tmp_path / "test_neg_zero.lp"
+    m.to_file(fn)
+
+    # Read the LP file content and verify no "+-" appears
+    with open(fn) as f:
+        content = f.read()
+    assert "+-" not in content, f"Found invalid '+-' in LP file: {content}"
+
+    # Verify Gurobi can read it without errors
+    gurobipy.read(str(fn))
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_file_lp_with_negative_zero_coefficients(tmp_path: Path) -> None:
+    """
+    Test that LP files with negative zero coefficients are valid.
+
+    Coefficients can also potentially be -0.0 due to floating point arithmetic.
+    """
+    import gurobipy
+
+    m = Model()
+
+    x = m.add_variables(name="x", lower=0, upper=10)
+    y = m.add_variables(name="y", lower=0, upper=10)
+
+    # Create an expression where coefficients could become -0.0
+    # through arithmetic operations
+    coeff = np.float64(-0.0)
+    expr = coeff * x + 1 * y
+
+    m.add_constraints(expr <= 5)
+    m.add_objective(x + y)
+
+    fn = tmp_path / "test_neg_zero_coeffs.lp"
+    m.to_file(fn)
+
+    # Read the LP file content and verify no "+-" appears
+    with open(fn) as f:
+        content = f.read()
+    assert "+-" not in content, f"Found invalid '+-' in LP file: {content}"
+
+    # Verify Gurobi can read it without errors
+    gurobipy.read(str(fn))
