@@ -57,9 +57,9 @@ def signed_number_expr(col_name: str) -> list[pl.Expr]:
     Return polars expressions for a signed number string, handling -0.0 correctly.
 
     This function returns two expressions: a sign prefix ('+' or '') and the
-    number cast to string. The sign prefix is '+' only if the string representation
-    does not start with '-'. This correctly handles the edge case of -0.0, which
-    is >= 0 numerically but renders as '-0.0' when cast to string.
+    number cast to string. It normalizes -0.0 to +0.0 to avoid producing invalid
+    LP file syntax like "+-0.0" (which occurs because -0.0 >= 0 is True but
+    str(-0.0) is "-0.0").
 
     Parameters
     ----------
@@ -71,11 +71,11 @@ def signed_number_expr(col_name: str) -> list[pl.Expr]:
     list[pl.Expr]
         Two polars expressions: [sign_prefix, value_string]
     """
-    value_str = pl.col(col_name).cast(pl.String)
-    sign_prefix = (
-        pl.when(~value_str.str.starts_with("-")).then(pl.lit("+")).otherwise(pl.lit(""))
-    )
-    return [sign_prefix, value_str]
+    value = pl.col(col_name)
+    # Normalize -0.0 to +0.0: if abs(x) == 0 then 0.0 else x
+    normalized = pl.when(value.abs() == 0).then(pl.lit(0.0)).otherwise(value)
+    sign_prefix = pl.when(normalized >= 0).then(pl.lit("+")).otherwise(pl.lit(""))
+    return [sign_prefix, normalized.cast(pl.String)]
 
 
 def print_coord(coord: str) -> str:

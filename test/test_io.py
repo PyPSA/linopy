@@ -247,14 +247,14 @@ class TestSignedNumberExpr:
         assert values == ["+0.0"]
 
     def test_negative_zero(self) -> None:
-        """Negative zero should NOT get a '+' prefix - this is the bug fix."""
+        """Negative zero is normalized to +0.0 - this is the bug fix."""
         # Create negative zero using numpy
         neg_zero = np.float64(-0.0)
         df = pl.DataFrame({"value": [neg_zero]})
         result = df.select(pl.concat_str(signed_number_expr("value")))
         values = result.to_series().to_list()
-        # The key assertion: should NOT be "+-0.0"
-        assert values == ["-0.0"]
+        # The key assertion: should NOT be "+-0.0", -0.0 is normalized to +0.0
+        assert values == ["+0.0"]
         assert "+-" not in values[0]
 
     def test_mixed_values_including_negative_zero(self) -> None:
@@ -263,7 +263,8 @@ class TestSignedNumberExpr:
         df = pl.DataFrame({"value": [1.0, -1.0, 0.0, neg_zero, 2.5, -2.5]})
         result = df.select(pl.concat_str(signed_number_expr("value")))
         values = result.to_series().to_list()
-        assert values == ["+1.0", "-1.0", "+0.0", "-0.0", "+2.5", "-2.5"]
+        # -0.0 is normalized to +0.0
+        assert values == ["+1.0", "-1.0", "+0.0", "+0.0", "+2.5", "-2.5"]
         # No value should contain "+-"
         for v in values:
             assert "+-" not in v
