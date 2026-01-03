@@ -71,7 +71,8 @@ def signed_number_expr(col_name: str) -> list[pl.Expr]:
     list[pl.Expr]
         Two polars expressions: [sign_prefix, value_string]
     """
-    value = pl.col(col_name)
+    # Cast to Float64 first to handle columns that are entirely null (dtype `null`)
+    value = pl.col(col_name).cast(pl.Float64)
     # Normalize -0.0 to +0.0: if abs(x) == 0 then 0.0 else x
     normalized = pl.when(value.abs() == 0).then(pl.lit(0.0)).otherwise(value)
     sign_prefix = pl.when(normalized >= 0).then(pl.lit("+")).otherwise(pl.lit(""))
