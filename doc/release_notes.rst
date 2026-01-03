@@ -7,6 +7,7 @@ Release Notes
 * Add simplify method to LinearExpression to combine duplicate terms
 * Add convenience function to create LinearExpression from constant
 * Fix compatibility for xpress versions below 9.6 (regression)
+* Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
 * Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
 * Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
 
