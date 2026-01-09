@@ -19,6 +19,7 @@ from xarray.testing import assert_allclose, assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
+from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
@@ -132,6 +133,18 @@ def model_maximization() -> Model:
     m.add_constraints(4 * x + 2 * y, LESS_EQUAL, 3)
 
     m.add_objective(2 * y + x, sense="max")
+    return m
+
+
+@pytest.fixture
+def model_with_constant_expression() -> Model:
+    m = Model(chunk=None)
+
+    x = m.add_variables(lower=0, name="x")
+    const = LinearExpression.from_constant(model=m, constant=2)
+
+    m.add_constraints(x + const, GREATER_EQUAL, 5)
+    m.add_objective(x)
     return m
 
 
@@ -405,6 +418,21 @@ def test_default_setting_expression_sol_accessor(
 
     qexpr = 4 * (x * y)  # type: ignore
     assert_equal(qexpr.solution, 4 * x.solution * y.solution)
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_constant_expression_in_constraint(
+    model_with_constant_expression: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    status, condition = model_with_constant_expression.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "ok"
+    assert np.isclose(model_with_constant_expression.objective.value or 0, 3.0)
+    assert np.isclose(model_with_constant_expression.solution["x"].item(), 3.0)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

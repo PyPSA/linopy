@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, overload
+from typing import Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -551,6 +551,46 @@ class Model:
         self.variables.add(variable)
         return variable
 
+    def add_sos_constraints(
+        self,
+        variable: Variable,
+        sos_type: Literal[1, 2],
+        sos_dim: str,
+    ) -> None:
+        """
+        Add an sos1 or sos2 constraint for one dimension of a variable
+
+        The dimension values are used as SOS.
+
+        Parameters
+        ----------
+        variable : Variable
+        sos_type : {1, 2}
+            Type of SOS
+        sos_dim : str
+            Which dimension of variable to add SOS constraint to
+        """
+        if sos_type not in (1, 2):
+            raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
+        if sos_dim not in variable.dims:
+            raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
+
+        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
+            existing_sos_type = variable.attrs.get("sos_type")
+            existing_sos_dim = variable.attrs.get("sos_dim")
+            raise ValueError(
+                f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
+            )
+
+        # Validate that sos_dim coordinates are numeric (needed for weights)
+        if not pd.api.types.is_numeric_dtype(variable.coords[sos_dim]):
+            raise ValueError(
+                f"SOS constraint requires numeric coordinates for dimension '{sos_dim}', "
+                f"but got {variable.coords[sos_dim].dtype}"
+            )
+
+        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
+
     def add_constraints(
         self,
         lhs: VariableLike
@@ -775,6 +815,32 @@ class Model:
         else:
             logger.debug(f"Removed constraint: {name}")
             self.constraints.remove(name)
+
+    def remove_sos_constraints(self, variable: Variable) -> None:
+        """
+        Remove all sos constraints from a given variable.
+
+        Parameters
+        ----------
+        variable : Variable
+            Variable instance from which to remove all sos constraints.
+            Can be retrieved from `m.variables.sos`.
+
+        Returns
+        -------
+        None.
+        """
+        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+            raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
+
+        sos_type = variable.attrs["sos_type"]
+        sos_dim = variable.attrs["sos_dim"]
+
+        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+
+        logger.debug(
+            f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
+        )
 
     def remove_objective(self) -> None:
         """
@@ -1217,6 +1283,12 @@ class Model:
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
             )
+
+        # SOS constraints are not supported by all solvers
+        if self.variables.sos and not solver_supports(
+            solver_name, SolverFeature.SOS_CONSTRAINTS
+        ):
+            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
