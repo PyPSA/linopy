@@ -10,7 +10,10 @@ from __future__ import annotations
 import platform
 from dataclasses import dataclass
 from enum import Enum, auto
+from importlib.metadata import version as package_version
 from typing import TYPE_CHECKING
+
+from packaging.specifiers import SpecifierSet
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -135,7 +138,16 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.GPU_ACCELERATION,  # xpress 9.8 now supports GPU acceleration
+                SolverFeature.GPU_ACCELERATION,  # supported from 9.8
+                SolverFeature.IIS_COMPUTATION,
+            }
+            if package_version("xpress") in SpecifierSet(">=9.8.0")
+            else {
+                SolverFeature.INTEGER_VARIABLES,
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
             }
         ),
