@@ -36,7 +36,9 @@ if "highs" in available_solvers:
     # mps io is only supported via highspy
     io_apis.append("mps")
 
-file_io_solvers = [s for s in available_solvers if s not in ["cupdlpx"]]
+file_io_solvers = get_available_solvers_with_feature(
+    SolverFeature.READ_MODEL_FROM_FILE, available_solvers
+)
 params: list[tuple[str, str, bool]] = list(
     itertools.product(file_io_solvers, io_apis, explicit_coordinate_names)
 )
@@ -56,12 +58,15 @@ if "mosek" in available_solvers:
 # handled in linopy/solver_capabilities.py by adjusting the registry at import time.
 feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
-feasible_mip_solvers: list[str] = available_solvers.copy()
-if "cupdlpx" in feasible_mip_solvers:
-    feasible_mip_solvers.remove("cupdlpx")  # cuPDLPx does not support MIP yet
+feasible_mip_solvers: list[str] = get_available_solvers_with_feature(
+    SolverFeature.INTEGER_VARIABLES, available_solvers
+)
 
-gpu_solvers: list[str] = ["cupdlpx"]
+gpu_solvers: list[str] = get_available_solvers_with_feature(
+    SolverFeature.GPU_ACCELERATION, available_solvers
+)
 
+# set tolerances for solution checking based on solver type (CPU vs. GPU)
 CPU_SOL_TOL: float = 1e-5  # numpy default
 GPU_SOL_TOL: float = 2.5e-4  # gpu solvers typically have lower numerical precision
 

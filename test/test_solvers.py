@@ -11,6 +11,7 @@ import pytest
 from test_io import model  # noqa: F401
 
 from linopy import Model, solvers
+from linopy.solver_capabilities import SolverFeature, solver_supports
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -53,8 +54,8 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     except ValueError:
         raise ValueError(f"Solver '{solver}' is not recognized")
 
-    if solver_class == solvers.cuPDLPx:
-        pytest.skip("cuPDLPx does not currently support file IO.")
+    if not solver_supports(solver, SolverFeature.READ_MODEL_FROM_FILE):
+        pytest.skip("Solver does not support reading model from file.")
 
     # Write the MPS file to the temporary directory
     mps_file = tmp_path / "problem.mps"
