@@ -44,7 +44,7 @@ flexible data-handling features:
    - `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
    - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
-   - `Xpress <https://www.fico.com/en/products/fico-xpress-solver>`__
+   - `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
    - `MOSEK <https://www.mosek.com/>`__
    - `COPT <https://www.shanshu.ai/copt>`__
