@@ -1459,7 +1459,10 @@ class Model:
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Xpress solver."""
         # Compute all IIS
-        solver_model.iisall()
+        try:  # Try new API first
+            solver_model.IISAll()
+        except AttributeError:  # Fallback to old API
+            solver_model.iisall()
 
         # Get the number of IIS found
         num_iis = solver_model.attributes.numiis
@@ -1503,28 +1506,55 @@ class Model:
         list[Any]
             List of xpress.constraint objects in the IIS
         """
-        # Prepare lists to receive IIS data
-        miisrow: list[Any] = []  # xpress.constraint objects in the IIS
-        miiscol: list[Any] = []  # xpress.variable objects in the IIS
-        constrainttype: list[str] = []  # Constraint types ('L', 'G', 'E')
-        colbndtype: list[str] = []  # Column bound types
-        duals: list[float] = []  # Dual values
-        rdcs: list[float] = []  # Reduced costs
-        isolationrows: list[str] = []  # Row isolation info
-        isolationcols: list[str] = []  # Column isolation info
+        # Declare variables before try/except to avoid mypy redefinition errors
+        miisrow: list[Any]
+        miiscol: list[Any]
+        constrainttype: list[str]
+        colbndtype: list[str]
+        duals: list[float]
+        rdcs: list[float]
+        isolationrows: list[str]
+        isolationcols: list[str]
 
-        # Get IIS data from Xpress
-        solver_model.getiisdata(
-            iis_num,
-            miisrow,
-            miiscol,
-            constrainttype,
-            colbndtype,
-            duals,
-            rdcs,
-            isolationrows,
-            isolationcols,
-        )
+        try:  # Try new API first
+            (
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            ) = solver_model.getIISData(iis_num)
+
+            # Transform list of indices to list of constraint objects
+            for i in range(len(miisrow)):
+                miisrow[i] = solver_model.getConstraint(miisrow[i])
+
+        except AttributeError:  # Fallback to old API
+            # Prepare lists to receive IIS data
+            miisrow = []  # xpress.constraint objects in the IIS
+            miiscol = []  # xpress.variable objects in the IIS
+            constrainttype = []  # Constraint types ('L', 'G', 'E')
+            colbndtype = []  # Column bound types
+            duals = []  # Dual values
+            rdcs = []  # Reduced costs
+            isolationrows = []  # Row isolation info
+            isolationcols = []  # Column isolation info
+
+            # Get IIS data from Xpress
+            solver_model.getiisdata(
+                iis_num,
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            )
 
         return miisrow
 
