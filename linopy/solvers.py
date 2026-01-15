@@ -1559,13 +1559,11 @@ class Xpress(Solver[None]):
         Result
         """
         CONDITION_MAP = {
-            "lp_optimal": "optimal",
-            "mip_optimal": "optimal",
-            "lp_infeasible": "infeasible",
-            "lp_infeas": "infeasible",
-            "mip_infeasible": "infeasible",
-            "lp_unbounded": "unbounded",
-            "mip_unbounded": "unbounded",
+            xpress.SolStatus.NOTFOUND: "unknown",
+            xpress.SolStatus.OPTIMAL: "optimal",
+            xpress.SolStatus.FEASIBLE: "terminated_by_limit",
+            xpress.SolStatus.INFEASIBLE: "infeasible",
+            xpress.SolStatus.UNBOUNDED: "unbounded",
         }
 
         io_api = read_io_api_from_problem_file(problem_fn)
@@ -1573,49 +1571,78 @@ class Xpress(Solver[None]):
 
         m = xpress.problem()
 
-        m.read(path_to_string(problem_fn))
-        m.setControl(self.solver_options)
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
+
+        # Set solver options - new API uses setControl per option, old API accepts dict
+        if self.solver_options is not None:
+            m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(path_to_string(log_fn))
+            try:  # Try new API first
+                m.setLogFile(path_to_string(log_fn))
+            except AttributeError:  # Fallback to old API
+                m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(path_to_string(warmstart_fn))
+            try:  # Try new API first
+                m.readBasis(path_to_string(warmstart_fn))
+            except AttributeError:  # Fallback to old API
+                m.readbasis(path_to_string(warmstart_fn))
 
-        m.solve()
+        m.optimize()
 
         # if the solver is stopped (timelimit for example), postsolve the problem
-        if m.getAttrib("solvestatus") == xpress.solvestatus_stopped:
-            m.postsolve()
+        if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
+            try:  # Try new API first
+                m.postSolve()
+            except AttributeError:  # Fallback to old API
+                m.postsolve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(path_to_string(basis_fn))
-            except Exception as err:
+                try:  # Try new API first
+                    m.writeBasis(path_to_string(basis_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebasis(path_to_string(basis_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                m.writebinsol(path_to_string(solution_fn))
-            except Exception as err:
+                try:  # Try new API first
+                    m.writeBinSol(path_to_string(solution_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebinsol(path_to_string(solution_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
-        condition = m.getProbStatusString()
+        condition = m.attributes.solstatus
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            objective = m.getObjVal()
+            objective = m.attributes.objval
 
-            var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            try:  # Try new API first
+                var = m.getNameList(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            except AttributeError:  # Fallback to old API
+                var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDual()
-                constraints = m.getnamelist(
-                    xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                )
+                _dual = m.getDuals()
+                try:  # Try new API first
+                    constraints = m.getNameList(
+                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    )
+                except AttributeError:  # Fallback to old API
+                    constraints = m.getnamelist(
+                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    )
                 dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
