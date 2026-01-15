@@ -3,6 +3,7 @@ Release Notes
 
 .. Upcoming Version
 
+* Bugfix for missing dependency for jupyter notebook example in documentation
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add simplify method to LinearExpression to combine duplicate terms
 * Add convenience function to create LinearExpression from constant
