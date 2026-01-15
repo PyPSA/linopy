@@ -1702,7 +1702,11 @@ class Xpress(Solver[None]):
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDuals()
+                try:  # Try new API first
+                    _dual = m.getDuals()
+                except AttributeError:  # Fallback to old API
+                    _dual = m.getDual()
+
                 try:  # Try new API first
                     constraints = m.getNameList(
                         xpress_Namespaces.ROW, 0, m.attributes.rows - 1
