@@ -452,7 +452,8 @@ def test_anonymous_constraint(
     model.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
-    assert_allclose(model.solution, model_anonymous_constraint.solution)
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+    assert_allclose(model.solution, model_anonymous_constraint.solution, rtol=tol)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

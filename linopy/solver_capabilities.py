@@ -10,6 +10,7 @@ from __future__ import annotations
 import platform
 from dataclasses import dataclass
 from enum import Enum, auto
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,14 @@ from packaging.specifiers import SpecifierSet
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+def _xpress_supports_gpu() -> bool:
+    """Check if installed xpress version supports GPU acceleration (>=9.8.0)."""
+    try:
+        return package_version("xpress") in SpecifierSet(">=9.8.0")
+    except PackageNotFoundError:
+        return False
 
 
 class SolverFeature(Enum):
@@ -138,10 +147,10 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.GPU_ACCELERATION,  # supported from 9.8
+                SolverFeature.GPU_ACCELERATION,
                 SolverFeature.IIS_COMPUTATION,
             }
-            if package_version("xpress") in SpecifierSet(">=9.8.0")
+            if _xpress_supports_gpu()
             else {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
@@ -219,6 +228,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="cuPDLPx",
         features=frozenset(
             {
+                SolverFeature.DIRECT_API,
                 SolverFeature.GPU_ACCELERATION,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
