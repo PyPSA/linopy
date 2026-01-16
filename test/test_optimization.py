@@ -464,6 +464,19 @@ def test_model_maximization(
         assert np.isclose(m.objective.value or 0, 3.3)
 
 
+def test_mock_solve(model_maximization: Model) -> None:
+    m = model_maximization
+    assert m.objective.sense == "max"
+    assert m.objective.value is None
+
+    status, condition = m.solve(solver="some_non_existant_solver", mock_solve=True)
+    assert status == "ok"
+    assert m.objective.value == 0
+    x_solution = m.variables["x"].solution
+    assert x_solution.coords == m.variables["x"].coords
+    assert (x_solution == 0).all()
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_default_settings_chunked(
     model_chunked: Model, solver: str, io_api: str, explicit_coordinate_names: bool
