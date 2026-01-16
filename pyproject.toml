@@ -99,6 +99,9 @@ version_scheme = "no-guess-dev"
 [tool.pytest.ini_options]
 testpaths = ["test"]
 norecursedirs = ["dev-scripts", "doc", "examples", "benchmark"]
+markers = [
+    "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
+]
 
 [tool.coverage.run]
 branch = true
