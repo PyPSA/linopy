@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running Tests
 ```bash
-# Run all tests
+# Run all tests (excluding GPU tests by default)
 pytest
 
 # Run tests with coverage
@@ -17,7 +17,15 @@ pytest test/test_model.py
 
 # Run a specific test function
 pytest test/test_model.py::test_model_creation
+
+# Run GPU tests (requires GPU hardware and cuPDLPx installation)
+pytest --run-gpu
+
+# Run only GPU tests
+pytest -m gpu --run-gpu
 ```
+
+**GPU Testing**: Tests that require GPU hardware (e.g., cuPDLPx solver) are automatically skipped by default since CI machines typically don't have GPUs. To run GPU tests locally, use the `--run-gpu` flag. The tests are automatically marked with `@pytest.mark.gpu` based on solver capabilities.
 
 ### Linting and Type Checking
 ```bash
