@@ -59,6 +59,7 @@ docs = [
     "gurobipy==11.0.2",
     "ipykernel==6.29.5",
     "matplotlib==3.9.1",
+    "highspy>=1.7.1",
 ]
 dev = [
     "pytest",
