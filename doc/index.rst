@@ -37,7 +37,8 @@ flexible data-handling features:
 -  Use **lazy operations** for large linear programs with
    `dask <https://dask.org/>`__
 -  Choose from **different commercial and non-commercial solvers**
--  Fast **import and export** a linear model using xarray’s netcdf IO
+-  Fast **import and export** a linear model using xarray's netcdf IO
+-  Support for **GPU-accelerated solving** for large-scale problems
 -  Support of various solvers
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
@@ -48,6 +49,7 @@ flexible data-handling features:
    - `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__
    - `MOSEK <https://www.mosek.com/>`__
    - `COPT <https://www.shanshu.ai/copt>`__
+   - `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ (GPU-accelerated)
 
 
 
@@ -116,6 +118,7 @@ This package is published under MIT license.
    infeasible-model
    solve-on-remote
    solve-on-oetc
+   gpu-acceleration
    migrating-from-pyomo
    gurobi-double-logging
 

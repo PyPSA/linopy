@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from packaging.version import parse as parse_version
 
+import linopy.io
 from linopy.constants import (
     Result,
     Solution,
@@ -205,6 +206,16 @@ with contextlib.suppress(ModuleNotFoundError):
     except coptpy.CoptError:
         pass
 
+with contextlib.suppress(ModuleNotFoundError):
+    import cupdlpx
+
+    try:
+        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
+        available_solvers.append("cupdlpx")
+    except ImportError:
+        pass
+
+
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
@@ -236,6 +247,7 @@ class SolverName(enum.Enum):
     COPT = "copt"
     MindOpt = "mindopt"
     PIPS = "pips"
+    cuPDLPx = "cupdlpx"
 
 
 def path_to_string(path: Path) -> str:
@@ -2367,3 +2379,248 @@ class PIPS(Solver[None]):
         super().__init__(**solver_options)
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)
+
+
+class cuPDLPx(Solver[None]):
+    """
+    Solver subclass for the cuPDLPx solver. cuPDLPx must be installed
+    with working GPU support for usage. Find the installation instructions
+    at https://github.com/MIT-Lu-Lab/cuPDLPx.
+
+    The full list of solver options provided with the python interface
+    is documented at https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python.
+
+    Some example options are:
+    * LogToConsole : False by default.
+    * TimeLimit : 3600.0 by default.
+    * IterationLimit : 2147483647 by default.
+
+    Attributes
+    ----------
+    **solver_options
+        options for the given solver
+    """
+
+    def __init__(
+        self,
+        **solver_options: Any,
+    ) -> None:
+        super().__init__(**solver_options)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a problem file using the solver cuPDLPx.
+        cuPDLPx does not currently support its own file IO, so this function
+        reads the problem file using linopy (only support netcf files) and
+        then passes the model to cuPDLPx for solving.
+        If the solution is feasible the function returns the
+        objective, solution and dual constraint variables.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
+        """
+        logger.warning(
+            "cuPDLPx doesn't currently support file IO. Building model from file using linopy."
+        )
+        problem_fn_ = path_to_string(problem_fn)
+
+        if problem_fn_.endswith(".netcdf"):
+            model: Model = linopy.io.read_netcdf(problem_fn_)
+        else:
+            msg = "linopy currently only supports reading models from netcdf files. Try using io_api='direct' instead."
+            raise NotImplementedError(msg)
+
+        return self.solve_problem_from_model(
+            model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
+        )
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        """
+        Solve a linear problem directly from a linopy model using the solver cuPDLPx.
+        If the solution is feasible the function returns the
+        objective, solution and dual constraint variables.
+
+        Parameters
+        ----------
+        model : linopy.model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint names to the solver (default: False)
+
+        Returns
+        -------
+        Result
+        """
+
+        if model.type in ["QP", "MILP"]:
+            msg = "cuPDLPx does not currently support QP or MILP problems."
+            raise NotImplementedError(msg)
+
+        cu_model = model.to_cupdlpx()
+
+        return self._solve(
+            cu_model,
+            l_model=model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api="direct",
+            sense=model.sense,
+        )
+
+    def _solve(
+        self,
+        cu_model: cupdlpx.Model,
+        l_model: Model | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        io_api: str | None = None,
+        sense: str | None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a cupdlpx.Model object.
+
+        Parameters
+        ----------
+        cu_model: cupdlpx.Model
+            cupdlpx object.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        model : linopy.model, optional
+            Linopy model for the problem.
+        io_api: str
+            io_api of the problem. For direct API from linopy model this is "direct".
+        sense: str
+            "min" or "max"
+
+        Returns
+        -------
+        Result
+        """
+
+        # see https://github.com/MIT-Lu-Lab/cuPDLPx/blob/main/python/cupdlpx/PDLP.py
+        CONDITION_MAP: dict[int, TerminationCondition] = {
+            cupdlpx.PDLP.OPTIMAL: TerminationCondition.optimal,
+            cupdlpx.PDLP.PRIMAL_INFEASIBLE: TerminationCondition.infeasible,
+            cupdlpx.PDLP.DUAL_INFEASIBLE: TerminationCondition.infeasible_or_unbounded,
+            cupdlpx.PDLP.TIME_LIMIT: TerminationCondition.time_limit,
+            cupdlpx.PDLP.ITERATION_LIMIT: TerminationCondition.iteration_limit,
+            cupdlpx.PDLP.UNSPECIFIED: TerminationCondition.unknown,
+        }
+
+        self._set_solver_params(cu_model)
+
+        if warmstart_fn is not None:
+            # cuPDLPx supports warmstart, but there currently isn't the tooling
+            # to read it in from a file
+            raise NotImplementedError("Warmstarting not yet implemented for cuPDLPx.")
+        else:
+            cu_model.clearWarmStart()
+
+        if basis_fn is not None:
+            logger.warning("Basis files are not supported by cuPDLPx. Ignoring.")
+
+        if log_fn is not None:
+            logger.warning("Log files are not supported by cuPDLPx. Ignoring.")
+
+        # solve
+        cu_model.optimize()
+
+        # parse solution and output
+        if solution_fn is not None:
+            raise NotImplementedError(
+                "Solution file output not yet implemented for cuPDLPx."
+            )
+
+        termination_condition = CONDITION_MAP.get(
+            cu_model.StatusCode, cu_model.StatusCode
+        )
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = cu_model.Status  # cuPDLPx status message
+
+        def get_solver_solution() -> Solution:
+            objective = cu_model.ObjVal
+
+            vlabels = None if l_model is None else l_model.matrices.vlabels
+            clabels = None if l_model is None else l_model.matrices.clabels
+
+            sol = pd.Series(cu_model.X, vlabels, dtype=float)
+            dual = pd.Series(cu_model.Pi, clabels, dtype=float)
+
+            if cu_model.ModelSense == cupdlpx.PDLP.MAXIMIZE:
+                dual *= -1  # flip sign of duals for max problems
+
+            return Solution(sol, dual, objective)
+
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+        # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
+        return Result(status, solution, cu_model)
+
+    def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
+        """
+        Set solver options for cuPDLPx model.
+
+        For list of available options, see
+        https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#parameters
+        """
+        for k, v in self.solver_options.items():
+            cu_model.setParam(k, v)

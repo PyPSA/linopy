@@ -30,11 +30,14 @@ Install a solver
 
 Linopy won't work without a solver. Currently, the following solvers are supported:
 
+CPU-based solvers
+~~~~~~~~~~~~~~~~~
+
 -  `Cbc <https://projects.coin-or.org/Cbc>`__ - open source, free, fast
 -  `GLPK <https://www.gnu.org/software/glpk/>`__ - open source, free, not very fast
 -  `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__ - open source, free, fast
 -  `Gurobi <https://www.gurobi.com/>`__  - closed source, commercial, very fast
--  `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__ - closed source, commercial, very fast
+-  `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__ - closed source, commercial, very fast (GPU acceleration available in v9.8+)
 -  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
 -  `MOSEK <https://www.mosek.com/>`__
 -  `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__ -
@@ -52,6 +55,20 @@ We recommend to install the HiGHS solver if possible, which is free and open sou
 .. code:: bash
 
     pip install highspy
+
+
+GPU-accelerated solvers
+~~~~~~~~~~~~~~~~~~~~~~~
+
+For large-scale optimization problems, GPU-accelerated solvers can provide significant performance improvements:
+
+-  `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ - open source, GPU-accelerated first-order solver
+
+**Note:** GPU solvers require compatible NVIDIA GPU hardware and CUDA installation. See the :doc:`gpu-acceleration` guide for detailed setup instructions.
+
+.. code:: bash
+
+    pip install cupdlpx
 
 
 For most of the other solvers, please click on the links to get further installation information.
