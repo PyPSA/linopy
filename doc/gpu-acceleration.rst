@@ -12,7 +12,7 @@ cuPDLPx
 
 `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`_ is an open-source, GPU-accelerated first-order solver developed by MIT. It implements a Primal-Dual hybrid gradient (PDHG) method optimized for GPUs.
 
-Install with
+To install it, you have to have the `CUDA Toolkit <https://developer.nvidia.com/cuda/toolkit>`_ installed requiring NVIDIA GPUs on your computer. Then, install with
 
 .. code-block:: bash
 
