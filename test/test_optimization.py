@@ -19,8 +19,8 @@ from xarray.testing import assert_allclose, assert_equal
 
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
-from linopy.scaling import ScaleOptions
 from linopy.expressions import LinearExpression
+from linopy.scaling import ScaleOptions
 from linopy.solver_capabilities import (
     SolverFeature,
     get_available_solvers_with_feature,
