@@ -36,8 +36,9 @@ dependencies = [
     "polars",
     "tqdm",
     "deprecation",
+    "packaging",
     "google-cloud-storage",
-    "requests"
+    "requests",
 ]
 
 [project.urls]
@@ -58,6 +59,7 @@ docs = [
     "gurobipy==11.0.2",
     "ipykernel==6.29.5",
     "matplotlib==3.9.1",
+    "highspy>=1.7.1",
 ]
 dev = [
     "pytest",
@@ -81,6 +83,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    # "cupdlpx>=0.1.2", pip package currently unstable
 ]
 
 [tool.setuptools.packages.find]
@@ -96,15 +99,16 @@ version_scheme = "no-guess-dev"
 [tool.pytest.ini_options]
 testpaths = ["test"]
 norecursedirs = ["dev-scripts", "doc", "examples", "benchmark"]
+markers = [
+    "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
+]
 
 [tool.coverage.run]
 branch = true
 source = ["linopy"]
 omit = ["test/*"]
 [tool.coverage.report]
-exclude_also = [
-    "if TYPE_CHECKING:",
-]
+exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
 exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']

@@ -50,6 +50,7 @@ from linopy.expressions import (
 )
 from linopy.io import (
     to_block_files,
+    to_cupdlpx,
     to_file,
     to_gurobipy,
     to_highspy,
@@ -1124,6 +1125,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
+        mock_solve: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1191,6 +1193,8 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        mock_solve : bool, optional
+            Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1200,6 +1204,11 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        if mock_solve:
+            return self._mock_solve(
+                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
@@ -1375,6 +1384,40 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
+    def _mock_solve(
+        self,
+        sanitize_zeros: bool = True,
+        sanitize_infinities: bool = True,
+    ) -> tuple[str, str]:
+        solver_name = "mock"
+
+        # clear cached matrix properties potentially present from previous solve commands
+        self.matrices.clean_cached_properties()
+
+        logger.info(f" Solve problem using {solver_name.title()} solver")
+        # reset result
+        self.reset_solution()
+
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
+
+        self.objective._value = 0.0
+        self.status = "ok"
+        self.termination_condition = TerminationCondition.optimal.value
+        self.solver_model = None
+        self.solver_name = solver_name
+
+        for name, var in self.variables.items():
+            var.solution = xr.DataArray(0.0, var.coords)
+
+        for name, con in self.constraints.items():
+            con.dual = xr.DataArray(0.0, con.labels.coords)
+
+        return "ok", "none"
+
     def compute_infeasibilities(self) -> list[int]:
         """
         Compute a set of infeasible constraints.
@@ -1458,7 +1501,10 @@ class Model:
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Xpress solver."""
         # Compute all IIS
-        solver_model.iisall()
+        try:  # Try new API first
+            solver_model.IISAll()
+        except AttributeError:  # Fallback to old API
+            solver_model.iisall()
 
         # Get the number of IIS found
         num_iis = solver_model.attributes.numiis
@@ -1502,28 +1548,55 @@ class Model:
         list[Any]
             List of xpress.constraint objects in the IIS
         """
-        # Prepare lists to receive IIS data
-        miisrow: list[Any] = []  # xpress.constraint objects in the IIS
-        miiscol: list[Any] = []  # xpress.variable objects in the IIS
-        constrainttype: list[str] = []  # Constraint types ('L', 'G', 'E')
-        colbndtype: list[str] = []  # Column bound types
-        duals: list[float] = []  # Dual values
-        rdcs: list[float] = []  # Reduced costs
-        isolationrows: list[str] = []  # Row isolation info
-        isolationcols: list[str] = []  # Column isolation info
+        # Declare variables before try/except to avoid mypy redefinition errors
+        miisrow: list[Any]
+        miiscol: list[Any]
+        constrainttype: list[str]
+        colbndtype: list[str]
+        duals: list[float]
+        rdcs: list[float]
+        isolationrows: list[str]
+        isolationcols: list[str]
 
-        # Get IIS data from Xpress
-        solver_model.getiisdata(
-            iis_num,
-            miisrow,
-            miiscol,
-            constrainttype,
-            colbndtype,
-            duals,
-            rdcs,
-            isolationrows,
-            isolationcols,
-        )
+        try:  # Try new API first
+            (
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            ) = solver_model.getIISData(iis_num)
+
+            # Transform list of indices to list of constraint objects
+            for i in range(len(miisrow)):
+                miisrow[i] = solver_model.getConstraint(miisrow[i])
+
+        except AttributeError:  # Fallback to old API
+            # Prepare lists to receive IIS data
+            miisrow = []  # xpress.constraint objects in the IIS
+            miiscol = []  # xpress.variable objects in the IIS
+            constrainttype = []  # Constraint types ('L', 'G', 'E')
+            colbndtype = []  # Column bound types
+            duals = []  # Dual values
+            rdcs = []  # Reduced costs
+            isolationrows = []  # Row isolation info
+            isolationcols = []  # Column isolation info
+
+            # Get IIS data from Xpress
+            solver_model.getiisdata(
+                iis_num,
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            )
 
         return miisrow
 
@@ -1588,5 +1661,7 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
