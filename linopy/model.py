@@ -1124,6 +1124,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
+        mock_solve: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1191,6 +1192,8 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        mock_solve : bool, optional
+            Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1200,6 +1203,11 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        if mock_solve:
+            return self._mock_solve(
+                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
@@ -1374,6 +1382,40 @@ class Model:
                 con.dual = xr.DataArray(vals, con.labels.coords)
 
         return result.status.status.value, result.status.termination_condition.value
+
+    def _mock_solve(
+        self,
+        sanitize_zeros: bool = True,
+        sanitize_infinities: bool = True,
+    ) -> tuple[str, str]:
+        solver_name = "mock"
+
+        # clear cached matrix properties potentially present from previous solve commands
+        self.matrices.clean_cached_properties()
+
+        logger.info(f" Solve problem using {solver_name.title()} solver")
+        # reset result
+        self.reset_solution()
+
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
+
+        self.objective._value = 0.0
+        self.status = "ok"
+        self.termination_condition = TerminationCondition.optimal.value
+        self.solver_model = None
+        self.solver_name = solver_name
+
+        for name, var in self.variables.items():
+            var.solution = xr.DataArray(0.0, var.coords)
+
+        for name, con in self.constraints.items():
+            con.dual = xr.DataArray(0.0, con.labels.coords)
+
+        return "ok", "none"
 
     def compute_infeasibilities(self) -> list[int]:
         """
