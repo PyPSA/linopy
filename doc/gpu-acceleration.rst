@@ -2,6 +2,10 @@
 GPU-Accelerated Solving
 ========================
 
+.. warning::
+
+   This feature is **experimental** and not tested in CI due to the lack of GPU-enabled machines. Use with caution and please report any issues.
+
 Linopy supports GPU-accelerated optimization solvers that can significantly speed up solving large-scale linear programming problems by leveraging the parallel processing capabilities of modern GPUs.
 
 Supported GPU Solvers
