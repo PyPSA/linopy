@@ -15,7 +15,7 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
-from linopy.io import signed_number_expr
+from linopy.io import signed_number
 from linopy.testing import assert_model_equal
 
 
@@ -223,26 +223,26 @@ def test_to_blocks(tmp_path: Path) -> None:
 
 
 class TestSignedNumberExpr:
-    """Test the signed_number_expr helper function for LP file formatting."""
+    """Test the signed_number helper function for LP file formatting."""
 
     def test_positive_numbers(self) -> None:
         """Positive numbers should get a '+' prefix."""
         df = pl.DataFrame({"value": [1.0, 2.5, 100.0]})
-        result = df.select(pl.concat_str(signed_number_expr("value")))
+        result = df.select(pl.concat_str(signed_number(pl.col("value"))))
         values = result.to_series().to_list()
         assert values == ["+1.0", "+2.5", "+100.0"]
 
     def test_negative_numbers(self) -> None:
         """Negative numbers should not get a '+' prefix (already have '-')."""
         df = pl.DataFrame({"value": [-1.0, -2.5, -100.0]})
-        result = df.select(pl.concat_str(signed_number_expr("value")))
+        result = df.select(pl.concat_str(signed_number(pl.col("value"))))
         values = result.to_series().to_list()
         assert values == ["-1.0", "-2.5", "-100.0"]
 
     def test_positive_zero(self) -> None:
         """Positive zero should get a '+' prefix."""
         df = pl.DataFrame({"value": [0.0]})
-        result = df.select(pl.concat_str(signed_number_expr("value")))
+        result = df.select(pl.concat_str(signed_number(pl.col("value"))))
         values = result.to_series().to_list()
         assert values == ["+0.0"]
 
@@ -251,7 +251,7 @@ class TestSignedNumberExpr:
         # Create negative zero using numpy
         neg_zero = np.float64(-0.0)
         df = pl.DataFrame({"value": [neg_zero]})
-        result = df.select(pl.concat_str(signed_number_expr("value")))
+        result = df.select(pl.concat_str(signed_number(pl.col("value"))))
         values = result.to_series().to_list()
         # The key assertion: should NOT be "+-0.0", -0.0 is normalized to +0.0
         assert values == ["+0.0"]
@@ -261,7 +261,7 @@ class TestSignedNumberExpr:
         """Test a mix of positive, negative, and zero values."""
         neg_zero = np.float64(-0.0)
         df = pl.DataFrame({"value": [1.0, -1.0, 0.0, neg_zero, 2.5, -2.5]})
-        result = df.select(pl.concat_str(signed_number_expr("value")))
+        result = df.select(pl.concat_str(signed_number(pl.col("value"))))
         values = result.to_series().to_list()
         # -0.0 is normalized to +0.0
         assert values == ["+1.0", "-1.0", "+0.0", "+0.0", "+2.5", "-2.5"]

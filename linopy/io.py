@@ -52,31 +52,24 @@ def clean_name(name: str) -> str:
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
-def signed_number_expr(col_name: str) -> list[pl.Expr]:
+def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     """
     Return polars expressions for a signed number string, handling -0.0 correctly.
 
-    This function returns two expressions: a sign prefix ('+' or '') and the
-    number cast to string. It normalizes -0.0 to +0.0 to avoid producing invalid
-    LP file syntax like "+-0.0" (which occurs because -0.0 >= 0 is True but
-    str(-0.0) is "-0.0").
-
     Parameters
     ----------
-    col_name : str
-        Name of the column containing the numeric value.
+    expr : pl.Expr
+        Numeric value
 
     Returns
     -------
-    list[pl.Expr]
-        Two polars expressions: [sign_prefix, value_string]
+    tuple[pl.Expr, pl.Expr]
+        value_string with sign
     """
-    # Cast to Float64 first to handle columns that are entirely null (dtype `null`)
-    value = pl.col(col_name).cast(pl.Float64)
-    # Normalize -0.0 to +0.0: if abs(x) == 0 then 0.0 else x
-    normalized = pl.when(value.abs() == 0).then(pl.lit(0.0)).otherwise(value)
-    sign_prefix = pl.when(normalized >= 0).then(pl.lit("+")).otherwise(pl.lit(""))
-    return [sign_prefix, normalized.cast(pl.String)]
+    return (
+        pl.when(expr >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.when(expr == 0).then(pl.lit("0.0")).otherwise(expr.cast(pl.String)),
+    )
 
 
 def print_coord(coord: str) -> str:
@@ -157,7 +150,7 @@ def objective_write_linear_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        *signed_number_expr("coeffs"),
+        *signed_number(pl.col("coeffs")),
         *print_variable(pl.col("vars")),
     ]
     df = df.select(pl.concat_str(cols, ignore_nulls=True))
@@ -169,10 +162,8 @@ def objective_write_linear_terms(
 def objective_write_quadratic_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
-    # Create doubled coefficient column for proper sign handling with -0.0
-    df = df.with_columns(pl.col("coeffs").mul(2).alias("coeffs_doubled"))
     cols = [
-        *signed_number_expr("coeffs_doubled"),
+        *signed_number(pl.col("coeffs").mul(2)),
         *print_variable(pl.col("vars1")),
         pl.lit(" *"),
         *print_variable(pl.col("vars2")),
@@ -254,11 +245,11 @@ def bounds_to_file(
             df = var_slice.to_polars()
 
             columns = [
-                *signed_number_expr("lower"),
+                *signed_number(pl.col("lower")),
                 pl.lit(" <= "),
                 *print_variable(pl.col("labels")),
                 pl.lit(" <= "),
-                *signed_number_expr("upper"),
+                *signed_number(pl.col("upper")),
             ]
 
             kwargs: Any = dict(
@@ -486,7 +477,7 @@ def constraints_to_file(
                 pl.when(pl.col("labels_first").is_not_null())
                 .then(pl.lit(":\n"))
                 .alias(":"),
-                *signed_number_expr("coeffs"),
+                *signed_number(pl.col("coeffs")),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
