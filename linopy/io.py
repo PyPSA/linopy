@@ -54,6 +54,26 @@ def clean_name(name: str) -> str:
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
+def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
+    """
+    Return polars expressions for a signed number string, handling -0.0 correctly.
+
+    Parameters
+    ----------
+    expr : pl.Expr
+        Numeric value
+
+    Returns
+    -------
+    tuple[pl.Expr, pl.Expr]
+        value_string with sign
+    """
+    return (
+        pl.when(expr >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.when(expr == 0).then(pl.lit("0.0")).otherwise(expr.cast(pl.String)),
+    )
+
+
 def print_coord(coord: str) -> str:
     from linopy.common import print_coord
 
@@ -132,8 +152,7 @@ def objective_write_linear_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").cast(pl.String),
+        *signed_number(pl.col("coeffs")),
         *print_variable(pl.col("vars")),
     ]
     df = df.select(pl.concat_str(cols, ignore_nulls=True))
@@ -146,8 +165,7 @@ def objective_write_quadratic_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").mul(2).cast(pl.String),
+        *signed_number(pl.col("coeffs").mul(2)),
         *print_variable(pl.col("vars1")),
         pl.lit(" *"),
         *print_variable(pl.col("vars2")),
@@ -229,13 +247,11 @@ def bounds_to_file(
             df = var_slice.to_polars()
 
             columns = [
-                pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("lower").cast(pl.String),
+                *signed_number(pl.col("lower")),
                 pl.lit(" <= "),
                 *print_variable(pl.col("labels")),
                 pl.lit(" <= "),
-                pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("upper").cast(pl.String),
+                *signed_number(pl.col("upper")),
             ]
 
             kwargs: Any = dict(
@@ -463,8 +479,7 @@ def constraints_to_file(
                 pl.when(pl.col("labels_first").is_not_null())
                 .then(pl.lit(":\n"))
                 .alias(":"),
-                pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
-                pl.col("coeffs").cast(pl.String),
+                *signed_number(pl.col("coeffs")),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
                 pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
