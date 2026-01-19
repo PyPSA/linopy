@@ -887,6 +887,9 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     # build model using canonical form matrices and vectors
     # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#modeling
     M = m.matrices
+    if M.A is None:
+        msg = "Model has no constraints, cannot export to cuPDLPx."
+        raise ValueError(msg)
     A = M.A.tocsr()  # cuPDLPx only supports CSR sparse matrix format
     # linopy stores constraints as Ax ?= b and keeps track of inequality
     # sense in M.sense. Convert to separate lower and upper bound vectors.
