@@ -150,6 +150,7 @@ Fri    0          4
 * [Cplex](https://www.ibm.com/de-de/analytics/cplex-optimizer)
 * [MOSEK](https://www.mosek.com/)
 * [COPT](https://www.shanshu.ai/copt)
+* [cuPDLPx](https://github.com/MIT-Lu-Lab/cuPDLPx)
 
 Note that these do have to be installed by the user separately.
 

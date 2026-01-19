@@ -30,6 +30,7 @@ from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
@@ -41,10 +42,10 @@ from linopy.common import (
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
-    is_constant,
     iterate_slices,
     print_coord,
     print_single_variable,
+    require_constant,
     save_join,
     set_int_index,
     to_dataframe,
@@ -52,6 +53,7 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -193,6 +195,14 @@ class Variable:
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
+        if "sos_type" in data.attrs or "sos_dim" in data.attrs:
+            if (sos_type := data.attrs.get("sos_type")) not in (1, 2):
+                raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
+            if (sos_dim := data.attrs.get("sos_dim")) not in data.dims:
+                raise ValueError(
+                    f"sos_dim must name a variable dimension, got {sos_dim}"
+                )
+
         self._data = data
         self._model = model
 
@@ -318,6 +328,8 @@ class Variable:
         dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
+        sos_type = self.attrs.get("sos_type")
+        sos_dim = self.attrs.get("sos_dim")
         lines = []
 
         if dims:
@@ -339,9 +351,11 @@ class Variable:
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
+            sos_str = f" - sos{sos_type} on {sos_dim}" if sos_type and sos_dim else ""
             lines.insert(
                 0,
-                f"Variable ({shape_str}){mask_str}\n{'-' * (len(shape_str) + len(mask_str) + 11)}",
+                f"Variable ({shape_str}){mask_str}{sos_str}\n"
+                f"{'-' * (len(shape_str) + len(mask_str) + len(sos_str) + 11)}",
             )
         else:
             lines.append(
@@ -762,7 +776,7 @@ class Variable:
         return self.data.upper
 
     @upper.setter
-    @is_constant
+    @require_constant
     def upper(self, value: ConstantLike) -> None:
         """
         Set the upper bounds of the variables.
@@ -786,7 +800,7 @@ class Variable:
         return self.data.lower
 
     @lower.setter
-    @is_constant
+    @require_constant
     def lower(self, value: ConstantLike) -> None:
         """
         Set the lower bounds of the variables.
@@ -848,7 +862,9 @@ class Variable:
         xr.DataArray
         """
         solver_model = self.model.solver_model
-        if self.model.solver_name != "gurobi":
+        if not solver_supports(
+            self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+        ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."
             )
@@ -1166,6 +1182,7 @@ class Variables:
 
     data: dict[str, Variable]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1227,6 +1244,10 @@ class Variables:
                 if ds.coords
                 else ""
             )
+            if (sos_type := ds.attrs.get("sos_type")) in (1, 2) and (
+                sos_dim := ds.attrs.get("sos_dim")
+            ):
+                coords += f" - sos{sos_type} on {sos_dim}"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1256,12 +1277,19 @@ class Variables:
         Add a variable to the variables container.
         """
         self.data[variable.name] = variable
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove variable `name` from the variables.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
 
     @property
     def attrs(self) -> dict[Any, Any]:
@@ -1321,7 +1349,14 @@ class Variables:
 
         These excludes variables with missing labels.
         """
-        return len(self.flat.labels.unique())
+        total = 0
+        for var in self.data.values():
+            labels = var.labels.values
+            if var.mask is not None:
+                total += int((labels[var.mask.values] != -1).sum())
+            else:
+                total += int((labels != -1).sum())
+        return total
 
     @property
     def binaries(self) -> Variables:
@@ -1353,6 +1388,21 @@ class Variables:
                 name: self.data[name]
                 for name in self
                 if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+            },
+            self.model,
+        )
+
+    @property
+    def sos(self) -> Variables:
+        """
+        Get all variables involved in an sos constraint.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("sos_dim")
+                and self[name].attrs.get("sos_type") in (1, 2)
             },
             self.model,
         )
@@ -1418,8 +1468,36 @@ class Variables:
     def get_label_position(self, values: int | ndarray) -> Any:
         """
         Get tuple of name and coordinate for variable labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position(self, values, self._label_position_index)
+
+    def get_label_position_with_index(
+        self, label: int
+    ) -> tuple[str, dict, tuple[int, ...]] | tuple[None, None, None]:
+        """
+        Get name, coordinate, and raw numpy index for a single variable label.
+
+        This is an optimized version that also returns the raw index for direct
+        numpy array access, avoiding xarray's .sel() overhead.
+
+        Parameters
+        ----------
+        label : int
+            The variable label to look up.
+
+        Returns
+        -------
+        tuple
+            (name, coord, index) where index is a tuple for numpy indexing,
+            or (None, None, None) if label is -1.
+        """
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return self._label_position_index.find_single_with_index(label)
 
     def print_labels(self, values: list[int]) -> None:
         """
