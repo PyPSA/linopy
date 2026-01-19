@@ -2,7 +2,7 @@ Release Notes
 =============
 
 .. Upcoming Version
-
+* Add ``mock_solve`` option to model.solve for quick testing without actual solving
 * Bugfix for missing dependency for jupyter notebook example in documentation
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add simplify method to LinearExpression to combine duplicate terms
