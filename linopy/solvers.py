@@ -2437,7 +2437,7 @@ class cuPDLPx(Solver[None]):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: EnvType | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the solver cuPDLPx.
@@ -2493,8 +2493,9 @@ class cuPDLPx(Solver[None]):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: EnvType | None = None,
+        env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the solver cuPDLPx.
@@ -2517,6 +2518,8 @@ class cuPDLPx(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        matrices : MatrixAccessor | ScaledMatrices, optional
+            Pre-computed matrices for the problem (default: None)
 
         Returns
         -------
