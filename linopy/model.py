@@ -65,6 +65,7 @@ from linopy.solvers import (
     IO_APIS,
     available_solvers,
 )
+from linopy.sos_reformulation import reformulate_all_sos
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -842,6 +843,45 @@ class Model:
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
 
+    def reformulate_sos_constraints(self, prefix: str = "_sos_reform_") -> list[str]:
+        """
+        Reformulate SOS constraints as binary + linear constraints.
+
+        This converts SOS1 and SOS2 constraints into equivalent binary variable
+        formulations using the Big-M method. This allows solving models with SOS
+        constraints using solvers that don't support them natively (e.g., HiGHS, GLPK).
+
+        Note: This requires all SOS variables to have finite bounds, as the Big-M
+        values are computed from the variable bounds.
+
+        Parameters
+        ----------
+        prefix : str, optional
+            Prefix for naming auxiliary variables and constraints.
+            Default is "_sos_reform_".
+
+        Returns
+        -------
+        list[str]
+            List of variable names that were reformulated.
+
+        Raises
+        ------
+        ValueError
+            If any SOS variable has infinite bounds.
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> x = m.add_variables(
+        ...     lower=0, upper=1, coords=[pd.Index([0, 1, 2], name="i")], name="x"
+        ... )
+        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        >>> m.reformulate_sos_constraints()  # Now solvable with HiGHS
+        ['x']
+        """
+        return reformulate_all_sos(self, prefix=prefix)
+
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
@@ -1126,6 +1166,7 @@ class Model:
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         mock_solve: bool = False,
+        reformulate_sos: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1195,6 +1236,11 @@ class Model:
             than 10000 variables and constraints.
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
+        reformulate_sos : bool, optional
+            Whether to automatically reformulate SOS constraints as binary + linear
+            constraints for solvers that don't support them natively.
+            This uses the Big-M method and requires all SOS variables to have finite bounds.
+            Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1293,10 +1339,17 @@ class Model:
             )
 
         # SOS constraints are not supported by all solvers
-        if self.variables.sos and not solver_supports(
-            solver_name, SolverFeature.SOS_CONSTRAINTS
-        ):
-            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
+        if self.variables.sos:
+            if reformulate_sos and not solver_supports(
+                solver_name, SolverFeature.SOS_CONSTRAINTS
+            ):
+                logger.info(f"Reformulating SOS constraints for solver {solver_name}")
+                self.reformulate_sos_constraints()
+            elif not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS):
+                raise ValueError(
+                    f"Solver {solver_name} does not support SOS constraints. "
+                    "Use reformulate_sos=True or a solver that supports SOS (gurobi, cplex)."
+                )
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
