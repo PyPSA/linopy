@@ -575,17 +575,14 @@ class Model:
             Big-M value(s) for SOS reformulation. Only used when reformulating
             SOS constraints for solvers that don't support them natively.
 
-            - None (default): Use variable bounds as Big-M (tightest valid choice)
+            - None (default): Use variable bounds as Big-M
             - float: Symmetric Big-M (M_upper = big_m, M_lower = -big_m)
             - tuple (upper, lower): Asymmetric Big-M values
 
-            The Big-M values are used in constraints:
-            - x <= M_upper * y  (upper linking)
-            - x >= M_lower * y  (lower linking, M_lower should be negative)
+            The reformulation uses the tighter of big_m and variable bounds:
+            M_upper = min(big_m_upper, var.upper), M_lower = max(big_m_lower, var.lower).
 
             Tighter Big-M values improve LP relaxation quality and solve time.
-            If you know tighter effective bounds from other constraints in your
-            model, specifying them here can significantly improve performance.
         """
         if sos_type not in (1, 2):
             raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")

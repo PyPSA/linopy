@@ -63,11 +63,11 @@ def validate_bounds_for_reformulation(var: Variable) -> None:
 
 def compute_big_m_values(var: Variable) -> tuple[DataArray, DataArray]:
     """
-    Compute Big-M values from variable bounds or custom big_m attributes.
+    Compute Big-M values from variable bounds and custom big_m attributes.
 
-    If custom big_m values were specified via add_sos_constraints(big_m=...),
-    those are used (broadcast to variable dimensions). Otherwise, the variable
-    bounds are used as the tightest valid Big-M values.
+    Uses the tighter of variable bounds and custom big_m values. This ensures
+    the best possible LP relaxation - a loose big_m won't make things worse
+    if variable bounds are already tight.
 
     Parameters
     ----------
@@ -87,16 +87,18 @@ def compute_big_m_values(var: Variable) -> tuple[DataArray, DataArray]:
     big_m_upper = var.attrs.get("big_m_upper")
     big_m_lower = var.attrs.get("big_m_lower")
 
+    # Start with variable bounds
+    M_upper = var.upper
+    M_lower = var.lower
+
+    # Use tighter of custom big_m and variable bounds
     if big_m_upper is not None:
-        # Broadcast scalar to variable dimensions using xr.full_like
-        M_upper = xr.full_like(var.labels, big_m_upper, dtype=float)
-    else:
-        M_upper = var.upper
+        custom_upper = xr.full_like(var.labels, big_m_upper, dtype=float)
+        M_upper = xr.where(custom_upper < M_upper, custom_upper, M_upper)
 
     if big_m_lower is not None:
-        M_lower = xr.full_like(var.labels, big_m_lower, dtype=float)
-    else:
-        M_lower = var.lower
+        custom_lower = xr.full_like(var.labels, big_m_lower, dtype=float)
+        M_lower = xr.where(custom_lower > M_lower, custom_lower, M_lower)
 
     return M_upper, M_lower
 

@@ -102,14 +102,17 @@ class TestComputeBigM:
         assert np.allclose(M_lower.values, [-1, -2, -3])
 
     def test_custom_big_m_scalar(self) -> None:
-        """Test Big-M with custom scalar value."""
+        """Test Big-M uses tighter of custom value and bounds."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
         M_upper, M_lower = compute_big_m_values(x)
+        # big_m=10 gives big_m_upper=10, big_m_lower=-10
+        # M_upper = min(10, 100) = 10 (custom is tighter)
+        # M_lower = max(-10, 0) = 0 (bound is tighter)
         assert np.allclose(M_upper.values, [10, 10, 10])
-        assert np.allclose(M_lower.values, [-10, -10, -10])
+        assert np.allclose(M_lower.values, [0, 0, 0])
 
     def test_custom_big_m_tuple(self) -> None:
         """Test Big-M with custom tuple (upper, lower)."""

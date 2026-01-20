@@ -335,6 +335,15 @@ Big-M values than the variable bounds. This is useful when:
     # Tuple of scalars: asymmetric (M_upper = 10, M_lower = -5)
     m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(10, -5))
 
+.. note::
+
+   The reformulation uses the **tighter** of custom ``big_m`` and variable bounds:
+
+   - ``M_upper = min(big_m_upper, var.upper)``
+   - ``M_lower = max(big_m_lower, var.lower)``
+
+   This ensures a loose ``big_m`` won't make the relaxation worse than using bounds alone.
+
 **Why tighter Big-M matters:**
 
 Tighter Big-M values lead to:
