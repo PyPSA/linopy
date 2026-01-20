@@ -557,6 +557,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
+        big_m: float | tuple[float, float] | None = None,
     ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
@@ -570,6 +571,21 @@ class Model:
             Type of SOS
         sos_dim : str
             Which dimension of variable to add SOS constraint to
+        big_m : float | tuple[float, float] | None, optional
+            Big-M value(s) for SOS reformulation. Only used when reformulating
+            SOS constraints for solvers that don't support them natively.
+
+            - None (default): Use variable bounds as Big-M (tightest valid choice)
+            - float: Symmetric Big-M (M_upper = big_m, M_lower = -big_m)
+            - tuple (upper, lower): Asymmetric Big-M values
+
+            The Big-M values are used in constraints:
+            - x <= M_upper * y  (upper linking)
+            - x >= M_lower * y  (lower linking, M_lower should be negative)
+
+            Tighter Big-M values improve LP relaxation quality and solve time.
+            If you know tighter effective bounds from other constraints in your
+            model, specifying them here can significantly improve performance.
         """
         if sos_type not in (1, 2):
             raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
@@ -590,7 +606,22 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
+        # Process and store big_m values
+        attrs_update: dict[str, Any] = {"sos_type": sos_type, "sos_dim": sos_dim}
+        if big_m is not None:
+            if isinstance(big_m, tuple):
+                if len(big_m) != 2:
+                    raise ValueError(
+                        "big_m tuple must have exactly 2 elements (upper, lower)"
+                    )
+                attrs_update["big_m_upper"] = float(big_m[0])
+                attrs_update["big_m_lower"] = float(big_m[1])
+            else:
+                # Scalar: symmetric (upper = big_m, lower = -big_m)
+                attrs_update["big_m_upper"] = float(big_m)
+                attrs_update["big_m_lower"] = -float(big_m)
+
+        variable.attrs.update(attrs_update)
 
     def add_constraints(
         self,
@@ -839,6 +870,10 @@ class Model:
 
         del variable.attrs["sos_type"], variable.attrs["sos_dim"]
 
+        # Also remove big_m attributes if present
+        variable.attrs.pop("big_m_upper", None)
+        variable.attrs.pop("big_m_lower", None)
+
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
@@ -851,8 +886,9 @@ class Model:
         formulations using the Big-M method. This allows solving models with SOS
         constraints using solvers that don't support them natively (e.g., HiGHS, GLPK).
 
-        Note: This requires all SOS variables to have finite bounds, as the Big-M
-        values are computed from the variable bounds.
+        Big-M values are determined as follows:
+        1. If custom big_m was specified in add_sos_constraints(), use that
+        2. Otherwise, use the variable bounds (tightest valid Big-M)
 
         Parameters
         ----------
@@ -868,7 +904,7 @@ class Model:
         Raises
         ------
         ValueError
-            If any SOS variable has infinite bounds.
+            If any SOS variable has infinite bounds and no custom big_m was specified.
 
         Examples
         --------
@@ -879,6 +915,10 @@ class Model:
         >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i")
         >>> m.reformulate_sos_constraints()  # Now solvable with HiGHS
         ['x']
+
+        With custom big_m for tighter relaxation:
+
+        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=0.5)
         """
         return reformulate_all_sos(self, prefix=prefix)
 

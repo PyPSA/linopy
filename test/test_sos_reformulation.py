@@ -101,6 +101,37 @@ class TestComputeBigM:
         assert np.allclose(M_upper.values, [1, 2, 3])
         assert np.allclose(M_lower.values, [-1, -2, -3])
 
+    def test_custom_big_m_scalar(self) -> None:
+        """Test Big-M with custom scalar value."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+        M_upper, M_lower = compute_big_m_values(x)
+        assert np.allclose(M_upper.values, [10, 10, 10])
+        assert np.allclose(M_lower.values, [-10, -10, -10])
+
+    def test_custom_big_m_tuple(self) -> None:
+        """Test Big-M with custom tuple (upper, lower)."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=-100, upper=100, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(5, -3))
+        M_upper, M_lower = compute_big_m_values(x)
+        assert np.allclose(M_upper.values, [5, 5, 5])
+        assert np.allclose(M_lower.values, [-3, -3, -3])
+
+    def test_custom_big_m_allows_infinite_bounds(self) -> None:
+        """Test that custom big_m allows variables with infinite bounds."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+        # Should not raise - custom big_m bypasses bound validation
+        validate_bounds_for_reformulation(x)
+        M_upper, M_lower = compute_big_m_values(x)
+        assert np.allclose(M_upper.values, [10, 10, 10])
+
 
 class TestSOS1Reformulation:
     """Tests for SOS1 reformulation."""
@@ -616,3 +647,76 @@ class TestEdgeCases:
         z = m.variables["_sos_reform_lambda_z"]
         # Segment indicators have n-1 = 2 elements
         assert z.sizes["bp"] == 2
+
+    def test_custom_big_m_removed_on_remove_sos(self) -> None:
+        """Test that custom big_m attributes are removed with SOS constraint."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+
+        assert "big_m_upper" in x.attrs
+        assert "big_m_lower" in x.attrs
+
+        m.remove_sos_constraints(x)
+
+        assert "big_m_upper" not in x.attrs
+        assert "big_m_lower" not in x.attrs
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestCustomBigM:
+    """Tests for custom Big-M functionality."""
+
+    def test_solve_with_custom_big_m(self) -> None:
+        """Test solving with custom big_m value."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        # Large bounds but tight effective constraint
+        x = m.add_variables(lower=0, upper=1000, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=1)
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        # With big_m=1, maximum should be 3 (x[2]=1)
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+    def test_solve_with_infinite_bounds_and_custom_big_m(self) -> None:
+        """Test solving with infinite bounds but custom big_m."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=5)
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        # Should work because big_m is specified
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        assert m.objective.value is not None
+        # Max is 15 (x[2]=5)
+        assert np.isclose(m.objective.value, 15, atol=1e-5)
+
+    def test_custom_big_m_tuple(self) -> None:
+        """Test solving with asymmetric big_m tuple."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=-100, upper=100, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(2, -1))
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        # Max is 6 (x[2]=2, limited by big_m_upper=2)
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 6, atol=1e-5)
+
+    def test_big_m_invalid_tuple_length(self) -> None:
+        """Test that invalid tuple length raises error."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+
+        with pytest.raises(ValueError, match="exactly 2 elements"):
+            m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(1, 2, 3))

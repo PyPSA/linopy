@@ -298,17 +298,61 @@ You can also reformulate manually before solving:
 Requirements
 ~~~~~~~~~~~~
 
-**Finite bounds are required.** The reformulation uses the Big-M method, which
-derives M values from the variable bounds. If any SOS variable has infinite
-bounds, a ``ValueError`` is raised:
+**Finite bounds or custom Big-M required.** The reformulation uses the Big-M method.
+By default, Big-M values are derived from variable bounds. If any SOS variable has
+infinite bounds, you must either:
+
+1. Set finite bounds on the variable, or
+2. Specify custom Big-M values via the ``big_m`` parameter
 
 .. code-block:: python
 
-    # This will raise ValueError
-    x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+    # Option 1: Finite bounds (default Big-M = bounds)
+    x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-    m.solve(solver_name="highs", reformulate_sos=True)
-    # ValueError: Variable 'x' has infinite upper bounds.
+
+    # Option 2: Custom Big-M (allows infinite bounds)
+    x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+
+Custom Big-M Values
+~~~~~~~~~~~~~~~~~~~
+
+The ``big_m`` parameter in ``add_sos_constraints()`` allows you to specify tighter
+Big-M values than the variable bounds. This is useful when:
+
+- Variable bounds are conservatively large (e.g., ``upper=1e6``)
+- Other constraints in your model imply tighter effective bounds
+- You have domain knowledge about the actual feasible range
+
+**Syntax options:**
+
+.. code-block:: python
+
+    # Scalar: symmetric Big-M (M_upper = 10, M_lower = -10)
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+
+    # Tuple of scalars: asymmetric (M_upper = 10, M_lower = -5)
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(10, -5))
+
+**Why tighter Big-M matters:**
+
+Tighter Big-M values lead to:
+
+- Better LP relaxation bounds (closer to optimal integer solution)
+- Fewer branch-and-bound nodes
+- Faster solve times
+
+.. code-block:: python
+
+    # Example: Variable has large bounds but we know effective range is smaller
+    x = m.add_variables(lower=0, upper=1000, coords=[idx], name="x")
+
+    # Other constraints limit x to [0, 10] in practice
+    m.add_constraints(x <= 10)
+
+    # Use tight Big-M for better performance
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
 
 Mathematical Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -553,7 +597,7 @@ See Also
 API Reference
 -------------
 
-.. py:method:: Model.add_sos_constraints(variable, sos_type, sos_dim)
+.. py:method:: Model.add_sos_constraints(variable, sos_type, sos_dim, big_m=None)
 
    Add an SOS1 or SOS2 constraint for one dimension of a variable.
 
@@ -563,6 +607,13 @@ API Reference
    :type sos_type: Literal[1, 2]
    :param sos_dim: Dimension along which to apply the SOS constraint
    :type sos_dim: str
+   :param big_m: Custom Big-M value(s) for reformulation. Can be:
+
+      - ``None`` (default): Use variable bounds
+      - ``float``: Symmetric Big-M (upper = big_m, lower = -big_m)
+      - ``tuple[float, float]``: Asymmetric (upper, lower)
+
+   :type big_m: float | tuple[float, float] | None
 
 .. py:method:: Model.remove_sos_constraints(variable)
 
@@ -579,7 +630,7 @@ API Reference
    :type prefix: str
    :returns: List of variable names that were reformulated
    :rtype: list[str]
-   :raises ValueError: If any SOS variable has infinite bounds
+   :raises ValueError: If any SOS variable has infinite bounds and no custom big_m
 
 .. py:attribute:: Variables.sos
 

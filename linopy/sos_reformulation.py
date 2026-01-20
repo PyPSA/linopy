@@ -25,6 +25,9 @@ def validate_bounds_for_reformulation(var: Variable) -> None:
     """
     Validate that a variable has finite bounds required for SOS reformulation.
 
+    If custom big_m values are provided via variable attributes, bounds
+    validation is skipped for those dimensions.
+
     Parameters
     ----------
     var : Variable
@@ -33,40 +36,69 @@ def validate_bounds_for_reformulation(var: Variable) -> None:
     Raises
     ------
     ValueError
-        If any bound is infinite (required for Big-M formulation).
+        If any bound is infinite and no custom big_m is provided.
     """
-    lower = var.lower
-    upper = var.upper
+    # If custom big_m is provided, skip bound validation
+    has_custom_upper = var.attrs.get("big_m_upper") is not None
+    has_custom_lower = var.attrs.get("big_m_lower") is not None
 
-    if np.isinf(lower).any():
-        raise ValueError(
-            f"Variable '{var.name}' has infinite lower bounds. "
-            "Finite bounds are required for SOS reformulation (Big-M method)."
-        )
-    if np.isinf(upper).any():
-        raise ValueError(
-            f"Variable '{var.name}' has infinite upper bounds. "
-            "Finite bounds are required for SOS reformulation (Big-M method)."
-        )
+    if not has_custom_lower:
+        lower = var.lower
+        if np.isinf(lower).any():
+            raise ValueError(
+                f"Variable '{var.name}' has infinite lower bounds. "
+                "Finite bounds are required for SOS reformulation (Big-M method). "
+                "Alternatively, specify big_m in add_sos_constraints()."
+            )
+
+    if not has_custom_upper:
+        upper = var.upper
+        if np.isinf(upper).any():
+            raise ValueError(
+                f"Variable '{var.name}' has infinite upper bounds. "
+                "Finite bounds are required for SOS reformulation (Big-M method). "
+                "Alternatively, specify big_m in add_sos_constraints()."
+            )
 
 
 def compute_big_m_values(var: Variable) -> tuple[DataArray, DataArray]:
     """
-    Compute Big-M values from variable bounds.
+    Compute Big-M values from variable bounds or custom big_m attributes.
+
+    If custom big_m values were specified via add_sos_constraints(big_m=...),
+    those are used (broadcast to variable dimensions). Otherwise, the variable
+    bounds are used as the tightest valid Big-M values.
 
     Parameters
     ----------
     var : Variable
-        Variable with finite bounds.
+        Variable with finite bounds (or custom big_m attributes).
 
     Returns
     -------
     tuple[DataArray, DataArray]
-        (M_upper, M_lower) - Big-M values computed from bounds.
-        M_upper = upper bound (for x <= U * y constraints)
-        M_lower = lower bound (for x >= L * y constraints)
+        (M_upper, M_lower) - Big-M values for reformulation constraints.
+        M_upper is used for: x <= M_upper * y
+        M_lower is used for: x >= M_lower * y
     """
-    return var.upper, var.lower
+    import xarray as xr
+
+    # Check for custom big_m values in attributes (always scalars)
+    big_m_upper = var.attrs.get("big_m_upper")
+    big_m_lower = var.attrs.get("big_m_lower")
+
+    if big_m_upper is not None:
+        # Broadcast scalar to variable dimensions using xr.full_like
+        M_upper = xr.full_like(var.labels, big_m_upper, dtype=float)
+    else:
+        M_upper = var.upper
+
+    if big_m_lower is not None:
+        M_lower = xr.full_like(var.labels, big_m_lower, dtype=float)
+    else:
+        M_lower = var.lower
+
+    return M_upper, M_lower
 
 
 def reformulate_sos1(model: Model, var: Variable, prefix: str) -> None:
