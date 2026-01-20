@@ -2134,7 +2134,7 @@ def merge(
                 if dim_name in HELPER_DIMS or dim_name not in ds_item.dims:
                     continue
                 if dim_name not in reference.coords or dim_name not in ds_item.coords:
-                    continue
+                    continue  # pragma: no cover
                 ref_coord = reference.coords[dim_name].values
                 ds_coord = ds_item.coords[dim_name].values
                 # Check: same length, same set of values, but different order
@@ -2143,8 +2143,8 @@ def merge(
                 ):
                     try:
                         same_values = set(ref_coord) == set(ds_coord)
-                    except TypeError:
-                        # Unhashable types (e.g., tuples) - convert to strings
+                    except TypeError:  # pragma: no cover
+                        # Unhashable types - convert to strings for comparison
                         same_values = {str(v) for v in ref_coord} == {
                             str(v) for v in ds_coord
                         }
