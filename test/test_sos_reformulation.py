@@ -354,6 +354,7 @@ class TestSolveWithReformulation:
         m.solve(solver_name="highs", reformulate_sos=True)
 
         # Should minimize to 0 by setting all x = 0
+        assert m.objective.value is not None
         assert np.isclose(m.objective.value, 0, atol=1e-5)
 
     def test_sos2_maximize_with_highs(self) -> None:
@@ -476,6 +477,8 @@ class TestEquivalenceWithGurobi:
 
         if "highs" in available_solvers:
             m2.solve(solver_name="highs", reformulate_sos=True)
+            assert m1.objective.value is not None
+            assert m2.objective.value is not None
             assert np.isclose(m1.objective.value, m2.objective.value, atol=1e-5)
 
     def test_sos2_equivalence(self) -> None:
@@ -502,6 +505,8 @@ class TestEquivalenceWithGurobi:
 
         if "highs" in available_solvers:
             m2.solve(solver_name="highs", reformulate_sos=True)
+            assert m1.objective.value is not None
+            assert m2.objective.value is not None
             assert np.isclose(m1.objective.value, m2.objective.value, atol=1e-5)
 
 
