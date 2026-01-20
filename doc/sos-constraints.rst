@@ -293,6 +293,34 @@ specify custom values via the ``big_m`` parameter:
 
 The reformulation uses the tighter of ``big_m`` and variable bounds.
 
+Mathematical Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+**SOS1 Reformulation:**
+Given variables :math:`x_i` with bounds :math:`L_i \leq x_i \leq U_i`, the constraint
+"at most one :math:`x_i` is non-zero" becomes:
+
+.. math::
+
+   y_i &\in \{0, 1\} \quad \forall i \\
+   x_i &\leq U_i \cdot y_i \quad \forall i \text{ where } U_i > 0 \\
+   x_i &\geq L_i \cdot y_i \quad \forall i \text{ where } L_i < 0 \\
+   \sum_i y_i &\leq 1
+
+**SOS2 Reformulation:**
+Given ordered variables :math:`x_0, \ldots, x_{n-1}`, the constraint
+"at most two adjacent variables are non-zero" uses segment indicators :math:`z_j`:
+
+.. math::
+
+   z_j &\in \{0, 1\} \quad j = 0, \ldots, n-2 \\
+   x_0 &\leq U_0 \cdot z_0 \\
+   x_i &\leq U_i \cdot (z_{i-1} + z_i) \quad i = 1, \ldots, n-2 \\
+   x_{n-1} &\leq U_{n-1} \cdot z_{n-2} \\
+   \sum_j z_j &\leq 1
+
+(Analogous constraints for lower bounds when :math:`L_i < 0`.)
+
 Common Patterns
 ---------------
 
