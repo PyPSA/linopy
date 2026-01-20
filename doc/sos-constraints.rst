@@ -3,7 +3,7 @@
 Special Ordered Sets (SOS) Constraints
 =======================================
 
-SOS constraints model situations where only one (SOS1) or two adjacent (SOS2) variables from an ordered set can be non-zero.
+Special Ordered Sets (SOS) are a constraint type used in mixed-integer programming to model situations where only one or two variables from an ordered set can be non-zero. Linopy supports both SOS Type 1 and SOS Type 2 constraints.
 
 .. contents::
    :local:
@@ -12,60 +12,259 @@ SOS constraints model situations where only one (SOS1) or two adjacent (SOS2) va
 Overview
 --------
 
-- **SOS1**: At most one variable can be non-zero (mutually exclusive choices)
-- **SOS2**: At most two adjacent variables can be non-zero (piecewise linear functions)
+SOS constraints are particularly useful for:
+
+- **SOS1**: Modeling mutually exclusive choices (e.g., selecting one facility from multiple locations)
+- **SOS2**: Piecewise linear approximations of nonlinear functions
+- Improving branch-and-bound efficiency in mixed-integer programming
+
+Types of SOS Constraints
+-------------------------
+
+SOS Type 1 (SOS1)
+~~~~~~~~~~~~~~~~~~
+
+In an SOS1 constraint, **at most one** variable in the ordered set can be non-zero.
+
+**Example use cases:**
+- Facility location problems (choose one location among many)
+- Technology selection (choose one technology option)
+- Mutually exclusive investment decisions
+
+SOS Type 2 (SOS2)
+~~~~~~~~~~~~~~~~~~
+
+In an SOS2 constraint, **at most two adjacent** variables in the ordered set can be non-zero. The adjacency is determined by the ordering weights (coordinates) of the variables.
+
+**Example use cases:**
+- Piecewise linear approximation of nonlinear functions
+- Portfolio optimization with discrete risk levels
+- Production planning with discrete capacity levels
 
 Basic Usage
 -----------
+
+Adding SOS Constraints
+~~~~~~~~~~~~~~~~~~~~~~~
+
+To add SOS constraints to variables in linopy:
 
 .. code-block:: python
 
     import linopy
     import pandas as pd
+    import xarray as xr
 
+    # Create model
     m = linopy.Model()
 
-    # SOS1: at most one option selected
-    options = pd.Index([0, 1, 2], name="options")
-    x = m.add_variables(coords=[options], name="x", lower=0, upper=1)
+    # Create variables with numeric coordinates
+    coords = pd.Index([0, 1, 2], name="options")
+    x = m.add_variables(coords=[coords], name="x", lower=0, upper=1)
+
+    # Add SOS1 constraint
     m.add_sos_constraints(x, sos_type=1, sos_dim="options")
 
-    # SOS2: at most two adjacent breakpoints active
-    breakpoints = pd.Index([0.0, 1.0, 2.0], name="bp")
+    # For SOS2 constraint
+    breakpoints = pd.Index([0.0, 1.0, 2.0], name="breakpoints")
     lambdas = m.add_variables(coords=[breakpoints], name="lambdas", lower=0, upper=1)
-    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="bp")
+    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="breakpoints")
 
-**Requirements:**
-
-- The SOS dimension must have numeric coordinates (used as ordering weights)
-- Only one SOS constraint per variable
-
-Multi-dimensional Variables
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For multi-dimensional variables, the SOS constraint applies independently for each combination of non-SOS dimensions:
+Method Signature
+~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    periods = pd.Index([0, 1], name="periods")
+    Model.add_sos_constraints(variable, sos_type, sos_dim, big_m=None)
+
+**Parameters:**
+
+- ``variable`` : Variable
+    The variable to which the SOS constraint should be applied
+- ``sos_type`` : {1, 2}
+    Type of SOS constraint (1 or 2)
+- ``sos_dim`` : str
+    Name of the dimension along which the SOS constraint applies
+- ``big_m`` : float | tuple[float, float] | None
+    Custom Big-M values for reformulation (see :ref:`sos-reformulation`)
+
+**Requirements:**
+
+- The specified dimension must exist in the variable
+- The coordinates for the SOS dimension must be numeric (used as weights for ordering)
+- Only one SOS constraint can be applied per variable
+
+Examples
+--------
+
+Example 1: Facility Location (SOS1)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    import linopy
+    import pandas as pd
+    import xarray as xr
+
+    # Problem data
+    locations = pd.Index([0, 1, 2, 3], name="locations")
+    costs = xr.DataArray([100, 150, 120, 80], coords=[locations])
+    benefits = xr.DataArray([200, 300, 250, 180], coords=[locations])
+
+    # Create model
+    m = linopy.Model()
+
+    # Decision variables: build facility at location i
+    build = m.add_variables(coords=[locations], name="build", lower=0, upper=1)
+
+    # SOS1 constraint: at most one facility can be built
+    m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
+
+    # Objective: maximize net benefit
+    net_benefit = benefits - costs
+    m.add_objective(-((net_benefit * build).sum()))
+
+    # Solve
+    m.solve(solver_name="gurobi")
+
+    if m.status == "ok":
+        solution = build.solution.to_pandas()
+        selected_location = solution[solution > 0.5].index[0]
+        print(f"Build facility at location {selected_location}")
+
+Example 2: Piecewise Linear Approximation (SOS2)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    import numpy as np
+
+    # Approximate f(x) = x² over [0, 3] with breakpoints
+    breakpoints = pd.Index([0, 1, 2, 3], name="breakpoints")
+
+    x_vals = xr.DataArray(breakpoints.to_series())
+    y_vals = x_vals**2
+
+    # Create model
+    m = linopy.Model()
+
+    # SOS2 variables (interpolation weights)
+    lambdas = m.add_variables(lower=0, upper=1, coords=[breakpoints], name="lambdas")
+    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="breakpoints")
+
+    # Interpolated coordinates
+    x = m.add_variables(name="x", lower=0, upper=3)
+    y = m.add_variables(name="y", lower=0, upper=9)
+
+    # Constraints
+    m.add_constraints(lambdas.sum() == 1, name="convexity")
+    m.add_constraints(x == lambdas @ x_vals, name="x_interpolation")
+    m.add_constraints(y == lambdas @ y_vals, name="y_interpolation")
+    m.add_constraints(x >= 1.5, name="x_minimum")
+
+    # Objective: minimize approximated function value
+    m.add_objective(y)
+
+    # Solve
+    m.solve(solver_name="gurobi")
+
+Working with Multi-dimensional Variables
+-----------------------------------------
+
+SOS constraints are created for each dimension that is not sos_dim.
+
+.. code-block:: python
+
+    # Multi-period production planning
+    periods = pd.Index(range(3), name="periods")
     modes = pd.Index([0, 1, 2], name="modes")
-    x = m.add_variables(lower=0, upper=1, coords=[periods, modes], name="x")
-    m.add_sos_constraints(x, sos_type=1, sos_dim="modes")
-    # Result: at most one mode selected PER period
+
+    # 2D variables: periods × modes
+    period_modes = m.add_variables(
+        lower=0, upper=1, coords=[periods, modes], name="use_mode"
+    )
+
+    # Adds SOS1 constraint for each period
+    m.add_sos_constraints(period_modes, sos_type=1, sos_dim="modes")
+
+Accessing SOS Variables
+-----------------------
+
+You can easily identify and access variables with SOS constraints:
+
+.. code-block:: python
+
+    # Get all variables with SOS constraints
+    sos_variables = m.variables.sos
+    print(f"SOS variables: {list(sos_variables.keys())}")
+
+    # Check SOS properties of a variable
+    for var_name in sos_variables:
+        var = m.variables[var_name]
+        sos_type = var.attrs["sos_type"]
+        sos_dim = var.attrs["sos_dim"]
+        print(f"{var_name}: SOS{sos_type} on dimension '{sos_dim}'")
+
+Variable Representation
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Variables with SOS constraints show their SOS information in string representations:
+
+.. code-block:: python
+
+    print(build)
+    # Output: Variable (locations: 4) - sos1 on locations
+    # -----------------------------------------------
+    # [0]: build[0] ∈ [0, 1]
+    # [1]: build[1] ∈ [0, 1]
+    # [2]: build[2] ∈ [0, 1]
+    # [3]: build[3] ∈ [0, 1]
+
+LP File Export
+--------------
+
+The generated LP file will include a SOS section:
+
+.. code-block:: text
+
+    sos
+
+    s0: S1 ::  x0:0  x1:1  x2:2
+    s3: S2 ::  x3:0.0  x4:1.0  x5:2.0
 
 Solver Compatibility
 --------------------
 
-**Native SOS support:** Gurobi, CPLEX, CBC, SCIP, Xpress
+SOS constraints are supported by most modern mixed-integer programming solvers through the LP file format:
 
-**No SOS support (use reformulation):** HiGHS, GLPK, MOSEK
+**Supported solvers (via LP file):**
+
+- Gurobi
+- CPLEX
+- COIN-OR CBC
+- SCIP
+- Xpress
+
+**Direct API support:**
+
+- Gurobi (via ``gurobipy``)
+
+**Unsupported solvers:**
+
+- HiGHS (does not support SOS constraints)
+- GLPK
+- MOSEK
+- MindOpt
+
+For unsupported solvers, use automatic reformulation (see below).
 
 .. _sos-reformulation:
 
 SOS Reformulation
 -----------------
 
-For solvers without native SOS support, linopy can reformulate SOS constraints as binary + linear constraints using the Big-M method.
+For solvers without native SOS support, linopy can reformulate SOS constraints
+as binary + linear constraints using the Big-M method.
 
 .. code-block:: python
 
@@ -76,18 +275,16 @@ For solvers without native SOS support, linopy can reformulate SOS constraints a
     m.reformulate_sos_constraints()
     m.solve(solver_name="highs")
 
-Big-M Values
-~~~~~~~~~~~~
-
-Big-M values are derived from variable bounds by default. For infinite bounds, specify custom values:
+**Requirements:** Big-M values are derived from variable bounds. For infinite bounds,
+specify custom values via the ``big_m`` parameter:
 
 .. code-block:: python
 
-    # Finite bounds: Big-M = bounds (default)
+    # Finite bounds (default)
     x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-    # Infinite bounds: specify Big-M explicitly
+    # Infinite bounds: specify Big-M
     x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
 
@@ -96,69 +293,58 @@ Big-M values are derived from variable bounds by default. For infinite bounds, s
 
 The reformulation uses the tighter of ``big_m`` and variable bounds.
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~
+Common Patterns
+---------------
 
-**SOS1:** Binary indicators :math:`y_i`, linking constraints, cardinality :math:`\sum y_i \leq 1`
-
-.. math::
-
-    y_i \in \{0, 1\}, \quad x_i \leq U_i \cdot y_i, \quad x_i \geq L_i \cdot y_i, \quad \sum y_i \leq 1
-
-**SOS2:** Segment indicators :math:`z_j` for :math:`j = 0, \ldots, n-2`, adjacency constraints
-
-.. math::
-
-    z_j \in \{0, 1\}, \quad x_0 \leq U_0 \cdot z_0, \quad x_i \leq U_i(z_{i-1} + z_i), \quad x_{n-1} \leq U_{n-1} \cdot z_{n-2}, \quad \sum z_j \leq 1
-
-Example: Piecewise Linear with HiGHS
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Piecewise Linear Cost Function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    import linopy
-    import pandas as pd
+    def add_piecewise_cost(model, variable, breakpoints, costs):
+        """Add piecewise linear cost function using SOS2."""
+        n_segments = len(breakpoints)
+        lambda_coords = pd.Index(range(n_segments), name="segments")
 
-    m = linopy.Model()
+        lambdas = model.add_variables(
+            coords=[lambda_coords], name="cost_lambdas", lower=0, upper=1
+        )
+        model.add_sos_constraints(lambdas, sos_type=2, sos_dim="segments")
 
-    # Approximate f(x) = x² over [0, 3]
-    bp = pd.Index([0.0, 1.0, 2.0, 3.0], name="bp")
-    x_vals, y_vals = bp.to_numpy(), bp.to_numpy() ** 2
+        cost_var = model.add_variables(name="cost", lower=0)
 
-    lambdas = m.add_variables(lower=0, upper=1, coords=[bp], name="lambdas")
-    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="bp")
+        x_vals = xr.DataArray(breakpoints, coords=[lambda_coords])
+        c_vals = xr.DataArray(costs, coords=[lambda_coords])
 
-    x = m.add_variables(name="x", lower=0, upper=3)
-    y = m.add_variables(name="y", lower=0, upper=9)
+        model.add_constraints(lambdas.sum() == 1, name="cost_convexity")
+        model.add_constraints(variable == (x_vals * lambdas).sum(), name="cost_x_def")
+        model.add_constraints(cost_var == (c_vals * lambdas).sum(), name="cost_def")
 
-    m.add_constraints(lambdas.sum() == 1, name="convexity")
-    m.add_constraints(x == (lambdas * x_vals).sum(), name="x_interp")
-    m.add_constraints(y == (lambdas * y_vals).sum(), name="y_interp")
-    m.add_constraints(x >= 1.5, name="x_min")
-    m.add_objective(y)
+        return cost_var
 
-    m.solve(solver_name="highs", reformulate_sos=True)
+Mutually Exclusive Investments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-API Reference
--------------
+.. code-block:: python
 
-.. py:method:: Model.add_sos_constraints(variable, sos_type, sos_dim, big_m=None)
+    def add_exclusive_investments(model, projects, costs, returns):
+        """Add mutually exclusive investment decisions using SOS1."""
+        project_coords = pd.Index(projects, name="projects")
 
-   Add SOS constraint to a variable.
+        invest = model.add_variables(
+            coords=[project_coords], name="invest", binary=True
+        )
+        model.add_sos_constraints(invest, sos_type=1, sos_dim="projects")
 
-   :param variable: Variable to constrain
-   :param sos_type: 1 (at most one non-zero) or 2 (at most two adjacent non-zero)
-   :param sos_dim: Dimension for SOS ordering
-   :param big_m: Custom Big-M: ``float`` (symmetric) or ``tuple[float, float]`` (upper, lower)
+        total_cost = (invest * costs).sum()
+        total_return = (invest * returns).sum()
 
-.. py:method:: Model.remove_sos_constraints(variable)
+        return invest, total_cost, total_return
 
-   Remove SOS constraints from a variable.
 
-.. py:method:: Model.reformulate_sos_constraints(prefix="_sos_reform_")
+See Also
+--------
 
-   Convert SOS to binary + linear constraints. Returns list of reformulated variable names.
-
-.. py:attribute:: Variables.sos
-
-   All variables with SOS constraints.
+- :doc:`creating-variables`: Creating variables with coordinates
+- :doc:`creating-constraints`: Adding regular constraints
+- :doc:`user-guide`: General linopy usage patterns
