@@ -2129,7 +2129,7 @@ def merge(
         reference = data[0]
         aligned_data = [reference]
         for ds in data[1:]:
-            needs_reindex = False
+            reindex_dims = {}
             for dim in reference.dims:
                 if dim in HELPER_DIMS or dim not in ds.dims:
                     continue
@@ -2149,10 +2149,9 @@ def merge(
                             str(v) for v in ds_coord
                         }
                     if same_values:
-                        needs_reindex = True
-                        break
-            if needs_reindex:
-                aligned_data.append(ds.reindex_like(reference))
+                        reindex_dims[dim] = reference.coords[dim]
+            if reindex_dims:
+                aligned_data.append(ds.reindex(reindex_dims))
             else:
                 aligned_data.append(ds)
         data = aligned_data
