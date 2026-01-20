@@ -254,6 +254,246 @@ SOS constraints are supported by most modern mixed-integer programming solvers t
 - MOSEK
 - MindOpt
 
+For these solvers, linopy provides automatic reformulation (see :ref:`sos-reformulation` below).
+
+.. _sos-reformulation:
+
+SOS Reformulation for Unsupported Solvers
+-----------------------------------------
+
+Linopy can automatically reformulate SOS constraints as binary + linear constraints
+using the Big-M method. This allows you to use SOS constraints with solvers that
+don't support them natively (HiGHS, GLPK, MOSEK, etc.).
+
+Enabling Reformulation
+~~~~~~~~~~~~~~~~~~~~~~
+
+Pass ``reformulate_sos=True`` to the ``solve()`` method:
+
+.. code-block:: python
+
+    import linopy
+    import pandas as pd
+
+    m = linopy.Model()
+    idx = pd.Index([0, 1, 2], name="i")
+    x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+    m.add_objective(x.sum(), sense="max")
+
+    # Now works with HiGHS!
+    m.solve(solver_name="highs", reformulate_sos=True)
+
+You can also reformulate manually before solving:
+
+.. code-block:: python
+
+    # Reformulate in place
+    reformulated_vars = m.reformulate_sos_constraints()
+    print(f"Reformulated: {reformulated_vars}")
+
+    # Then solve with any solver
+    m.solve(solver_name="highs")
+
+Requirements
+~~~~~~~~~~~~
+
+**Finite bounds are required.** The reformulation uses the Big-M method, which
+derives M values from the variable bounds. If any SOS variable has infinite
+bounds, a ``ValueError`` is raised:
+
+.. code-block:: python
+
+    # This will raise ValueError
+    x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+    m.solve(solver_name="highs", reformulate_sos=True)
+    # ValueError: Variable 'x' has infinite upper bounds.
+
+Mathematical Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The reformulation converts SOS constraints into Mixed-Integer Linear Programming
+(MILP) constraints using binary indicator variables.
+
+**SOS1 Reformulation**
+
+Given variables :math:`x_i` for :math:`i \in I` with bounds :math:`L_i \leq x_i \leq U_i`,
+the SOS1 constraint "at most one :math:`x_i` is non-zero" is reformulated as:
+
+.. math::
+
+    \text{Binary indicators:} \quad & y_i \in \{0, 1\} \quad \forall i \in I \\[0.5em]
+    \text{Upper linking:} \quad & x_i \leq U_i \cdot y_i \quad \forall i \in I \text{ where } U_i > 0 \\[0.5em]
+    \text{Lower linking:} \quad & x_i \geq L_i \cdot y_i \quad \forall i \in I \text{ where } L_i < 0 \\[0.5em]
+    \text{Cardinality:} \quad & \sum_{i \in I} y_i \leq 1
+
+**Interpretation:**
+
+- :math:`y_i = 1` means variable :math:`x_i` is "selected" (allowed to be non-zero)
+- :math:`y_i = 0` forces :math:`x_i = 0` via the linking constraints
+- The cardinality constraint ensures at most one :math:`y_i = 1`
+
+**Example:** For :math:`x \in [0, 10]`:
+
+- If :math:`y = 0`: constraint :math:`x \leq 10 \cdot 0 = 0` forces :math:`x = 0`
+- If :math:`y = 1`: constraint :math:`x \leq 10 \cdot 1 = 10` allows :math:`x \in [0, 10]`
+
+**SOS2 Reformulation**
+
+Given ordered variables :math:`x_0, x_1, \ldots, x_{n-1}` with bounds :math:`L_i \leq x_i \leq U_i`,
+the SOS2 constraint "at most two adjacent :math:`x_i` are non-zero" is reformulated using
+segment indicators:
+
+.. math::
+
+    \text{Segment indicators:} \quad & z_j \in \{0, 1\} \quad \forall j \in \{0, \ldots, n-2\} \\[0.5em]
+    \text{First variable:} \quad & x_0 \leq U_0 \cdot z_0 \\[0.5em]
+    \text{Middle variables:} \quad & x_i \leq U_i \cdot (z_{i-1} + z_i) \quad \forall i \in \{1, \ldots, n-2\} \\[0.5em]
+    \text{Last variable:} \quad & x_{n-1} \leq U_{n-1} \cdot z_{n-2} \\[0.5em]
+    \text{Cardinality:} \quad & \sum_{j=0}^{n-2} z_j \leq 1
+
+(Similar constraints for lower bounds when :math:`L_i < 0`)
+
+**Interpretation:**
+
+- :math:`z_j = 1` means "segment :math:`j`" is active (between positions :math:`j` and :math:`j+1`)
+- Variable :math:`x_i` can only be non-zero if an adjacent segment is active
+- The cardinality constraint ensures at most one segment is active
+- This guarantees at most two adjacent variables :math:`(x_j, x_{j+1})` are non-zero
+
+**Example:** For :math:`n = 4` variables :math:`(x_0, x_1, x_2, x_3)`:
+
+- If :math:`z_1 = 1` (segment 1 active): :math:`x_1` and :math:`x_2` can be non-zero
+- Constraints force :math:`x_0 = 0` (needs :math:`z_0`) and :math:`x_3 = 0` (needs :math:`z_2`)
+
+Auxiliary Variables and Constraints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The reformulation creates auxiliary variables and constraints with a ``_sos_reform_`` prefix:
+
+.. code-block:: python
+
+    m.reformulate_sos_constraints()
+
+    # For SOS1 variable 'x':
+    # - Binary indicators: _sos_reform_x_y
+    # - Upper constraints: _sos_reform_x_upper
+    # - Lower constraints: _sos_reform_x_lower (if L < 0)
+    # - Cardinality:       _sos_reform_x_card
+
+    # For SOS2 variable 'x':
+    # - Segment indicators: _sos_reform_x_z
+    # - Upper constraints:  _sos_reform_x_upper_first, _sos_reform_x_upper_mid_*, _sos_reform_x_upper_last
+    # - Lower constraints:  _sos_reform_x_lower_first, _sos_reform_x_lower_mid_*, _sos_reform_x_lower_last
+    # - Cardinality:        _sos_reform_x_card
+
+You can use a custom prefix:
+
+.. code-block:: python
+
+    m.reformulate_sos_constraints(prefix="_my_sos_")
+
+Multi-dimensional Variables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For multi-dimensional variables, the reformulation respects xarray broadcasting.
+Constraints are created for each combination of non-SOS dimensions:
+
+.. code-block:: python
+
+    # 2D variable: periods × options
+    periods = pd.Index([0, 1], name="periods")
+    options = pd.Index([0, 1, 2], name="options")
+    x = m.add_variables(lower=0, upper=1, coords=[periods, options], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="options")
+
+    # After reformulation:
+    # - Binary y has shape (periods: 2, options: 3)
+    # - Cardinality constraint: sum over 'options' for each period
+    # - Result: at most one option selected PER period
+
+Edge Cases
+~~~~~~~~~~
+
+The reformulation handles several edge cases automatically:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Case
+     - Handling
+   * - Single-element SOS
+     - Skipped (trivially satisfied)
+   * - All-zero bounds (L=U=0)
+     - Skipped (variable already fixed to 0)
+   * - All-positive bounds
+     - Only upper linking constraints created
+   * - All-negative bounds
+     - Only lower linking constraints created
+   * - Mixed bounds
+     - Both upper and lower constraints created
+
+Performance Considerations
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Reformulation trade-offs:**
+
+- **Pros:** Works with any MIP solver; explicit constraints can sometimes help the solver
+- **Cons:** Adds binary variables and constraints; may be slower than native SOS support
+
+**When to use native SOS:**
+
+- Use native SOS (Gurobi, CPLEX) when available—solvers have specialized branching strategies
+- Native SOS often provides better performance for piecewise linear problems
+
+**When reformulation is useful:**
+
+- When you must use a solver without SOS support (HiGHS, GLPK)
+- For model portability across different solvers
+- When debugging—explicit constraints are easier to inspect
+
+Example: Piecewise Linear with HiGHS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    import linopy
+    import pandas as pd
+    import numpy as np
+
+    # Approximate f(x) = x² using piecewise linear with HiGHS
+    m = linopy.Model()
+
+    breakpoints = pd.Index([0.0, 1.0, 2.0, 3.0], name="bp")
+    x_vals = breakpoints.to_numpy()
+    y_vals = x_vals**2  # [0, 1, 4, 9]
+
+    # SOS2 interpolation weights
+    lambdas = m.add_variables(lower=0, upper=1, coords=[breakpoints], name="lambdas")
+    m.add_sos_constraints(lambdas, sos_type=2, sos_dim="bp")
+
+    # Interpolated point
+    x = m.add_variables(name="x", lower=0, upper=3)
+    y = m.add_variables(name="y", lower=0, upper=9)
+
+    # Constraints
+    m.add_constraints(lambdas.sum() == 1, name="convexity")
+    m.add_constraints(x == (lambdas * x_vals).sum(), name="x_interp")
+    m.add_constraints(y == (lambdas * y_vals).sum(), name="y_interp")
+    m.add_constraints(x >= 1.5, name="x_min")
+
+    # Minimize y (approximated x²)
+    m.add_objective(y)
+
+    # Solve with HiGHS using reformulation
+    m.solve(solver_name="highs", reformulate_sos=True)
+
+    print(f"x = {x.solution.item():.2f}")
+    print(f"y ≈ x² = {y.solution.item():.2f}")
+    # Output: x = 1.50, y ≈ x² = 2.50 (exact: 2.25)
+
 Common Patterns
 ---------------
 
@@ -309,3 +549,38 @@ See Also
 - :doc:`creating-variables`: Creating variables with coordinates
 - :doc:`creating-constraints`: Adding regular constraints
 - :doc:`user-guide`: General linopy usage patterns
+
+API Reference
+-------------
+
+.. py:method:: Model.add_sos_constraints(variable, sos_type, sos_dim)
+
+   Add an SOS1 or SOS2 constraint for one dimension of a variable.
+
+   :param variable: Variable to constrain
+   :type variable: Variable
+   :param sos_type: Type of SOS constraint (1 or 2)
+   :type sos_type: Literal[1, 2]
+   :param sos_dim: Dimension along which to apply the SOS constraint
+   :type sos_dim: str
+
+.. py:method:: Model.remove_sos_constraints(variable)
+
+   Remove SOS constraints from a variable.
+
+   :param variable: Variable from which to remove SOS constraints
+   :type variable: Variable
+
+.. py:method:: Model.reformulate_sos_constraints(prefix="_sos_reform_")
+
+   Reformulate SOS constraints as binary + linear constraints using the Big-M method.
+
+   :param prefix: Prefix for auxiliary variable and constraint names
+   :type prefix: str
+   :returns: List of variable names that were reformulated
+   :rtype: list[str]
+   :raises ValueError: If any SOS variable has infinite bounds
+
+.. py:attribute:: Variables.sos
+
+   Property returning all variables with SOS constraints.
