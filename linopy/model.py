@@ -38,6 +38,9 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SOS_BIG_M_ATTR,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -588,9 +591,9 @@ class Model:
         if sos_dim not in variable.dims:
             raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
 
-        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
-            existing_sos_type = variable.attrs.get("sos_type")
-            existing_sos_dim = variable.attrs.get("sos_dim")
+        if SOS_TYPE_ATTR in variable.attrs or SOS_DIM_ATTR in variable.attrs:
+            existing_sos_type = variable.attrs.get(SOS_TYPE_ATTR)
+            existing_sos_dim = variable.attrs.get(SOS_DIM_ATTR)
             raise ValueError(
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
@@ -603,9 +606,9 @@ class Model:
             )
 
         # Process and store big_m value
-        attrs_update: dict[str, Any] = {"sos_type": sos_type, "sos_dim": sos_dim}
+        attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
         if big_m is not None:
-            attrs_update["big_m_upper"] = float(big_m)
+            attrs_update[SOS_BIG_M_ATTR] = float(big_m)
 
         variable.attrs.update(attrs_update)
 
@@ -848,16 +851,16 @@ class Model:
         -------
         None.
         """
-        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+        if SOS_TYPE_ATTR not in variable.attrs or SOS_DIM_ATTR not in variable.attrs:
             raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
 
-        sos_type = variable.attrs["sos_type"]
-        sos_dim = variable.attrs["sos_dim"]
+        sos_type = variable.attrs[SOS_TYPE_ATTR]
+        sos_dim = variable.attrs[SOS_DIM_ATTR]
 
-        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+        del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
 
         # Also remove big_m attribute if present
-        variable.attrs.pop("big_m_upper", None)
+        variable.attrs.pop(SOS_BIG_M_ATTR, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"

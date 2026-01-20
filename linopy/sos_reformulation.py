@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from xarray import DataArray
 
+from linopy.constants import SOS_BIG_M_ATTR, SOS_DIM_ATTR, SOS_TYPE_ATTR
+
 if TYPE_CHECKING:
     from linopy.model import Model
     from linopy.variables import Variable
@@ -50,7 +52,7 @@ def compute_big_m_values(var: Variable) -> DataArray:
             "SOS reformulation requires non-negative variables (lower >= 0)."
         )
 
-    big_m_upper = var.attrs.get("big_m_upper")
+    big_m_upper = var.attrs.get(SOS_BIG_M_ATTR)
     M_upper = var.upper
 
     if big_m_upper is not None:
@@ -84,7 +86,7 @@ def reformulate_sos1(model: Model, var: Variable, prefix: str) -> None:
     prefix : str
         Prefix for naming auxiliary variables and constraints.
     """
-    sos_dim = str(var.attrs["sos_dim"])
+    sos_dim = str(var.attrs[SOS_DIM_ATTR])
     name = var.name
     M = compute_big_m_values(var)
 
@@ -115,7 +117,7 @@ def reformulate_sos2(model: Model, var: Variable, prefix: str) -> None:
     prefix : str
         Prefix for naming auxiliary variables and constraints.
     """
-    sos_dim = str(var.attrs["sos_dim"])
+    sos_dim = str(var.attrs[SOS_DIM_ATTR])
     name = var.name
     n = var.sizes[sos_dim]
 
@@ -179,8 +181,8 @@ def reformulate_all_sos(model: Model, prefix: str = "_sos_reform_") -> list[str]
 
     for var_name in list(model.variables.sos):
         var = model.variables[var_name]
-        sos_type = var.attrs.get("sos_type")
-        sos_dim = var.attrs.get("sos_dim")
+        sos_type = var.attrs.get(SOS_TYPE_ATTR)
+        sos_dim = var.attrs.get(SOS_DIM_ATTR)
 
         if sos_type is None or sos_dim is None:
             continue
