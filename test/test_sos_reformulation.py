@@ -12,20 +12,18 @@ from linopy.sos_reformulation import (
     reformulate_all_sos,
     reformulate_sos1,
     reformulate_sos2,
-    validate_bounds_for_reformulation,
 )
 
 
 class TestValidateBounds:
-    """Tests for validate_bounds_for_reformulation."""
+    """Tests for bound validation in compute_big_m_values."""
 
     def test_finite_bounds_pass(self) -> None:
         """Finite bounds should pass validation."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=-1, upper=1, coords=[idx], name="x")
-        # Should not raise
-        validate_bounds_for_reformulation(x)
+        compute_big_m_values(x)  # Should not raise
 
     def test_infinite_upper_bounds_raise(self) -> None:
         """Infinite upper bounds should raise ValueError."""
@@ -33,7 +31,7 @@ class TestValidateBounds:
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
         with pytest.raises(ValueError, match="infinite upper bounds"):
-            validate_bounds_for_reformulation(x)
+            compute_big_m_values(x)
 
     def test_infinite_lower_bounds_raise(self) -> None:
         """Infinite lower bounds should raise ValueError."""
@@ -41,7 +39,7 @@ class TestValidateBounds:
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=-np.inf, upper=1, coords=[idx], name="x")
         with pytest.raises(ValueError, match="infinite lower bounds"):
-            validate_bounds_for_reformulation(x)
+            compute_big_m_values(x)
 
     def test_mixed_infinite_bounds_raise(self) -> None:
         """Mixed finite/infinite bounds should raise ValueError."""
@@ -54,7 +52,7 @@ class TestValidateBounds:
             name="x",
         )
         with pytest.raises(ValueError, match="infinite lower bounds"):
-            validate_bounds_for_reformulation(x)
+            compute_big_m_values(x)
 
 
 class TestComputeBigM:
@@ -130,8 +128,7 @@ class TestComputeBigM:
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
-        # Should not raise - custom big_m bypasses bound validation
-        validate_bounds_for_reformulation(x)
+        # Should not raise - custom big_m makes result finite
         M_upper, M_lower = compute_big_m_values(x)
         assert np.allclose(M_upper.values, [10, 10, 10])
 
