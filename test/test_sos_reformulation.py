@@ -256,6 +256,27 @@ class TestSOS2Reformulation:
         assert "_test_x_upper_first" in m.constraints
         assert "_test_x_lower_first" in m.constraints
 
+    def test_sos2_multidimensional(self) -> None:
+        """Test SOS2 reformulation with multi-dimensional variables."""
+        m = Model()
+        idx_i = pd.Index([0, 1, 2], name="i")
+        idx_j = pd.Index([0, 1], name="j")
+        x = m.add_variables(lower=0, upper=1, coords=[idx_i, idx_j], name="x")
+        m.add_sos_constraints(x, sos_type=2, sos_dim="i")
+
+        reformulate_sos2(m, x, "_test_")
+        m.remove_sos_constraints(x)
+
+        # Segment indicator should have (n-1) elements in i dimension, same j dimension
+        z = m.variables["_test_x_z"]
+        assert set(z.dims) == {"i", "j"}
+        assert z.sizes["i"] == 2  # n-1 = 3-1 = 2
+        assert z.sizes["j"] == 2
+
+        # Cardinality constraint should have j dimension preserved
+        card_con = m.constraints["_test_x_card"]
+        assert "j" in card_con.dims
+
 
 class TestReformulateAllSOS:
     """Tests for reformulate_all_sos."""
@@ -436,6 +457,32 @@ class TestSolveWithReformulation:
         for j in idx_j:
             nonzero_count = (np.abs(x.solution.sel(j=j).values) > 1e-5).sum()
             assert nonzero_count <= 1
+
+    def test_multidimensional_sos2_with_highs(self) -> None:
+        """Test multi-dimensional SOS2 with HiGHS."""
+        m = Model()
+        idx_i = pd.Index([0, 1, 2], name="i")
+        idx_j = pd.Index([0, 1], name="j")
+        x = m.add_variables(lower=0, upper=1, coords=[idx_i, idx_j], name="x")
+        m.add_sos_constraints(x, sos_type=2, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        # For each j, at most two adjacent x[i, j] can be non-zero
+        # Maximum is achieved by two adjacent non-zeros per j column: 4 total
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 4, atol=1e-5)
+
+        # Check SOS2 is satisfied for each j
+        for j in idx_j:
+            sol_j = x.solution.sel(j=j).values
+            nonzero_indices = np.where(np.abs(sol_j) > 1e-5)[0]
+            # At most 2 non-zeros
+            assert len(nonzero_indices) <= 2
+            # If 2 non-zeros, they must be adjacent
+            if len(nonzero_indices) == 2:
+                assert abs(nonzero_indices[1] - nonzero_indices[0]) == 1
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
