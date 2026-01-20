@@ -54,7 +54,7 @@ def compute_big_m_values(var: Variable) -> DataArray:
     M_upper = var.upper
 
     if big_m_upper is not None:
-        M_upper = np.minimum(M_upper, big_m_upper)
+        M_upper = M_upper.clip(max=big_m_upper)  # type: ignore[arg-type]
 
     # Validate finiteness
     if np.isinf(M_upper).any():
@@ -84,7 +84,7 @@ def reformulate_sos1(model: Model, var: Variable, prefix: str) -> None:
     prefix : str
         Prefix for naming auxiliary variables and constraints.
     """
-    sos_dim = var.attrs["sos_dim"]
+    sos_dim = str(var.attrs["sos_dim"])
     name = var.name
     M = compute_big_m_values(var)
 
@@ -115,7 +115,7 @@ def reformulate_sos2(model: Model, var: Variable, prefix: str) -> None:
     prefix : str
         Prefix for naming auxiliary variables and constraints.
     """
-    sos_dim = var.attrs["sos_dim"]
+    sos_dim = str(var.attrs["sos_dim"])
     name = var.name
     n = var.sizes[sos_dim]
 
