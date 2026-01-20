@@ -297,29 +297,41 @@ Mathematical Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 **SOS1 Reformulation:**
-Given variables :math:`x_i` with bounds :math:`L_i \leq x_i \leq U_i`, the constraint
-"at most one :math:`x_i` is non-zero" becomes:
+
+Original constraint: :math:`\text{SOS1}(\{x_1, x_2, \ldots, x_n\})` means at most one
+:math:`x_i` can be non-zero.
+
+Given :math:`x = (x_1, \ldots, x_n) \in \mathbb{R}^n_+`, introduce binary
+:math:`y = (y_1, \ldots, y_n) \in \{0,1\}^n`:
 
 .. math::
 
-   y_i &\in \{0, 1\} \quad \forall i \\
-   x_i &\leq U_i \cdot y_i \quad \forall i \text{ where } U_i > 0 \\
-   x_i &\geq L_i \cdot y_i \quad \forall i \text{ where } L_i < 0 \\
-   \sum_i y_i &\leq 1
+   x_i &\leq M_i \cdot y_i \quad \forall i \in \{1, \ldots, n\} \\
+   x_i &\geq 0 \quad \forall i \in \{1, \ldots, n\} \\
+   \sum_{i=1}^{n} y_i &\leq 1 \\
+   y_i &\in \{0, 1\} \quad \forall i \in \{1, \ldots, n\}
+
+where :math:`M_i \geq \sup\{x_i\}` (upper bound on :math:`x_i`).
 
 **SOS2 Reformulation:**
-Given ordered variables :math:`x_0, \ldots, x_{n-1}`, the constraint
-"at most two adjacent variables are non-zero" uses segment indicators :math:`z_j`:
+
+Original constraint: :math:`\text{SOS2}(\{x_1, x_2, \ldots, x_n\})` means at most two
+:math:`x_i` can be non-zero, and if two are non-zero, they must have consecutive indices.
+
+Given :math:`x = (x_1, \ldots, x_n) \in \mathbb{R}^n_+`, introduce binary
+:math:`y = (y_1, \ldots, y_{n-1}) \in \{0,1\}^{n-1}`:
 
 .. math::
 
-   z_j &\in \{0, 1\} \quad j = 0, \ldots, n-2 \\
-   x_0 &\leq U_0 \cdot z_0 \\
-   x_i &\leq U_i \cdot (z_{i-1} + z_i) \quad i = 1, \ldots, n-2 \\
-   x_{n-1} &\leq U_{n-1} \cdot z_{n-2} \\
-   \sum_j z_j &\leq 1
+   x_1 &\leq M_1 \cdot y_1 \\
+   x_i &\leq M_i \cdot (y_{i-1} + y_i) \quad \forall i \in \{2, \ldots, n-1\} \\
+   x_n &\leq M_n \cdot y_{n-1} \\
+   x_i &\geq 0 \quad \forall i \in \{1, \ldots, n\} \\
+   \sum_{i=1}^{n-1} y_i &\leq 1 \\
+   y_i &\in \{0, 1\} \quad \forall i \in \{1, \ldots, n-1\}
 
-(Analogous constraints for lower bounds when :math:`L_i < 0`.)
+where :math:`M_i \geq \sup\{x_i\}`. Interpretation: :math:`y_i = 1` activates interval
+:math:`[i, i+1]`, allowing :math:`x_i` and :math:`x_{i+1}` to be non-zero.
 
 Common Patterns
 ---------------
