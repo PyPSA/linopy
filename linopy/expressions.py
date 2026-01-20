@@ -2128,15 +2128,15 @@ def merge(
     if override and len(data) > 1:
         reference = data[0]
         aligned_data = [reference]
-        for ds in data[1:]:
+        for ds_item in data[1:]:
             reindex_dims = {}
-            for dim in reference.dims:
-                if dim in HELPER_DIMS or dim not in ds.dims:
+            for dim_name in reference.dims:
+                if dim_name in HELPER_DIMS or dim_name not in ds_item.dims:
                     continue
-                if dim not in reference.coords or dim not in ds.coords:
+                if dim_name not in reference.coords or dim_name not in ds_item.coords:
                     continue
-                ref_coord = reference.coords[dim].values
-                ds_coord = ds.coords[dim].values
+                ref_coord = reference.coords[dim_name].values
+                ds_coord = ds_item.coords[dim_name].values
                 # Check: same length, same set of values, but different order
                 if len(ref_coord) == len(ds_coord) and not np.array_equal(
                     ref_coord, ds_coord
@@ -2149,11 +2149,11 @@ def merge(
                             str(v) for v in ds_coord
                         }
                     if same_values:
-                        reindex_dims[dim] = reference.coords[dim]
+                        reindex_dims[dim_name] = reference.coords[dim_name]
             if reindex_dims:
-                aligned_data.append(ds.reindex(reindex_dims))
+                aligned_data.append(ds_item.reindex(reindex_dims))
             else:
-                aligned_data.append(ds)
+                aligned_data.append(ds_item)
         data = aligned_data
 
     if not kwargs:
