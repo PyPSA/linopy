@@ -557,7 +557,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
-        big_m: float | tuple[float, float] | None = None,
+        big_m: float | None = None,
     ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
@@ -571,16 +571,15 @@ class Model:
             Type of SOS
         sos_dim : str
             Which dimension of variable to add SOS constraint to
-        big_m : float | tuple[float, float] | None, optional
-            Big-M value(s) for SOS reformulation. Only used when reformulating
+        big_m : float | None, optional
+            Big-M value for SOS reformulation. Only used when reformulating
             SOS constraints for solvers that don't support them natively.
 
-            - None (default): Use variable bounds as Big-M
-            - float: Symmetric Big-M (M_upper = big_m, M_lower = -big_m)
-            - tuple (upper, lower): Asymmetric Big-M values
+            - None (default): Use variable upper bounds as Big-M
+            - float: Custom Big-M value
 
-            The reformulation uses the tighter of big_m and variable bounds:
-            M_upper = min(big_m_upper, var.upper), M_lower = max(big_m_lower, var.lower).
+            The reformulation uses the tighter of big_m and variable upper bound:
+            M = min(big_m, var.upper).
 
             Tighter Big-M values improve LP relaxation quality and solve time.
         """
@@ -603,20 +602,10 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        # Process and store big_m values
+        # Process and store big_m value
         attrs_update: dict[str, Any] = {"sos_type": sos_type, "sos_dim": sos_dim}
         if big_m is not None:
-            if isinstance(big_m, tuple):
-                if len(big_m) != 2:
-                    raise ValueError(
-                        "big_m tuple must have exactly 2 elements (upper, lower)"
-                    )
-                attrs_update["big_m_upper"] = float(big_m[0])
-                attrs_update["big_m_lower"] = float(big_m[1])
-            else:
-                # Scalar: symmetric (upper = big_m, lower = -big_m)
-                attrs_update["big_m_upper"] = float(big_m)
-                attrs_update["big_m_lower"] = -float(big_m)
+            attrs_update["big_m_upper"] = float(big_m)
 
         variable.attrs.update(attrs_update)
 
@@ -867,9 +856,8 @@ class Model:
 
         del variable.attrs["sos_type"], variable.attrs["sos_dim"]
 
-        # Also remove big_m attributes if present
+        # Also remove big_m attribute if present
         variable.attrs.pop("big_m_upper", None)
-        variable.attrs.pop("big_m_lower", None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"

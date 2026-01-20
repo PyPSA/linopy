@@ -19,10 +19,10 @@ class TestValidateBounds:
     """Tests for bound validation in compute_big_m_values."""
 
     def test_finite_bounds_pass(self) -> None:
-        """Finite bounds should pass validation."""
+        """Finite non-negative bounds should pass validation."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-1, upper=1, coords=[idx], name="x")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         compute_big_m_values(x)  # Should not raise
 
     def test_infinite_upper_bounds_raise(self) -> None:
@@ -33,25 +33,25 @@ class TestValidateBounds:
         with pytest.raises(ValueError, match="infinite upper bounds"):
             compute_big_m_values(x)
 
-    def test_infinite_lower_bounds_raise(self) -> None:
-        """Infinite lower bounds should raise ValueError."""
+    def test_negative_lower_bounds_raise(self) -> None:
+        """Negative lower bounds should raise ValueError."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-np.inf, upper=1, coords=[idx], name="x")
-        with pytest.raises(ValueError, match="infinite lower bounds"):
+        x = m.add_variables(lower=-1, upper=1, coords=[idx], name="x")
+        with pytest.raises(ValueError, match="negative lower bounds"):
             compute_big_m_values(x)
 
-    def test_mixed_infinite_bounds_raise(self) -> None:
-        """Mixed finite/infinite bounds should raise ValueError."""
+    def test_mixed_negative_lower_bounds_raise(self) -> None:
+        """Mixed finite/negative lower bounds should raise ValueError."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(
-            lower=np.array([0, -np.inf, 0]),
+            lower=np.array([0, -1, 0]),
             upper=np.array([1, 1, 1]),
             coords=[idx],
             name="x",
         )
-        with pytest.raises(ValueError, match="infinite lower bounds"):
+        with pytest.raises(ValueError, match="negative lower bounds"):
             compute_big_m_values(x)
 
 
@@ -63,41 +63,21 @@ class TestComputeBigM:
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=10, coords=[idx], name="x")
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [10, 10, 10])
-        assert np.allclose(M_lower.values, [0, 0, 0])
-
-    def test_negative_bounds(self) -> None:
-        """Test Big-M computation with negative bounds."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-10, upper=-1, coords=[idx], name="x")
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [-1, -1, -1])
-        assert np.allclose(M_lower.values, [-10, -10, -10])
-
-    def test_mixed_bounds(self) -> None:
-        """Test Big-M computation with mixed bounds."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-5, upper=10, coords=[idx], name="x")
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [10, 10, 10])
-        assert np.allclose(M_lower.values, [-5, -5, -5])
+        M = compute_big_m_values(x)
+        assert np.allclose(M.values, [10, 10, 10])
 
     def test_varying_bounds(self) -> None:
-        """Test Big-M computation with varying bounds."""
+        """Test Big-M computation with varying upper bounds."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(
-            lower=np.array([-1, -2, -3]),
+            lower=np.array([0, 0, 0]),
             upper=np.array([1, 2, 3]),
             coords=[idx],
             name="x",
         )
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [1, 2, 3])
-        assert np.allclose(M_lower.values, [-1, -2, -3])
+        M = compute_big_m_values(x)
+        assert np.allclose(M.values, [1, 2, 3])
 
     def test_custom_big_m_scalar(self) -> None:
         """Test Big-M uses tighter of custom value and bounds."""
@@ -105,22 +85,9 @@ class TestComputeBigM:
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
-        M_upper, M_lower = compute_big_m_values(x)
-        # big_m=10 gives big_m_upper=10, big_m_lower=-10
-        # M_upper = min(10, 100) = 10 (custom is tighter)
-        # M_lower = max(-10, 0) = 0 (bound is tighter)
-        assert np.allclose(M_upper.values, [10, 10, 10])
-        assert np.allclose(M_lower.values, [0, 0, 0])
-
-    def test_custom_big_m_tuple(self) -> None:
-        """Test Big-M with custom tuple (upper, lower)."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-100, upper=100, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(5, -3))
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [5, 5, 5])
-        assert np.allclose(M_lower.values, [-3, -3, -3])
+        M = compute_big_m_values(x)
+        # M = min(10, 100) = 10 (custom is tighter)
+        assert np.allclose(M.values, [10, 10, 10])
 
     def test_custom_big_m_allows_infinite_bounds(self) -> None:
         """Test that custom big_m allows variables with infinite bounds."""
@@ -129,8 +96,8 @@ class TestComputeBigM:
         x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
         # Should not raise - custom big_m makes result finite
-        M_upper, M_lower = compute_big_m_values(x)
-        assert np.allclose(M_upper.values, [10, 10, 10])
+        M = compute_big_m_values(x)
+        assert np.allclose(M.values, [10, 10, 10])
 
 
 class TestSOS1Reformulation:
@@ -157,36 +124,6 @@ class TestSOS1Reformulation:
         assert y.dims == x.dims
         assert y.sizes == x.sizes
 
-    def test_sos1_negative_bounds(self) -> None:
-        """Test SOS1 reformulation with negative bounds."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-2, upper=1, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-
-        reformulate_sos1(m, x, "_test_")
-        m.remove_sos_constraints(x)
-
-        # Should have both upper and lower constraints
-        assert "_test_x_upper" in m.constraints
-        assert "_test_x_lower" in m.constraints
-        assert "_test_x_card" in m.constraints
-
-    def test_sos1_all_negative_bounds(self) -> None:
-        """Test SOS1 reformulation with all negative bounds (no upper constraint)."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-2, upper=-1, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-
-        reformulate_sos1(m, x, "_test_")
-        m.remove_sos_constraints(x)
-
-        # Should only have lower constraint (no positive upper bounds)
-        assert "_test_x_upper" not in m.constraints
-        assert "_test_x_lower" in m.constraints
-        assert "_test_x_card" in m.constraints
-
     def test_sos1_multidimensional(self) -> None:
         """Test SOS1 reformulation with multi-dimensional variables."""
         m = Model()
@@ -205,7 +142,6 @@ class TestSOS1Reformulation:
         # Cardinality constraint should have reduced dimensions (summed over i)
         card_con = m.constraints["_test_x_card"]
         assert "j" in card_con.dims
-        # The constraint has j dimension preserved
 
 
 class TestSOS2Reformulation:
@@ -272,20 +208,6 @@ class TestSOS2Reformulation:
         assert "_test_x_upper_mid_1" in m.constraints  # middle element at index 1
         assert "_test_x_upper_mid_2" in m.constraints  # middle element at index 2
         assert "_test_x_upper_last" in m.constraints
-
-    def test_sos2_negative_bounds(self) -> None:
-        """Test SOS2 reformulation with negative bounds."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-2, upper=1, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=2, sos_dim="i")
-
-        reformulate_sos2(m, x, "_test_")
-        m.remove_sos_constraints(x)
-
-        # Should have both upper and lower constraints
-        assert "_test_x_upper_first" in m.constraints
-        assert "_test_x_lower_first" in m.constraints
 
     def test_sos2_multidimensional(self) -> None:
         """Test SOS2 reformulation with multi-dimensional variables."""
@@ -370,6 +292,16 @@ class TestReformulateAllSOS:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
         with pytest.raises(ValueError, match="infinite"):
+            reformulate_all_sos(m)
+
+    def test_reformulate_raises_on_negative_lower_bounds(self) -> None:
+        """Test that negative lower bounds raise ValueError."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=-1, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+        with pytest.raises(ValueError, match="negative lower bounds"):
             reformulate_all_sos(m)
 
 
@@ -576,19 +508,6 @@ class TestEquivalenceWithGurobi:
 class TestEdgeCases:
     """Tests for edge cases."""
 
-    def test_zero_lower_bound(self) -> None:
-        """Test handling of zero lower bound."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-
-        reformulate_all_sos(m)
-
-        # Should only have upper constraints (no negative lower bounds)
-        assert "_sos_reform_x_upper" in m.constraints
-        assert "_sos_reform_x_lower" not in m.constraints
-
     def test_preserves_non_sos_variables(self) -> None:
         """Test that non-SOS variables are preserved."""
         m = Model()
@@ -649,19 +568,17 @@ class TestEdgeCases:
         assert z.sizes["bp"] == 2
 
     def test_custom_big_m_removed_on_remove_sos(self) -> None:
-        """Test that custom big_m attributes are removed with SOS constraint."""
+        """Test that custom big_m attribute is removed with SOS constraint."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
 
         assert "big_m_upper" in x.attrs
-        assert "big_m_lower" in x.attrs
 
         m.remove_sos_constraints(x)
 
         assert "big_m_upper" not in x.attrs
-        assert "big_m_lower" not in x.attrs
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
@@ -697,26 +614,3 @@ class TestCustomBigM:
         assert m.objective.value is not None
         # Max is 15 (x[2]=5)
         assert np.isclose(m.objective.value, 15, atol=1e-5)
-
-    def test_custom_big_m_tuple(self) -> None:
-        """Test solving with asymmetric big_m tuple."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=-100, upper=100, coords=[idx], name="x")
-        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(2, -1))
-        m.add_objective(x * np.array([1, 2, 3]), sense="max")
-
-        m.solve(solver_name="highs", reformulate_sos=True)
-
-        # Max is 6 (x[2]=2, limited by big_m_upper=2)
-        assert m.objective.value is not None
-        assert np.isclose(m.objective.value, 6, atol=1e-5)
-
-    def test_big_m_invalid_tuple_length(self) -> None:
-        """Test that invalid tuple length raises error."""
-        m = Model()
-        idx = pd.Index([0, 1, 2], name="i")
-        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
-
-        with pytest.raises(ValueError, match="exactly 2 elements"):
-            m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(1, 2, 3))

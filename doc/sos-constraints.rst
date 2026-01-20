@@ -85,8 +85,8 @@ Method Signature
     Type of SOS constraint (1 or 2)
 - ``sos_dim`` : str
     Name of the dimension along which the SOS constraint applies
-- ``big_m`` : float | tuple[float, float] | None
-    Custom Big-M values for reformulation (see :ref:`sos-reformulation`)
+- ``big_m`` : float | None
+    Custom Big-M value for reformulation (see :ref:`sos-reformulation`)
 
 **Requirements:**
 
@@ -275,8 +275,11 @@ as binary + linear constraints using the Big-M method.
     m.reformulate_sos_constraints()
     m.solve(solver_name="highs")
 
-**Requirements:** Big-M values are derived from variable bounds. For infinite bounds,
-specify custom values via the ``big_m`` parameter:
+**Requirements:**
+
+- Variables must have **non-negative lower bounds** (lower >= 0)
+- Big-M values are derived from variable upper bounds
+- For infinite upper bounds, specify custom values via the ``big_m`` parameter
 
 .. code-block:: python
 
@@ -284,14 +287,11 @@ specify custom values via the ``big_m`` parameter:
     x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-    # Infinite bounds: specify Big-M
+    # Infinite upper bounds: specify Big-M
     x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
 
-    # Asymmetric Big-M
-    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=(10, -5))
-
-The reformulation uses the tighter of ``big_m`` and variable bounds.
+The reformulation uses the tighter of ``big_m`` and variable upper bound.
 
 Mathematical Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~
