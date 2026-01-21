@@ -1,10 +1,8 @@
 Release Notes
 =============
 
-.. Upcoming Version
-
-Version 0.6.2
---------------
+Upcoming Version
+----------------
 
 * Add the `sphinx-copybutton` to the documentation
 
