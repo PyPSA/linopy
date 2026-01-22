@@ -113,6 +113,7 @@ This package is published under MIT license.
    creating-constraints
    sos-constraints
    manipulating-models
+   scaling
    testing-framework
    transport-tutorial
    infeasible-model

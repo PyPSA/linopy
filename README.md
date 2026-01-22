@@ -38,6 +38,7 @@
 * Use **lazy operations** for large linear programs  with [dask](https://dask.org/)
 * Choose from **different commercial and non-commercial solvers**
 * Fast **import and export** a linear model using xarray's netcdf IO
+* Optional **pre-solve scaling** of constraints (and continuous variables) to improve numerical robustness
 
 
 ## Installation
