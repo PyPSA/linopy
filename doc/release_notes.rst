@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `LinearExpression.names_of_terms_used` property.
 * Add the `sphinx-copybutton` to the documentation
 
 Version 0.6.1

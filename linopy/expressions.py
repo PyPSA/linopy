@@ -1072,6 +1072,31 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
+    def names_of_terms_used(self) -> list[str]:
+        """
+        The names of the terms (variables) that are used (i.e., excluding those that are completely masked).
+        """
+        if self.nterm == 0:
+            return []
+
+        # Collect all unique labels from the expression (excluding -1) while preserving order
+        all_labels = self.vars.values.ravel()
+        valid_labels = all_labels[all_labels != -1]
+
+        if len(valid_labels) == 0:
+            return []
+
+        # Get unique labels while preserving first occurrence order
+        unique_labels, first_indices = np.unique(valid_labels, return_index=True)
+        ordered_labels = unique_labels[np.argsort(first_indices)]
+
+        # Batch lookup variable names for all labels
+        positions = self.model.variables.get_label_position(ordered_labels)
+
+        # Deduplicate names while preserving order (dict.fromkeys is faster than set + list)
+        return list(dict.fromkeys(name for name, _ in positions if name is not None))
+
+    @property
     def shape(self) -> tuple[int, ...]:
         """
         Get the total shape of the linear expression.

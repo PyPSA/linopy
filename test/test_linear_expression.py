@@ -1315,6 +1315,23 @@ def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
     )
 
 
+def test_term_names() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+
+    expr = a + b
+    assert expr.nterm == 2
+    assert expr.names_of_terms_used == ["a", "b"]
+
+    mask = xr.DataArray(False, coords=[time])
+    expr = a + (b * 1).where(mask)
+    assert expr.nterm == 2
+    assert expr.names_of_terms_used == ["a"]
+
+
 def test_respresentation_with_sparsisty(x: Variable) -> None:
     model = Model()
     time = pd.Index(name="t", data=[0, 1, 2, 3, 4])

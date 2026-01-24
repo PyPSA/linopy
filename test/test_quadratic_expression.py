@@ -360,3 +360,11 @@ def test_power_of_three(x: Variable) -> None:
         x**3
     with pytest.raises(TypeError):
         (x * x) * (x * x)
+
+
+def test_term_names(x: Variable, y: Variable) -> None:
+    expr = 2 * (x * x) + 3 * y + 1
+    assert expr.names_of_terms_used == ["x", "y"]
+
+    expr = 2 * (y * y) + 1
+    assert expr.names_of_terms_used == ["y"]
