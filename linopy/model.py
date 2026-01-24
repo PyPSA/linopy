@@ -667,6 +667,12 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
+        # Capture original RHS for auto-masking before constraint creation
+        # (NaN values in RHS are lost during constraint creation)
+        original_rhs_notnull = None
+        if self.auto_mask and rhs is not None:
+            original_rhs_notnull = as_dataarray(rhs).notnull()
+
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
@@ -723,7 +729,9 @@ class Model:
         # Auto-mask based on null expressions or NaN RHS
         if self.auto_mask:
             expr = LinearExpression(data, self)
-            auto_mask_arr = ~expr.isnull() & data.rhs.notnull()
+            auto_mask_arr = ~expr.isnull()
+            if original_rhs_notnull is not None:
+                auto_mask_arr = auto_mask_arr & original_rhs_notnull
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
@@ -804,6 +812,12 @@ class Model:
 
             sign = maybe_replace_signs(as_dataarray(sign))
 
+        # Capture original RHS for auto-masking before constraint creation
+        # (NaN values in RHS are lost during constraint creation)
+        original_rhs_notnull = None
+        if self.auto_mask and rhs is not None:
+            original_rhs_notnull = as_dataarray(rhs).notnull()
+
         if isinstance(lhs, QuadraticExpression):
             if sign is None or rhs is None:
                 raise ValueError(
@@ -844,7 +858,9 @@ class Model:
         # Auto-mask based on null expressions or NaN RHS
         if self.auto_mask:
             expr = QuadraticExpression(data, self)
-            auto_mask_arr = ~expr.isnull() & data.rhs.notnull()
+            auto_mask_arr = ~expr.isnull()
+            if original_rhs_notnull is not None:
+                auto_mask_arr = auto_mask_arr & original_rhs_notnull
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
