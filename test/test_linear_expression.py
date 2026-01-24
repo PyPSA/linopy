@@ -1330,3 +1330,11 @@ def test_term_names() -> None:
     expr = a + (b * 1).where(mask)
     assert expr.nterm == 2
     assert expr.names_of_terms_used == ["a"]
+
+    expr = (b * 1).where(mask)
+    assert expr.nterm == 1
+    assert expr.names_of_terms_used == []
+
+    expr = LinearExpression.from_constant(model=m, constant=5)
+    assert expr.nterm == 0
+    assert expr.names_of_terms_used == []
