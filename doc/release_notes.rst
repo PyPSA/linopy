@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 
 Version 0.6.1
