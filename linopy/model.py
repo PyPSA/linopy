@@ -552,9 +552,10 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
-        # Auto-mask based on NaN in bounds
+        # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
-            auto_mask_arr = data.lower.notnull() & data.upper.notnull()
+            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(data.upper.values)
+            auto_mask_arr = DataArray(auto_mask_values, coords=data.coords, dims=data.dims)
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
@@ -686,9 +687,11 @@ class Model:
 
         # Capture original RHS for auto-masking before constraint creation
         # (NaN values in RHS are lost during constraint creation)
-        original_rhs_notnull = None
+        # Use numpy for speed instead of xarray's notnull()
+        original_rhs_mask = None
         if self.auto_mask and rhs is not None:
-            original_rhs_notnull = as_dataarray(rhs).notnull()
+            rhs_da = as_dataarray(rhs)
+            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
@@ -743,12 +746,21 @@ class Model:
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
 
-        # Auto-mask based on null expressions or NaN RHS
+        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
-            expr = LinearExpression(data, self)
-            auto_mask_arr = ~expr.isnull()
-            if original_rhs_notnull is not None:
-                auto_mask_arr = auto_mask_arr & original_rhs_notnull
+            # Check if expression is null: all vars == -1
+            # This is equivalent to LinearExpression(data, self).isnull() but faster
+            vars_all_invalid = (data.vars.values == -1).all(axis=-1)  # Along TERM_DIM
+            auto_mask_values = ~vars_all_invalid
+            if original_rhs_mask is not None:
+                coords, dims, rhs_notnull = original_rhs_mask
+                # Broadcast RHS mask to match data shape if needed
+                if rhs_notnull.shape != auto_mask_values.shape:
+                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
+                    rhs_da, _ = xr.broadcast(rhs_da, data.labels)
+                    rhs_notnull = rhs_da.values
+                auto_mask_values = auto_mask_values & rhs_notnull
+            auto_mask_arr = DataArray(auto_mask_values, coords=data.labels.coords, dims=data.labels.dims)
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
