@@ -14,13 +14,13 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import time
-from typing import Any
+import time  # noqa: E402
+from typing import Any  # noqa: E402
 
-import numpy as np
-import pandas as pd
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
-from linopy import GREATER_EQUAL, Model
+from linopy import GREATER_EQUAL, Model  # noqa: E402
 
 
 def create_nan_data(

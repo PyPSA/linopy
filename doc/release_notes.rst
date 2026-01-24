@@ -5,6 +5,7 @@ Upcoming Version
 ----------------
 
 * Add the `sphinx-copybutton` to the documentation
+* Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
 
 Version 0.6.1
 --------------
