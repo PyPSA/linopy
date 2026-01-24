@@ -145,6 +145,7 @@ class Model:
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
+        "_auto_mask",
         "_solver_dir",
         "solver_model",
         "solver_name",
@@ -156,6 +157,7 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
+        auto_mask: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -175,6 +177,10 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
+        auto_mask : bool
+            Whether to automatically mask variables and constraints where
+            bounds, coefficients, or RHS values contain NaN. The default is
+            False.
 
         Returns
         -------
@@ -200,6 +206,7 @@ class Model:
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
+        self._auto_mask: bool = bool(auto_mask)
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -338,6 +345,18 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
+    def auto_mask(self) -> bool:
+        """
+        If True, automatically mask variables and constraints where bounds,
+        coefficients, or RHS values contain NaN.
+        """
+        return self._auto_mask
+
+    @auto_mask.setter
+    def auto_mask(self, value: bool) -> None:
+        self._auto_mask = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -364,6 +383,7 @@ class Model:
             "_varnameCounter",
             "_connameCounter",
             "force_dim_names",
+            "auto_mask",
         ]
 
     def __repr__(self) -> str:
@@ -555,6 +575,14 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
+        # Auto-mask based on NaN in bounds
+        if self.auto_mask:
+            auto_mask_arr = data.lower.notnull() & data.upper.notnull()
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
+
         start = self._xCounter
         end = start + data.labels.size
         data.labels.values = np.arange(start, end).reshape(data.labels.shape)
@@ -692,6 +720,15 @@ class Model:
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
 
+        # Auto-mask based on null expressions or NaN RHS
+        if self.auto_mask:
+            expr = LinearExpression(data, self)
+            auto_mask_arr = ~expr.isnull() & data.rhs.notnull()
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
+
         self.check_force_dim_names(data)
 
         start = self._cCounter
@@ -803,6 +840,15 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
+
+        # Auto-mask based on null expressions or NaN RHS
+        if self.auto_mask:
+            expr = QuadraticExpression(data, self)
+            auto_mask_arr = ~expr.isnull() & data.rhs.notnull()
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
 
         self.check_force_dim_names(data)
 
