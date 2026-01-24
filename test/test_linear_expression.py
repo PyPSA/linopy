@@ -1313,3 +1313,13 @@ def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
     assert all(simplified.coeffs.values == 3.0), (
         f"Expected coefficient 3.0, got {simplified.coeffs.values}"
     )
+
+
+def test_respresentation_with_sparsisty(x: Variable) -> None:
+    model = Model()
+    time = pd.Index(name="t", data=[0, 1, 2, 3, 4])
+    short_time = pd.Index(name="t", data=[0, 1])
+    a = model.add_variables(name="a", coords=[time])
+    a_expr = a.where(xr.DataArray([0, 0, 0, 1, 1], coords={"t": time}))  #
+    a_reindexed = a_expr.sel(t=short_time)
+    assert isinstance(a_reindexed, LinearExpression)
