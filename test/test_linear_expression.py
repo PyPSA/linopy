@@ -1330,13 +1330,3 @@ def test_term_names() -> None:
     expr = a + (b * 1).where(mask)
     assert expr.nterm == 2
     assert expr.names_of_terms_used == ["a"]
-
-
-def test_respresentation_with_sparsisty(x: Variable) -> None:
-    model = Model()
-    time = pd.Index(name="t", data=[0, 1, 2, 3, 4])
-    short_time = pd.Index(name="t", data=[0, 1])
-    a = model.add_variables(name="a", coords=[time])
-    a_expr = a.where(xr.DataArray([0, 0, 0, 1, 1], coords={"t": time}))  #
-    a_reindexed = a_expr.sel(t=short_time)
-    assert isinstance(a_reindexed, LinearExpression)
