@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import GREATER_EQUAL, Model
 
 
 def create_nan_data(
@@ -269,7 +269,7 @@ def benchmark(
     print("=" * 70)
     print("BENCHMARK: No Masking vs Manual Masking vs Auto-Masking")
     print("=" * 70)
-    print(f"\nModel size:")
+    print("\nModel size:")
     print(f"  - Generators: {n_generators}")
     print(f"  - Time periods: {n_periods}")
     print(f"  - Regions: {n_regions}")
@@ -290,14 +290,14 @@ def benchmark(
     line_nan_count = data["line_capacity"].isna().sum().sum()
     line_total = data["line_capacity"].size
 
-    print(f"NaN statistics:")
+    print("NaN statistics:")
     print(
         f"  - Generator capacity: {gen_nan_count:,}/{gen_total:,} "
-        f"({100*gen_nan_count/gen_total:.1f}% NaN)"
+        f"({100 * gen_nan_count / gen_total:.1f}% NaN)"
     )
     print(
         f"  - Line capacity: {line_nan_count:,}/{line_total:,} "
-        f"({100*line_nan_count/line_total:.1f}% NaN)"
+        f"({100 * line_nan_count / line_total:.1f}% NaN)"
     )
     print()
 
@@ -343,37 +343,37 @@ def benchmark(
     print("RESULTS: Model Building Time")
     print("-" * 70)
 
-    print(f"\nNo masking (baseline):")
+    print("\nNo masking (baseline):")
     print(f"  - Mean time: {np.mean(no_mask_times):.3f}s")
     print(f"  - Variables: {no_mask_nvars:,} (includes NaN-bounded vars)")
     print(f"  - Constraints: {no_mask_ncons:,}")
 
-    print(f"\nManual masking:")
+    print("\nManual masking:")
     print(f"  - Mean time: {np.mean(manual_times):.3f}s")
     print(f"  - Variables: {manual_nvars:,}")
     print(f"  - Constraints: {manual_ncons:,}")
     manual_overhead = np.mean(manual_times) - np.mean(no_mask_times)
-    print(f"  - Overhead vs no-mask: {manual_overhead*1000:+.1f}ms")
+    print(f"  - Overhead vs no-mask: {manual_overhead * 1000:+.1f}ms")
 
-    print(f"\nAuto masking:")
+    print("\nAuto masking:")
     print(f"  - Mean time: {np.mean(auto_times):.3f}s")
     print(f"  - Variables: {auto_nvars:,}")
     print(f"  - Constraints: {auto_ncons:,}")
     auto_overhead = np.mean(auto_times) - np.mean(no_mask_times)
-    print(f"  - Overhead vs no-mask: {auto_overhead*1000:+.1f}ms")
+    print(f"  - Overhead vs no-mask: {auto_overhead * 1000:+.1f}ms")
 
     # Comparison
-    print(f"\nComparison (Auto vs Manual):")
+    print("\nComparison (Auto vs Manual):")
     speedup = np.mean(manual_times) / np.mean(auto_times)
     diff = np.mean(auto_times) - np.mean(manual_times)
     if speedup > 1:
         print(f"  - Auto-mask is {speedup:.2f}x FASTER than manual")
     else:
-        print(f"  - Auto-mask is {1/speedup:.2f}x SLOWER than manual")
-    print(f"  - Time difference: {diff*1000:+.1f}ms")
+        print(f"  - Auto-mask is {1 / speedup:.2f}x SLOWER than manual")
+    print(f"  - Time difference: {diff * 1000:+.1f}ms")
 
     # Verify models are equivalent
-    print(f"\nVerification:")
+    print("\nVerification:")
     print(f"  - Manual == Auto variables: {manual_nvars == auto_nvars}")
     print(f"  - Manual == Auto constraints: {manual_ncons == auto_ncons}")
     print(f"  - Variables masked out: {no_mask_nvars - manual_nvars:,}")
@@ -394,8 +394,8 @@ def benchmark(
     print("RESULTS: LP File Write Time & Size")
     print("-" * 70)
 
-    import tempfile
     import os
+    import tempfile
 
     # Write LP file for manual masked model
     with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
@@ -415,11 +415,11 @@ def benchmark(
     auto_lp_size = os.path.getsize(auto_lp_path) / (1024 * 1024)  # MB
     os.unlink(auto_lp_path)
 
-    print(f"\nManual masking:")
+    print("\nManual masking:")
     print(f"  - Write time: {manual_write_time:.3f}s")
     print(f"  - File size:  {manual_lp_size:.2f} MB")
 
-    print(f"\nAuto masking:")
+    print("\nAuto masking:")
     print(f"  - Write time: {auto_write_time:.3f}s")
     print(f"  - File size:  {auto_lp_size:.2f} MB")
 
@@ -463,7 +463,7 @@ def benchmark_code_simplicity() -> None:
     print("CODE COMPARISON: Manual vs Auto-Mask")
     print("=" * 70)
 
-    manual_code = '''
+    manual_code = """
 # Manual masking - must create mask explicitly
 gen_mask = gen_capacity.notnull()
 dispatch = m.add_variables(
@@ -473,9 +473,9 @@ dispatch = m.add_variables(
     name="dispatch",
     mask=gen_mask,  # Extra step required
 )
-'''
+"""
 
-    auto_code = '''
+    auto_code = """
 # Auto masking - just pass the data with NaN
 m = Model(auto_mask=True)
 dispatch = m.add_variables(
@@ -484,7 +484,7 @@ dispatch = m.add_variables(
     coords=[generators, periods],
     name="dispatch",
 )
-'''
+"""
 
     print("\nManual masking approach:")
     print(manual_code)
@@ -516,10 +516,10 @@ def benchmark_constraint_masking(n_runs: int = 3) -> None:
     nan_mask = rng.random(n_constraints) < nan_fraction
     rhs.values[nan_mask] = np.nan
 
-    print(f"\nModel size:")
+    print("\nModel size:")
     print(f"  - Variables: {n_vars}")
     print(f"  - Potential constraints: {n_constraints}")
-    print(f"  - NaN in RHS: {nan_mask.sum()} ({100*nan_fraction:.0f}%)")
+    print(f"  - NaN in RHS: {nan_mask.sum()} ({100 * nan_fraction:.0f}%)")
     print(f"\nRunning {n_runs} iterations each...\n")
 
     # Manual masking
@@ -558,16 +558,16 @@ def benchmark_constraint_masking(n_runs: int = 3) -> None:
     print("-" * 70)
     print("RESULTS: Constraint Building Time")
     print("-" * 70)
-    print(f"\nManual masking:")
+    print("\nManual masking:")
     print(f"  - Mean time: {np.mean(manual_times):.3f}s")
     print(f"  - Active constraints: {manual_ncons:,}")
 
-    print(f"\nAuto masking:")
+    print("\nAuto masking:")
     print(f"  - Mean time: {np.mean(auto_times):.3f}s")
     print(f"  - Active constraints: {auto_ncons:,}")
 
     overhead = np.mean(auto_times) - np.mean(manual_times)
-    print(f"\nOverhead: {overhead*1000:.1f}ms")
+    print(f"\nOverhead: {overhead * 1000:.1f}ms")
     print(f"Same constraint count: {manual_ncons == auto_ncons}")
 
 
@@ -588,9 +588,9 @@ def print_summary_table(results: list[dict[str, Any]]) -> None:
         lp_size = r.get("lp_size_mb", 0)
         print(
             f"{name:<12} {r['potential_vars']:>10,} {r['nvars']:>10,} "
-            f"{r['masked_out']:>8,} {r['no_mask_time']*1000:>8.0f}ms "
-            f"{r['manual_time']*1000:>8.0f}ms {r['auto_time']*1000:>8.0f}ms "
-            f"{(r['auto_time']-r['manual_time'])*1000:>+7.0f}ms "
+            f"{r['masked_out']:>8,} {r['no_mask_time'] * 1000:>8.0f}ms "
+            f"{r['manual_time'] * 1000:>8.0f}ms {r['auto_time'] * 1000:>8.0f}ms "
+            f"{(r['auto_time'] - r['manual_time']) * 1000:>+7.0f}ms "
             f"{lp_write:>8.0f}ms {lp_size:>8.1f}MB"
         )
     print("-" * 110)

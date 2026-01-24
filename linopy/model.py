@@ -554,8 +554,12 @@ class Model:
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
-            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(data.upper.values)
-            auto_mask_arr = DataArray(auto_mask_values, coords=data.coords, dims=data.dims)
+            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
+                data.upper.values
+            )
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.coords, dims=data.dims
+            )
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
@@ -760,7 +764,9 @@ class Model:
                     rhs_da, _ = xr.broadcast(rhs_da, data.labels)
                     rhs_notnull = rhs_da.values
                 auto_mask_values = auto_mask_values & rhs_notnull
-            auto_mask_arr = DataArray(auto_mask_values, coords=data.labels.coords, dims=data.labels.dims)
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
+            )
             if mask is not None:
                 mask = mask & auto_mask_arr
             else:
