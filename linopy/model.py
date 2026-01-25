@@ -597,7 +597,7 @@ class Model:
 
         variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
 
-    def add_piecewise_constraint(
+    def add_piecewise_constraints(
         self,
         expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
         breakpoints: DataArray,
@@ -675,7 +675,7 @@ class Model:
         >>> m = Model()
         >>> x = m.add_variables(name="x")
         >>> breakpoints = xr.DataArray([0, 10, 50, 100], dims=["bp"])
-        >>> m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        >>> m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         Using an expression:
 
@@ -683,7 +683,7 @@ class Model:
         >>> x = m.add_variables(name="x")
         >>> y = m.add_variables(name="y")
         >>> breakpoints = xr.DataArray([0, 10, 50, 100], dims=["bp"])
-        >>> m.add_piecewise_constraint(x + y, breakpoints, dim="bp")
+        >>> m.add_piecewise_constraints(x + y, breakpoints, dim="bp")
 
         Multiple linked variables (e.g., power-efficiency curve):
 
@@ -695,7 +695,7 @@ class Model:
         ...     [[0, 50, 100], [0.8, 0.95, 0.9]],
         ...     coords={"var": ["power", "efficiency"], "bp": [0, 1, 2]},
         ... )
-        >>> m.add_piecewise_constraint(
+        >>> m.add_piecewise_constraints(
         ...     {"power": power, "efficiency": efficiency},
         ...     breakpoints,
         ...     link_dim="var",

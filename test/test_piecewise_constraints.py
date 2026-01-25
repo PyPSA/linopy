@@ -23,7 +23,7 @@ class TestBasicSingleVariable:
             [0, 10, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         # Check lambda variables were created
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
@@ -50,7 +50,7 @@ class TestBasicSingleVariable:
             coords={"generator": generators, "bp": bp_coords},
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         # Lambda should have both generator and bp dimensions
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
@@ -73,7 +73,7 @@ class TestDictOfVariables:
             coords={"var": ["power", "efficiency"], "bp": [0, 1, 2]},
         )
 
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
             link_dim="var",
@@ -100,7 +100,7 @@ class TestDictOfVariables:
             },
         )
 
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
             link_dim="var",
@@ -130,7 +130,7 @@ class TestAutoDetectLinkDim:
         )
 
         # Should auto-detect link_dim="var"
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
             dim="bp",
@@ -152,7 +152,7 @@ class TestAutoDetectLinkDim:
         )
 
         with pytest.raises(ValueError, match="Could not auto-detect link_dim"):
-            m.add_piecewise_constraint(
+            m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
                 dim="bp",
@@ -174,7 +174,7 @@ class TestMasking:
             coords={"bp": [0, 1, 2, 3]},
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         # Lambda for NaN breakpoint should be masked
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
@@ -200,7 +200,7 @@ class TestMasking:
             coords={"generator": generators, "bp": [0, 1, 2]},
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp", mask=mask)
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", mask=mask)
 
         # Should still create variables and constraints
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
@@ -214,7 +214,7 @@ class TestMasking:
         breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
 
         # Should work with skip_nan_check=True
-        m.add_piecewise_constraint(x, breakpoints, dim="bp", skip_nan_check=True)
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", skip_nan_check=True)
 
         # All lambda variables should be valid (no masking)
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
@@ -238,7 +238,7 @@ class TestMultiDimensional:
             coords={"generator": generators, "time": timesteps, "bp": [0, 1, 2, 3]},
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         # Lambda should have all dimensions
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
@@ -259,7 +259,7 @@ class TestValidationErrors:
         with pytest.raises(
             ValueError, match="must be a Variable, LinearExpression, or dict"
         ):
-            m.add_piecewise_constraint("invalid", breakpoints, dim="bp")  # type: ignore
+            m.add_piecewise_constraints("invalid", breakpoints, dim="bp")  # type: ignore
 
     def test_missing_dim(self) -> None:
         """Test error when breakpoints don't have the required dim."""
@@ -269,7 +269,7 @@ class TestValidationErrors:
         breakpoints = xr.DataArray([0, 10, 50], dims=["wrong"])
 
         with pytest.raises(ValueError, match="must have dimension"):
-            m.add_piecewise_constraint(x, breakpoints, dim="bp")
+            m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
     def test_non_numeric_dim(self) -> None:
         """Test error when dim coordinates are not numeric."""
@@ -283,7 +283,7 @@ class TestValidationErrors:
         )
 
         with pytest.raises(ValueError, match="numeric coordinates"):
-            m.add_piecewise_constraint(x, breakpoints, dim="bp")
+            m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
     def test_expression_support(self) -> None:
         """Test that LinearExpression is supported as input."""
@@ -294,7 +294,7 @@ class TestValidationErrors:
         breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
 
         # Should work with a LinearExpression
-        m.add_piecewise_constraint(x + y, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x + y, breakpoints, dim="bp")
 
         # Check constraints were created
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
@@ -308,7 +308,7 @@ class TestValidationErrors:
         breakpoints = xr.DataArray([0, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2]})
 
         with pytest.raises(ValueError, match="not found in breakpoints dimensions"):
-            m.add_piecewise_constraint(
+            m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
                 link_dim="var",
@@ -328,7 +328,7 @@ class TestValidationErrors:
         )
 
         with pytest.raises(ValueError, match="don't match expression keys"):
-            m.add_piecewise_constraint(
+            m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
                 link_dim="var",
@@ -348,8 +348,8 @@ class TestNameGeneration:
         bp1 = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
         bp2 = xr.DataArray([0, 20, 80], dims=["bp"], coords={"bp": [0, 1, 2]})
 
-        m.add_piecewise_constraint(x, bp1, dim="bp")
-        m.add_piecewise_constraint(y, bp2, dim="bp")
+        m.add_piecewise_constraints(x, bp1, dim="bp")
+        m.add_piecewise_constraints(y, bp2, dim="bp")
 
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl1{PWL_LAMBDA_SUFFIX}" in m.variables
@@ -361,7 +361,7 @@ class TestNameGeneration:
 
         breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp", name="my_pwl")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", name="my_pwl")
 
         assert f"my_pwl{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"my_pwl{PWL_CONVEX_SUFFIX}" in m.constraints
@@ -382,7 +382,7 @@ class TestLPFileOutput:
             coords={"bp": [0, 1, 2]},
         )
 
-        m.add_piecewise_constraint(x, breakpoints, dim="bp")
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
         # Add a simple objective to make it a valid LP
         m.add_objective(x)
@@ -418,7 +418,7 @@ class TestSolverIntegration:
             coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
         )
 
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"x": x, "cost": cost}, breakpoints, link_dim="var", dim="bp"
         )
 
@@ -453,7 +453,7 @@ class TestSolverIntegration:
             coords={"var": ["power", "efficiency"], "bp": [0, 1, 2, 3, 4]},
         )
 
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
             link_dim="var",
@@ -498,7 +498,7 @@ class TestSolverIntegration:
             },
         )
 
-        m.add_piecewise_constraint(
+        m.add_piecewise_constraints(
             {"power": power, "cost": cost}, breakpoints, link_dim="var", dim="bp"
         )
 
