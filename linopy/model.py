@@ -35,9 +35,13 @@ from linopy.common import (
     to_path,
 )
 from linopy.constants import (
+    DEFAULT_BREAKPOINT_DIM,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    PWL_CONVEX_SUFFIX,
+    PWL_LAMBDA_SUFFIX,
+    PWL_LINK_SUFFIX,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -47,6 +51,7 @@ from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
+    merge,
 )
 from linopy.io import (
     to_block_files,
@@ -596,7 +601,7 @@ class Model:
         vars: Variable | dict[str, Variable],
         breakpoints: DataArray,
         link_dim: str | None = None,
-        dim: str = "breakpoint",
+        dim: str = DEFAULT_BREAKPOINT_DIM,
         mask: DataArray | None = None,
         name: str | None = None,
     ) -> Constraint:
@@ -645,7 +650,7 @@ class Model:
             and other constraints can be accessed via:
             - `model.variables[f"{name}_lambda"]`
             - `model.constraints[f"{name}_convex"]`
-            - `model.constraints[f"{name}_link_{var_name}"]`
+            - `model.constraints[f"{name}_link"]`
 
         Raises
         ------
@@ -691,12 +696,7 @@ class Model:
         3. Convexity constraint: Σ λ_i = 1
         4. Linking constraints: var = Σ λ_i × breakpoint_i (for each variable)
         """
-        # Step 1: Input validation
-        if not isinstance(vars, Variable | dict):
-            raise ValueError(
-                f"'vars' must be a Variable or dict of Variables, got {type(vars)}"
-            )
-
+        # Input validation
         if dim not in breakpoints.dims:
             raise ValueError(
                 f"breakpoints must have dimension '{dim}', "
@@ -710,121 +710,141 @@ class Model:
                 f"for SOS2 weights, but got {breakpoints.coords[dim].dtype}"
             )
 
-        # Step 2: Normalize vars to dict
+        # Generate base name if not provided
+        if name is None:
+            i = 0
+            while f"pwl{i}{PWL_LAMBDA_SUFFIX}" in self.variables:
+                i += 1
+            name = f"pwl{i}"
+
+        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+        link_name = f"{name}{PWL_LINK_SUFFIX}"
+
+        # Handle single Variable case directly (no dict normalization)
         if isinstance(vars, Variable):
-            vars_dict: dict[str, Variable] = {vars.name: vars}
-            single_var = True
-        else:
-            vars_dict = vars
-            single_var = False
+            if vars.name not in self.variables:
+                raise ValueError(f"Variable '{vars.name}' not found in model")
+
+            # Compute mask from NaN values if not provided
+            if mask is None:
+                mask = ~breakpoints.isnull()
+
+            # Lambda coordinates: all dims from breakpoints
+            lambda_dims = list(breakpoints.dims)
+            lambda_coords = [
+                pd.Index(breakpoints.coords[d].values, name=d) for d in lambda_dims
+            ]
+
+            # Create lambda variables
+            lambda_var = self.add_variables(
+                lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=mask
+            )
+
+            # Add SOS2 constraint
+            self.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+
+            # Add convexity constraint: sum(lambda) = 1
+            convex_con = self.add_constraints(
+                lambda_var.sum(dim=dim) == 1, name=convex_name
+            )
+
+            # Add single linking constraint: var = sum(lambda * breakpoints)
+            weighted_sum = (lambda_var * breakpoints).sum(dim=dim)
+            self.add_constraints(vars == weighted_sum, name=link_name)
+
+            return convex_con
+
+        # Handle dict of Variables case
+        if not isinstance(vars, dict):
+            raise ValueError(
+                f"'vars' must be a Variable or dict of Variables, got {type(vars)}"
+            )
+
+        vars_dict = vars
 
         # Validate all variables exist in model
         for var_name, var in vars_dict.items():
             if var.name not in self.variables:
                 raise ValueError(f"Variable '{var.name}' not found in model")
 
-        # Step 3: Auto-detect or validate link_dim
-        if not single_var:
+        # Auto-detect or validate link_dim
+        if link_dim is None:
+            # Try to auto-detect link_dim from breakpoints
+            for d in breakpoints.dims:
+                if d == dim:
+                    continue
+                coords_set = set(str(c) for c in breakpoints.coords[d].values)
+                if coords_set == set(vars_dict.keys()):
+                    link_dim = str(d)
+                    break
             if link_dim is None:
-                # Try to auto-detect link_dim from breakpoints
-                for d in breakpoints.dims:
-                    if d == dim:
-                        continue
-                    coords_set = set(str(c) for c in breakpoints.coords[d].values)
-                    if coords_set == set(vars_dict.keys()):
-                        link_dim = str(d)
-                        break
-                if link_dim is None:
-                    raise ValueError(
-                        "Could not auto-detect link_dim. Please specify it explicitly. "
-                        f"Breakpoint dimensions: {list(breakpoints.dims)}, "
-                        f"variable keys: {list(vars_dict.keys())}"
-                    )
-            else:
-                # Validate link_dim exists and matches dict keys
-                if link_dim not in breakpoints.dims:
-                    raise ValueError(
-                        f"link_dim '{link_dim}' not found in breakpoints dimensions "
-                        f"{list(breakpoints.dims)}"
-                    )
-                coords_set = set(str(c) for c in breakpoints.coords[link_dim].values)
-                if coords_set != set(vars_dict.keys()):
-                    raise ValueError(
-                        f"link_dim '{link_dim}' coordinates {coords_set} "
-                        f"don't match variable keys {set(vars_dict.keys())}"
-                    )
+                raise ValueError(
+                    "Could not auto-detect link_dim. Please specify it explicitly. "
+                    f"Breakpoint dimensions: {list(breakpoints.dims)}, "
+                    f"variable keys: {list(vars_dict.keys())}"
+                )
+        else:
+            # Validate link_dim exists and matches dict keys
+            if link_dim not in breakpoints.dims:
+                raise ValueError(
+                    f"link_dim '{link_dim}' not found in breakpoints dimensions "
+                    f"{list(breakpoints.dims)}"
+                )
+            coords_set = set(str(c) for c in breakpoints.coords[link_dim].values)
+            if coords_set != set(vars_dict.keys()):
+                raise ValueError(
+                    f"link_dim '{link_dim}' coordinates {coords_set} "
+                    f"don't match variable keys {set(vars_dict.keys())}"
+                )
 
-        # Step 4: Compute mask from NaN values if not provided
+        # Compute mask from NaN values if not provided
         if mask is None:
             mask = ~breakpoints.isnull()
 
-        # Step 5: Determine lambda coordinates (all dims except link_dim)
-        # Lambda has all dims from breakpoints except link_dim
-        excluded_dims = set()
-        if link_dim is not None:
-            excluded_dims.add(link_dim)
-
-        lambda_dims = [d for d in breakpoints.dims if d not in excluded_dims]
+        # Lambda coordinates: all dims from breakpoints except link_dim
+        lambda_dims = [d for d in breakpoints.dims if d != link_dim]
         lambda_coords = [
             pd.Index(breakpoints.coords[d].values, name=d) for d in lambda_dims
         ]
 
-        # Step 6: Generate names
-        if name is None:
-            # Find unused pwl name
-            i = 0
-            while f"pwl{i}_lambda" in self.variables:
-                i += 1
-            name = f"pwl{i}"
+        # Lambda mask: valid if ANY breakpoint across link_dim is valid
+        lambda_mask = mask.any(dim=link_dim)
 
-        lambda_name = f"{name}_lambda"
-        convex_name = f"{name}_convex"
-
-        # Step 7: Compute lambda mask
-        # Lambda variable is valid if ANY of its breakpoints across link_dim are valid
-        if link_dim is not None:
-            lambda_mask = mask.any(dim=link_dim)
-        else:
-            # For single var case, use mask directly (collapsed along other dims if needed)
-            lambda_mask = mask
-
-        # Step 8: Create lambda variables
+        # Create lambda variables
         lambda_var = self.add_variables(
-            lower=0,
-            upper=1,
-            coords=lambda_coords,
-            name=lambda_name,
-            mask=lambda_mask,
+            lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
         )
 
-        # Step 9: Add SOS2 constraint on lambda variables
+        # Add SOS2 constraint
         self.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
 
-        # Step 10: Add convexity constraint (sum of lambda = 1)
+        # Add convexity constraint: sum(lambda) = 1
         convex_con = self.add_constraints(
-            lambda_var.sum(dim=dim) == 1,
-            name=convex_name,
+            lambda_var.sum(dim=dim) == 1, name=convex_name
         )
 
-        # Step 11: Add linking constraints for each variable
-        for var_name, var in vars_dict.items():
-            # Get breakpoints for this variable
-            if link_dim is not None:
-                bp_for_var = breakpoints.sel({link_dim: var_name})
-            else:
-                bp_for_var = breakpoints
+        # Stack all variables into a single expression along link_dim for single constraint
+        # Get the link_dim coordinates in the order they appear in breakpoints
+        link_coords = list(breakpoints.coords[link_dim].values)
 
-            # Compute weighted sum: sum(lambda * breakpoints)
-            weighted_sum = (lambda_var * bp_for_var).sum(dim=dim)
+        # Convert each variable to a LinearExpression and assign link_dim coordinate
+        var_exprs = []
+        for k in link_coords:
+            var = vars_dict[str(k)]
+            expr = var.to_linexpr()
+            # Expand dims to add link_dim coordinate
+            expr_data = expr.data.expand_dims({link_dim: [k]})
+            var_exprs.append(LinearExpression(expr_data, self))
 
-            # Add linking constraint: var == weighted_sum
-            link_con_name = f"{name}_link_{var_name}"
-            self.add_constraints(
-                var == weighted_sum,
-                name=link_con_name,
-            )
+        # Concatenate all variable expressions along link_dim
+        stacked_vars_expr = merge(var_exprs, dim=link_dim)
 
-        # Step 12: Return the convexity constraint as the primary reference
+        # Add single linking constraint for all variables:
+        # stacked_vars == (lambda * breakpoints).sum(dim=dim)
+        weighted_sum = (lambda_var * breakpoints).sum(dim=dim)
+        self.add_constraints(stacked_vars_expr == weighted_sum, name=link_name)
+
         return convex_con
 
     def add_constraints(
