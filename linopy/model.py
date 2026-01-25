@@ -51,7 +51,6 @@ from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
-    merge,
 )
 from linopy.io import (
     to_block_files,
@@ -726,19 +725,17 @@ class Model:
             if vars.name not in self.variables:
                 raise ValueError(f"Variable '{vars.name}' not found in model")
 
-            # Compute mask from NaN values if not provided
+            # Compute mask from NaN values only if not provided
             if mask is None:
                 mask = ~breakpoints.isnull()
 
-            # Lambda coordinates: all dims from breakpoints
-            lambda_dims = list(breakpoints.dims)
-            lambda_coords = [
-                pd.Index(breakpoints.coords[d].values, name=d) for d in lambda_dims
-            ]
-
-            # Create lambda variables
+            # Create lambda variables using breakpoints coords directly
             lambda_var = self.add_variables(
-                lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=mask
+                lower=0,
+                upper=1,
+                coords=breakpoints.coords,
+                name=lambda_name,
+                mask=mask,
             )
 
             # Add SOS2 constraint
@@ -762,27 +759,23 @@ class Model:
             )
 
         vars_dict = vars
+        vars_keys = set(vars_dict.keys())
 
-        # Validate all variables exist in model
-        for var_name, var in vars_dict.items():
-            if var.name not in self.variables:
-                raise ValueError(f"Variable '{var.name}' not found in model")
-
-        # Auto-detect or validate link_dim
+        # Auto-detect or validate link_dim (combined with variable validation)
         if link_dim is None:
             # Try to auto-detect link_dim from breakpoints
             for d in breakpoints.dims:
                 if d == dim:
                     continue
                 coords_set = set(str(c) for c in breakpoints.coords[d].values)
-                if coords_set == set(vars_dict.keys()):
+                if coords_set == vars_keys:
                     link_dim = str(d)
                     break
             if link_dim is None:
                 raise ValueError(
                     "Could not auto-detect link_dim. Please specify it explicitly. "
                     f"Breakpoint dimensions: {list(breakpoints.dims)}, "
-                    f"variable keys: {list(vars_dict.keys())}"
+                    f"variable keys: {list(vars_keys)}"
                 )
         else:
             # Validate link_dim exists and matches dict keys
@@ -792,21 +785,22 @@ class Model:
                     f"{list(breakpoints.dims)}"
                 )
             coords_set = set(str(c) for c in breakpoints.coords[link_dim].values)
-            if coords_set != set(vars_dict.keys()):
+            if coords_set != vars_keys:
                 raise ValueError(
                     f"link_dim '{link_dim}' coordinates {coords_set} "
-                    f"don't match variable keys {set(vars_dict.keys())}"
+                    f"don't match variable keys {vars_keys}"
                 )
 
-        # Compute mask from NaN values if not provided
+        # Lambda coordinates: breakpoints coords without link_dim (as list of Index)
+        lambda_coords = [
+            pd.Index(breakpoints.coords[d].values, name=d)
+            for d in breakpoints.dims
+            if d != link_dim
+        ]
+
+        # Compute mask from NaN values only if not provided
         if mask is None:
             mask = ~breakpoints.isnull()
-
-        # Lambda coordinates: all dims from breakpoints except link_dim
-        lambda_dims = [d for d in breakpoints.dims if d != link_dim]
-        lambda_coords = [
-            pd.Index(breakpoints.coords[d].values, name=d) for d in lambda_dims
-        ]
 
         # Lambda mask: valid if ANY breakpoint across link_dim is valid
         lambda_mask = mask.any(dim=link_dim)
@@ -824,21 +818,31 @@ class Model:
             lambda_var.sum(dim=dim) == 1, name=convex_name
         )
 
-        # Stack all variables into a single expression along link_dim for single constraint
-        # Get the link_dim coordinates in the order they appear in breakpoints
+        # Build stacked expression efficiently by concatenating variable labels directly
         link_coords = list(breakpoints.coords[link_dim].values)
 
-        # Convert each variable to a LinearExpression and assign link_dim coordinate
-        var_exprs = []
+        # Collect labels and validate variables exist in single pass
+        labels_list = []
         for k in link_coords:
             var = vars_dict[str(k)]
-            expr = var.to_linexpr()
-            # Expand dims to add link_dim coordinate
-            expr_data = expr.data.expand_dims({link_dim: [k]})
-            var_exprs.append(LinearExpression(expr_data, self))
+            if var.name not in self.variables:
+                raise ValueError(f"Variable '{var.name}' not found in model")
+            labels_list.append(var.labels.expand_dims({link_dim: [k]}))
 
-        # Concatenate all variable expressions along link_dim
-        stacked_vars_expr = merge(var_exprs, dim=link_dim)
+        # Stack labels directly using xr.concat (more efficient than merge)
+        stacked_labels = xr.concat(labels_list, dim=link_dim)
+
+        # Build LinearExpression Dataset directly with coeffs=1, avoiding intermediate objects
+        stacked_expr_data = Dataset(
+            {
+                "coeffs": xr.ones_like(stacked_labels, dtype=float).expand_dims(
+                    TERM_DIM
+                ),
+                "vars": stacked_labels.expand_dims(TERM_DIM),
+                "const": xr.zeros_like(stacked_labels.isel({link_dim: 0}), dtype=float),
+            }
+        )
+        stacked_vars_expr = LinearExpression(stacked_expr_data, self)
 
         # Add single linking constraint for all variables:
         # stacked_vars == (lambda * breakpoints).sum(dim=dim)
