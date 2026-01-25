@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -371,7 +373,7 @@ class TestNameGeneration:
 class TestLPFileOutput:
     """Tests for LP file output with piecewise constraints."""
 
-    def test_piecewise_written_to_lp(self, tmp_path) -> None:
+    def test_piecewise_written_to_lp(self, tmp_path: Path) -> None:
         """Test that piecewise constraints are properly written to LP file."""
         m = Model()
         x = m.add_variables(name="x")

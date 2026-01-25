@@ -745,6 +745,7 @@ class Model:
 
         if is_single:
             # Single expression case
+            assert isinstance(expr, Variable | LinearExpression)
             target_expr = self._to_linexpr(expr)
             # Build lambda coordinates from breakpoints dimensions
             lambda_coords = [
@@ -754,7 +755,8 @@ class Model:
 
         else:
             # Dict case - need to validate link_dim and build stacked expression
-            expr_dict = expr
+            assert isinstance(expr, dict)
+            expr_dict: dict[str, Variable | LinearExpression] = expr
             expr_keys = set(expr_dict.keys())
 
             # Auto-detect or validate link_dim
@@ -769,7 +771,7 @@ class Model:
 
             # Compute mask
             base_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
-            lambda_mask = base_mask.any(dim=link_dim)
+            lambda_mask = base_mask.any(dim=link_dim) if base_mask is not None else None
 
             # Build stacked expression from dict
             target_expr = self._build_stacked_expr(expr_dict, breakpoints, link_dim)
