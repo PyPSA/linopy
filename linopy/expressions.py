@@ -1072,19 +1072,27 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
-    def names_of_terms_used(self) -> list[str]:
+    def nvar(self) -> int:
         """
-        The names of the terms (variables) that are used (i.e., excluding those that are completely masked).
+        Get the number of unique variables in the linear expression.
+        Note that nvar <= nterm, as variables can appear multiple times and there can be terms which are completely masked out.
+        """
+        return len(self.variable_names)
+
+    @property
+    def variable_names(self) -> set[str]:
+        """
+        The names of the unique variables present in the expression
         """
         if self.nterm == 0:
-            return []
+            return set()
 
         # Collect all unique labels from the expression (excluding -1) while preserving order
         all_labels = self.vars.values.ravel()
         valid_labels = all_labels[all_labels != -1]
 
         if len(valid_labels) == 0:
-            return []
+            return set()
 
         # Get unique labels while preserving first occurrence order
         unique_labels, first_indices = np.unique(valid_labels, return_index=True)
@@ -1093,8 +1101,7 @@ class BaseExpression(ABC):
         # Batch lookup variable names for all labels
         positions = self.model.variables.get_label_position(ordered_labels)
 
-        # Deduplicate names while preserving order (dict.fromkeys is faster than set + list)
-        return list(dict.fromkeys(name for name, _ in positions if name is not None))
+        return {p[0] for p in positions if p[0] is not None}
 
     @property
     def shape(self) -> tuple[int, ...]:

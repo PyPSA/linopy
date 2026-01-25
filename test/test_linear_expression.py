@@ -1315,7 +1315,7 @@ def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
     )
 
 
-def test_term_names() -> None:
+def test_variable_names() -> None:
     m = Model()
     time = pd.Index(range(3), name="time")
 
@@ -1324,17 +1324,42 @@ def test_term_names() -> None:
 
     expr = a + b
     assert expr.nterm == 2
-    assert expr.names_of_terms_used == ["a", "b"]
+    assert expr.variable_names == {"a", "b"}
 
     mask = xr.DataArray(False, coords=[time])
     expr = a + (b * 1).where(mask)
     assert expr.nterm == 2
-    assert expr.names_of_terms_used == ["a"]
+    assert expr.variable_names == {"a"}
 
     expr = (b * 1).where(mask)
     assert expr.nterm == 1
-    assert expr.names_of_terms_used == []
+    assert expr.variable_names == set()
 
     expr = LinearExpression.from_constant(model=m, constant=5)
     assert expr.nterm == 0
-    assert expr.names_of_terms_used == []
+    assert expr.variable_names == set()
+
+
+def test_nvar_and_nterm() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    all_false = xr.DataArray(False, coords=[time])
+    not_0 = xr.DataArray([False, True, True], coords=[time])
+    not_1 = xr.DataArray([True, False, True], coords=[time])
+    not_2 = xr.DataArray([True, True, False], coords=[time])
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+    c = m.add_variables(name="c", coords=[time])
+
+    expr = (a.where(not_0) + b.where(not_1) + c.where(not_2)).densify_terms()
+    assert expr.nterm == 3
+    assert expr.nvar == 3
+
+    expr = a + b.where(all_false)
+    assert expr.nterm == 2
+    assert expr.nvar == 1
+
+    expr = expr.simplify()
+    assert expr.nterm == 1
+    assert expr.nvar == 1

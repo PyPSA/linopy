@@ -362,9 +362,9 @@ def test_power_of_three(x: Variable) -> None:
         (x * x) * (x * x)
 
 
-def test_term_names(x: Variable, y: Variable) -> None:
+def test_variable_names(x: Variable, y: Variable) -> None:
     expr = 2 * (x * x) + 3 * y + 1
-    assert expr.names_of_terms_used == ["x", "y"]
+    assert expr.variable_names == {"x", "y"}
 
     expr = 2 * (y * y) + 1
-    assert expr.names_of_terms_used == ["y"]
+    assert expr.variable_names == {"y"}
