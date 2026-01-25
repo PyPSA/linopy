@@ -1496,7 +1496,7 @@ class LinearExpression(BaseExpression):
 
             # Filter out invalid entries
             mask = (vars_row != -1) & (coeffs_row != 0) & ~np.isnan(coeffs_row)
-            valid_vars = vars_row[mask].astype(np.int64, copy=False)
+            valid_vars = vars_row[mask]
             valid_coeffs = coeffs_row[mask]
 
             if len(valid_vars) == 0:
@@ -1508,11 +1508,15 @@ class LinearExpression(BaseExpression):
                     ]
                 )
 
-            unique_vars, inverse = np.unique(valid_vars, return_inverse=True)
-            summed = np.bincount(inverse, weights=valid_coeffs)
-            nonzero = summed != 0
-            unique_vars = unique_vars[nonzero]
-            unique_coeffs = summed[nonzero]
+            # Use bincount to sum coefficients for each variable ID efficiently
+            max_var = int(valid_vars.max())
+            summed = np.bincount(
+                valid_vars, weights=valid_coeffs, minlength=max_var + 1
+            )
+
+            # Get non-zero entries
+            unique_vars = np.where(summed != 0)[0]
+            unique_coeffs = summed[unique_vars]
 
             # Pad to match input length
             result_vars = np.full(input_len, -1, dtype=float)
@@ -1692,17 +1696,6 @@ class LinearExpression(BaseExpression):
         This is the same as calling ``10*x + y`` + 1 but a bit more performant.
         """
 
-        if model is None:
-            for t in tuples:
-                if isinstance(t, tuple) and len(t) == 2:
-                    _, var = t
-                    if isinstance(var, variables.ScalarVariable):
-                        model = var.model
-                        break
-                    if isinstance(var, variables.Variable):
-                        model = var.model
-                        break
-
         def process_one(
             t: tuple[ConstantLike, str | Variable | ScalarVariable]
             | tuple[ConstantLike]
@@ -1738,11 +1731,7 @@ class LinearExpression(BaseExpression):
                     raise TypeError("Expected variable as second element of tuple.")
 
                 if model is None:
-                    model = expr.model
-                elif expr.model is not model:
-                    raise ValueError(
-                        "All variables in tuples must belong to the same model."
-                    )
+                    model = expr.model  # TODO: Ensure equality of models
                 return expr
 
             if len(t) == 1:

@@ -1102,10 +1102,6 @@ def test_linear_expression_from_tuples(x: Variable, y: Variable) -> None:
     expr5 = LinearExpression.from_tuples(1, model=x.model)
     assert isinstance(expr5, LinearExpression)
 
-    expr6 = LinearExpression.from_tuples(1, (10, x), (1, y))
-    assert isinstance(expr6, LinearExpression)
-    assert (expr6.const == 1).all()
-
 
 def test_linear_expression_from_tuples_bad_calls(
     m: Model, x: Variable, y: Variable
