@@ -591,6 +591,242 @@ class Model:
 
         variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
 
+    def add_piecewise_constraint(
+        self,
+        vars: Variable | dict[str, Variable],
+        breakpoints: DataArray,
+        link_dim: str | None = None,
+        dim: str = "breakpoint",
+        mask: DataArray | None = None,
+        name: str | None = None,
+    ) -> Constraint:
+        """
+        Add a piecewise linear constraint using SOS2 formulation.
+
+        This method creates a piecewise linear constraint that links one or more
+        variables together via a set of breakpoints. It uses the SOS2 (Special
+        Ordered Set of type 2) formulation with lambda (interpolation) variables.
+
+        The SOS2 formulation ensures that at most two adjacent lambda variables
+        can be non-zero, effectively selecting a segment of the piecewise linear
+        function.
+
+        Parameters
+        ----------
+        vars : Variable or dict[str, Variable]
+            The variable(s) to be linked by the piecewise constraint.
+            - If a single Variable is passed, the breakpoints directly specify
+              the piecewise points for that variable.
+            - If a dict is passed, the keys must match coordinates in `link_dim`
+              of the breakpoints, allowing multiple variables to be linked.
+        breakpoints : xr.DataArray
+            The breakpoint values defining the piecewise linear function.
+            Must have `dim` as one of its dimensions. If `vars` is a dict,
+            must also have `link_dim` dimension with coordinates matching the
+            dict keys.
+        link_dim : str, optional
+            The dimension in breakpoints that links to different variables.
+            Required when `vars` is a dict. If None and `vars` is a dict,
+            will attempt to auto-detect from breakpoints dimensions.
+        dim : str, default "breakpoint"
+            The dimension in breakpoints that represents the breakpoint index.
+            This dimension's coordinates must be numeric (used as SOS2 weights).
+        mask : xr.DataArray, optional
+            Boolean mask indicating which piecewise constraints are valid.
+            If None, auto-detected from NaN values in breakpoints.
+        name : str, optional
+            Base name for the generated variables and constraints.
+            If None, auto-generates names like "pwl0", "pwl1", etc.
+
+        Returns
+        -------
+        Constraint
+            The convexity constraint (sum of lambda = 1). Lambda variables
+            and other constraints can be accessed via:
+            - `model.variables[f"{name}_lambda"]`
+            - `model.constraints[f"{name}_convex"]`
+            - `model.constraints[f"{name}_link_{var_name}"]`
+
+        Raises
+        ------
+        ValueError
+            If vars is not a Variable or dict of Variables.
+            If breakpoints doesn't have the required dim dimension.
+            If link_dim cannot be auto-detected when vars is a dict.
+            If link_dim coordinates don't match dict keys.
+            If dim coordinates are not numeric.
+
+        Examples
+        --------
+        Single variable piecewise constraint:
+
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> breakpoints = xr.DataArray([0, 10, 50, 100], dims=["bp"])
+        >>> m.add_piecewise_constraint(x, breakpoints, dim="bp")
+
+        Multiple linked variables (e.g., power-efficiency curve):
+
+        >>> m = Model()
+        >>> generators = ["gen1", "gen2"]
+        >>> power = m.add_variables(coords=[generators], name="power")
+        >>> efficiency = m.add_variables(coords=[generators], name="efficiency")
+        >>> breakpoints = xr.DataArray(
+        ...     [[0, 50, 100], [0.8, 0.95, 0.9]],
+        ...     coords={"var": ["power", "efficiency"], "bp": [0, 1, 2]},
+        ... )
+        >>> m.add_piecewise_constraint(
+        ...     {"power": power, "efficiency": efficiency},
+        ...     breakpoints,
+        ...     link_dim="var",
+        ...     dim="bp",
+        ... )
+
+        Notes
+        -----
+        The piecewise linear constraint is formulated using SOS2 variables:
+
+        1. Lambda variables λ_i with bounds [0, 1] are created for each breakpoint
+        2. SOS2 constraint ensures at most two adjacent λ_i can be non-zero
+        3. Convexity constraint: Σ λ_i = 1
+        4. Linking constraints: var = Σ λ_i × breakpoint_i (for each variable)
+        """
+        # Step 1: Input validation
+        if not isinstance(vars, Variable | dict):
+            raise ValueError(
+                f"'vars' must be a Variable or dict of Variables, got {type(vars)}"
+            )
+
+        if dim not in breakpoints.dims:
+            raise ValueError(
+                f"breakpoints must have dimension '{dim}', "
+                f"but only has dimensions {list(breakpoints.dims)}"
+            )
+
+        # Validate dim coordinates are numeric (required for SOS2 weights)
+        if not pd.api.types.is_numeric_dtype(breakpoints.coords[dim]):
+            raise ValueError(
+                f"Breakpoint dimension '{dim}' must have numeric coordinates "
+                f"for SOS2 weights, but got {breakpoints.coords[dim].dtype}"
+            )
+
+        # Step 2: Normalize vars to dict
+        if isinstance(vars, Variable):
+            vars_dict: dict[str, Variable] = {vars.name: vars}
+            single_var = True
+        else:
+            vars_dict = vars
+            single_var = False
+
+        # Validate all variables exist in model
+        for var_name, var in vars_dict.items():
+            if var.name not in self.variables:
+                raise ValueError(f"Variable '{var.name}' not found in model")
+
+        # Step 3: Auto-detect or validate link_dim
+        if not single_var:
+            if link_dim is None:
+                # Try to auto-detect link_dim from breakpoints
+                for d in breakpoints.dims:
+                    if d == dim:
+                        continue
+                    coords_set = set(str(c) for c in breakpoints.coords[d].values)
+                    if coords_set == set(vars_dict.keys()):
+                        link_dim = str(d)
+                        break
+                if link_dim is None:
+                    raise ValueError(
+                        "Could not auto-detect link_dim. Please specify it explicitly. "
+                        f"Breakpoint dimensions: {list(breakpoints.dims)}, "
+                        f"variable keys: {list(vars_dict.keys())}"
+                    )
+            else:
+                # Validate link_dim exists and matches dict keys
+                if link_dim not in breakpoints.dims:
+                    raise ValueError(
+                        f"link_dim '{link_dim}' not found in breakpoints dimensions "
+                        f"{list(breakpoints.dims)}"
+                    )
+                coords_set = set(str(c) for c in breakpoints.coords[link_dim].values)
+                if coords_set != set(vars_dict.keys()):
+                    raise ValueError(
+                        f"link_dim '{link_dim}' coordinates {coords_set} "
+                        f"don't match variable keys {set(vars_dict.keys())}"
+                    )
+
+        # Step 4: Compute mask from NaN values if not provided
+        if mask is None:
+            mask = ~breakpoints.isnull()
+
+        # Step 5: Determine lambda coordinates (all dims except link_dim)
+        # Lambda has all dims from breakpoints except link_dim
+        excluded_dims = set()
+        if link_dim is not None:
+            excluded_dims.add(link_dim)
+
+        lambda_dims = [d for d in breakpoints.dims if d not in excluded_dims]
+        lambda_coords = [
+            pd.Index(breakpoints.coords[d].values, name=d) for d in lambda_dims
+        ]
+
+        # Step 6: Generate names
+        if name is None:
+            # Find unused pwl name
+            i = 0
+            while f"pwl{i}_lambda" in self.variables:
+                i += 1
+            name = f"pwl{i}"
+
+        lambda_name = f"{name}_lambda"
+        convex_name = f"{name}_convex"
+
+        # Step 7: Compute lambda mask
+        # Lambda variable is valid if ANY of its breakpoints across link_dim are valid
+        if link_dim is not None:
+            lambda_mask = mask.any(dim=link_dim)
+        else:
+            # For single var case, use mask directly (collapsed along other dims if needed)
+            lambda_mask = mask
+
+        # Step 8: Create lambda variables
+        lambda_var = self.add_variables(
+            lower=0,
+            upper=1,
+            coords=lambda_coords,
+            name=lambda_name,
+            mask=lambda_mask,
+        )
+
+        # Step 9: Add SOS2 constraint on lambda variables
+        self.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+
+        # Step 10: Add convexity constraint (sum of lambda = 1)
+        convex_con = self.add_constraints(
+            lambda_var.sum(dim=dim) == 1,
+            name=convex_name,
+        )
+
+        # Step 11: Add linking constraints for each variable
+        for var_name, var in vars_dict.items():
+            # Get breakpoints for this variable
+            if link_dim is not None:
+                bp_for_var = breakpoints.sel({link_dim: var_name})
+            else:
+                bp_for_var = breakpoints
+
+            # Compute weighted sum: sum(lambda * breakpoints)
+            weighted_sum = (lambda_var * bp_for_var).sum(dim=dim)
+
+            # Add linking constraint: var == weighted_sum
+            link_con_name = f"{name}_link_{var_name}"
+            self.add_constraints(
+                var == weighted_sum,
+                name=link_con_name,
+            )
+
+        # Step 12: Return the convexity constraint as the primary reference
+        return convex_con
+
     def add_constraints(
         self,
         lhs: VariableLike
