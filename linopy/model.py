@@ -746,7 +746,10 @@ class Model:
         if is_single:
             # Single expression case
             target_expr = self._to_linexpr(expr)
-            lambda_coords = breakpoints.coords
+            # Build lambda coordinates from breakpoints dimensions
+            lambda_coords = [
+                pd.Index(breakpoints.coords[d].values, name=d) for d in breakpoints.dims
+            ]
             lambda_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
 
         else:
