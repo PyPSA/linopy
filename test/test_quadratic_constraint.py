@@ -1644,3 +1644,216 @@ class TestQuadraticExpressionCoverage:
         qexpr = x * x
         result = qexpr.rolling(dim_0=3, center=True).sum()
         assert result is not None
+
+
+class TestPrintSingleQuadraticConstraint:
+    """Tests for print_single_quadratic_constraint function."""
+
+    def test_print_single_quadratic_constraint_basic(self) -> None:
+        """Test printing a single quadratic constraint."""
+        from linopy.common import print_single_quadratic_constraint
+
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        m.add_quadratic_constraints(x * x + 2 * y, "<=", 10, name="qc")
+
+        label = int(m.quadratic_constraints["qc"].labels.values)
+        result = print_single_quadratic_constraint(m, label)
+
+        assert "qc" in result
+        assert "≤" in result or "<=" in result
+        assert "10" in result
+
+    def test_print_single_quadratic_constraint_multidim(self) -> None:
+        """Test printing a single quadratic constraint from multidimensional."""
+        from linopy.common import print_single_quadratic_constraint
+
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+
+        # Get first label
+        labels = m.quadratic_constraints["qc"].labels.values.ravel()
+        first_label = int(labels[labels != -1][0])
+        result = print_single_quadratic_constraint(m, first_label)
+
+        assert "qc" in result
+
+
+class TestQuadraticConstraintIOCoverage:
+    """Tests for IO coverage of quadratic constraints."""
+
+    def test_lp_file_with_progress(self) -> None:
+        """Test LP file writing with progress=True."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+        m.add_objective(x)
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            # Write with progress (tests the progress branch)
+            m.to_file(f.name, progress=True)
+            content = Path(f.name).read_text()
+
+        assert "qc" in content.lower() or "QCMATRIX" in content
+
+    def test_lp_file_only_quadratic_constraints(self) -> None:
+        """Test LP file with only quadratic constraints (no linear)."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        # Only quadratic constraint, no linear constraints
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+        m.add_objective(x)
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            m.to_file(f.name)
+            content = Path(f.name).read_text()
+
+        # Should have "s.t." section header
+        assert "s.t." in content or "Subject" in content
+
+    def test_lp_file_explicit_coordinate_names(self) -> None:
+        """Test LP file with explicit coordinate names."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(2)], name="x")
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+        m.add_objective(x.sum())
+
+        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+            m.to_file(f.name, explicit_coordinate_names=True)
+            content = Path(f.name).read_text()
+
+        assert "qc" in content.lower()
+
+    def test_netcdf_roundtrip_with_linear_terms(self) -> None:
+        """Test netCDF roundtrip for QC with both quadratic and linear terms."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        # Mixed quadratic and linear terms
+        m.add_quadratic_constraints(x * x + 2 * x + 3 * y, "<=", 10, name="qc")
+        m.add_objective(x + y)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model.nc"
+            m.to_netcdf(path)
+
+            m2 = linopy.read_netcdf(path)
+
+            assert len(m2.quadratic_constraints) == 1
+            assert "qc" in m2.quadratic_constraints
+
+
+class TestQuadraticConstraintToPolars:
+    """Tests for to_polars method coverage."""
+
+    def test_to_polars_with_linear_terms(self) -> None:
+        """Test to_polars with mixed quadratic and linear terms."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        qc = m.add_quadratic_constraints(x * x + 2 * x + 3 * y, "<=", 10, name="qc")
+
+        df = qc.to_polars()
+        assert "coeffs" in df.columns
+        assert "is_quadratic" in df.columns
+
+        # Should have both quadratic and linear terms
+        n_quad = df.filter(pl.col("is_quadratic")).height
+        n_linear = df.filter(~pl.col("is_quadratic")).height
+        assert n_quad >= 1
+        assert n_linear >= 1
+
+    def test_to_polars_multidimensional(self) -> None:
+        """Test to_polars with multidimensional constraint."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3)], name="x")
+        qc = m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+
+        df = qc.to_polars()
+        assert df.height > 0
+        # Should have 3 unique labels (one per coordinate)
+        assert df["labels"].n_unique() == 3
+
+
+class TestQuadraticConstraintFlat:
+    """Tests for flat property coverage."""
+
+    def test_flat_multidimensional(self) -> None:
+        """Test flat property with multidimensional constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(2), range(3)], name="x")
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
+
+        flat = m.quadratic_constraints.flat
+        assert isinstance(flat, pd.DataFrame)
+        assert len(flat) > 0
+
+    def test_flat_multiple_constraints(self) -> None:
+        """Test flat property with multiple constraints."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+        y = m.add_variables(lower=0, name="y")
+        m.add_quadratic_constraints(x * x, "<=", 10, name="qc1")
+        m.add_quadratic_constraints(y * y, "<=", 20, name="qc2")
+
+        flat = m.quadratic_constraints.flat
+        assert len(flat) >= 2
+
+
+class TestQuadraticExpressionAdditional:
+    """Additional tests for QuadraticExpression edge cases."""
+
+    def test_quadratic_expression_constant_only(self) -> None:
+        """Test quadratic expression that simplifies to constant."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+
+        # Expression with only constant term (after cancellation)
+        qexpr = x * x - x * x + 5
+        # This should still be a QuadraticExpression but effectively constant
+        assert qexpr is not None
+
+    def test_quadratic_expression_to_constraint_ge(self) -> None:
+        """Test QuadraticExpression.to_constraint with >= sign."""
+        from linopy.constraints import QuadraticConstraint
+
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+
+        qexpr = x * x
+        qc = qexpr.to_constraint(">=", 5)
+        assert isinstance(qc, QuadraticConstraint)
+        assert str(qc.sign.values) == ">="
+
+    def test_quadratic_expression_to_constraint_eq(self) -> None:
+        """Test QuadraticExpression.to_constraint with = sign."""
+        from linopy.constraints import QuadraticConstraint
+
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+
+        qexpr = x * x
+        qc = qexpr.to_constraint("=", 5)
+        assert isinstance(qc, QuadraticConstraint)
+        assert str(qc.sign.values) == "="
+
+    def test_quadratic_expression_comparison_operators(self) -> None:
+        """Test QuadraticExpression comparison operators."""
+        m = Model()
+        x = m.add_variables(lower=0, name="x")
+
+        qexpr = x * x
+
+        # Test <= operator
+        c1 = qexpr <= 10
+        assert c1 is not None
+
+        # Test >= operator
+        c2 = qexpr >= 1
+        assert c2 is not None
+
+        # Test == operator
+        c3 = qexpr == 5
+        assert c3 is not None
