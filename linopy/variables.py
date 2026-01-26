@@ -52,7 +52,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import HELPER_DIMS, SOS_DIM_ATTR, SOS_TYPE_ATTR, TERM_DIM
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
@@ -195,10 +195,10 @@ class Variable:
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
-        if "sos_type" in data.attrs or "sos_dim" in data.attrs:
-            if (sos_type := data.attrs.get("sos_type")) not in (1, 2):
+        if SOS_TYPE_ATTR in data.attrs or SOS_DIM_ATTR in data.attrs:
+            if (sos_type := data.attrs.get(SOS_TYPE_ATTR)) not in (1, 2):
                 raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
-            if (sos_dim := data.attrs.get("sos_dim")) not in data.dims:
+            if (sos_dim := data.attrs.get(SOS_DIM_ATTR)) not in data.dims:
                 raise ValueError(
                     f"sos_dim must name a variable dimension, got {sos_dim}"
                 )
@@ -328,8 +328,8 @@ class Variable:
         dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
-        sos_type = self.attrs.get("sos_type")
-        sos_dim = self.attrs.get("sos_dim")
+        sos_type = self.attrs.get(SOS_TYPE_ATTR)
+        sos_dim = self.attrs.get(SOS_DIM_ATTR)
         lines = []
 
         if dims:
@@ -1244,8 +1244,8 @@ class Variables:
                 if ds.coords
                 else ""
             )
-            if (sos_type := ds.attrs.get("sos_type")) in (1, 2) and (
-                sos_dim := ds.attrs.get("sos_dim")
+            if (sos_type := ds.attrs.get(SOS_TYPE_ATTR)) in (1, 2) and (
+                sos_dim := ds.attrs.get(SOS_DIM_ATTR)
             ):
                 coords += f" - sos{sos_type} on {sos_dim}"
             r += f" * {name}{coords}\n"
@@ -1401,8 +1401,8 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if self[name].attrs.get("sos_dim")
-                and self[name].attrs.get("sos_type") in (1, 2)
+                if self[name].attrs.get(SOS_DIM_ATTR)
+                and self[name].attrs.get(SOS_TYPE_ATTR) in (1, 2)
             },
             self.model,
         )
