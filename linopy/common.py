@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
@@ -264,7 +264,17 @@ def as_dataarray(
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
+    elif isinstance(arr, DataArray):
+        # Apply coords via reindex/expand if provided as dict (for consistency with other input types)
+        if coords is not None and isinstance(coords, Mapping):
+            # Reindex dimensions that exist in both arr and coords
+            reindex_coords = {k: v for k, v in coords.items() if k in arr.dims}
+            if reindex_coords:
+                arr = arr.reindex(reindex_coords)
+            # Expand to new dimensions from coords
+            expand_coords = {k: v for k, v in coords.items() if k not in arr.dims}
+            if expand_coords:
+                arr = arr.expand_dims(expand_coords)
     elif not isinstance(arr, DataArray):
         supported_types = [
             np.number,
