@@ -1194,6 +1194,33 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
         merge(expr1, expr2)
 
 
+def test_merge_with_override_and_reordered_coords(m: Model) -> None:
+    """Test merge with join='override' when coordinates have same values but different order."""
+    import pandas as pd
+
+    # Create variables with same coordinate values but different order
+    coords_a = pd.Index(["x", "y", "z"], name="dim_0")
+    coords_b = pd.Index(["z", "x", "y"], name="dim_0")  # Same values, different order
+
+    v1 = m.add_variables(coords=[coords_a], name="v1")
+    v2 = m.add_variables(coords=[coords_b], name="v2")
+
+    expr1 = 1 * v1
+    expr2 = 2 * v2
+
+    # Merging along _term (default) triggers the override logic because
+    # both expressions have the same dimension sizes
+    res = merge([expr1, expr2], cls=LinearExpression)
+
+    # Verify that the coordinates match the first expression's order
+    assert list(res.coords["dim_0"].values) == ["x", "y", "z"]
+    # The result should have 2 terms (one from each expression)
+    assert res.nterm == 2
+    # Verify the coefficients are correctly aligned (not mismatched due to positional concat)
+    assert res.sel(dim_0="x").coeffs.values.tolist() == [1.0, 2.0]
+    assert res.sel(dim_0="z").coeffs.values.tolist() == [1.0, 2.0]
+
+
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:
     expr = x + y
     expr2: LinearExpression = sum([x, y])  # type: ignore
