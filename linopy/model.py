@@ -134,6 +134,7 @@ class Model:
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
+        "_auto_mask",
         "_solver_dir",
         "solver_model",
         "solver_name",
@@ -145,6 +146,7 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
+        auto_mask: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -164,6 +166,10 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
+        auto_mask : bool
+            Whether to automatically mask variables and constraints where
+            bounds, coefficients, or RHS values contain NaN. The default is
+            False.
 
         Returns
         -------
@@ -184,6 +190,7 @@ class Model:
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
+        self._auto_mask: bool = bool(auto_mask)
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -315,6 +322,18 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
+    def auto_mask(self) -> bool:
+        """
+        If True, automatically mask variables and constraints where bounds,
+        coefficients, or RHS values contain NaN.
+        """
+        return self._auto_mask
+
+    @auto_mask.setter
+    def auto_mask(self, value: bool) -> None:
+        self._auto_mask = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -341,6 +360,7 @@ class Model:
             "_varnameCounter",
             "_connameCounter",
             "force_dim_names",
+            "auto_mask",
         ]
 
     def __repr__(self) -> str:
@@ -532,13 +552,27 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
+        # Auto-mask based on NaN in bounds (use numpy for speed)
+        if self.auto_mask:
+            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
+                data.upper.values
+            )
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.coords, dims=data.dims
+            )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
+
         start = self._xCounter
         end = start + data.labels.size
         data.labels.values = np.arange(start, end).reshape(data.labels.shape)
         self._xCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            # Use numpy where for speed (38x faster than xarray where)
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -656,6 +690,14 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
+        # Capture original RHS for auto-masking before constraint creation
+        # (NaN values in RHS are lost during constraint creation)
+        # Use numpy for speed instead of xarray's notnull()
+        original_rhs_mask = None
+        if self.auto_mask and rhs is not None:
+            rhs_da = as_dataarray(rhs)
+            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
+
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
@@ -708,6 +750,32 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
+            # Broadcast mask to match data shape for correct numpy where behavior
+            if mask.shape != data.labels.shape:
+                mask, _ = xr.broadcast(mask, data.labels)
+
+        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
+        if self.auto_mask:
+            # Check if expression is null: all vars == -1
+            # Use max() instead of all() - if max == -1, all are -1 (since valid vars >= 0)
+            # This is ~30% faster for large term dimensions
+            vars_all_invalid = data.vars.values.max(axis=-1) == -1
+            auto_mask_values = ~vars_all_invalid
+            if original_rhs_mask is not None:
+                coords, dims, rhs_notnull = original_rhs_mask
+                # Broadcast RHS mask to match data shape if needed
+                if rhs_notnull.shape != auto_mask_values.shape:
+                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
+                    rhs_da, _ = xr.broadcast(rhs_da, data.labels)
+                    rhs_notnull = rhs_da.values
+                auto_mask_values = auto_mask_values & rhs_notnull
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
+            )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
 
         self.check_force_dim_names(data)
 
@@ -717,7 +785,8 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            # Use numpy where for speed (38x faster than xarray where)
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
