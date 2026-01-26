@@ -24,6 +24,7 @@ repos:
     rev: v0.4.1
     hooks:
     -   id: blackdoc
+        exclude: ^dev-scripts/
         additional_dependencies: ['black==24.8.0']
         exclude: dev-scripts/quadratic_constraints_plan\.md
 -   repo: https://github.com/codespell-project/codespell

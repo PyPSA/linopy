@@ -12,7 +12,6 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-import xarray.core
 from xarray.testing import assert_equal
 
 import linopy
@@ -68,6 +67,12 @@ def test_constraint_name(c: linopy.constraints.Constraint) -> None:
 def test_empty_constraints_repr() -> None:
     # test empty contraints
     Model().constraints.__repr__()
+
+
+def test_cannot_create_constraint_without_variable() -> None:
+    model = linopy.Model()
+    with pytest.raises(ValueError):
+        _ = linopy.LinearExpression(12, model) == linopy.LinearExpression(13, model)
 
 
 def test_constraints_getter(m: Model, c: linopy.constraints.Constraint) -> None:

@@ -1,7 +1,8 @@
 Release Notes
 =============
 
-.. Upcoming Version
+Upcoming Version
+----------------
 
 * Add support for quadratic constraints (QCP/QCQP). Use `model.add_quadratic_constraints()` to add constraints of the form x'Qx + a'x <= b. Supported solvers: Gurobi, MOSEK, COPT. Gurobi also supports nonconvex quadratic constraints.
 * Add MPS export support for models with quadratic constraints (requires Gurobi).
@@ -11,7 +12,43 @@ Release Notes
 * Add `model.quadratic_constraints` container for inspecting quadratic constraints.
 * Add `model.matrices` accessor properties for quadratic constraints: `qclabels`, `qc_sense`, `qc_rhs`, `Qc`, `qc_linear`.
 * Fix `expression.shape`to always exclude the _term dimension
-* Fix compatibility for xpress versions below 9.6 (regression)
+* Fix docs (pick highs solver)
+* Add the `sphinx-copybutton` to the documentation
+
+Version 0.6.1
+--------------
+
+* Avoid Gurobi initialization on linopy import.
+* Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
+
+Version 0.6.0
+--------------
+
+**Features**
+
+* Add ``mock_solve`` option to ``Model.solve()`` for quick testing without actual solving
+* Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
+* Add ``simplify`` method to ``LinearExpression`` to combine duplicate terms
+* Add convenience function to create ``LinearExpression`` from constant
+* Add support for GPU-accelerated solver `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`_
+* Add solver features registry for introspection of solver capabilities
+
+**Performance**
+
+* Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
+* Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
+
+**Bug Fixes**
+
+* Fix HiGHS solver to properly stop on Ctrl-C keyboard interrupt
+* Fix CBC solver to correctly parse negative objective values
+* Fix Xpress compatibility for versions below 9.6 (regression from namespace change)
+* Fix Xpress ``getDual()`` fallback for older versions
+* Fix missing dependency for jupyter notebook example in documentation
+
+**Solver Updates**
+
+* Add Xpress 9.8+ API support with full backward compatibility to 9.6+
 
 Version 0.5.8
 --------------

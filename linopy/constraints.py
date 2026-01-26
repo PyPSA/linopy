@@ -29,6 +29,7 @@ from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
 from linopy.common import (
+    LabelPositionIndex,
     LocIndexer,
     align_lines_by_delimiter,
     assign_multiindex_safe,
@@ -42,7 +43,6 @@ from linopy.common import (
     group_terms_polars,
     has_optimized_model,
     infer_schema_polars,
-    is_constant,
     iterate_slices,
     maybe_replace_signs,
     print_coord,
@@ -50,6 +50,7 @@ from linopy.common import (
     print_single_expression,
     print_single_quadratic_constraint,
     replace_by_map,
+    require_constant,
     save_join,
     to_dataframe,
     to_polars,
@@ -459,7 +460,7 @@ class Constraint:
         return self.data.sign
 
     @sign.setter
-    @is_constant
+    @require_constant
     def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self._data = assign_multiindex_safe(self.data, sign=value)
@@ -699,6 +700,7 @@ class Constraints:
 
     data: dict[str, Constraint]
     model: Model
+    _label_position_index: LabelPositionIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
@@ -795,12 +797,19 @@ class Constraints:
         Add a constraint to the constraints constrainer.
         """
         self.data[constraint.name] = constraint
+        self._invalidate_label_position_index()
 
     def remove(self, name: str) -> None:
         """
         Remove constraint `name` from the constraints.
         """
         self.data.pop(name)
+        self._invalidate_label_position_index()
+
+    def _invalidate_label_position_index(self) -> None:
+        """Invalidate the label position index cache."""
+        if self._label_position_index is not None:
+            self._label_position_index.invalidate()
 
     @property
     def labels(self) -> Dataset:
@@ -872,9 +881,36 @@ class Constraints:
         """
         Get the number all constraints effectively used by the model.
 
-        These excludes constraints with missing labels.
+        This excludes constraints with missing labels or where all variables
+        are masked (vars == -1).
         """
-        return len(self.flat.labels.unique())
+        total = 0
+        for con in self.data.values():
+            labels = con.labels.values
+            vars_arr = con.vars.values
+
+            # Handle scalar constraint (single constraint, labels is 0-d)
+            if labels.ndim == 0:
+                # Scalar: valid if label != -1 and any var != -1
+                if labels != -1 and (vars_arr != -1).any():
+                    total += 1
+                continue
+
+            # Array constraint: labels has constraint dimensions, vars has
+            # constraint dimensions + _term dimension
+            valid_labels = labels != -1
+
+            # Check if any variable in each constraint is valid (not -1)
+            # vars has shape (..., n_terms) where ... matches labels shape
+            has_valid_var = (vars_arr != -1).any(axis=-1)
+
+            active = valid_labels & has_valid_var
+
+            if con.mask is not None:
+                active = active & con.mask.values
+
+            total += int(active.sum())
+        return total
 
     @property
     def inequalities(self) -> Constraints:
@@ -960,8 +996,12 @@ class Constraints:
     ):
         """
         Get tuple of name and coordinate for constraint labels.
+
+        Uses an optimized O(log n) binary search implementation with a cached index.
         """
-        return get_label_position(self, values)
+        if self._label_position_index is None:
+            self._label_position_index = LabelPositionIndex(self)
+        return get_label_position(self, values, self._label_position_index)
 
     def print_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
@@ -978,7 +1018,14 @@ class Constraints:
             if display_max_terms is not None:
                 opts.set_value(display_max_terms=display_max_terms)
             res = [print_single_constraint(self.model, v) for v in values]
-        print("\n".join(res))
+
+        output = "\n".join(res)
+        try:
+            print(output)
+        except UnicodeEncodeError:
+            # Replace Unicode math symbols with ASCII equivalents for Windows console
+            output = output.replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
+            print(output)
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
@@ -1402,7 +1449,7 @@ class QuadraticConstraint:
         return self.data.sign
 
     @sign.setter
-    @is_constant
+    @require_constant
     def sign(self, value: SignLike) -> None:
         value = maybe_replace_signs(DataArray(value)).broadcast_like(self.sign)
         self._data = assign_multiindex_safe(self.data, sign=value)

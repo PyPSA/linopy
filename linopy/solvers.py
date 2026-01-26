@@ -13,6 +13,7 @@ import os
 import re
 import subprocess as sub
 import sys
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -24,12 +25,17 @@ import numpy as np
 import pandas as pd
 from packaging.version import parse as parse_version
 
+import linopy.io
 from linopy.constants import (
     Result,
     Solution,
     SolverStatus,
     Status,
     TerminationCondition,
+)
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_solvers_with_feature,
 )
 
 if TYPE_CHECKING:
@@ -39,16 +45,11 @@ if TYPE_CHECKING:
 
 EnvType = TypeVar("EnvType")
 
-QUADRATIC_SOLVERS = [
-    "gurobi",
-    "xpress",
-    "cplex",
-    "highs",
-    "scip",
-    "mosek",
-    "copt",
-    "mindopt",
-]
+# Generated from solver_capabilities registry for backward compatibility
+QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
+NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
+    SolverFeature.SOLUTION_FILE_NOT_NEEDED
+)
 
 # Solvers that support quadratic constraints (QCP/QCQP) via LP file format
 # Note: HiGHS does NOT support quadratic constraints
@@ -65,23 +66,79 @@ NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS = [
     "gurobi",
 ]
 
-# Solvers that don't need a solution file when keep_files=False
-NO_SOLUTION_FILE_SOLVERS = [
-    "xpress",
-    "gurobi",
-    "highs",
-    "mosek",
-    "scip",
-    "copt",
-    "mindopt",
-]
-
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
 available_solvers = []
 
 which = "where" if os.name == "nt" else "which"
+
+
+def _run_highs_with_keyboard_interrupt(h: Any) -> None:
+    """
+    Run `highspy.Highs.run()` while ensuring Ctrl-C cancels the solve.
+
+    HiGHS can run for a long time inside a C-extension call. Running it in a
+    worker thread allows the main thread to reliably receive KeyboardInterrupt
+    and signal HiGHS to stop via `cancelSolve()`.
+    """
+
+    handle_keyboard_interrupt = getattr(h, "HandleKeyboardInterrupt", None)
+    handle_user_interrupt = getattr(h, "HandleUserInterrupt", None)
+
+    old_handle_keyboard_interrupt = (
+        handle_keyboard_interrupt if not callable(handle_keyboard_interrupt) else None
+    )
+    old_handle_user_interrupt = (
+        handle_user_interrupt if not callable(handle_user_interrupt) else None
+    )
+
+    try:
+        if callable(handle_keyboard_interrupt):
+            handle_keyboard_interrupt(True)
+        elif handle_keyboard_interrupt is not None:
+            h.HandleKeyboardInterrupt = True
+
+        if callable(handle_user_interrupt):
+            handle_user_interrupt(True)
+        elif handle_user_interrupt is not None:
+            h.HandleUserInterrupt = True
+
+        finished = threading.Event()
+        run_error: BaseException | None = None
+
+        def _target() -> None:
+            nonlocal run_error
+            try:
+                h.run()
+            except BaseException as exc:  # pragma: no cover
+                run_error = exc
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=_target, name="linopy-highs-run", daemon=True)
+        thread.start()
+
+        try:
+            while not finished.wait(0.1):
+                pass
+        except KeyboardInterrupt:
+            cancel_solve = getattr(h, "cancelSolve", None)
+            if callable(cancel_solve):
+                with contextlib.suppress(Exception):
+                    cancel_solve()
+            while not finished.wait(0.1):
+                pass
+            raise
+
+        if run_error is not None:
+            raise run_error
+    finally:
+        if old_handle_keyboard_interrupt is not None:
+            h.HandleKeyboardInterrupt = old_handle_keyboard_interrupt
+        if old_handle_user_interrupt is not None:
+            h.HandleUserInterrupt = old_handle_user_interrupt
+
 
 # the first available solver will be the default solver
 with contextlib.suppress(ModuleNotFoundError):
@@ -160,6 +217,16 @@ with contextlib.suppress(ModuleNotFoundError):
     except coptpy.CoptError:
         pass
 
+with contextlib.suppress(ModuleNotFoundError):
+    import cupdlpx
+
+    try:
+        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
+        available_solvers.append("cupdlpx")
+    except ImportError:
+        pass
+
+
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 quadratic_constraint_solvers = [
     s for s in QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
@@ -197,6 +264,7 @@ class SolverName(enum.Enum):
     COPT = "copt"
     MindOpt = "mindopt"
     PIPS = "pips"
+    cuPDLPx = "cupdlpx"
 
 
 def path_to_string(path: Path) -> str:
@@ -511,7 +579,7 @@ class CBC(Solver[None]):
         variables = {v.name for v in h.getVariables()}
 
         def get_solver_solution() -> Solution:
-            m = re.match(r"Optimal.* - objective value (\d+\.?\d*)$", first_line)
+            m = re.match(r"Optimal.* - objective value (-?\d+\.?\d*)$", first_line)
             if m and len(m.groups()) == 1:
                 objective = float(m.group(1))
             else:
@@ -941,7 +1009,7 @@ class Highs(Solver[None]):
         elif warmstart_fn:
             h.readBasis(path_to_string(warmstart_fn))
 
-        h.run()
+        _run_highs_with_keyboard_interrupt(h)
 
         condition = h.getModelStatus()
         termination_condition = CONDITION_MAP.get(
@@ -1598,13 +1666,11 @@ class Xpress(Solver[None]):
         Result
         """
         CONDITION_MAP = {
-            "lp_optimal": "optimal",
-            "mip_optimal": "optimal",
-            "lp_infeasible": "infeasible",
-            "lp_infeas": "infeasible",
-            "mip_infeasible": "infeasible",
-            "lp_unbounded": "unbounded",
-            "mip_unbounded": "unbounded",
+            xpress.SolStatus.NOTFOUND: "unknown",
+            xpress.SolStatus.OPTIMAL: "optimal",
+            xpress.SolStatus.FEASIBLE: "terminated_by_limit",
+            xpress.SolStatus.INFEASIBLE: "infeasible",
+            xpress.SolStatus.UNBOUNDED: "unbounded",
         }
 
         io_api = read_io_api_from_problem_file(problem_fn)
@@ -1612,49 +1678,82 @@ class Xpress(Solver[None]):
 
         m = xpress.problem()
 
-        m.read(path_to_string(problem_fn))
-        m.setControl(self.solver_options)
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
+
+        # Set solver options - new API uses setControl per option, old API accepts dict
+        if self.solver_options is not None:
+            m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(path_to_string(log_fn))
+            try:  # Try new API first
+                m.setLogFile(path_to_string(log_fn))
+            except AttributeError:  # Fallback to old API
+                m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(path_to_string(warmstart_fn))
+            try:  # Try new API first
+                m.readBasis(path_to_string(warmstart_fn))
+            except AttributeError:  # Fallback to old API
+                m.readbasis(path_to_string(warmstart_fn))
 
-        m.solve()
+        m.optimize()
 
         # if the solver is stopped (timelimit for example), postsolve the problem
-        if m.getAttrib("solvestatus") == xpress.solvestatus_stopped:
-            m.postsolve()
+        if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
+            try:  # Try new API first
+                m.postSolve()
+            except AttributeError:  # Fallback to old API
+                m.postsolve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(path_to_string(basis_fn))
-            except Exception as err:
+                try:  # Try new API first
+                    m.writeBasis(path_to_string(basis_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebasis(path_to_string(basis_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                m.writebinsol(path_to_string(solution_fn))
-            except Exception as err:
+                try:  # Try new API first
+                    m.writeBinSol(path_to_string(solution_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebinsol(path_to_string(solution_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
-        condition = m.getProbStatusString()
+        condition = m.attributes.solstatus
         termination_condition = CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
-            objective = m.getObjVal()
+            objective = m.attributes.objval
 
-            var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            try:  # Try new API first
+                var = m.getNameList(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
+            except AttributeError:  # Fallback to old API
+                var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                _dual = m.getDual()
-                constraints = m.getnamelist(
-                    xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                )
+                try:  # Try new API first
+                    _dual = m.getDuals()
+                except AttributeError:  # Fallback to old API
+                    _dual = m.getDual()
+
+                try:  # Try new API first
+                    constraints = m.getNameList(
+                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    )
+                except AttributeError:  # Fallback to old API
+                    constraints = m.getnamelist(
+                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                    )
                 dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
@@ -2307,3 +2406,248 @@ class PIPS(Solver[None]):
         super().__init__(**solver_options)
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)
+
+
+class cuPDLPx(Solver[None]):
+    """
+    Solver subclass for the cuPDLPx solver. cuPDLPx must be installed
+    with working GPU support for usage. Find the installation instructions
+    at https://github.com/MIT-Lu-Lab/cuPDLPx.
+
+    The full list of solver options provided with the python interface
+    is documented at https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python.
+
+    Some example options are:
+    * LogToConsole : False by default.
+    * TimeLimit : 3600.0 by default.
+    * IterationLimit : 2147483647 by default.
+
+    Attributes
+    ----------
+    **solver_options
+        options for the given solver
+    """
+
+    def __init__(
+        self,
+        **solver_options: Any,
+    ) -> None:
+        super().__init__(**solver_options)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a problem file using the solver cuPDLPx.
+        cuPDLPx does not currently support its own file IO, so this function
+        reads the problem file using linopy (only support netcf files) and
+        then passes the model to cuPDLPx for solving.
+        If the solution is feasible the function returns the
+        objective, solution and dual constraint variables.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
+        """
+        logger.warning(
+            "cuPDLPx doesn't currently support file IO. Building model from file using linopy."
+        )
+        problem_fn_ = path_to_string(problem_fn)
+
+        if problem_fn_.endswith(".netcdf"):
+            model: Model = linopy.io.read_netcdf(problem_fn_)
+        else:
+            msg = "linopy currently only supports reading models from netcdf files. Try using io_api='direct' instead."
+            raise NotImplementedError(msg)
+
+        return self.solve_problem_from_model(
+            model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
+        )
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        """
+        Solve a linear problem directly from a linopy model using the solver cuPDLPx.
+        If the solution is feasible the function returns the
+        objective, solution and dual constraint variables.
+
+        Parameters
+        ----------
+        model : linopy.model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint names to the solver (default: False)
+
+        Returns
+        -------
+        Result
+        """
+
+        if model.type in ["QP", "MILP"]:
+            msg = "cuPDLPx does not currently support QP or MILP problems."
+            raise NotImplementedError(msg)
+
+        cu_model = model.to_cupdlpx()
+
+        return self._solve(
+            cu_model,
+            l_model=model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api="direct",
+            sense=model.sense,
+        )
+
+    def _solve(
+        self,
+        cu_model: cupdlpx.Model,
+        l_model: Model | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        io_api: str | None = None,
+        sense: str | None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a cupdlpx.Model object.
+
+        Parameters
+        ----------
+        cu_model: cupdlpx.Model
+            cupdlpx object.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        model : linopy.model, optional
+            Linopy model for the problem.
+        io_api: str
+            io_api of the problem. For direct API from linopy model this is "direct".
+        sense: str
+            "min" or "max"
+
+        Returns
+        -------
+        Result
+        """
+
+        # see https://github.com/MIT-Lu-Lab/cuPDLPx/blob/main/python/cupdlpx/PDLP.py
+        CONDITION_MAP: dict[int, TerminationCondition] = {
+            cupdlpx.PDLP.OPTIMAL: TerminationCondition.optimal,
+            cupdlpx.PDLP.PRIMAL_INFEASIBLE: TerminationCondition.infeasible,
+            cupdlpx.PDLP.DUAL_INFEASIBLE: TerminationCondition.infeasible_or_unbounded,
+            cupdlpx.PDLP.TIME_LIMIT: TerminationCondition.time_limit,
+            cupdlpx.PDLP.ITERATION_LIMIT: TerminationCondition.iteration_limit,
+            cupdlpx.PDLP.UNSPECIFIED: TerminationCondition.unknown,
+        }
+
+        self._set_solver_params(cu_model)
+
+        if warmstart_fn is not None:
+            # cuPDLPx supports warmstart, but there currently isn't the tooling
+            # to read it in from a file
+            raise NotImplementedError("Warmstarting not yet implemented for cuPDLPx.")
+        else:
+            cu_model.clearWarmStart()
+
+        if basis_fn is not None:
+            logger.warning("Basis files are not supported by cuPDLPx. Ignoring.")
+
+        if log_fn is not None:
+            logger.warning("Log files are not supported by cuPDLPx. Ignoring.")
+
+        # solve
+        cu_model.optimize()
+
+        # parse solution and output
+        if solution_fn is not None:
+            raise NotImplementedError(
+                "Solution file output not yet implemented for cuPDLPx."
+            )
+
+        termination_condition = CONDITION_MAP.get(
+            cu_model.StatusCode, cu_model.StatusCode
+        )
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = cu_model.Status  # cuPDLPx status message
+
+        def get_solver_solution() -> Solution:
+            objective = cu_model.ObjVal
+
+            vlabels = None if l_model is None else l_model.matrices.vlabels
+            clabels = None if l_model is None else l_model.matrices.clabels
+
+            sol = pd.Series(cu_model.X, vlabels, dtype=float)
+            dual = pd.Series(cu_model.Pi, clabels, dtype=float)
+
+            if cu_model.ModelSense == cupdlpx.PDLP.MAXIMIZE:
+                dual *= -1  # flip sign of duals for max problems
+
+            return Solution(sol, dual, objective)
+
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+        # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
+        return Result(status, solution, cu_model)
+
+    def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
+        """
+        Set solver options for cuPDLPx model.
+
+        For list of available options, see
+        https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#parameters
+        """
+        for k, v in self.solver_options.items():
+            cu_model.setParam(k, v)
