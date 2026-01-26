@@ -51,6 +51,21 @@ NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
     SolverFeature.SOLUTION_FILE_NOT_NEEDED
 )
 
+# Solvers that support quadratic constraints (QCP/QCQP) via LP file format
+# Note: HiGHS does NOT support quadratic constraints
+# Note: SCIP supports QC but its LP file reading doesn't work atm
+# Note: XPRESS support convex QC but are excluded due to licensing/config complexity with QCQP
+QUADRATIC_CONSTRAINT_SOLVERS = [
+    "gurobi",
+    "mosek",
+    "copt",
+]
+
+# Solvers that support nonconvex quadratic constraints (bilinear terms, >= constraints)
+NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS = [
+    "gurobi",
+]
+
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
@@ -213,6 +228,12 @@ with contextlib.suppress(ModuleNotFoundError):
 
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
+quadratic_constraint_solvers = [
+    s for s in QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
+]
+nonconvex_quadratic_constraint_solvers = [
+    s for s in NONCONVEX_QUADRATIC_CONSTRAINT_SOLVERS if s in available_solvers
+]
 logger = logging.getLogger(__name__)
 
 
@@ -1249,10 +1270,20 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
 
-            return Solution(sol, dual, objective)
+            # Retrieve quadratic constraint dual values
+            qc_dual = pd.Series(dtype=float)
+            try:
+                qcs = m.getQConstrs()
+                if qcs:
+                    qc_dual = pd.Series({qc.QCName: qc.QCPi for qc in qcs}, dtype=float)
+            except (AttributeError, gurobipy.GurobiError):
+                # QCPi not available (non-convex or QCPDual=0)
+                pass
+
+            return Solution(sol, dual, objective, qc_dual)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
