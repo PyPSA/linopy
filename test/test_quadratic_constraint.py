@@ -1691,12 +1691,13 @@ class TestQuadraticConstraintIOCoverage:
         m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
         m.add_objective(x)
 
-        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "model.lp"
             # Write with progress (tests the progress branch)
-            m.to_file(f.name, progress=True)
-            content = Path(f.name).read_text()
+            m.to_file(filepath, progress=True)
+            content = filepath.read_text()
 
-        assert "qc" in content.lower() or "QCMATRIX" in content
+            assert "qc" in content.lower() or "QCMATRIX" in content
 
     def test_lp_file_only_quadratic_constraints(self) -> None:
         """Test LP file with only quadratic constraints (no linear)."""
@@ -1706,12 +1707,13 @@ class TestQuadraticConstraintIOCoverage:
         m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
         m.add_objective(x)
 
-        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
-            m.to_file(f.name)
-            content = Path(f.name).read_text()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "model.lp"
+            m.to_file(filepath)
+            content = filepath.read_text()
 
-        # Should have "s.t." section header
-        assert "s.t." in content or "Subject" in content
+            # Should have "s.t." section header
+            assert "s.t." in content or "Subject" in content
 
     def test_lp_file_explicit_coordinate_names(self) -> None:
         """Test LP file with explicit coordinate names."""
@@ -1720,11 +1722,12 @@ class TestQuadraticConstraintIOCoverage:
         m.add_quadratic_constraints(x * x, "<=", 10, name="qc")
         m.add_objective(x.sum())
 
-        with tempfile.NamedTemporaryFile(suffix=".lp", delete=False) as f:
-            m.to_file(f.name, explicit_coordinate_names=True)
-            content = Path(f.name).read_text()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "model.lp"
+            m.to_file(filepath, explicit_coordinate_names=True)
+            content = filepath.read_text()
 
-        assert "qc" in content.lower()
+            assert "qc" in content.lower()
 
     def test_netcdf_roundtrip_with_linear_terms(self) -> None:
         """Test netCDF roundtrip for QC with both quadratic and linear terms."""
