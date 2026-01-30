@@ -441,10 +441,10 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # Disjoint coordinate subsets: outer join produces the union of coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
-    assert len(expr.coords["dim_2"]) == 10
+    assert len(expr.coords["dim_2"]) == 20
 
 
 def test_linear_expression_sum_with_const(
@@ -465,10 +465,10 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # Disjoint coordinate subsets: outer join produces the union of coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
-    assert len(expr.coords["dim_2"]) == 10
+    assert len(expr.coords["dim_2"]) == 20
 
 
 def test_linear_expression_sum_drop_zeros(z: Variable) -> None:
