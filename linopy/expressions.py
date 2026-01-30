@@ -2123,38 +2123,38 @@ def merge(
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
     # When using join='override', xr.concat places values positionally instead of
-    # aligning by label. We need to reindex datasets that have the same coordinate
-    # values but in a different order to ensure proper alignment.
+    # aligning by label. We need to reindex datasets that have mismatched coordinate
+    # values (different order or different subsets) to ensure proper alignment.
     if override and len(data) > 1:
-        reference = data[0]
-        aligned_data = [reference]
-        for ds_item in data[1:]:
-            reindex_dims = {}
-            for dim_name in reference.dims:
-                if dim_name in HELPER_DIMS or dim_name not in ds_item.dims:
-                    continue
-                if dim_name not in reference.coords or dim_name not in ds_item.coords:
-                    continue  # pragma: no cover
-                ref_coord = reference.coords[dim_name].values
-                ds_coord = ds_item.coords[dim_name].values
-                # Check: same length, same set of values, but different order
-                if len(ref_coord) == len(ds_coord) and not np.array_equal(
-                    ref_coord, ds_coord
-                ):
-                    try:
-                        same_values = set(ref_coord) == set(ds_coord)
-                    except TypeError:  # pragma: no cover
-                        # Unhashable types - convert to strings for comparison
-                        same_values = {str(v) for v in ref_coord} == {
-                            str(v) for v in ds_coord
-                        }
-                    if same_values:
-                        reindex_dims[dim_name] = reference.coords[dim_name]
-            if reindex_dims:
-                aligned_data.append(ds_item.reindex(reindex_dims))
-            else:
-                aligned_data.append(ds_item)
-        data = aligned_data
+        union_coords: dict[Hashable, list] = {}
+        needs_reindex = False
+        for dim_name in data[0].dims:
+            if dim_name in HELPER_DIMS:
+                continue
+            all_vals = []
+            for ds_item in data:
+                if dim_name in ds_item.coords:
+                    all_vals.append(ds_item.coords[dim_name].values)
+            if len(all_vals) > 1:
+                ref = all_vals[0]
+                for other in all_vals[1:]:
+                    if not np.array_equal(ref, other):
+                        # Build union preserving insertion order
+                        seen: set = set()
+                        union: list = []
+                        for vals in all_vals:
+                            for v in vals:
+                                key = v if isinstance(v, Hashable) else str(v)
+                                if key not in seen:
+                                    seen.add(key)
+                                    union.append(v)
+                        union_coords[dim_name] = union
+                        needs_reindex = True
+                        break
+
+        if needs_reindex:
+            reindex_map = {k: pd.Index(v) for k, v in union_coords.items()}
+            data = [ds.reindex(reindex_map, fill_value=FILL_VALUE) for ds in data]
 
     if not kwargs:
         kwargs = {

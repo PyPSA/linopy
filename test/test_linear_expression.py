@@ -1221,6 +1221,36 @@ def test_merge_with_override_and_reordered_coords(m: Model) -> None:
     assert res.sel(dim_0="z").coeffs.values.tolist() == [1.0, 2.0]
 
 
+def test_merge_with_overlapping_coords(m: Model) -> None:
+    """Test merge when expressions have overlapping but different coordinate subsets."""
+    import pandas as pd
+
+    coords_a = pd.Index(["alice", "bob"], name="person")
+    coords_b = pd.Index(["bob", "charlie"], name="person")
+
+    v1 = m.add_variables(coords=[coords_a], name="ov1")
+    v2 = m.add_variables(coords=[coords_b], name="ov2")
+
+    expr1 = 1 * v1
+    expr2 = 2 * v2
+
+    res = merge([expr1, expr2], cls=LinearExpression)
+
+    # Union coords should be alice, bob, charlie
+    assert list(res.coords["person"].values) == ["alice", "bob", "charlie"]
+    assert res.nterm == 2
+    # bob: in both → coeffs [1, 2]
+    assert res.sel(person="bob").coeffs.values.tolist() == [1.0, 2.0]
+    # alice: only in expr1 → first term has coeff 1, second is fill (nan)
+    alice_coeffs = res.sel(person="alice").coeffs.values
+    assert alice_coeffs[0] == 1.0
+    assert np.isnan(alice_coeffs[1])
+    # charlie: only in expr2 → first term is fill (nan), second has coeff 2
+    charlie_coeffs = res.sel(person="charlie").coeffs.values
+    assert np.isnan(charlie_coeffs[0])
+    assert charlie_coeffs[1] == 2.0
+
+
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:
     expr = x + y
     expr2: LinearExpression = sum([x, y])  # type: ignore
