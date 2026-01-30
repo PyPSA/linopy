@@ -919,16 +919,10 @@ class Model:
         # Filling-order constraints: δ[i+1] ≤ δ[i] (vectorized)
         fill_con: Constraint | None = None
         if n_segments >= 2:
-            fill_pairs = []
-            for i in range(n_segments - 1):
-                fill_pairs.append(
-                    delta_var.sel({seg_dim: i + 1}) - delta_var.sel({seg_dim: i})
-                )
-            fill_dim = f"{dim}_fill"
-            fill_index = pd.Index(range(n_segments - 1), name=fill_dim)
-            stacked = xr.concat([fp.data for fp in fill_pairs], dim=fill_index)
-            fill_expr = LinearExpression(stacked, self)
-            fill_con = self.add_constraints(fill_expr <= 0, name=fill_name)
+            # Slice adjacent pairs and drop coords so they align
+            delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
+            delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+            fill_con = self.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
         # Linking constraint: expr = bp₀ + Σᵢ δᵢ × step_i
         bp0 = breakpoints.isel({dim: 0})
