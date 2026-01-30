@@ -85,6 +85,7 @@ def test_knitro_solver(tmp_path: Path) -> None:
     result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
 
     assert result.status.is_ok
+    assert result.solution is not None
     assert result.solution.objective == 30.0
 
 
