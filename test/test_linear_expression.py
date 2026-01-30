@@ -441,10 +441,10 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # Disjoint coordinate subsets: outer join produces the union of coords
+    # test special case override coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
-    assert len(expr.coords["dim_2"]) == 20
+    assert len(expr.coords["dim_2"]) == 10
 
 
 def test_linear_expression_sum_with_const(
@@ -465,10 +465,10 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # Disjoint coordinate subsets: outer join produces the union of coords
+    # test special case override coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
-    assert len(expr.coords["dim_2"]) == 20
+    assert len(expr.coords["dim_2"]) == 10
 
 
 def test_linear_expression_sum_drop_zeros(z: Variable) -> None:
@@ -1221,9 +1221,14 @@ def test_merge_with_override_and_reordered_coords(m: Model) -> None:
     assert res.sel(dim_0="z").coeffs.values.tolist() == [1.0, 2.0]
 
 
-def test_merge_with_overlapping_coords(m: Model) -> None:
-    """Test merge when expressions have overlapping but different coordinate subsets."""
+def test_align_with_overlapping_coords(m: Model) -> None:
+    """
+    Test that linopy.align enables correct addition of expressions with
+    overlapping but different coordinate subsets.
+    """
     import pandas as pd
+
+    from linopy import align
 
     coords_a = pd.Index(["alice", "bob"], name="person")
     coords_b = pd.Index(["bob", "charlie"], name="person")
@@ -1231,10 +1236,8 @@ def test_merge_with_overlapping_coords(m: Model) -> None:
     v1 = m.add_variables(coords=[coords_a], name="ov1")
     v2 = m.add_variables(coords=[coords_b], name="ov2")
 
-    expr1 = 1 * v1
-    expr2 = 2 * v2
-
-    res = merge([expr1, expr2], cls=LinearExpression)
+    expr1, expr2 = align(1 * v1, 2 * v2, join="outer")
+    res = expr1 + expr2
 
     # Union coords should be alice, bob, charlie
     assert list(res.coords["person"].values) == ["alice", "bob", "charlie"]

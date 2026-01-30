@@ -1159,6 +1159,24 @@ def forward_as_properties(**routes: list[str]) -> Callable[[type], type]:
     return deco
 
 
+def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
+    """
+    Check if all common keys among a list of dictionaries have the same value.
+
+    Parameters
+    ----------
+    list_of_dicts : list of dict
+        A list of dictionaries.
+
+    Returns
+    -------
+    bool
+        True if all common keys have the same value across all dictionaries, False otherwise.
+    """
+    common_keys = set.intersection(*(set(d.keys()) for d in list_of_dicts))
+    return all(len({d[k] for d in list_of_dicts if k in d}) == 1 for k in common_keys)
+
+
 def align(
     *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
     join: JoinOptions = "inner",

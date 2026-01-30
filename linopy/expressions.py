@@ -47,6 +47,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -2048,28 +2049,6 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
-def _check_coords_match(exprs: Sequence) -> bool:
-    """
-    Check that all expressions have identical coordinate values (and order)
-    for every non-helper dimension they share. Returns True only when
-    join='override' (positional concat) is safe.
-    """
-    if len(exprs) < 2:
-        return True
-    ref = exprs[0]
-    for other in exprs[1:]:
-        for dim_name in ref.dims:
-            if dim_name in HELPER_DIMS or dim_name not in other.dims:
-                continue
-            if dim_name not in ref.coords or dim_name not in other.coords:
-                continue  # pragma: no cover
-            if not np.array_equal(
-                ref.coords[dim_name].values, other.coords[dim_name].values
-            ):
-                return False
-    return True
-
-
 def merge(
     exprs: Sequence[
         LinearExpression | QuadraticExpression | variables.Variable | Dataset
@@ -2133,12 +2112,49 @@ def merge(
     model = exprs[0].model
 
     if cls in linopy_types and dim in HELPER_DIMS:
-        override = _check_coords_match(exprs)
+        coord_dims = [
+            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
+        ]
+        override = check_common_keys_values(coord_dims)  # type: ignore
     else:
         override = False
 
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
+
+    # When using join='override', xr.concat places values positionally instead of
+    # aligning by label. We need to reindex datasets that have the same coordinate
+    # values but in a different order to ensure proper alignment.
+    if override and len(data) > 1:
+        reference = data[0]
+        aligned_data = [reference]
+        for ds_item in data[1:]:
+            reindex_dims = {}
+            for dim_name in reference.dims:
+                if dim_name in HELPER_DIMS or dim_name not in ds_item.dims:
+                    continue
+                if dim_name not in reference.coords or dim_name not in ds_item.coords:
+                    continue  # pragma: no cover
+                ref_coord = reference.coords[dim_name].values
+                ds_coord = ds_item.coords[dim_name].values
+                # Check: same length, same set of values, but different order
+                if len(ref_coord) == len(ds_coord) and not np.array_equal(
+                    ref_coord, ds_coord
+                ):
+                    try:
+                        same_values = set(ref_coord) == set(ds_coord)
+                    except TypeError:  # pragma: no cover
+                        # Unhashable types - convert to strings for comparison
+                        same_values = {str(v) for v in ref_coord} == {
+                            str(v) for v in ds_coord
+                        }
+                    if same_values:
+                        reindex_dims[dim_name] = reference.coords[dim_name]
+            if reindex_dims:
+                aligned_data.append(ds_item.reindex(reindex_dims))
+            else:
+                aligned_data.append(ds_item)
+        data = aligned_data
 
     if not kwargs:
         kwargs = {
