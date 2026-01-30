@@ -4,7 +4,7 @@ Release Notes
 .. Upcoming Version
 
 * Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
-* Fix expression merge to properly align coordinates instead of placing values positionally; expressions with mismatched coordinates now use label-based alignment via ``join='outer'``. **Breaking:** expressions with disjoint coordinate subsets of the same size previously merged positionally (silently incorrect); they now produce the union of coordinates via outer join.
+* Fix expression merge to properly reindex coordinates when expressions have the same coordinate values in different order, preventing silent data corruption with ``join='override'``. For expressions with different coordinate subsets, use ``linopy.align(..., join='outer')`` before adding.
 
 Version 0.6.0
 --------------
