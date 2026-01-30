@@ -40,6 +40,8 @@ from linopy.constants import (
     HELPER_DIMS,
     LESS_EQUAL,
     PWL_CONVEX_SUFFIX,
+    PWL_DELTA_SUFFIX,
+    PWL_FILL_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
     TERM_DIM,
@@ -606,18 +608,20 @@ class Model:
         mask: DataArray | None = None,
         name: str | None = None,
         skip_nan_check: bool = False,
+        method: Literal["sos2", "incremental", "auto"] = "sos2",
     ) -> Constraint:
         """
-        Add a piecewise linear constraint using SOS2 formulation.
+        Add a piecewise linear constraint using SOS2 or incremental formulation.
 
         This method creates a piecewise linear constraint that links one or more
-        variables/expressions together via a set of breakpoints. It uses the SOS2
-        (Special Ordered Set of type 2) formulation with lambda (interpolation)
-        variables.
+        variables/expressions together via a set of breakpoints. It supports two
+        formulations:
 
-        The SOS2 formulation ensures that at most two adjacent lambda variables
-        can be non-zero, effectively selecting a segment of the piecewise linear
-        function.
+        - **SOS2** (default): Uses SOS2 (Special Ordered Set of type 2) with lambda
+          (interpolation) variables. Works for any breakpoints.
+        - **Incremental**: Uses delta variables with filling-order constraints.
+          Pure LP formulation (no SOS2 or binary variables), but requires strictly
+          monotonic breakpoints.
 
         Parameters
         ----------
@@ -638,7 +642,8 @@ class Model:
             will attempt to auto-detect from breakpoints dimensions.
         dim : str, default "breakpoint"
             The dimension in breakpoints that represents the breakpoint index.
-            This dimension's coordinates must be numeric (used as SOS2 weights).
+            This dimension's coordinates must be numeric (used as SOS2 weights
+            for the SOS2 method).
         mask : xr.DataArray, optional
             Boolean mask indicating which piecewise constraints are valid.
             If None, auto-detected from NaN values in breakpoints (unless
@@ -649,15 +654,20 @@ class Model:
         skip_nan_check : bool, default False
             If True, skip automatic NaN detection in breakpoints. Use this
             when you know breakpoints contain no NaN values for better performance.
+        method : str, default "sos2"
+            Formulation method. One of:
+            - ``"sos2"``: SOS2 formulation with lambda variables (default).
+            - ``"incremental"``: Incremental (delta) formulation. Requires strictly
+              monotonic breakpoints. Pure LP, no SOS2 or binary variables.
+            - ``"auto"``: Automatically selects ``"incremental"`` if breakpoints are
+              strictly monotonic, otherwise falls back to ``"sos2"``.
 
         Returns
         -------
         Constraint
-            The convexity constraint (sum of lambda = 1). Lambda variables
-            and other constraints can be accessed via:
-            - `model.variables[f"{name}_lambda"]`
-            - `model.constraints[f"{name}_convex"]`
-            - `model.constraints[f"{name}_link"]`
+            For SOS2: the convexity constraint (sum of lambda = 1).
+            For incremental: the first filling-order constraint (or the link
+            constraint if only 2 breakpoints).
 
         Raises
         ------
@@ -666,7 +676,9 @@ class Model:
             If breakpoints doesn't have the required dim dimension.
             If link_dim cannot be auto-detected when expr is a dict.
             If link_dim coordinates don't match dict keys.
-            If dim coordinates are not numeric.
+            If dim coordinates are not numeric (SOS2 method only).
+            If breakpoints are not strictly monotonic (incremental method).
+            If method is not one of 'sos2', 'incremental', 'auto'.
 
         Examples
         --------
@@ -702,15 +714,35 @@ class Model:
         ...     dim="bp",
         ... )
 
+        Incremental formulation (no SOS2, pure LP):
+
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> breakpoints = xr.DataArray([0, 10, 50, 100], dims=["bp"])
+        >>> _ = m.add_piecewise_constraints(
+        ...     x, breakpoints, dim="bp", method="incremental"
+        ... )
+
         Notes
         -----
-        The piecewise linear constraint is formulated using SOS2 variables:
+        **SOS2 formulation:**
 
         1. Lambda variables λ_i with bounds [0, 1] are created for each breakpoint
         2. SOS2 constraint ensures at most two adjacent λ_i can be non-zero
         3. Convexity constraint: Σ λ_i = 1
         4. Linking constraints: expr = Σ λ_i × breakpoint_i (for each expression)
+
+        **Incremental formulation** (for strictly monotonic breakpoints bp₀ < bp₁ < ... < bpₙ):
+
+        1. Delta variables δᵢ ∈ [0, 1] for i = 1, ..., n (one per segment)
+        2. Filling-order constraints: δᵢ₊₁ ≤ δᵢ for i = 1, ..., n-1
+        3. Linking constraint: expr = bp₀ + Σᵢ δᵢ × (bpᵢ - bpᵢ₋₁)
         """
+        if method not in ("sos2", "incremental", "auto"):
+            raise ValueError(
+                f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
+            )
+
         # --- Input validation ---
         if dim not in breakpoints.dims:
             raise ValueError(
@@ -718,7 +750,17 @@ class Model:
                 f"but only has dimensions {list(breakpoints.dims)}"
             )
 
-        if not pd.api.types.is_numeric_dtype(breakpoints.coords[dim]):
+        # Resolve method for 'auto'
+        if method == "auto":
+            if self._check_strict_monotonicity(breakpoints, dim):
+                method = "incremental"
+            else:
+                method = "sos2"
+
+        # Numeric coordinates only required for SOS2
+        if method == "sos2" and not pd.api.types.is_numeric_dtype(
+            breakpoints.coords[dim]
+        ):
             raise ValueError(
                 f"Breakpoint dimension '{dim}' must have numeric coordinates "
                 f"for SOS2 weights, but got {breakpoints.coords[dim].dtype}"
@@ -729,11 +771,7 @@ class Model:
             name = f"pwl{self._pwlCounter}"
             self._pwlCounter += 1
 
-        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
-        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-        link_name = f"{name}{PWL_LINK_SUFFIX}"
-
-        # --- Determine lambda coordinates, mask, and target expression ---
+        # --- Determine target expression and related info ---
         is_single = isinstance(expr, Variable | LinearExpression)
         is_dict = isinstance(expr, dict)
 
@@ -744,39 +782,75 @@ class Model:
             )
 
         if is_single:
-            # Single expression case
             assert isinstance(expr, Variable | LinearExpression)
             target_expr = self._to_linexpr(expr)
-            # Build lambda coordinates from breakpoints dimensions
+            extra_coords = [
+                pd.Index(breakpoints.coords[d].values, name=d)
+                for d in breakpoints.dims
+                if d != dim
+            ]
             lambda_coords = [
                 pd.Index(breakpoints.coords[d].values, name=d) for d in breakpoints.dims
             ]
-            lambda_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
-
+            computed_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
+            lambda_mask = computed_mask
+            resolved_link_dim = None
         else:
-            # Dict case - need to validate link_dim and build stacked expression
             assert isinstance(expr, dict)
             expr_dict: dict[str, Variable | LinearExpression] = expr
             expr_keys = set(expr_dict.keys())
-
-            # Auto-detect or validate link_dim
-            link_dim = self._resolve_pwl_link_dim(link_dim, breakpoints, dim, expr_keys)
-
-            # Build lambda coordinates (exclude link_dim)
+            resolved_link_dim = self._resolve_pwl_link_dim(
+                link_dim, breakpoints, dim, expr_keys
+            )
+            extra_coords = [
+                pd.Index(breakpoints.coords[d].values, name=d)
+                for d in breakpoints.dims
+                if d != dim and d != resolved_link_dim
+            ]
             lambda_coords = [
                 pd.Index(breakpoints.coords[d].values, name=d)
                 for d in breakpoints.dims
-                if d != link_dim
+                if d != resolved_link_dim
             ]
-
-            # Compute mask
             base_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
-            lambda_mask = base_mask.any(dim=link_dim) if base_mask is not None else None
+            lambda_mask = (
+                base_mask.any(dim=resolved_link_dim) if base_mask is not None else None
+            )
+            computed_mask = base_mask
+            target_expr = self._build_stacked_expr(
+                expr_dict, breakpoints, resolved_link_dim
+            )
 
-            # Build stacked expression from dict
-            target_expr = self._build_stacked_expr(expr_dict, breakpoints, link_dim)
+        # --- Dispatch to formulation ---
+        if method == "sos2":
+            return self._add_pwl_sos2(
+                name, breakpoints, dim, target_expr, lambda_coords, lambda_mask
+            )
+        else:
+            return self._add_pwl_incremental(
+                name,
+                breakpoints,
+                dim,
+                target_expr,
+                extra_coords,
+                computed_mask,
+                resolved_link_dim,
+            )
 
-        # --- Common: Create lambda, SOS2, convexity, and linking constraints ---
+    def _add_pwl_sos2(
+        self,
+        name: str,
+        breakpoints: DataArray,
+        dim: str,
+        target_expr: LinearExpression,
+        lambda_coords: list[pd.Index],
+        lambda_mask: DataArray | None,
+    ) -> Constraint:
+        """Create piecewise linear constraint using SOS2 formulation."""
+        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+        link_name = f"{name}{PWL_LINK_SUFFIX}"
+
         lambda_var = self.add_variables(
             lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
         )
@@ -791,6 +865,112 @@ class Model:
         self.add_constraints(target_expr == weighted_sum, name=link_name)
 
         return convex_con
+
+    def _add_pwl_incremental(
+        self,
+        name: str,
+        breakpoints: DataArray,
+        dim: str,
+        target_expr: LinearExpression,
+        extra_coords: list[pd.Index],
+        mask: DataArray | None,
+        link_dim: str | None,
+    ) -> Constraint:
+        """
+        Create piecewise linear constraint using incremental formulation.
+
+        For strictly monotonic breakpoints bp₀, bp₁, ..., bpₙ:
+        - Delta variables δᵢ ∈ [0, 1] for i = 1, ..., n
+        - Filling-order: δᵢ₊₁ ≤ δᵢ
+        - Link: expr = bp₀ + Σᵢ δᵢ × (bpᵢ - bpᵢ₋₁)
+        """
+        # Validate strict monotonicity
+        if not self._check_strict_monotonicity(breakpoints, dim):
+            raise ValueError(
+                "Incremental method requires strictly monotonic breakpoints "
+                "along the breakpoint dimension."
+            )
+
+        delta_name = f"{name}{PWL_DELTA_SUFFIX}"
+        fill_name = f"{name}{PWL_FILL_SUFFIX}"
+        link_name = f"{name}{PWL_LINK_SUFFIX}"
+
+        bp_coords = breakpoints.coords[dim].values
+        n_segments = len(bp_coords) - 1
+
+        # Delta dimension uses segment indices 0..n_segments-1
+        seg_dim = f"{dim}_seg"
+        seg_coords = list(range(n_segments))
+
+        # Build delta variable coordinates
+        delta_coords = extra_coords + [pd.Index(seg_coords, name=seg_dim)]
+
+        # Compute delta mask from breakpoints mask if available
+        if mask is not None:
+            # For each segment, both adjacent breakpoints must be valid
+            # Reduce over link_dim if present
+            bp_mask = mask
+            if link_dim is not None:
+                bp_mask = bp_mask.all(dim=link_dim)
+            # For segment i, need bp[i] and bp[i+1] both valid
+            mask_vals = []
+            for i in range(n_segments):
+                m1 = bp_mask.isel({dim: i})
+                m2 = bp_mask.isel({dim: i + 1})
+                mask_vals.append(m1 & m2)
+            if extra_coords:
+                delta_mask = xr.concat(
+                    mask_vals, dim=pd.Index(seg_coords, name=seg_dim)
+                )
+            else:
+                delta_mask = xr.DataArray(mask_vals, dims=[seg_dim])
+        else:
+            delta_mask = None
+
+        # Create delta variables δᵢ ∈ [0, 1]
+        delta_var = self.add_variables(
+            lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+        )
+
+        # Filling-order constraints: δᵢ₊₁ ≤ δᵢ for i = 0, ..., n_segments-2
+        return_con: Constraint | None = None
+        if n_segments >= 2:
+            for i in range(n_segments - 1):
+                delta_i = delta_var.sel({seg_dim: i})
+                delta_i1 = delta_var.sel({seg_dim: i + 1})
+                con = self.add_constraints(delta_i1 <= delta_i, name=f"{fill_name}_{i}")
+                if return_con is None:
+                    return_con = con
+
+        # Linking constraint: expr = bp₀ + Σᵢ δᵢ × (bpᵢ₊₁ - bpᵢ)
+        # Compute step sizes for each segment
+        step_sizes = []
+        for i in range(n_segments):
+            step = breakpoints.isel({dim: i + 1}) - breakpoints.isel({dim: i})
+            step_sizes.append(step)
+
+        # Stack step sizes along seg_dim
+        steps = xr.concat(step_sizes, dim=pd.Index(seg_coords, name=seg_dim))
+
+        # bp₀ value
+        bp0 = breakpoints.isel({dim: 0})
+
+        weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0
+        link_con = self.add_constraints(target_expr == weighted_sum, name=link_name)
+
+        if return_con is None:
+            return_con = link_con
+
+        return return_con
+
+    @staticmethod
+    def _check_strict_monotonicity(breakpoints: DataArray, dim: str) -> bool:
+        """Check if breakpoints are strictly monotonic along dim."""
+        diffs = breakpoints.diff(dim)
+        # All diffs must be either all positive or all negative (strictly monotonic)
+        all_positive = bool((diffs > 0).all())
+        all_negative = bool((diffs < 0).all())
+        return all_positive or all_negative
 
     def _to_linexpr(self, expr: Variable | LinearExpression) -> LinearExpression:
         """Convert Variable or LinearExpression to LinearExpression."""

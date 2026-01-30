@@ -10,7 +10,13 @@ import pytest
 import xarray as xr
 
 from linopy import Model, available_solvers
-from linopy.constants import PWL_CONVEX_SUFFIX, PWL_LAMBDA_SUFFIX, PWL_LINK_SUFFIX
+from linopy.constants import (
+    PWL_CONVEX_SUFFIX,
+    PWL_DELTA_SUFFIX,
+    PWL_FILL_SUFFIX,
+    PWL_LAMBDA_SUFFIX,
+    PWL_LINK_SUFFIX,
+)
 
 
 class TestBasicSingleVariable:
@@ -519,3 +525,196 @@ class TestSolverIntegration:
         # gen1 should provide ~50 (cheap up to 50), gen2 provides rest
         total_power = power.solution.sum().values
         assert np.isclose(total_power, 120, atol=1e-5)
+
+
+class TestIncrementalFormulation:
+    """Tests for the incremental (delta) piecewise formulation."""
+
+    def test_single_variable_incremental(self) -> None:
+        """Test incremental formulation with a single variable."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, 10, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+        # Check delta variables created
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        # 3 segments → 3 delta vars
+        delta_var = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert "bp_seg" in delta_var.dims
+        assert len(delta_var.coords["bp_seg"]) == 3
+
+        # Check filling-order constraints (2 for 3 segments)
+        assert f"pwl0{PWL_FILL_SUFFIX}_0" in m.constraints
+        assert f"pwl0{PWL_FILL_SUFFIX}_1" in m.constraints
+
+        # Check link constraint
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+        # No SOS2 or lambda variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
+
+    def test_two_breakpoints_incremental(self) -> None:
+        """Test incremental with only 2 breakpoints (1 segment, no fill constraints)."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray([0, 100], dims=["bp"], coords={"bp": [0, 1]})
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+        # 1 segment → 1 delta var, no filling constraints
+        delta_var = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert len(delta_var.coords["bp_seg"]) == 1
+
+        # Link constraint should exist
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_dict_incremental(self) -> None:
+        """Test incremental formulation with dict of variables."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        # Both power and cost breakpoints are strictly increasing
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 10, 50]],
+            dims=["var", "bp"],
+            coords={"var": ["power", "cost"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="incremental",
+        )
+
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_non_monotonic_raises(self) -> None:
+        """Test that non-monotonic breakpoints raise ValueError for incremental."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Not monotonic: 0, 50, 30
+        breakpoints = xr.DataArray([0, 50, 30], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        with pytest.raises(ValueError, match="strictly monotonic"):
+            m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+    def test_decreasing_monotonic_works(self) -> None:
+        """Test that strictly decreasing breakpoints work for incremental."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [100, 50, 10, 0], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+
+    def test_auto_selects_incremental(self) -> None:
+        """Test method='auto' selects incremental for monotonic breakpoints."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, 10, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="auto")
+
+        # Should use incremental (delta vars, no lambda)
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
+
+    def test_auto_selects_sos2(self) -> None:
+        """Test method='auto' falls back to sos2 for non-monotonic breakpoints."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Non-monotonic across the full array (dict case would have link_dim)
+        # For single expr, breakpoints along dim are [0, 50, 30]
+        breakpoints = xr.DataArray([0, 50, 30], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="auto")
+
+        # Should use sos2 (lambda vars, no delta)
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_DELTA_SUFFIX}" not in m.variables
+
+    def test_invalid_method_raises(self) -> None:
+        """Test that an invalid method raises ValueError."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        with pytest.raises(ValueError, match="method must be"):
+            m.add_piecewise_constraints(x, breakpoints, dim="bp", method="invalid")
+
+    def test_incremental_with_coords(self) -> None:
+        """Test incremental formulation with extra coordinates."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 30, 80]],
+            dims=["generator", "bp"],
+            coords={"generator": generators, "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+        delta_var = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert "generator" in delta_var.dims
+        assert "bp_seg" in delta_var.dims
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+class TestIncrementalSolverIntegration:
+    """Integration tests for incremental formulation with Gurobi."""
+
+    def test_solve_incremental_single(self) -> None:
+        """Test solving with incremental formulation."""
+        gurobipy = pytest.importorskip("gurobipy")
+
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        cost = m.add_variables(name="cost")
+
+        # Monotonic breakpoints for both x and cost
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 10, 50]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"x": x, "cost": cost},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="incremental",
+        )
+
+        m.add_constraints(x >= 50, name="x_min")
+        m.add_objective(cost)
+
+        try:
+            status, cond = m.solve(solver_name="gurobi", io_api="direct")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        assert status == "ok"
+        assert np.isclose(x.solution.values, 50, atol=1e-5)
+        assert np.isclose(cost.solution.values, 10, atol=1e-5)
