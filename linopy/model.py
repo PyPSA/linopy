@@ -784,17 +784,9 @@ class Model:
         if is_single:
             assert isinstance(expr, Variable | LinearExpression)
             target_expr = self._to_linexpr(expr)
-            extra_coords = [
-                pd.Index(breakpoints.coords[d].values, name=d)
-                for d in breakpoints.dims
-                if d != dim
-            ]
-            lambda_coords = [
-                pd.Index(breakpoints.coords[d].values, name=d) for d in breakpoints.dims
-            ]
+            resolved_link_dim = None
             computed_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
             lambda_mask = computed_mask
-            resolved_link_dim = None
         else:
             assert isinstance(expr, dict)
             expr_dict: dict[str, Variable | LinearExpression] = expr
@@ -802,24 +794,26 @@ class Model:
             resolved_link_dim = self._resolve_pwl_link_dim(
                 link_dim, breakpoints, dim, expr_keys
             )
-            extra_coords = [
-                pd.Index(breakpoints.coords[d].values, name=d)
-                for d in breakpoints.dims
-                if d != dim and d != resolved_link_dim
-            ]
-            lambda_coords = [
-                pd.Index(breakpoints.coords[d].values, name=d)
-                for d in breakpoints.dims
-                if d != resolved_link_dim
-            ]
-            base_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
+            computed_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
             lambda_mask = (
-                base_mask.any(dim=resolved_link_dim) if base_mask is not None else None
+                computed_mask.any(dim=resolved_link_dim)
+                if computed_mask is not None
+                else None
             )
-            computed_mask = base_mask
             target_expr = self._build_stacked_expr(
                 expr_dict, breakpoints, resolved_link_dim
             )
+
+        # Build coordinate lists excluding special dimensions
+        exclude_dims = {dim, resolved_link_dim} - {None}
+        extra_coords = [
+            pd.Index(breakpoints.coords[d].values, name=d)
+            for d in breakpoints.dims
+            if d not in exclude_dims
+        ]
+        lambda_coords = extra_coords + [
+            pd.Index(breakpoints.coords[dim].values, name=dim)
+        ]
 
         # --- Dispatch to formulation ---
         if method == "sos2":
@@ -884,7 +878,6 @@ class Model:
         - Filling-order: δᵢ₊₁ ≤ δᵢ
         - Link: expr = bp₀ + Σᵢ δᵢ × (bpᵢ - bpᵢ₋₁)
         """
-        # Validate strict monotonicity
         if not self._check_strict_monotonicity(breakpoints, dim):
             raise ValueError(
                 "Incremental method requires strictly monotonic breakpoints "
@@ -895,35 +888,26 @@ class Model:
         fill_name = f"{name}{PWL_FILL_SUFFIX}"
         link_name = f"{name}{PWL_LINK_SUFFIX}"
 
-        bp_coords = breakpoints.coords[dim].values
-        n_segments = len(bp_coords) - 1
-
-        # Delta dimension uses segment indices 0..n_segments-1
+        n_segments = breakpoints.sizes[dim] - 1
         seg_dim = f"{dim}_seg"
-        seg_coords = list(range(n_segments))
+        seg_index = pd.Index(range(n_segments), name=seg_dim)
+        delta_coords = extra_coords + [seg_index]
 
-        # Build delta variable coordinates
-        delta_coords = extra_coords + [pd.Index(seg_coords, name=seg_dim)]
+        # Compute step sizes: bp[i+1] - bp[i] for each segment
+        steps = breakpoints.diff(dim).rename({dim: seg_dim})
+        steps[seg_dim] = seg_index
 
-        # Compute delta mask from breakpoints mask if available
+        # Compute delta mask from breakpoints mask
         if mask is not None:
-            # For each segment, both adjacent breakpoints must be valid
-            # Reduce over link_dim if present
             bp_mask = mask
             if link_dim is not None:
                 bp_mask = bp_mask.all(dim=link_dim)
-            # For segment i, need bp[i] and bp[i+1] both valid
-            mask_vals = []
-            for i in range(n_segments):
-                m1 = bp_mask.isel({dim: i})
-                m2 = bp_mask.isel({dim: i + 1})
-                mask_vals.append(m1 & m2)
-            if extra_coords:
-                delta_mask = xr.concat(
-                    mask_vals, dim=pd.Index(seg_coords, name=seg_dim)
-                )
-            else:
-                delta_mask = xr.DataArray(mask_vals, dims=[seg_dim])
+            # Segment valid if both adjacent breakpoints valid
+            mask_lo = bp_mask.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
+            mask_hi = bp_mask.isel({dim: slice(1, None)}).rename({dim: seg_dim})
+            mask_lo[seg_dim] = seg_index
+            mask_hi[seg_dim] = seg_index
+            delta_mask: DataArray | None = mask_lo & mask_hi
         else:
             delta_mask = None
 
@@ -932,36 +916,26 @@ class Model:
             lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
         )
 
-        # Filling-order constraints: δᵢ₊₁ ≤ δᵢ for i = 0, ..., n_segments-2
-        return_con: Constraint | None = None
+        # Filling-order constraints: δ[i+1] ≤ δ[i] (vectorized)
+        fill_con: Constraint | None = None
         if n_segments >= 2:
+            fill_pairs = []
             for i in range(n_segments - 1):
-                delta_i = delta_var.sel({seg_dim: i})
-                delta_i1 = delta_var.sel({seg_dim: i + 1})
-                con = self.add_constraints(delta_i1 <= delta_i, name=f"{fill_name}_{i}")
-                if return_con is None:
-                    return_con = con
+                fill_pairs.append(
+                    delta_var.sel({seg_dim: i + 1}) - delta_var.sel({seg_dim: i})
+                )
+            fill_dim = f"{dim}_fill"
+            fill_index = pd.Index(range(n_segments - 1), name=fill_dim)
+            stacked = xr.concat([fp.data for fp in fill_pairs], dim=fill_index)
+            fill_expr = LinearExpression(stacked, self)
+            fill_con = self.add_constraints(fill_expr <= 0, name=fill_name)
 
-        # Linking constraint: expr = bp₀ + Σᵢ δᵢ × (bpᵢ₊₁ - bpᵢ)
-        # Compute step sizes for each segment
-        step_sizes = []
-        for i in range(n_segments):
-            step = breakpoints.isel({dim: i + 1}) - breakpoints.isel({dim: i})
-            step_sizes.append(step)
-
-        # Stack step sizes along seg_dim
-        steps = xr.concat(step_sizes, dim=pd.Index(seg_coords, name=seg_dim))
-
-        # bp₀ value
+        # Linking constraint: expr = bp₀ + Σᵢ δᵢ × step_i
         bp0 = breakpoints.isel({dim: 0})
-
         weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0
         link_con = self.add_constraints(target_expr == weighted_sum, name=link_name)
 
-        if return_con is None:
-            return_con = link_con
-
-        return return_con
+        return fill_con if fill_con is not None else link_con
 
     @staticmethod
     def _check_strict_monotonicity(breakpoints: DataArray, dim: str) -> bool:

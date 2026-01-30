@@ -548,9 +548,8 @@ class TestIncrementalFormulation:
         assert "bp_seg" in delta_var.dims
         assert len(delta_var.coords["bp_seg"]) == 3
 
-        # Check filling-order constraints (2 for 3 segments)
-        assert f"pwl0{PWL_FILL_SUFFIX}_0" in m.constraints
-        assert f"pwl0{PWL_FILL_SUFFIX}_1" in m.constraints
+        # Check filling-order constraint (single vectorized constraint)
+        assert f"pwl0{PWL_FILL_SUFFIX}" in m.constraints
 
         # Check link constraint
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
