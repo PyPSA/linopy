@@ -47,7 +47,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -2049,6 +2048,28 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
+def _check_coords_match(exprs: Sequence) -> bool:
+    """
+    Check that all expressions have identical coordinate values (and order)
+    for every non-helper dimension they share. Returns True only when
+    join='override' (positional concat) is safe.
+    """
+    if len(exprs) < 2:
+        return True
+    ref = exprs[0]
+    for other in exprs[1:]:
+        for dim_name in ref.dims:
+            if dim_name in HELPER_DIMS or dim_name not in other.dims:
+                continue
+            if dim_name not in ref.coords or dim_name not in other.coords:
+                continue  # pragma: no cover
+            if not np.array_equal(
+                ref.coords[dim_name].values, other.coords[dim_name].values
+            ):
+                return False
+    return True
+
+
 def merge(
     exprs: Sequence[
         LinearExpression | QuadraticExpression | variables.Variable | Dataset
@@ -2112,49 +2133,12 @@ def merge(
     model = exprs[0].model
 
     if cls in linopy_types and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
+        override = _check_coords_match(exprs)
     else:
         override = False
 
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
-
-    # When using join='override', xr.concat places values positionally instead of
-    # aligning by label. We need to reindex datasets that have mismatched coordinate
-    # values (different order or different subsets) to ensure proper alignment.
-    if override and len(data) > 1:
-        union_coords: dict[Hashable, list] = {}
-        needs_reindex = False
-        for dim_name in data[0].dims:
-            if dim_name in HELPER_DIMS:
-                continue
-            all_vals = []
-            for ds_item in data:
-                if dim_name in ds_item.coords:
-                    all_vals.append(ds_item.coords[dim_name].values)
-            if len(all_vals) > 1:
-                ref = all_vals[0]
-                for other in all_vals[1:]:
-                    if not np.array_equal(ref, other):
-                        # Build union preserving insertion order
-                        seen: set = set()
-                        union: list = []
-                        for vals in all_vals:
-                            for v in vals:
-                                key = v if isinstance(v, Hashable) else str(v)
-                                if key not in seen:
-                                    seen.add(key)
-                                    union.append(v)
-                        union_coords[dim_name] = union
-                        needs_reindex = True
-                        break
-
-        if needs_reindex:
-            reindex_map = {k: pd.Index(v) for k, v in union_coords.items()}
-            data = [ds.reindex(reindex_map, fill_value=FILL_VALUE) for ds in data]
 
     if not kwargs:
         kwargs = {
