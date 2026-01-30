@@ -1,7 +1,17 @@
 Release Notes
 =============
 
-.. Upcoming Version
+Upcoming Version
+----------------
+
+* Fix docs (pick highs solver)
+* Add the `sphinx-copybutton` to the documentation
+
+Version 0.6.1
+--------------
+
+* Avoid Gurobi initialization on linopy import.
+* Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
 
 * Fix compatibility for xpress versions below 9.6 (regression)
 * Add support for the Artelys Knitro solver (via the Knitro Python API)
