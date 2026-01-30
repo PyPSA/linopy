@@ -933,12 +933,23 @@ class Model:
 
     @staticmethod
     def _check_strict_monotonicity(breakpoints: DataArray, dim: str) -> bool:
-        """Check if breakpoints are strictly monotonic along dim."""
+        """
+        Check if breakpoints are strictly monotonic along dim.
+
+        Each slice along non-dim dimensions is checked independently,
+        allowing different slices to have opposite directions (e.g., one
+        increasing and another decreasing). NaN values are ignored.
+        """
         diffs = breakpoints.diff(dim)
-        # All diffs must be either all positive or all negative (strictly monotonic)
-        all_positive = bool((diffs > 0).all())
-        all_negative = bool((diffs < 0).all())
-        return all_positive or all_negative
+        # Per-slice along dim: all non-NaN diffs positive, or all negative
+        pos = (diffs > 0) | diffs.isnull()
+        neg = (diffs < 0) | diffs.isnull()
+        all_pos_per_slice = pos.all(dim)
+        all_neg_per_slice = neg.all(dim)
+        # Each slice must be one or the other (and have at least one non-NaN)
+        has_non_nan = (~diffs.isnull()).any(dim)
+        monotonic = (all_pos_per_slice | all_neg_per_slice) & has_non_nan
+        return bool(monotonic.all())
 
     def _to_linexpr(self, expr: Variable | LinearExpression) -> LinearExpression:
         """Convert Variable or LinearExpression to LinearExpression."""

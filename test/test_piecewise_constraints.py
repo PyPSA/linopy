@@ -620,6 +620,43 @@ class TestIncrementalFormulation:
         m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
 
+    def test_opposite_directions_in_dict(self) -> None:
+        """Test that dict with opposite monotonic directions works."""
+        m = Model()
+        power = m.add_variables(name="power")
+        eff = m.add_variables(name="eff")
+
+        # power increasing, efficiency decreasing
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0.95, 0.9, 0.8]],
+            dims=["var", "bp"],
+            coords={"var": ["power", "eff"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"power": power, "eff": eff},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="incremental",
+        )
+
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_nan_breakpoints_monotonic(self) -> None:
+        """Test that NaN breakpoints don't break monotonicity check."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, 10, np.nan, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        # Should detect as monotonic despite NaN
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="auto")
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+
     def test_auto_selects_incremental(self) -> None:
         """Test method='auto' selects incremental for monotonic breakpoints."""
         m = Model()
