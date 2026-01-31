@@ -447,6 +447,7 @@ def constraints_to_file(
                     (pl.col("labels") != pl.col("labels").shift(-1))
                     .fill_null(True)
                     .alias("is_last_in_group"),
+                    pl.col("rhs").cast(pl.String).alias("rhs_str"),
                 ]
             )
 
@@ -462,7 +463,7 @@ def constraints_to_file(
                 pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
                 pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
-                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
+                pl.when(pl.col("is_last_in_group")).then(pl.col("rhs_str")),
             ]
 
             kwargs: Any = dict(
