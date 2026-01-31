@@ -465,6 +465,7 @@ def constraints_to_file(
                 *signed_number(pl.col("coeffs")),
                 col_labels[0],
                 col_labels[1],
+                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
                 pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
