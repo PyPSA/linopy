@@ -23,6 +23,7 @@ from linopy.common import (
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
+    maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
 
@@ -737,3 +738,20 @@ def test_is_constant() -> None:
     ]
     for cv in constant_values:
         assert is_constant(cv)
+
+
+def test_maybe_group_terms_polars_no_duplicates():
+    """Fast path: distinct (labels, vars) pairs skip group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 2], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (2, 3)
+    assert result.columns == ["labels", "vars", "coeffs"]
+    assert result["coeffs"].to_list() == [3.0, 4.0]
+
+
+def test_maybe_group_terms_polars_with_duplicates():
+    """Slow path: duplicate (labels, vars) pairs trigger group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 1], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (1, 3)
+    assert result["coeffs"].to_list() == [7.0]
