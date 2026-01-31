@@ -42,7 +42,6 @@ from linopy.common import (
     get_label_position,
     group_terms_polars,
     has_optimized_model,
-    infer_schema_polars,
     iterate_slices,
     maybe_replace_signs,
     print_coord,
@@ -622,14 +621,30 @@ class Constraint:
         long = to_polars(ds[keys])
 
         long = filter_nulls_polars(long)
-        long = group_terms_polars(long)
+        if ds.sizes.get("_term", 1) > 1:
+            long = group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
-        short_ds = ds[[k for k in ds if "_term" not in ds[k].dims]]
-        schema = infer_schema_polars(short_ds)
-        schema["sign"] = pl.Enum(["=", "<=", ">="])
-        short = to_polars(short_ds, schema=schema)
+        # Build short DataFrame (labels, rhs) without xarray broadcast.
+        # Add sign separately to avoid costly numpy string→polars conversion.
+        labels_flat = ds["labels"].values.reshape(-1)
+        rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
+        short = pl.DataFrame({"labels": labels_flat, "rhs": rhs_flat})
         short = filter_nulls_polars(short)
+
+        sign_values = ds["sign"].values
+        unique_signs = np.unique(sign_values)
+        if len(unique_signs) == 1:
+            short = short.with_columns(
+                pl.lit(unique_signs[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+            )
+        else:
+            sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
+            # Apply same mask as filter_nulls (labels != -1)
+            sign_flat = sign_flat[labels_flat != -1]
+            short = short.with_columns(
+                pl.Series("sign", sign_flat, dtype=pl.Enum(["=", "<=", ">="]))
+            )
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
 
         df = long.join(short, on="labels", how="inner")
