@@ -73,6 +73,11 @@ def _format_and_write(
             .collect(engine="streaming")
         )
     except Exception:
+        logger.warning(
+            "Polars streaming engine failed, falling back to eager evaluation. "
+            "Please report this at https://github.com/PyPSA/linopy/issues",
+            exc_info=True,
+        )
         formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
     formatted.write_csv(f, **kwargs)
 
