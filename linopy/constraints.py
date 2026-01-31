@@ -625,27 +625,32 @@ class Constraint:
             long = group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
-        # Build short DataFrame (labels, rhs) without xarray broadcast.
-        # Add sign separately to avoid costly numpy string→polars conversion.
+        # Build short DataFrame (labels, rhs, sign) without xarray broadcast.
+        # Apply labels mask directly instead of filter_nulls_polars.
         labels_flat = ds["labels"].values.reshape(-1)
+        mask = labels_flat != -1
+        labels_masked = labels_flat[mask]
         rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
-        short = pl.DataFrame({"labels": labels_flat, "rhs": rhs_flat})
-        short = filter_nulls_polars(short)
 
         sign_values = ds["sign"].values
-        unique_signs = np.unique(sign_values)
-        if len(unique_signs) == 1:
-            short = short.with_columns(
-                pl.lit(unique_signs[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+        sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
+        all_same_sign = (
+            sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
+        )
+
+        short_data: dict = {
+            "labels": labels_masked,
+            "rhs": rhs_flat[mask],
+        }
+        if all_same_sign:
+            short = pl.DataFrame(short_data).with_columns(
+                pl.lit(sign_flat[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
             )
         else:
-            sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
-            # Apply same mask as filter_nulls (labels != -1)
-            sign_flat = sign_flat[labels_flat != -1]
-            short = short.with_columns(
-                pl.Series("sign", sign_flat, dtype=pl.Enum(["=", "<=", ">="]))
+            short_data["sign"] = pl.Series(
+                "sign", sign_flat[mask], dtype=pl.Enum(["=", "<=", ">="])
             )
-        check_has_nulls_polars(short, name=f"{self.type} {self.name}")
+            short = pl.DataFrame(short_data)
 
         df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
