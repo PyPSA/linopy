@@ -57,12 +57,36 @@ BENCH_SCRIPT = textwrap.dedent("""\
         return m
 
 
+    def knapsack_model(n):
+        from numpy.random import default_rng
+        rng = default_rng(125)
+        m = Model()
+        packages = m.add_variables(coords=[np.arange(n)], binary=True)
+        weight = rng.integers(1, 100, size=n)
+        value = rng.integers(1, 100, size=n)
+        m.add_constraints((weight * packages).sum() <= 200)
+        m.add_objective(-(value * packages).sum())
+        return m
+
+
     def pypsa_model():
         try:
             import pypsa
         except ImportError:
             return None
         n = pypsa.examples.scigrid_de()
+        n.optimize.create_model()
+        return n.model
+
+
+    def pypsa_model_240h():
+        try:
+            import pypsa
+            import pandas as pd
+        except ImportError:
+            return None
+        n = pypsa.examples.scigrid_de()
+        n.set_snapshots(pd.date_range('2011-01-01', periods=240, freq='h'))
         n.optimize.create_model()
         return n.model
 
@@ -82,12 +106,19 @@ BENCH_SCRIPT = textwrap.dedent("""\
 
 
     results = []
-    results.append(bench("basic_model(N=100)", basic_model(100)))
-    results.append(bench("basic_model(N=500)", basic_model(500)))
+    for n in [50, 100, 200, 500]:
+        results.append(bench(f"basic_model(N={n})", basic_model(n)))
+
+    for n in [1000, 10000, 100000]:
+        results.append(bench(f"knapsack(N={n})", knapsack_model(n)))
 
     m = pypsa_model()
     if m is not None:
-        results.append(bench("PyPSA scigrid-de", m))
+        results.append(bench("PyPSA scigrid-de 24h", m))
+
+    m = pypsa_model_240h()
+    if m is not None:
+        results.append(bench("PyPSA scigrid-de 240h", m))
 
     json.dump(results, sys.stdout)
 """)
@@ -120,7 +151,7 @@ def run_benchmark_at_commit(ref: str) -> list[dict]:
             capture_output=True,
         )
         try:
-            # Install in current environment
+            # Install in current environment (non-editable + force to ensure clean)
             print(f"  Installing linopy from {sha}...", file=sys.stderr)
             subprocess.run(
                 [
@@ -128,23 +159,27 @@ def run_benchmark_at_commit(ref: str) -> list[dict]:
                     "-m",
                     "pip",
                     "install",
-                    "-e",
                     worktree_dir,
                     "-q",
                     "--no-deps",
+                    "--force-reinstall",
                 ],
                 check=True,
                 capture_output=True,
             )
 
-            # Run benchmark in subprocess (fresh import)
+            # Run benchmark in subprocess (fresh import, cwd=/ to avoid
+            # importing linopy from the repo working directory)
             print("  Running benchmarks...", file=sys.stderr)
             result = subprocess.run(
                 [sys.executable, "-c", BENCH_SCRIPT],
                 capture_output=True,
                 text=True,
-                check=True,
+                cwd="/",
             )
+            if result.returncode != 0:
+                print(f"  FAILED! stderr:\n{result.stderr}", file=sys.stderr)
+                return []
             return json.loads(result.stdout)
         finally:
             subprocess.run(
@@ -178,7 +213,17 @@ def main():
     # Reinstall current version
     print("\nReinstalling current worktree linopy...", file=sys.stderr)
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", ".", "-q", "--no-deps"],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            ".",
+            "-q",
+            "--no-deps",
+            "--force-reinstall",
+        ],
         capture_output=True,
     )
 
