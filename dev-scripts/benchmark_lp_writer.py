@@ -86,7 +86,7 @@ def main() -> None:
         benchmark_model(f"N={n}", basic_model(n), iterations)
 
     print("\nknapsack_model (N binary vars, 1 constraint with N terms):")
-    for n in [100, 500, 1000, 5000, 10000]:
+    for n in [100, 1000, 10000, 50000, 100000]:
         benchmark_model(f"N={n}", knapsack_model(n), iterations)
 
     print("\nPyPSA SciGrid-DE (realistic power system model):")
