@@ -60,6 +60,7 @@ from linopy.common import (
     has_optimized_model,
     is_constant,
     iterate_slices,
+    maybe_group_terms_polars,
     print_coord,
     print_single_expression,
     to_dataframe,
@@ -1463,13 +1464,7 @@ class LinearExpression(BaseExpression):
 
         df = to_polars(self.data)
         df = filter_nulls_polars(df)
-        if df["vars"].n_unique() < df.height:
-            df = group_terms_polars(df)
-        else:
-            # Match column order of group_terms (group-by keys, coeffs, rest)
-            varcols = [c for c in df.columns if c.startswith("vars")]
-            rest = [c for c in df.columns if c not in varcols and c != "coeffs"]
-            df = df.select(varcols + ["coeffs"] + rest)
+        df = maybe_group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
         return df
 

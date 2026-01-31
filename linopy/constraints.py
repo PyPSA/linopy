@@ -40,9 +40,9 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
-    group_terms_polars,
     has_optimized_model,
     iterate_slices,
+    maybe_group_terms_polars,
     maybe_replace_signs,
     print_coord,
     print_single_constraint,
@@ -622,7 +622,7 @@ class Constraint:
 
         long = filter_nulls_polars(long)
         if ds.sizes.get("_term", 1) > 1:
-            long = group_terms_polars(long)
+            long = maybe_group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
         # Build short DataFrame (labels, rhs, sign) without xarray broadcast.
