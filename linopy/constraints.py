@@ -632,11 +632,7 @@ class Constraint:
         short = filter_nulls_polars(short)
         check_has_nulls_polars(short, name=f"{self.type} {self.name}")
 
-        df = pl.concat([short, long], how="diagonal_relaxed").sort(["labels", "rhs"])
-        # delete subsequent non-null rhs (happens is all vars per label are -1)
-        is_non_null = df["rhs"].is_not_null()
-        prev_non_is_null = is_non_null.shift(1).fill_null(False)
-        df = df.filter(is_non_null & ~prev_non_is_null | ~is_non_null)
+        df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     # Wrapped function which would convert variable to dataarray
