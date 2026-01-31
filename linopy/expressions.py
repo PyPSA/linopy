@@ -1463,7 +1463,13 @@ class LinearExpression(BaseExpression):
 
         df = to_polars(self.data)
         df = filter_nulls_polars(df)
-        df = group_terms_polars(df)
+        if df["vars"].n_unique() < df.height:
+            df = group_terms_polars(df)
+        else:
+            # Match column order of group_terms (group-by keys, coeffs, rest)
+            varcols = [c for c in df.columns if c.startswith("vars")]
+            rest = [c for c in df.columns if c not in varcols and c != "coeffs"]
+            df = df.select(varcols + ["coeffs"] + rest)
         check_has_nulls_polars(df, name=self.type)
         return df
 
