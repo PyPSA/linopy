@@ -119,7 +119,23 @@ def run_benchmarks(
 
     if model_type == "basic":
         print("\nbasic_model (2 x N^2 vars, 2 x N^2 constraints):")
-        for n in [5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000]:
+        for n in [
+            5,
+            10,
+            20,
+            30,
+            50,
+            75,
+            100,
+            150,
+            200,
+            300,
+            500,
+            750,
+            1000,
+            1500,
+            2000,
+        ]:
             r = benchmark_model(
                 f"basic N={n}", basic_model(n), iterations, io_api=io_api
             )
