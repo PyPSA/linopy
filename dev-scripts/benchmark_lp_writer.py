@@ -84,19 +84,23 @@ def benchmark_model(
             times.append(time.perf_counter() - start)
 
     avg = float(np.mean(times))
-    std = float(np.std(times))
+    med = float(np.median(times))
+    q25 = float(np.percentile(times, 25))
+    q75 = float(np.percentile(times, 75))
     nvars = int(m.nvars)
     ncons = int(m.ncons)
     print(
         f"  {label:55s} ({nvars:>9,} vars, {ncons:>9,} cons): "
-        f"{avg * 1000:7.1f}ms ± {std * 1000:5.1f}ms"
+        f"{med * 1000:7.1f}ms (IQR {q25 * 1000:.1f}–{q75 * 1000:.1f}ms)"
     )
     return {
         "label": label,
         "nvars": nvars,
         "ncons": ncons,
         "mean_s": avg,
-        "std_s": std,
+        "median_s": med,
+        "q25_s": q25,
+        "q75_s": q75,
         "times_s": times,
     }
 
@@ -136,9 +140,9 @@ def run_benchmarks(
             1500,
             2000,
         ]:
-            r = benchmark_model(
-                f"basic N={n}", basic_model(n), iterations, io_api=io_api
-            )
+            # More iterations for small models to reduce noise
+            iters = iterations * 5 if n <= 100 else iterations
+            r = benchmark_model(f"basic N={n}", basic_model(n), iters, io_api=io_api)
             r["model"] = "basic"
             r["param"] = n
             results.append(r)
@@ -175,56 +179,85 @@ def plot_comparison(file_old: str, file_new: str) -> None:
     label_old = data_old.get("label", Path(file_old).stem)
     label_new = data_new.get("label", Path(file_new).stem)
 
-    nv_old = [r["nvars"] for r in data_old["results"]]
-    ms_old = [r["mean_s"] * 1000 for r in data_old["results"]]
-    std_old = [r["std_s"] * 1000 for r in data_old["results"]]
-    nv_new = [r["nvars"] for r in data_new["results"]]
-    ms_new = [r["mean_s"] * 1000 for r in data_new["results"]]
-    std_new = [r["std_s"] * 1000 for r in data_new["results"]]
+    def get_stats(data):
+        """Extract median and IQR from results, falling back to mean/std."""
+        nv = [r["nvars"] for r in data["results"]]
+        if "median_s" in data["results"][0]:
+            med = [r["median_s"] * 1000 for r in data["results"]]
+            lo = [r["q25_s"] * 1000 for r in data["results"]]
+            hi = [r["q75_s"] * 1000 for r in data["results"]]
+        else:
+            med = [r["mean_s"] * 1000 for r in data["results"]]
+            std = [r["std_s"] * 1000 for r in data["results"]]
+            lo = [m - s for m, s in zip(med, std)]
+            hi = [m + s for m, s in zip(med, std)]
+        return nv, med, lo, hi
+
+    nv_old, med_old, lo_old, hi_old = get_stats(data_old)
+    nv_new, med_new, lo_new, hi_new = get_stats(data_new)
 
     color_old, color_new = "#1f77b4", "#ff7f0e"
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(f"LP Write Performance: {label_old} vs {label_new}", fontsize=14)
 
+    def plot_errorbar(ax, nv, med, lo, hi, **kwargs):
+        yerr_lo = [m - l for m, l in zip(med, lo)]
+        yerr_hi = [h - m for m, h in zip(med, hi)]
+        ax.errorbar(nv, med, yerr=[yerr_lo, yerr_hi], capsize=3, **kwargs)
+
     # Panel 1: All data, log-log
     ax = axes[0, 0]
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         nv_old,
-        ms_old,
-        yerr=std_old,
+        med_old,
+        lo_old,
+        hi_old,
         marker="o",
         color=color_old,
         linestyle="--",
         label=label_old,
         alpha=0.8,
-        capsize=3,
     )
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         nv_new,
-        ms_new,
-        yerr=std_new,
+        med_new,
+        lo_new,
+        hi_new,
         marker="s",
         color=color_new,
         linestyle="-",
         label=label_new,
         alpha=0.8,
-        capsize=3,
     )
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Number of variables")
-    ax.set_ylabel("Write time (ms)")
+    ax.set_ylabel("Write time (ms, median)")
     ax.set_title("IO time vs problem size (log-log)")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Panel 2: Speedup ratio (old/new)
+    # Panel 2: Speedup ratio (old/new) with IQR-based bounds
     ax = axes[0, 1]
     if len(nv_old) == len(nv_new):
-        speedup = [o / n for o, n in zip(ms_old, ms_new)]
-        ax.plot(nv_old, speedup, marker="o", color="#2ca02c")
-        ax.fill_between(nv_old, 1.0, speedup, alpha=0.15, color="#2ca02c")
+        speedup = [o / n for o, n in zip(med_old, med_new)]
+        # Conservative bounds: best case = hi_old/lo_new, worst = lo_old/hi_new
+        speedup_lo = [l / h for l, h in zip(lo_old, hi_new)]
+        speedup_hi = [h / l for h, l in zip(hi_old, lo_new)]
+        yerr_lo = [s - sl for s, sl in zip(speedup, speedup_lo)]
+        yerr_hi = [sh - s for s, sh in zip(speedup, speedup_hi)]
+        ax.errorbar(
+            nv_old,
+            speedup,
+            yerr=[yerr_lo, yerr_hi],
+            marker="o",
+            color="#2ca02c",
+            capsize=3,
+        )
+        ax.fill_between(nv_old, speedup_lo, speedup_hi, alpha=0.15, color="#2ca02c")
     ax.axhline(1.0, color="gray", linestyle="--", alpha=0.5)
     ax.set_xscale("log")
     ax.set_xlabel("Number of variables")
@@ -237,30 +270,32 @@ def plot_comparison(file_old: str, file_new: str) -> None:
     cutoff = 25000
     idx_old = [i for i, n in enumerate(nv_old) if n <= cutoff]
     idx_new = [i for i, n in enumerate(nv_new) if n <= cutoff]
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         [nv_old[i] for i in idx_old],
-        [ms_old[i] for i in idx_old],
-        yerr=[std_old[i] for i in idx_old],
+        [med_old[i] for i in idx_old],
+        [lo_old[i] for i in idx_old],
+        [hi_old[i] for i in idx_old],
         marker="o",
         color=color_old,
         linestyle="--",
         label=label_old,
         alpha=0.8,
-        capsize=3,
     )
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         [nv_new[i] for i in idx_new],
-        [ms_new[i] for i in idx_new],
-        yerr=[std_new[i] for i in idx_new],
+        [med_new[i] for i in idx_new],
+        [lo_new[i] for i in idx_new],
+        [hi_new[i] for i in idx_new],
         marker="s",
         color=color_new,
         linestyle="-",
         label=label_new,
         alpha=0.8,
-        capsize=3,
     )
     ax.set_xlabel("Number of variables")
-    ax.set_ylabel("Write time (ms)")
+    ax.set_ylabel("Write time (ms, median)")
     ax.set_ylim(bottom=0)
     ax.set_title(f"Small models (≤ {cutoff:,} vars)")
     ax.legend()
@@ -270,31 +305,33 @@ def plot_comparison(file_old: str, file_new: str) -> None:
     ax = axes[1, 1]
     idx_old = [i for i, n in enumerate(nv_old) if n > cutoff]
     idx_new = [i for i, n in enumerate(nv_new) if n > cutoff]
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         [nv_old[i] for i in idx_old],
-        [ms_old[i] for i in idx_old],
-        yerr=[std_old[i] for i in idx_old],
+        [med_old[i] for i in idx_old],
+        [lo_old[i] for i in idx_old],
+        [hi_old[i] for i in idx_old],
         marker="o",
         color=color_old,
         linestyle="--",
         label=label_old,
         alpha=0.8,
-        capsize=3,
     )
-    ax.errorbar(
+    plot_errorbar(
+        ax,
         [nv_new[i] for i in idx_new],
-        [ms_new[i] for i in idx_new],
-        yerr=[std_new[i] for i in idx_new],
+        [med_new[i] for i in idx_new],
+        [lo_new[i] for i in idx_new],
+        [hi_new[i] for i in idx_new],
         marker="s",
         color=color_new,
         linestyle="-",
         label=label_new,
         alpha=0.8,
-        capsize=3,
     )
     ax.set_xscale("log")
     ax.set_xlabel("Number of variables")
-    ax.set_ylabel("Write time (ms)")
+    ax.set_ylabel("Write time (ms, median)")
     ax.set_title(f"Large models (> {cutoff:,} vars)")
     ax.legend()
     ax.grid(True, alpha=0.3)
