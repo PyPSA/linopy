@@ -634,7 +634,7 @@ class Constraint:
 
         sign_values = ds["sign"].values
         sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
-        all_same_sign = (
+        all_same_sign = len(sign_flat) > 0 and (
             sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
         )
 
