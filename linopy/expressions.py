@@ -1772,6 +1772,225 @@ class LinearExpression(BaseExpression):
         return LinearExpression(const_da, model)
 
 
+class LazyLinearExpression(LinearExpression):
+    """
+    A LinearExpression that defers merge along _term.
+
+    Instead of concatenating datasets immediately (which triggers dense
+    outer-join padding in xarray), this class stores a list of compact
+    per-expression datasets.  Materialization into a single dense Dataset
+    happens lazily on first access to ``.data`` so that all existing code
+    paths work unchanged.  The speedup comes from overriding the ``flat``
+    property (the solver hot-path) to iterate parts directly, avoiding the
+    dense padding entirely.
+    """
+
+    __slots__ = ("_parts", "_const_override")
+
+    def __init__(
+        self,
+        data_or_parts: Dataset | list[Dataset],
+        model: Model,
+        *,
+        parts: list[Dataset] | None = None,
+        const: DataArray | None = None,
+    ) -> None:
+        # Normal LinearExpression construction (e.g. from exprwrap fallback)
+        if parts is None and not isinstance(data_or_parts, list):
+            super().__init__(data_or_parts, model)
+            self._parts = []
+            self._const_override = None
+            return
+
+        # Lazy construction: store parts, defer materialization
+        if parts is not None:
+            part_list = parts
+        else:
+            part_list = data_or_parts  # type: ignore[assignment]
+
+        object.__setattr__(self, "_parts", part_list)
+        object.__setattr__(self, "_const_override", const)
+        object.__setattr__(self, "_model", model)
+        object.__setattr__(self, "_data", None)  # lazy
+
+    @property
+    def data(self) -> Dataset:
+        if self._data is None:
+            object.__setattr__(self, "_data", self._materialize())
+        return self._data
+
+    @property
+    def const(self) -> DataArray:
+        if self._const_override is not None:
+            return self._const_override
+        return self.data.const
+
+    @const.setter
+    def const(self, value: DataArray) -> None:
+        object.__setattr__(self, "_const_override", None)
+        self._data = assign_multiindex_safe(self.data, const=value)
+
+    @property
+    def is_lazy(self) -> bool:
+        """True if the expression has not been materialized yet."""
+        return self._data is None and len(self._parts) > 0
+
+    def _materialize(self) -> Dataset:
+        """Fall back to the standard dense merge."""
+        if not self._parts:
+            raise ValueError("LazyLinearExpression has no parts to materialize")
+
+        # Detect if all parts share the same coordinate space
+        coord_dims = [
+            {k: v for k, v in p.sizes.items() if k not in HELPER_DIMS}
+            for p in self._parts
+        ]
+        override = check_common_keys_values(coord_dims)
+
+        kwargs: dict[str, Any] = {
+            "coords": "minimal",
+            "compat": "override",
+            "join": "override" if override else "outer",
+            "fill_value": FILL_VALUE,
+        }
+        ds = xr.concat(self._parts, TERM_DIM, **kwargs)
+
+        for d in set(HELPER_DIMS) & set(ds.coords):
+            ds = ds.reset_index(d, drop=True)
+
+        if self._const_override is not None:
+            ds = assign_multiindex_safe(ds, const=self._const_override)
+        else:
+            ds = ds.assign(const=0.0)
+
+        # Normalize: transpose so _term is last, broadcast coord dims
+        ds = Dataset(ds.transpose(..., TERM_DIM))
+        (ds,) = xr.broadcast(ds, exclude=HELPER_DIMS)
+
+        return ds
+
+    @property
+    def flat(self) -> pd.DataFrame:
+        """
+        Convert the expression to a pandas DataFrame without materializing.
+
+        Each part is converted independently and the results are concatenated,
+        avoiding the dense outer-join padding entirely.
+        """
+        if not self.is_lazy:
+            return super().flat
+
+        frames = []
+        for part in self._parts:
+
+            def mask_func(
+                datadict: dict[Hashable, np.ndarray],
+            ) -> pd.Series:
+                return (datadict["vars"] != -1) & (datadict["coeffs"] != 0)
+
+            df = to_dataframe(part, mask_func=mask_func)
+            if len(df):
+                frames.append(df)
+
+        if not frames:
+            return pd.DataFrame(
+                {"coeffs": pd.Series(dtype=float), "vars": pd.Series(dtype=int)}
+            )
+
+        df = pd.concat(frames, ignore_index=True)
+        df = df.groupby("vars", as_index=False).sum()
+        check_has_nulls(df, name=self.type)
+        return df
+
+    def __add__(
+        self,
+        other: ConstantLike
+        | VariableLike
+        | ScalarLinearExpression
+        | LinearExpression
+        | QuadraticExpression,
+    ) -> LinearExpression | QuadraticExpression:
+        if not self.is_lazy:
+            return super().__add__(other)
+
+        if isinstance(other, QuadraticExpression):
+            return other.__add__(self)
+
+        try:
+            if np.isscalar(other):
+                const = (
+                    self._const_override
+                    if self._const_override is not None
+                    else xr.DataArray(0.0)
+                )
+                return LazyLinearExpression(
+                    None,  # type: ignore[arg-type]
+                    self._model,
+                    parts=list(self._parts),
+                    const=const + other,
+                )
+
+            if isinstance(other, LazyLinearExpression) and other.is_lazy:
+                # Merge parts lists
+                const_self = (
+                    self._const_override
+                    if self._const_override is not None
+                    else xr.DataArray(0.0)
+                )
+                const_other = (
+                    other._const_override
+                    if other._const_override is not None
+                    else xr.DataArray(0.0)
+                )
+                aligned_self, aligned_other = xr.align(
+                    const_self, const_other, join="outer", fill_value=0
+                )
+                return LazyLinearExpression(
+                    None,  # type: ignore[arg-type]
+                    self._model,
+                    parts=self._parts + other._parts,
+                    const=aligned_self + aligned_other,
+                )
+
+            # For LinearExpression/Variable, use merge directly to avoid
+            # materializing self via coord_dims access in super().__add__
+            other = as_expression(other, model=self._model)
+            return merge([self, other])
+        except TypeError:
+            return NotImplemented
+
+    def __neg__(self) -> LinearExpression:
+        if not self.is_lazy:
+            return super().__neg__()
+        neg_parts = [assign_multiindex_safe(p, coeffs=-p.coeffs) for p in self._parts]
+        const = (
+            self._const_override
+            if self._const_override is not None
+            else xr.DataArray(0.0)
+        )
+        return LazyLinearExpression(
+            None,  # type: ignore[arg-type]
+            self._model,
+            parts=neg_parts,
+            const=-const,
+        )
+
+    def __sub__(
+        self,
+        other: ConstantLike
+        | VariableLike
+        | ScalarLinearExpression
+        | LinearExpression
+        | QuadraticExpression,
+    ) -> LinearExpression | QuadraticExpression:
+        if not self.is_lazy:
+            return super().__sub__(other)
+        try:
+            return self.__add__(-other)
+        except TypeError:
+            return NotImplemented
+
+
 class QuadraticExpression(BaseExpression):
     """
     A quadratic expression consisting of terms of coefficients and variables.
@@ -1875,7 +2094,9 @@ class QuadraticExpression(BaseExpression):
                 return self.assign(const=self.const - other)
 
             other = as_expression(other, model=self.model, dims=self.coord_dims)
-            if type(other) is LinearExpression:
+            if isinstance(other, LinearExpression) and not isinstance(
+                other, QuadraticExpression
+            ):
                 other = other.to_quadexpr()
             return merge([self, -other], cls=self.__class__)
         except TypeError:
@@ -2094,7 +2315,7 @@ def merge(
         exprs = [exprs] + list(add_exprs)  # type: ignore
 
     has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
-    has_linear_expression = any(type(e) is LinearExpression for e in exprs)
+    has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
         cls = QuadraticExpression if has_quad_expression else LinearExpression
 
@@ -2111,7 +2332,8 @@ def merge(
 
     model = exprs[0].model
 
-    if cls in linopy_types and dim in HELPER_DIMS:
+    has_lazy = any(isinstance(e, LazyLinearExpression) and e.is_lazy for e in exprs)
+    if cls in linopy_types and dim in HELPER_DIMS and not has_lazy:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
@@ -2119,15 +2341,26 @@ def merge(
     else:
         override = False
 
-    data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
-    data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
+    data = [
+        e.data
+        if isinstance(e, linopy_types)
+        and not (isinstance(e, LazyLinearExpression) and e.is_lazy)
+        else e
+        for e in exprs
+    ]
+    data = [
+        fill_missing_coords(ds, fill_helper_dims=True)
+        if isinstance(ds, Dataset)
+        else ds
+        for ds in data
+    ]
 
     if not kwargs:
         kwargs = {
             "coords": "minimal",
             "compat": "override",
         }
-        if cls == LinearExpression:
+        if issubclass(cls, LinearExpression):
             kwargs["fill_value"] = FILL_VALUE
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
@@ -2138,6 +2371,46 @@ def merge(
             kwargs.setdefault("join", "outer")
 
     if dim == TERM_DIM:
+        # Use lazy merge for LinearExpression
+        if issubclass(cls, LinearExpression):
+            # Flatten any existing LazyLinearExpression parts
+            parts: list[Dataset] = []
+            const_arrays: list[DataArray] = []
+            for expr in exprs:
+                if isinstance(expr, LazyLinearExpression) and expr.is_lazy:
+                    parts.extend(expr._parts)
+                    c = (
+                        expr._const_override
+                        if expr._const_override is not None
+                        else xr.DataArray(0.0)
+                    )
+                    const_arrays.append(c)
+                else:
+                    d = expr.data if isinstance(expr, linopy_types) else expr
+                    d = fill_missing_coords(d, fill_helper_dims=True)
+                    const_arrays.append(d["const"])
+                    parts.append(d[["coeffs", "vars"]])
+
+            # Sum constants (cheap — no _term dim involved)
+            subkwargs_const = (
+                {**kwargs, "fill_value": 0}
+                if kwargs
+                else {
+                    "coords": "minimal",
+                    "compat": "override",
+                    "join": "outer",
+                    "fill_value": 0,
+                }
+            )
+            const = xr.concat(const_arrays, "_temp", **subkwargs_const).sum("_temp")
+
+            return LazyLinearExpression(
+                None,  # type: ignore[arg-type]
+                model,
+                parts=parts,
+                const=const,
+            )
+
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
         subkwargs = {**kwargs, "fill_value": 0}
         const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)

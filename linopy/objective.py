@@ -232,11 +232,13 @@ class Objective:
 
     @property
     def is_linear(self) -> bool:
-        return type(self.expression) is expressions.LinearExpression
+        return isinstance(
+            self.expression, expressions.LinearExpression
+        ) and not isinstance(self.expression, expressions.QuadraticExpression)
 
     @property
     def is_quadratic(self) -> bool:
-        return type(self.expression) is expressions.QuadraticExpression
+        return isinstance(self.expression, expressions.QuadraticExpression)
 
     def to_matrix(self, *args: Any, **kwargs: Any) -> csc_matrix:
         """Wrapper for expression.to_matrix"""
