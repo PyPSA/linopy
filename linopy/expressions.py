@@ -1990,6 +1990,135 @@ class LazyLinearExpression(LinearExpression):
         except TypeError:
             return NotImplemented
 
+    def _compact(self) -> LazyLinearExpression:
+        """
+        Merge parts that share the same coordinate space.
+
+        Groups parts by their non-helper dimension signature and merges
+        each group with ``join="override"`` (cheap, no padding).  This
+        keeps the part count low after many chained additions.
+        """
+        if not self.is_lazy or len(self._parts) <= 1:
+            return self
+
+        from itertools import groupby
+
+        def _coord_key(p: Dataset) -> tuple:
+            return tuple(
+                sorted((k, v) for k, v in p.sizes.items() if k not in HELPER_DIMS)
+            )
+
+        sorted_parts = sorted(self._parts, key=_coord_key)
+        merged: list[Dataset] = []
+        for _key, group in groupby(sorted_parts, key=_coord_key):
+            group_list = list(group)
+            if len(group_list) == 1:
+                merged.append(group_list[0])
+            else:
+                ds = xr.concat(
+                    group_list,
+                    TERM_DIM,
+                    coords="minimal",
+                    compat="override",
+                    join="override",
+                    fill_value=FILL_VALUE,
+                )
+                for d in set(HELPER_DIMS) & set(ds.coords):
+                    ds = ds.reset_index(d, drop=True)
+                merged.append(ds)
+
+        return LazyLinearExpression(
+            None,  # type: ignore[arg-type]
+            self._model,
+            parts=merged,
+            const=self._const_override,
+        )
+
+    def to_polars(self) -> pl.DataFrame:
+        """Convert the expression to a polars DataFrame without materializing."""
+        if not self.is_lazy:
+            return super().to_polars()
+
+        frames = []
+        for part in self._parts:
+            df = to_polars(part)
+            df = filter_nulls_polars(df)
+            if len(df):
+                frames.append(df)
+
+        if not frames:
+            return pl.DataFrame(
+                {
+                    "vars": pl.Series([], dtype=pl.Int64),
+                    "coeffs": pl.Series([], dtype=pl.Float64),
+                }
+            )
+
+        df = pl.concat(frames)
+        df = group_terms_polars(df)
+        check_has_nulls_polars(df, name=self.type)
+        return df
+
+    def sel(self, *args: Any, **kwargs: Any) -> LazyLinearExpression | LinearExpression:
+        """Apply sel to each part independently."""
+        if not self.is_lazy:
+            return super().sel(*args, **kwargs)
+        # Materialize — sel semantics with indexers may not apply cleanly per-part
+        return LinearExpression.sel(self, *args, **kwargs)
+
+    def rename(
+        self, *args: Any, **kwargs: Any
+    ) -> LazyLinearExpression | LinearExpression:
+        """Apply rename to each part independently, skipping parts that lack the dim."""
+        if not self.is_lazy:
+            return super().rename(*args, **kwargs)
+        # Build the name mapping
+        from xarray.core.utils import either_dict_or_kwargs
+
+        name_dict = either_dict_or_kwargs(args[0] if args else {}, kwargs, "rename")
+        new_parts = []
+        for p in self._parts:
+            # Only rename dims/vars that exist in this part
+            applicable = {k: v for k, v in name_dict.items() if k in p or k in p.dims}
+            new_parts.append(p.rename(applicable) if applicable else p)
+        const = self._const_override
+        if const is not None:
+            applicable = {k: v for k, v in name_dict.items() if k in const.dims}
+            if applicable:
+                const = const.rename(applicable)
+        return LazyLinearExpression(
+            None,  # type: ignore[arg-type]
+            self._model,
+            parts=new_parts,
+            const=const,
+        )
+
+    def shift(
+        self, *args: Any, **kwargs: Any
+    ) -> LazyLinearExpression | LinearExpression:
+        """Apply shift to each part independently."""
+        if not self.is_lazy:
+            return super().shift(*args, **kwargs)
+        # Materialize — shift fill behavior needs consistent coord space
+        return LinearExpression.shift(self, *args, **kwargs)
+
+    def diff(self, dim: str, n: int = 1) -> LazyLinearExpression | LinearExpression:
+        """Apply diff to each part that contains the dimension."""
+        if not self.is_lazy:
+            return super().diff(dim, n)
+        new_parts = []
+        for p in self._parts:
+            if dim in p.dims:
+                new_parts.append(p.diff(dim, n))
+            else:
+                new_parts.append(p)
+        return LazyLinearExpression(
+            None,  # type: ignore[arg-type]
+            self._model,
+            parts=new_parts,
+            const=self._const_override,
+        )
+
 
 class QuadraticExpression(BaseExpression):
     """
