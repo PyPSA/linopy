@@ -8,7 +8,6 @@ This module contains commonly used functions.
 from __future__ import annotations
 
 import operator
-import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
@@ -18,7 +17,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import arange, signedinteger
+from numpy import signedinteger
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
@@ -27,6 +26,7 @@ from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
 from linopy.constants import (
+    DEFAULT_LABEL_DTYPE,
     HELPER_DIMS,
     SIGNS,
     SIGNS_alternative,
@@ -333,11 +333,9 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
     schema = {}
-    np_major_version = int(np.__version__.split(".")[0])
-    use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
         if np.issubdtype(array.dtype, np.integer):
-            schema[name] = pl.Int32 if use_int32 else pl.Int64
+            schema[name] = pl.Int32 if array.dtype.itemsize <= 4 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
             schema[name] = pl.Float64  # type: ignore
         elif np.issubdtype(array.dtype, np.bool_):
@@ -523,7 +521,7 @@ def fill_missing_coords(
     # Fill in missing integer coordinates
     for dim in ds.dims:
         if dim not in ds.coords and dim not in skip_dims:
-            ds.coords[dim] = arange(ds.sizes[dim])
+            ds.coords[dim] = np.arange(ds.sizes[dim], dtype=DEFAULT_LABEL_DTYPE)
 
     return ds
 
