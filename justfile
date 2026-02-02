@@ -1,7 +1,6 @@
 default_iterations := "10"
 default_model := "basic"
 default_phase := "all"
-default_quick := "False"
 results_dir := "benchmarks/results"
 
 [group('benchmark')]
@@ -19,7 +18,7 @@ quick name="quick":
     just _run basic lp_write {{name}} 5 True
 
 [group('benchmark')]
-compare ref="master" model=default_model phase=default_phase iterations=default_iterations quick=default_quick:
+compare ref="master" model=default_model phase=default_phase iterations=default_iterations quick="False":
     #!/usr/bin/env bash
     set -euo pipefail
     home_branch=$(git rev-parse --abbrev-ref HEAD)
@@ -71,6 +70,10 @@ compare ref="master" model=default_model phase=default_phase iterations=default_
         fi
     done
     echo ">>> Done."
+
+[group('benchmark')]
+compare-quick ref="master":
+    just compare {{ref}} basic all 10 True
 
 [group('benchmark')]
 plot +files:

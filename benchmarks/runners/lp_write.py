@@ -37,12 +37,12 @@ def run(
         lp_path = Path(tmpdir) / "model.lp"
 
         # Warmup
-        model.to_file(lp_path)
+        model.to_file(lp_path, progress=False)
 
         for _ in range(iterations):
             gc.collect()
             t0 = time.perf_counter()
-            model.to_file(lp_path)
+            model.to_file(lp_path, progress=False)
             elapsed = time.perf_counter() - t0
             times.append(elapsed)
 
