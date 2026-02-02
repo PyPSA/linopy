@@ -8,14 +8,16 @@ import linopy
 
 LABEL = "sparse N={n_buses} T={n_time}"
 SIZES = [
-    {"n_buses": 20, "n_time": 24},
     {"n_buses": 50, "n_time": 50},
     {"n_buses": 100, "n_time": 100},
-    {"n_buses": 200, "n_time": 200},
+    {"n_buses": 250, "n_time": 250},
+    {"n_buses": 500, "n_time": 500},
+    {"n_buses": 1000, "n_time": 1000},
+    {"n_buses": 1600, "n_time": 1600},
 ]
 QUICK_SIZES = [
-    {"n_buses": 20, "n_time": 24},
     {"n_buses": 50, "n_time": 50},
+    {"n_buses": 100, "n_time": 100},
 ]
 DESCRIPTION = "Sparse ring network — exercises outer-join alignment"
 

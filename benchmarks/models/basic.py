@@ -5,8 +5,8 @@ from __future__ import annotations
 import linopy
 
 LABEL = "basic N={n}"
-SIZES = [{"n": n} for n in [5, 10, 25, 50, 100, 200, 500]]
-QUICK_SIZES = [{"n": n} for n in [5, 10, 25]]
+SIZES = [{"n": n} for n in [10, 50, 100, 250, 500, 1000, 1600]]
+QUICK_SIZES = [{"n": n} for n in [10, 50, 100]]
 DESCRIPTION = "2*N^2 vars/cons — simple dense model"
 
 

@@ -31,6 +31,12 @@ compare ref="master" model=default_model phase=default_phase iterations=default_
         phases="{{phase}}"
     fi
 
+    if [[ "{{model}}" == "all" ]]; then
+        models=$(python -c "from benchmarks.models import list_models; print(' '.join(list_models()))")
+    else
+        models="{{model}}"
+    fi
+
     ref="{{ref}}"
     if [[ "$ref" == *:* ]]; then
         remote="${ref%%:*}"
@@ -47,33 +53,43 @@ compare ref="master" model=default_model phase=default_phase iterations=default_
     git checkout --detach "$checkout_ref"
     pip install -e . --quiet 2>/dev/null || true
 
-    echo ">>> Benchmarking $ref_name (model={{model}}, phases=$phases, quick={{quick}}) ..."
-    for phase in $phases; do
-        just _run "{{model}}" "$phase" "$ref_name" "{{iterations}}" "{{quick}}"
+    echo ">>> Benchmarking $ref_name (models=$models, phases=$phases, quick={{quick}}) ..."
+    for model in $models; do
+        for phase in $phases; do
+            just _run "$model" "$phase" "$ref_name" "{{iterations}}" "{{quick}}"
+        done
     done
 
     echo ">>> Returning to $home_branch ..."
     git checkout "$home_branch"
     pip install -e . --quiet 2>/dev/null || true
 
-    echo ">>> Benchmarking $home_name (model={{model}}, phases=$phases, quick={{quick}}) ..."
-    for phase in $phases; do
-        just _run "{{model}}" "$phase" "$home_name" "{{iterations}}" "{{quick}}"
+    echo ">>> Benchmarking $home_name (models=$models, phases=$phases, quick={{quick}}) ..."
+    for model in $models; do
+        for phase in $phases; do
+            just _run "$model" "$phase" "$home_name" "{{iterations}}" "{{quick}}"
+        done
     done
 
     echo ">>> Comparing results ..."
-    for phase in $phases; do
-        old="benchmarks/results/${ref_name}_{{model}}_${phase}.json"
-        new="benchmarks/results/${home_name}_{{model}}_${phase}.json"
-        if [[ -f "$old" && -f "$new" ]]; then
-            python -c "from benchmarks.compare import compare; compare('$old', '$new')"
-        fi
+    for model in $models; do
+        for phase in $phases; do
+            old="benchmarks/results/${ref_name}_${model}_${phase}.json"
+            new="benchmarks/results/${home_name}_${model}_${phase}.json"
+            if [[ -f "$old" && -f "$new" ]]; then
+                python -c "from benchmarks.compare import compare; compare('$old', '$new')"
+            fi
+        done
     done
     echo ">>> Done."
 
 [group('benchmark')]
+compare-all ref="master" iterations=default_iterations:
+    just compare {{ref}} all all {{iterations}} False
+
+[group('benchmark')]
 compare-quick ref="master":
-    just compare {{ref}} basic all 10 True
+    just compare {{ref}} basic all 5 True
 
 [group('benchmark')]
 plot +files:

@@ -7,8 +7,8 @@ import numpy as np
 import linopy
 
 LABEL = "knapsack N={n}"
-SIZES = [{"n": n} for n in [10, 50, 100, 500, 1000]]
-QUICK_SIZES = [{"n": n} for n in [10, 50]]
+SIZES = [{"n": n} for n in [100, 1_000, 10_000, 100_000, 1_000_000, 5_000_000]]
+QUICK_SIZES = [{"n": n} for n in [100, 1_000, 10_000]]
 DESCRIPTION = "N binary variables — integer programming stress test"
 
 

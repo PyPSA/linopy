@@ -6,12 +6,15 @@ import linopy
 
 LABEL = "large_expr N={n_constraints} K={terms_per_constraint}"
 SIZES = [
-    {"n_constraints": 100, "terms_per_constraint": 10},
-    {"n_constraints": 500, "terms_per_constraint": 50},
-    {"n_constraints": 1000, "terms_per_constraint": 100},
+    {"n_constraints": 100, "terms_per_constraint": 100},
+    {"n_constraints": 500, "terms_per_constraint": 200},
+    {"n_constraints": 1000, "terms_per_constraint": 500},
+    {"n_constraints": 2000, "terms_per_constraint": 1000},
+    {"n_constraints": 5000, "terms_per_constraint": 1000},
 ]
 QUICK_SIZES = [
-    {"n_constraints": 100, "terms_per_constraint": 10},
+    {"n_constraints": 100, "terms_per_constraint": 100},
+    {"n_constraints": 500, "terms_per_constraint": 200},
 ]
 DESCRIPTION = "N constraints each summing K variables — expression building stress test"
 
