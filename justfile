@@ -1,29 +1,28 @@
 default_iterations := "10"
 results_dir := "benchmarks/results"
 
+[group: 'run']
 # Run all phases for all models
 bench label="dev" iterations=default_iterations:
     python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
+[group: 'run']
 # Run a single model + phase
 bench-model model phase="build" label="dev" iterations=default_iterations quick="True":
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
+[group: 'run']
 # Quick smoke test (basic model, all phases, small sizes)
 bench-quick label="dev":
     just bench-run basic build {{label}} 5 True
     just bench-run basic memory {{label}} 5 True
     just bench-run basic lp_write {{label}} 5 True
 
-# Internal: run a single model+phase (used by other recipes)
-[private]
-bench-run model phase label iterations quick:
-    python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
 # Benchmark a branch vs current, then compare
 # Usage: just bench-branch FBumann:perf/lp-write-speed-combined
-#        just bench-branch origin/master model=pypsa_scigrid phase=lp_write
-#        just bench-branch my-branch iterations=20 quick=false
+#        just bench-branch origin/master pypsa_scigrid lp_write 20 False
+[group: 'compare']
 bench-branch ref model="basic" phase="all" iterations=default_iterations quick="True":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -79,10 +78,16 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     done
     echo ">>> Done."
 
-# Compare result JSON files across branches (2 or more)
+# Compare result JSON files manually (2 or more)
+[group: 'compare']
 bench-compare +files:
     python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
 # List available models and phases
+[group: 'info']
 bench-list:
     python -c "from benchmarks.run import list_available; list_available()"
+
+[private]
+bench-run model phase label iterations quick:
+    python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
