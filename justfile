@@ -42,7 +42,7 @@ bench-branch ref:
         remote="${ref%%:*}"
         branch="${ref#*:}"
         git remote get-url "$remote" 2>/dev/null || git remote add "$remote" "https://github.com/$remote/linopy.git"
-        git fetch "$remote" "$branch" --no-tags --no-recurse-submodules 2>&1 || true
+        git fetch "$remote" "$branch" --no-tags --no-recurse-submodules
         checkout_ref="FETCH_HEAD"
     else
         git fetch origin --no-tags --no-recurse-submodules 2>&1 || true
