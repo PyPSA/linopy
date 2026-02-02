@@ -6,12 +6,12 @@ Modular benchmark framework for linopy. All commands use [`just`](https://github
 $ just --list
 Available recipes:
     [benchmark]
-    all label="dev" iterations=default_iterations
-    compare ref model="basic" phase="all" iterations=default_iterations quick="True"
+    all name iterations=default_iterations
+    compare ref="master" model="basic" phase="all" iterations=default_iterations quick="True"
     list
-    model model phase="build" label="dev" iterations=default_iterations quick="True"
+    model name model phase="all" iterations=default_iterations quick="False"
     plot +files
-    quick label="dev"
+    quick name="quick"
 ```
 
 Start with `just list` to see available models and phases, then `just quick` for a smoke test.
@@ -26,16 +26,16 @@ just list
 just quick
 
 # Full suite
-just all label="my-branch"
+just all my-branch
 
 # Single model + phase
-just model knapsack memory label="my-branch" iterations=20
+just model my-branch knapsack memory iterations=20
 
 # Compare current branch against master
-just compare master
+just compare
 
-# Compare against a remote fork
-just compare FBumann:perf/lp-write-speed model="basic" phase="lp_write"
+# Compare against a remote fork, specific phase
+just compare ref=FBumann:perf/lp-write-speed phase=lp_write
 
 # Plot existing result files
 just plot benchmarks/results/master_basic_build.json benchmarks/results/feat_basic_build.json
@@ -43,4 +43,4 @@ just plot benchmarks/results/master_basic_build.json benchmarks/results/feat_bas
 
 ## Output
 
-Results are saved as JSON in `benchmarks/results/` (gitignored), named `{label}_{model}_{phase}.json`. Comparison plots are saved as PNG alongside.
+Results are saved as JSON in `benchmarks/results/` (gitignored), named `{name}_{model}_{phase}.json`. Comparison plots are saved as PNG alongside.
