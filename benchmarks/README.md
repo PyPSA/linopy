@@ -8,6 +8,7 @@ Available recipes:
     [benchmark]
     all name iterations=default_iterations
     compare ref="master" model=default_model phase=default_phase iterations=default_iterations quick="False"
+    compare-all ref="master" iterations=default_iterations
     compare-quick ref="master"
     list
     model name model phase=default_phase iterations=default_iterations quick="False"
@@ -26,16 +27,19 @@ just list
 # Quick smoke test (basic model, all phases, 5 iterations)
 just quick
 
-# Full suite
+# Full suite (all models, all phases)
 just all my-branch
 
 # Single model + phase
 just model my-branch knapsack memory
 
-# Compare current branch against master (all phases, basic model)
+# Compare current branch against master (basic model, all phases)
 just compare
 
-# Quick compare (small sizes, 5 iterations)
+# Compare all models against master
+just compare-all
+
+# Quick compare (basic model, small sizes, 5 iterations)
 just compare-quick perf/lp-write-speed
 
 # Compare against a remote fork
