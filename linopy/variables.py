@@ -52,7 +52,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import DEFAULT_LABEL_DTYPE, HELPER_DIMS, TERM_DIM
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
@@ -1066,7 +1066,9 @@ class Variable:
             .map(DataArray.ffill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign_multiindex_safe(labels=data.labels.astype(int))
+        return self.assign_multiindex_safe(
+            labels=data.labels.astype(DEFAULT_LABEL_DTYPE)
+        )
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
         """
@@ -1093,7 +1095,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign(labels=data.labels.astype(int))
+        return self.assign(labels=data.labels.astype(DEFAULT_LABEL_DTYPE))
 
     def sanitize(self) -> Variable:
         """
@@ -1104,7 +1106,9 @@ class Variable:
         linopy.Variable
         """
         if issubdtype(self.labels.dtype, floating):
-            return self.assign(labels=self.labels.fillna(-1).astype(int))
+            return self.assign(
+                labels=self.labels.fillna(-1).astype(DEFAULT_LABEL_DTYPE)
+            )
         return self
 
     def equals(self, other: Variable) -> bool:
@@ -1525,7 +1529,10 @@ class Variables:
         """
         df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=DEFAULT_LABEL_DTYPE),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 

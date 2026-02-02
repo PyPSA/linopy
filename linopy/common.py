@@ -460,7 +460,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
         )
         arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
-            arrs = tuple([ds.fillna(-1).astype(int) for ds in arrs])
+            arrs = tuple([ds.fillna(-1).astype(DEFAULT_LABEL_DTYPE) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
 
 
