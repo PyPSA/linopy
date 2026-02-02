@@ -1,22 +1,22 @@
 default_iterations := "10"
 results_dir := "benchmarks/results"
 
-[group('run')]
-bench label="dev" iterations=default_iterations:
+[group('benchmark')]
+all label="dev" iterations=default_iterations:
     python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
-[group('run')]
-bench-model model phase="build" label="dev" iterations=default_iterations quick="True":
+[group('benchmark')]
+model model phase="build" label="dev" iterations=default_iterations quick="True":
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
-[group('run')]
-bench-quick label="dev":
-    just bench-run basic build {{label}} 5 True
-    just bench-run basic memory {{label}} 5 True
-    just bench-run basic lp_write {{label}} 5 True
+[group('benchmark')]
+quick label="dev":
+    just _run basic build {{label}} 5 True
+    just _run basic memory {{label}} 5 True
+    just _run basic lp_write {{label}} 5 True
 
-[group('compare')]
-bench-branch ref model="basic" phase="all" iterations=default_iterations quick="True":
+[group('benchmark')]
+compare ref model="basic" phase="all" iterations=default_iterations quick="True":
     #!/usr/bin/env bash
     set -euo pipefail
     home_branch=$(git rev-parse --abbrev-ref HEAD)
@@ -47,7 +47,7 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
 
     echo ">>> Benchmarking $ref_label (model={{model}}, phases=$phases, quick={{quick}}) ..."
     for phase in $phases; do
-        just bench-run "{{model}}" "$phase" "$ref_label" "{{iterations}}" "{{quick}}"
+        just _run "{{model}}" "$phase" "$ref_label" "{{iterations}}" "{{quick}}"
     done
 
     echo ">>> Returning to $home_branch ..."
@@ -56,7 +56,7 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
 
     echo ">>> Benchmarking $home_label (model={{model}}, phases=$phases, quick={{quick}}) ..."
     for phase in $phases; do
-        just bench-run "{{model}}" "$phase" "$home_label" "{{iterations}}" "{{quick}}"
+        just _run "{{model}}" "$phase" "$home_label" "{{iterations}}" "{{quick}}"
     done
 
     echo ">>> Comparing results ..."
@@ -69,14 +69,14 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     done
     echo ">>> Done."
 
-[group('compare')]
-bench-compare +files:
+[group('benchmark')]
+plot +files:
     python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
-[group('info')]
-bench-list:
+[group('benchmark')]
+list:
     python -c "from benchmarks.run import list_available; list_available()"
 
 [private]
-bench-run model phase label iterations quick:
+_run model phase label iterations quick:
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
