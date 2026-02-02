@@ -36,12 +36,7 @@ bench-branch ref:
     set -euo pipefail
     home_branch=$(git rev-parse --abbrev-ref HEAD)
     home_label=$(echo "$home_branch" | tr '/:' '--')
-    tmp_bench=$(mktemp -d)
-    # Preserve benchmarks/ and results/ across checkout
-    cp -r benchmarks "$tmp_bench/benchmarks"
-    # Sanitize label: replace / and : with -
     ref_label=$(echo "{{ref}}" | tr '/:' '--')
-    # Handle remote refs like "FBumann:perf/lp-write-speed-combined"
     ref="{{ref}}"
     if [[ "$ref" == *:* ]]; then
         remote="${ref%%:*}"
@@ -55,19 +50,13 @@ bench-branch ref:
     fi
     echo ">>> Checking out $checkout_ref ..."
     git checkout --detach "$checkout_ref"
-    rm -rf benchmarks/
-    cp -r "$tmp_bench/benchmarks" benchmarks
     pip install -e . --quiet 2>/dev/null || true
     echo ">>> Running bench-quick on $ref_label ..."
     python -c "from benchmarks.run import run_single; run_single('basic', 'build', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
     python -c "from benchmarks.run import run_single; run_single('basic', 'memory', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
     python -c "from benchmarks.run import run_single; run_single('basic', 'lp_write', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
-    # Save results before switching back
-    cp -r benchmarks/results "$tmp_bench/results"
     echo ">>> Returning to $home_branch ..."
     git checkout "$home_branch"
-    cp -r "$tmp_bench/results/"* benchmarks/results/ 2>/dev/null || true
-    rm -rf "$tmp_bench"
     pip install -e . --quiet 2>/dev/null || true
     echo ">>> Running bench-quick on $home_label ..."
     python -c "from benchmarks.run import run_single; run_single('basic', 'build', label='$home_label', iterations=5, quick=True, output_dir='benchmarks/results')"
