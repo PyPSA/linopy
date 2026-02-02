@@ -146,6 +146,7 @@ with contextlib.suppress(ModuleNotFoundError):
 if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("glpk")
 
+
 if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
     available_solvers.append("cbc")
 
@@ -173,6 +174,7 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             ROW = 1
             COLUMN = 2
             SET = 3
+
 
 with contextlib.suppress(ModuleNotFoundError, ImportError):
     import knitro
@@ -217,8 +219,10 @@ with contextlib.suppress(ModuleNotFoundError):
     except ImportError:
         pass
 
+
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
+
 
 io_structure = dict(
     lp_file={
@@ -279,7 +283,7 @@ def read_io_api_from_problem_file(problem_fn: Path | str) -> str:
 
 
 def maybe_adjust_objective_sign(
-        solution: Solution, io_api: str | None, sense: str | None
+    solution: Solution, io_api: str | None, sense: str | None
 ) -> Solution:
     if sense == "min":
         return solution
@@ -303,8 +307,8 @@ class Solver(ABC, Generic[EnvType]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         self.solver_options = solver_options
 
@@ -314,7 +318,7 @@ class Solver(ABC, Generic[EnvType]):
             raise ImportError(msg)
 
     def safe_get_solution(
-            self, status: Status, func: Callable[[], Solution]
+        self, status: Status, func: Callable[[], Solution]
     ) -> Solution:
         """
         Get solution from function call, if status is unknown still try to run it.
@@ -334,14 +338,14 @@ class Solver(ABC, Generic[EnvType]):
 
     @abstractmethod
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: EnvType | None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a model.
@@ -354,13 +358,13 @@ class Solver(ABC, Generic[EnvType]):
 
     @abstractmethod
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: EnvType | None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a problem file.
@@ -372,15 +376,15 @@ class Solver(ABC, Generic[EnvType]):
         pass
 
     def solve_problem(
-            self,
-            model: Model | None = None,
-            problem_fn: Path | None = None,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: EnvType | None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model | None = None,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem either from a model or a problem file.
@@ -431,32 +435,32 @@ class CBC(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the CBC solver.
@@ -506,10 +510,10 @@ class CBC(Solver[None]):
 
         if self.solver_options:
             command += (
-                    " ".join(
-                        "-" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
-                    )
-                    + " "
+                " ".join(
+                    "-" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
+                )
+                + " "
             )
         command += f"-solve -solu {solution_fn} "
 
@@ -617,32 +621,32 @@ class GLPK(Solver[None]):
     """
 
     def __init(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for GLPK"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the glpk solver.
@@ -705,10 +709,10 @@ class GLPK(Solver[None]):
             command += f"-w {basis_fn} "
         if self.solver_options:
             command += (
-                    " ".join(
-                        "--" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
-                    )
-                    + " "
+                " ".join(
+                    "--" + " ".join([k, str(v)]) for k, v in self.solver_options.items()
+                )
+                + " "
             )
         command = command.strip()
 
@@ -797,20 +801,20 @@ class Highs(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Highs solver.
@@ -867,13 +871,13 @@ class Highs(Solver[None]):
         )
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Highs solver.
@@ -917,9 +921,9 @@ class Highs(Solver[None]):
         )
 
     def _set_solver_params(
-            self,
-            highs_solver: highspy.Highs,
-            log_fn: Path | None = None,
+        self,
+        highs_solver: highspy.Highs,
+        log_fn: Path | None = None,
     ) -> None:
         if log_fn is not None:
             self.solver_options["log_file"] = path_to_string(log_fn)
@@ -929,14 +933,14 @@ class Highs(Solver[None]):
             highs_solver.setOptionValue(k, v)
 
     def _solve(
-            self,
-            h: highspy.Highs,
-            solution_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            model: Model | None = None,
-            io_api: str | None = None,
-            sense: str | None = None,
+        self,
+        h: highspy.Highs,
+        solution_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        model: Model | None = None,
+        io_api: str | None = None,
+        sense: str | None = None,
     ) -> Result:
         """
         Solve a linear problem from a Highs object.
@@ -1038,20 +1042,20 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: gurobipy.Env | dict[str, Any] | None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Gurobi solver.
@@ -1102,13 +1106,13 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             )
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: gurobipy.Env | dict[str, Any] | None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: gurobipy.Env | dict[str, Any] | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Gurobi solver.
@@ -1159,14 +1163,14 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             )
 
     def _solve(
-            self,
-            m: gurobipy.Model,
-            solution_fn: Path | None,
-            log_fn: Path | None,
-            warmstart_fn: Path | None,
-            basis_fn: Path | None,
-            io_api: str | None,
-            sense: str | None,
+        self,
+        m: gurobipy.Model,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Gurobi object.
@@ -1277,32 +1281,32 @@ class Cplex(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for Cplex"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the cplex solver.
@@ -1429,32 +1433,32 @@ class SCIP(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for SCIP"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the scip solver.
@@ -1585,32 +1589,32 @@ class Xpress(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for Xpress"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Xpress solver.
@@ -1758,32 +1762,32 @@ class Knitro(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for Knitro"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the Knitro solver.
@@ -2091,20 +2095,20 @@ class Mosek(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the MOSEK solver.
@@ -2154,13 +2158,13 @@ class Mosek(Solver[None]):
             )
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MOSEK solver. Both mps and
@@ -2213,14 +2217,14 @@ class Mosek(Solver[None]):
             )
 
     def _solve(
-            self,
-            m: mosek.Task,
-            solution_fn: Path | None,
-            log_fn: Path | None,
-            warmstart_fn: Path | None,
-            basis_fn: Path | None,
-            io_api: str | None,
-            sense: str | None,
+        self,
+        m: mosek.Task,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
     ) -> Result:
         """
         Solve a linear problem from a Mosek task object.
@@ -2425,32 +2429,32 @@ class COPT(Solver[None]):
     """
 
     def __init(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for COPT"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the COPT solver.
@@ -2566,32 +2570,32 @@ class MindOpt(Solver[None]):
     """
 
     def __init(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         msg = "Direct API not implemented for MindOpt"
         raise NotImplementedError(msg)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the MindOpt solver.
@@ -2700,8 +2704,8 @@ class PIPS(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
         msg = "The PIPS solver interface is not yet implemented."
@@ -2729,19 +2733,19 @@ class cuPDLPx(Solver[None]):
     """
 
     def __init__(
-            self,
-            **solver_options: Any,
+        self,
+        **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
 
     def solve_problem_from_file(
-            self,
-            problem_fn: Path,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: EnvType | None = None,
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the solver cuPDLPx.
@@ -2791,14 +2795,14 @@ class cuPDLPx(Solver[None]):
         )
 
     def solve_problem_from_model(
-            self,
-            model: Model,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            env: EnvType | None = None,
-            explicit_coordinate_names: bool = False,
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the solver cuPDLPx.
@@ -2845,15 +2849,15 @@ class cuPDLPx(Solver[None]):
         )
 
     def _solve(
-            self,
-            cu_model: cupdlpx.Model,
-            l_model: Model | None = None,
-            solution_fn: Path | None = None,
-            log_fn: Path | None = None,
-            warmstart_fn: Path | None = None,
-            basis_fn: Path | None = None,
-            io_api: str | None = None,
-            sense: str | None = None,
+        self,
+        cu_model: cupdlpx.Model,
+        l_model: Model | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        io_api: str | None = None,
+        sense: str | None = None,
     ) -> Result:
         """
         Solve a linear problem from a cupdlpx.Model object.
