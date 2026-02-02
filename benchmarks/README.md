@@ -2,52 +2,45 @@
 
 Modular benchmark framework for linopy. All commands use [`just`](https://github.com/casey/just).
 
-## Quick Start
-
-```bash
-# Install just (macOS)
-brew install just
-
-# List available models and phases
-just bench-list
-
-# Quick smoke test
-just bench-quick
-
-# Full benchmark suite
-just bench label="my-branch"
-
-# Single phase
-just bench-build label="my-branch"
-just bench-memory label="my-branch"
-just bench-write label="my-branch"
-
-# Single model + phase
-just bench-model basic build label="my-branch"
-
-# Compare two runs
-just bench-compare benchmarks/results/old_basic_build.json benchmarks/results/new_basic_build.json
+```
+$ just --list
+Available recipes:
+    [benchmark]
+    all label="dev" iterations=default_iterations
+    compare ref model="basic" phase="all" iterations=default_iterations quick="True"
+    list
+    model model phase="build" label="dev" iterations=default_iterations quick="True"
+    plot +files
+    quick label="dev"
 ```
 
-## Models
+Start with `just list` to see available models and phases, then `just quick` for a smoke test.
 
-| Name | Description |
-|------|-------------|
-| `basic` | 2×N² vars/cons — simple dense model |
-| `knapsack` | N binary variables — integer programming |
-| `pypsa_scigrid` | Real power system from PyPSA SciGrid-DE |
-| `sparse` | Sparse ring network — exercises alignment |
-| `large_expr` | Many-term expressions — stress test |
+## Examples
 
-## Phases
+```bash
+# Discover available models and phases
+just list
 
-| Name | Description |
-|------|-------------|
-| `build` | Model construction speed (time) |
-| `memory` | Peak memory via tracemalloc |
-| `lp_write` | LP file writing speed |
+# Quick smoke test (basic model, all phases, 5 iterations)
+just quick
+
+# Full suite
+just all label="my-branch"
+
+# Single model + phase
+just model knapsack memory label="my-branch" iterations=20
+
+# Compare current branch against master
+just compare master
+
+# Compare against a remote fork
+just compare FBumann:perf/lp-write-speed model="basic" phase="lp_write"
+
+# Plot existing result files
+just plot benchmarks/results/master_basic_build.json benchmarks/results/feat_basic_build.json
+```
 
 ## Output
 
-Results are saved as JSON files in `benchmarks/results/` (gitignored).
-Pattern: `{label}_{model}_{phase}.json`
+Results are saved as JSON in `benchmarks/results/` (gitignored), named `{label}_{model}_{phase}.json`. Comparison plots are saved as PNG alongside.
