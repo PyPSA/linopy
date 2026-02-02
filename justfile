@@ -27,51 +27,60 @@ bench-quick label="dev":
     python -c "from benchmarks.run import run_single; run_single('basic', 'memory', label='{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
     python -c "from benchmarks.run import run_single; run_single('basic', 'lp_write', label='{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
 
-# Benchmark a remote/local branch (checks it out, runs, returns)
-# Usage: just bench-branch FBumann:perf/lp-write-speed-combined build
-#        just bench-branch origin/master memory
-#        just bench-branch my-local-branch lp_write
-bench-branch ref phase="build" model="basic" iterations=default_iterations:
+# Benchmark a branch vs current: checkout ref, run bench-quick, return, run bench-quick here, compare
+# Usage: just bench-branch FBumann:perf/lp-write-speed-combined
+#        just bench-branch origin/master
+#        just bench-branch my-local-branch
+bench-branch ref:
     #!/usr/bin/env bash
     set -euo pipefail
     home_branch=$(git rev-parse --abbrev-ref HEAD)
+    home_label=$(echo "$home_branch" | tr '/:' '--')
     tmp_bench=$(mktemp -d)
     # Preserve benchmarks/ and results/ across checkout
     cp -r benchmarks/ "$tmp_bench/benchmarks"
     # Sanitize label: replace / and : with -
-    label=$(echo "{{ref}}" | tr '/:' '--')
+    ref_label=$(echo "{{ref}}" | tr '/:' '--')
     # Handle remote refs like "FBumann:perf/lp-write-speed-combined"
     ref="{{ref}}"
     if [[ "$ref" == *:* ]]; then
         remote="${ref%%:*}"
         branch="${ref#*:}"
-        # Add remote if not present, fetch the branch
         git remote get-url "$remote" 2>/dev/null || git remote add "$remote" "https://github.com/$remote/linopy.git"
-        git fetch "$remote" "$branch"
-        checkout_ref="$remote/$branch"
+        git fetch "$remote" "$branch" --no-tags --no-recurse-submodules 2>&1 || true
+        checkout_ref="FETCH_HEAD"
     else
-        # Local branch or origin ref
-        git fetch --all 2>/dev/null || true
+        git fetch origin --no-tags --no-recurse-submodules 2>&1 || true
         checkout_ref="$ref"
     fi
     echo ">>> Checking out $checkout_ref ..."
     git checkout "$checkout_ref" --detach
-    # Restore benchmarks/
     cp -r "$tmp_bench/benchmarks" benchmarks/
-    # Install the checked-out linopy
     pip install -e . --quiet 2>/dev/null || true
-    echo ">>> Running: model={{model}} phase={{phase}} label=$label ..."
-    python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='$label', iterations={{iterations}}, output_dir='{{results_dir}}')"
+    echo ">>> Running bench-quick on $ref_label ..."
+    python -c "from benchmarks.run import run_single; run_single('basic', 'build', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'memory', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'lp_write', label='$ref_label', iterations=5, quick=True, output_dir='benchmarks/results')"
     # Save results before switching back
     cp -r benchmarks/results/ "$tmp_bench/results"
     echo ">>> Returning to $home_branch ..."
     git checkout "$home_branch"
-    # Restore results from the run
     cp -r "$tmp_bench/results/"* benchmarks/results/ 2>/dev/null || true
     rm -rf "$tmp_bench"
-    # Reinstall current branch
     pip install -e . --quiet 2>/dev/null || true
-    echo ">>> Done. Results saved with label=$label"
+    echo ">>> Running bench-quick on $home_label ..."
+    python -c "from benchmarks.run import run_single; run_single('basic', 'build', label='$home_label', iterations=5, quick=True, output_dir='benchmarks/results')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'memory', label='$home_label', iterations=5, quick=True, output_dir='benchmarks/results')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'lp_write', label='$home_label', iterations=5, quick=True, output_dir='benchmarks/results')"
+    echo ">>> Comparing results ..."
+    for phase in build memory lp_write; do
+        old="benchmarks/results/${ref_label}_basic_${phase}.json"
+        new="benchmarks/results/${home_label}_basic_${phase}.json"
+        if [[ -f "$old" && -f "$new" ]]; then
+            python -c "from benchmarks.compare import compare; compare('$old', '$new')"
+        fi
+    done
+    echo ">>> Done."
 
 # Compare result JSON files across branches (2 or more)
 bench-compare +files:
