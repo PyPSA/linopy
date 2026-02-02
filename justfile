@@ -54,7 +54,7 @@ bench-branch ref:
         checkout_ref="$ref"
     fi
     echo ">>> Checking out $checkout_ref ..."
-    git checkout "$checkout_ref" --detach
+    git checkout --detach "$checkout_ref"
     cp -r "$tmp_bench/benchmarks" benchmarks/
     pip install -e . --quiet 2>/dev/null || true
     echo ">>> Running bench-quick on $ref_label ..."
