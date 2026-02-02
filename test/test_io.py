@@ -383,3 +383,23 @@ def test_to_file_lp_same_sign_constraints(tmp_path: Path) -> None:
     content = fn.read_text()
     assert "s.t." in content
     assert "<=" in content
+
+
+def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
+    """Test LP writing when constraints have different sign operators."""
+    m = Model()
+    N = np.arange(5)
+    x = m.add_variables(coords=[N], name="x")
+    # Mix of <= and >= constraints in the same container
+    m.add_constraints(x <= 10, name="upper")
+    m.add_constraints(x >= 1, name="lower")
+    m.add_constraints(2 * x == 8, name="eq")
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "mixed_sign.lp"
+    m.to_file(fn)
+    content = fn.read_text()
+    assert "s.t." in content
+    assert "<=" in content
+    assert ">=" in content
+    assert "=" in content
