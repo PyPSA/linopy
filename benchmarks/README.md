@@ -7,9 +7,9 @@ $ just --list
 Available recipes:
     [benchmark]
     all name iterations=default_iterations
-    compare ref="master" model="basic" phase="all" iterations=default_iterations quick="True"
+    compare ref="master" model=default_model phase=default_phase iterations=default_iterations quick=default_quick
     list
-    model name model phase="all" iterations=default_iterations quick="False"
+    model name model phase=default_phase iterations=default_iterations quick="False"
     plot +files
     quick name="quick"
 ```
@@ -29,16 +29,35 @@ just quick
 just all my-branch
 
 # Single model + phase
-just model my-branch knapsack memory iterations=20
+just model my-branch knapsack memory
 
-# Compare current branch against master
+# Compare current branch against master (all phases, basic model)
 just compare
 
-# Compare against a remote fork, specific phase
-just compare ref=FBumann:perf/lp-write-speed phase=lp_write
+# Compare against another branch
+just compare perf/lp-write-speed-combined-bench
+
+# Compare against a remote fork
+just compare FBumann:perf/lp-write-speed
 
 # Plot existing result files
 just plot benchmarks/results/master_basic_build.json benchmarks/results/feat_basic_build.json
+```
+
+## Overriding defaults
+
+Recipe parameters that show `=default_*` reference top-level variables in the justfile.
+Override them with `--set` on the command line:
+
+```bash
+# Run compare with quick mode
+just --set default_quick True compare perf/lp-write-speed
+
+# Compare only the lp_write phase
+just --set default_phase lp_write compare perf/lp-write-speed
+
+# Combine multiple overrides
+just --set default_quick True --set default_phase build compare perf/lp-write-speed
 ```
 
 ## Output

@@ -1,4 +1,7 @@
 default_iterations := "10"
+default_model := "basic"
+default_phase := "all"
+default_quick := "False"
 results_dir := "benchmarks/results"
 
 [group('benchmark')]
@@ -6,7 +9,7 @@ all name iterations=default_iterations:
     python -c "from benchmarks.run import run_all; run_all(name='{{name}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
 [group('benchmark')]
-model name model phase="all" iterations=default_iterations quick="False":
+model name model phase=default_phase iterations=default_iterations quick="False":
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', name='{{name}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
 [group('benchmark')]
@@ -16,7 +19,7 @@ quick name="quick":
     just _run basic lp_write {{name}} 5 True
 
 [group('benchmark')]
-compare ref="master" model="basic" phase="all" iterations=default_iterations quick="True":
+compare ref="master" model=default_model phase=default_phase iterations=default_iterations quick=default_quick:
     #!/usr/bin/env bash
     set -euo pipefail
     home_branch=$(git rev-parse --abbrev-ref HEAD)
