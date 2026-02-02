@@ -25,9 +25,9 @@ bench-model model phase="memory" label="dev" iterations=default_iterations:
 bench-quick label="dev":
     python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
 
-# Compare two result JSON files
-bench-compare old new:
-    python -c "from benchmarks.compare import compare; compare('{{old}}', '{{new}}')"
+# Compare result JSON files across branches (2 or more)
+bench-compare +files:
+    python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
 # List available models and phases
 bench-list:
