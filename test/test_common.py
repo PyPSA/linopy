@@ -740,7 +740,7 @@ def test_is_constant() -> None:
         assert is_constant(cv)
 
 
-def test_maybe_group_terms_polars_no_duplicates():
+def test_maybe_group_terms_polars_no_duplicates() -> None:
     """Fast path: distinct (labels, vars) pairs skip group_by."""
     df = pl.DataFrame({"labels": [0, 0], "vars": [1, 2], "coeffs": [3.0, 4.0]})
     result = maybe_group_terms_polars(df)
@@ -749,7 +749,7 @@ def test_maybe_group_terms_polars_no_duplicates():
     assert result["coeffs"].to_list() == [3.0, 4.0]
 
 
-def test_maybe_group_terms_polars_with_duplicates():
+def test_maybe_group_terms_polars_with_duplicates() -> None:
     """Slow path: duplicate (labels, vars) pairs trigger group_by."""
     df = pl.DataFrame({"labels": [0, 0], "vars": [1, 1], "coeffs": [3.0, 4.0]})
     result = maybe_group_terms_polars(df)

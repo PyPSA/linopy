@@ -7,6 +7,7 @@ Created on Thu Mar 18 09:03:35 2021.
 
 import pickle
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -339,7 +340,7 @@ def test_to_file_lp_with_negative_zero_coefficients(tmp_path: Path) -> None:
     gurobipy.read(str(fn))
 
 
-def test_format_and_write_streaming_fallback(tmp_path):
+def test_format_and_write_streaming_fallback(tmp_path: Path) -> None:
     """Test that _format_and_write falls back to eager when streaming fails."""
     df = pl.DataFrame({"a": ["x", "y"], "b": ["1", "2"]})
     columns = [pl.col("a"), pl.lit(" "), pl.col("b")]
@@ -353,7 +354,7 @@ def test_format_and_write_streaming_fallback(tmp_path):
     # Force streaming to fail
     original_collect = pl.LazyFrame.collect
 
-    def failing_collect(self, *args, **kwargs):
+    def failing_collect(self: pl.LazyFrame, *args: Any, **kwargs: Any) -> pl.DataFrame:
         if kwargs.get("engine") == "streaming":
             raise RuntimeError("simulated streaming failure")
         return original_collect(self, *args, **kwargs)
@@ -367,7 +368,7 @@ def test_format_and_write_streaming_fallback(tmp_path):
     assert content_normal == content_fallback
 
 
-def test_to_file_lp_same_sign_constraints(tmp_path):
+def test_to_file_lp_same_sign_constraints(tmp_path: Path) -> None:
     """Test LP writing when all constraints have the same sign operator."""
     m = Model()
     N = np.arange(5)
