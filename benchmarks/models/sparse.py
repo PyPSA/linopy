@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import xarray as xr
 
 import linopy
 
@@ -46,18 +47,21 @@ def build(n_buses: int, n_time: int) -> linopy.Model:
     m.add_constraints(flow <= 100, name="flow_upper")
     m.add_constraints(flow >= -100, name="flow_lower")
 
-    # Bus balance: gen[b] + inflow - outflow = demand[b]
+    # Bus balance: gen[b] + inflow[b] - outflow[b] = demand[b]
+    # In a ring: line b-1 flows into bus b, line b flows out of bus b
+    # Rename line→bus so dimensions align for vectorized constraint
+    inflow = flow.roll(line=1).assign_coords(line=list(buses)).rename(line="bus")
+    outflow = flow.assign_coords(line=list(buses)).rename(line="bus")
+    balance = gen + inflow - outflow
+
     rng = np.random.default_rng(42)
-    demand = rng.uniform(10, 50, size=(n_buses, n_time))
+    demand = xr.DataArray(
+        rng.uniform(10, 50, size=(n_buses, n_time)),
+        coords=[list(buses), list(time)],
+        dims=["bus", "time"],
+    )
+    m.add_constraints(balance == demand, name="balance")
 
-    for b in buses:
-        # Lines into bus b: line (b-1) % n_buses flows into b
-        # Lines out of bus b: line b flows out of b
-        line_in = (b - 1) % n_buses
-        line_out = b
-        balance = gen.sel(bus=b) + flow.sel(line=line_in) - flow.sel(line=line_out)
-        m.add_constraints(balance == demand[b], name=f"balance_{b}")
-
-    # Generation cost (sum over time first, then weight by bus cost)
+    # Generation cost
     m.add_objective(gen.sum("time"))
     return m
