@@ -1,17 +1,17 @@
 default_iterations := "10"
 results_dir := "benchmarks/results"
 
-[group: 'run']
+[group('run')]
 # Run all phases for all models
 bench label="dev" iterations=default_iterations:
     python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
-[group: 'run']
+[group('run')]
 # Run a single model + phase
 bench-model model phase="build" label="dev" iterations=default_iterations quick="True":
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
-[group: 'run']
+[group('run')]
 # Quick smoke test (basic model, all phases, small sizes)
 bench-quick label="dev":
     just bench-run basic build {{label}} 5 True
@@ -22,7 +22,7 @@ bench-quick label="dev":
 # Benchmark a branch vs current, then compare
 # Usage: just bench-branch FBumann:perf/lp-write-speed-combined
 #        just bench-branch origin/master pypsa_scigrid lp_write 20 False
-[group: 'compare']
+[group('compare')]
 bench-branch ref model="basic" phase="all" iterations=default_iterations quick="True":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -79,12 +79,12 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     echo ">>> Done."
 
 # Compare result JSON files manually (2 or more)
-[group: 'compare']
+[group('compare')]
 bench-compare +files:
     python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
 # List available models and phases
-[group: 'info']
+[group('info')]
 bench-list:
     python -c "from benchmarks.run import list_available; list_available()"
 
