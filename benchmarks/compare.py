@@ -28,7 +28,7 @@ MARKERS = ["o", "s", "D", "^", "v", "P"]
 def _load(path: str) -> dict:
     with open(path) as f:
         data = json.load(f)
-    data.setdefault("label", Path(path).stem)
+    data.setdefault("name", Path(path).stem)
     return data
 
 
@@ -89,7 +89,7 @@ def compare(*paths: str) -> None:
     all_stats = []
     for d in datasets:
         nvars, med, lo, hi = _extract(d.get("runs", []), phase)
-        all_stats.append((d["label"], nvars, med, lo, hi))
+        all_stats.append((d.get("name", d.get("label", "unknown")), nvars, med, lo, hi))
 
     if not all_stats[0][1]:
         print("No data to plot.")

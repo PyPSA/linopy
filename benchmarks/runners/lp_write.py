@@ -13,7 +13,7 @@ PHASE = "lp_write"
 
 
 def run(
-    label: str,
+    name: str,
     builder,
     builder_args: dict,
     iterations: int = 10,
@@ -49,7 +49,7 @@ def run(
     times_arr = np.array(times)
     return {
         "phase": PHASE,
-        "label": label,
+        "name": name,
         "params": builder_args,
         "iterations": iterations,
         "write_time_median_s": float(np.median(times_arr)),

@@ -11,7 +11,7 @@ PHASE = "memory"
 
 
 def run(
-    label: str,
+    name: str,
     builder,
     builder_args: dict,
     iterations: int = 5,
@@ -60,7 +60,7 @@ def run(
     peaks_arr = np.array(peaks)
     return {
         "phase": PHASE,
-        "label": label,
+        "name": name,
         "params": builder_args,
         "iterations": iterations,
         "peak_memory_median_mb": float(np.median(peaks_arr)),

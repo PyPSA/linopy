@@ -11,7 +11,7 @@ PHASE = "build"
 
 
 def run(
-    label: str,
+    name: str,
     builder,
     builder_args: dict,
     iterations: int = 30,
@@ -46,7 +46,7 @@ def run(
     times_arr = np.array(times)
     return {
         "phase": PHASE,
-        "label": label,
+        "name": name,
         "params": builder_args,
         "iterations": iterations,
         "build_time_median_s": float(np.median(times_arr)),

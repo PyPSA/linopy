@@ -12,7 +12,7 @@ from benchmarks.runners import get_runner, list_phases
 def run_single(
     model_name: str,
     phase: str,
-    label: str = "dev",
+    name: str = "dev",
     iterations: int = 30,
     quick: bool = False,
     output_dir: str = "benchmarks/results",
@@ -27,7 +27,7 @@ def run_single(
     )
 
     results = {
-        "label": label,
+        "name": name,
         "model": model_name,
         "phase": phase,
         "runs": [],
@@ -37,7 +37,7 @@ def run_single(
         desc = model_mod.LABEL.format(**kwargs)
         print(f"  {desc} ... ", end="", flush=True)
         res = runner.run(
-            label=label,
+            name=name,
             builder=model_mod.build,
             builder_args=kwargs,
             iterations=iterations,
@@ -49,7 +49,7 @@ def run_single(
         # Print a compact summary
         summary_parts = []
         for key, val in res.items():
-            if key in ("phase", "label", "params", "iterations"):
+            if key in ("phase", "name", "params", "iterations"):
                 continue
             if isinstance(val, float):
                 summary_parts.append(f"{key}={val:.3f}")
@@ -60,7 +60,7 @@ def run_single(
     # Save
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    filename = out_path / f"{label}_{model_name}_{phase}.json"
+    filename = out_path / f"{name}_{model_name}_{phase}.json"
     with open(filename, "w") as f:
         json.dump(results, f, indent=2)
     print(f"  Saved: {filename}")
@@ -69,7 +69,7 @@ def run_single(
 
 def run_phase(
     phase: str,
-    label: str = "dev",
+    name: str = "dev",
     iterations: int = 30,
     quick: bool = False,
     output_dir: str = "benchmarks/results",
@@ -81,7 +81,7 @@ def run_phase(
         res = run_single(
             model_name,
             phase,
-            label=label,
+            name=name,
             iterations=iterations,
             quick=quick,
             output_dir=output_dir,
@@ -91,7 +91,7 @@ def run_phase(
 
 
 def run_all(
-    label: str = "dev",
+    name: str = "dev",
     iterations: int = 30,
     quick: bool = False,
     output_dir: str = "benchmarks/results",
@@ -104,7 +104,7 @@ def run_all(
         print(f"{'=' * 60}")
         results = run_phase(
             phase,
-            label=label,
+            name=name,
             iterations=iterations,
             quick=quick,
             output_dir=output_dir,
