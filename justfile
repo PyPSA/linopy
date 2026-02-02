@@ -2,26 +2,20 @@ default_iterations := "10"
 results_dir := "benchmarks/results"
 
 [group('run')]
-# Run all phases for all models
 bench label="dev" iterations=default_iterations:
     python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
 [group('run')]
-# Run a single model + phase
 bench-model model phase="build" label="dev" iterations=default_iterations quick="True":
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, quick={{quick}}, output_dir='{{results_dir}}')"
 
 [group('run')]
-# Quick smoke test (basic model, all phases, small sizes)
 bench-quick label="dev":
     just bench-run basic build {{label}} 5 True
     just bench-run basic memory {{label}} 5 True
     just bench-run basic lp_write {{label}} 5 True
 
 [group('compare')]
-# Benchmark a branch vs current, then compare
-# Usage: just bench-branch FBumann:perf/lp-write-speed-combined
-#        just bench-branch origin/master pypsa_scigrid lp_write 20 False
 bench-branch ref model="basic" phase="all" iterations=default_iterations quick="True":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -29,14 +23,12 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     home_label=$(echo "$home_branch" | tr '/:' '--')
     ref_label=$(echo "{{ref}}" | tr '/:' '--')
 
-    # Determine phases to run
     if [[ "{{phase}}" == "all" ]]; then
         phases="build memory lp_write"
     else
         phases="{{phase}}"
     fi
 
-    # Fetch and checkout target ref
     ref="{{ref}}"
     if [[ "$ref" == *:* ]]; then
         remote="${ref%%:*}"
@@ -78,12 +70,10 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     echo ">>> Done."
 
 [group('compare')]
-# Compare result JSON files manually (2 or more)
 bench-compare +files:
     python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
 [group('info')]
-# List available models and phases
 bench-list:
     python -c "from benchmarks.run import list_available; list_available()"
 
