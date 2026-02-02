@@ -21,9 +21,11 @@ bench-write label="dev" iterations=default_iterations:
 bench-model model phase="memory" label="dev" iterations=default_iterations:
     python -c "from benchmarks.run import run_single; run_single('{{model}}', '{{phase}}', label='{{label}}', iterations={{iterations}}, output_dir='{{results_dir}}')"
 
-# Quick smoke test (small sizes, few iterations)
+# Quick smoke test (basic model only, small sizes)
 bench-quick label="dev":
-    python -c "from benchmarks.run import run_all; run_all('{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'build', label='{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'memory', label='{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
+    python -c "from benchmarks.run import run_single; run_single('basic', 'lp_write', label='{{label}}', iterations=5, quick=True, output_dir='{{results_dir}}')"
 
 # Compare result JSON files across branches (2 or more)
 bench-compare +files:
