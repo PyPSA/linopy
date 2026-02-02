@@ -61,3 +61,7 @@ just --set default_model knapsack --set default_iterations 20 compare master
 ## Output
 
 Results are saved as JSON in `benchmarks/results/` (gitignored), named `{name}_{model}_{phase}.json`. Comparison plots are saved as PNG alongside.
+
+## Ideas for future models
+
+- **sparse**: A model with variables on mismatched coordinate subsets to exercise sparse/outer-join alignment (e.g. lines indexed by `(bus_from, bus_to)` vs bus-level variables).
