@@ -1889,19 +1889,19 @@ class Knitro(Solver[None]):
             suffix = problem_fn.suffix.lower()
             if suffix == ".lp":
                 candidate_loaders = [
-                    "KN_load_lp_file",
-                    "KN_load_file",
+                    "KN_load_lp",
+                    "KN_read_problem"
                 ]
             elif suffix == ".mps":
                 candidate_loaders = [
                     "KN_load_mps_file",
-                    "KN_load_file",
+                    "KN_read_problem"
                 ]
             else:
                 candidate_loaders = [
-                    "KN_load_file",
+                    "KN_read_problem",
                     "KN_load_mps_file",
-                    "KN_load_lp_file",
+                    "KN_load_lp",
                 ]
 
             last_ret: int | None = None
