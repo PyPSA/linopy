@@ -1903,7 +1903,9 @@ class Knitro(Solver[None]):
                 load_fn = getattr(knitro, candidate, None)
                 if load_fn is None:
                     continue
-                ret_val, _ret_rc = unpack_value_and_rc(load_fn(kc, problem_path, read_options=[]))
+                ret_val, _ret_rc = unpack_value_and_rc(
+                    load_fn(kc, problem_path, read_options=[])
+                )
                 last_ret = int(ret_val)
                 if last_ret == 0:
                     break
