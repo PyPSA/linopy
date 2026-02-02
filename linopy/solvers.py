@@ -1891,13 +1891,11 @@ class Knitro(Solver[None]):
                 candidate_loaders = [
                     "KN_load_lp_file",
                     "KN_load_file",
-                    "KN_load_mps_file",
                 ]
             elif suffix == ".mps":
                 candidate_loaders = [
                     "KN_load_mps_file",
                     "KN_load_file",
-                    "KN_load_lp_file",
                 ]
             else:
                 candidate_loaders = [
