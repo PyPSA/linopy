@@ -99,7 +99,7 @@ version_scheme = "no-guess-dev"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-norecursedirs = ["dev-scripts", "doc", "examples", "benchmark"]
+norecursedirs = ["dev-scripts", "doc", "examples", "benchmark", "benchmarks"]
 markers = [
     "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
 ]
@@ -112,7 +112,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', 'benchmark/*', 'doc/*']
+exclude = ['dev/*', 'examples/*', 'benchmark/*', 'benchmarks/*', 'doc/*']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true
