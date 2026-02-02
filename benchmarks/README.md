@@ -65,3 +65,4 @@ Results are saved as JSON in `benchmarks/results/` (gitignored), named `{name}_{
 ## Ideas for future models
 
 - **sparse**: A model with variables on mismatched coordinate subsets to exercise sparse/outer-join alignment (e.g. lines indexed by `(bus_from, bus_to)` vs bus-level variables).
+- **large_expr**: A model that stress-tests expression building — chaining many arithmetic operations, combining expressions from different variable groups, or building expressions incrementally.
