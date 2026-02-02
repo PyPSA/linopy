@@ -18,11 +18,10 @@ bench-quick label="dev":
     just bench-run basic memory {{label}} 5 True
     just bench-run basic lp_write {{label}} 5 True
 
-
+[group('compare')]
 # Benchmark a branch vs current, then compare
 # Usage: just bench-branch FBumann:perf/lp-write-speed-combined
 #        just bench-branch origin/master pypsa_scigrid lp_write 20 False
-[group('compare')]
 bench-branch ref model="basic" phase="all" iterations=default_iterations quick="True":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -78,13 +77,13 @@ bench-branch ref model="basic" phase="all" iterations=default_iterations quick="
     done
     echo ">>> Done."
 
-# Compare result JSON files manually (2 or more)
 [group('compare')]
+# Compare result JSON files manually (2 or more)
 bench-compare +files:
     python -c "import sys; from benchmarks.compare import compare; compare(*sys.argv[1:])" {{files}}
 
-# List available models and phases
 [group('info')]
+# List available models and phases
 bench-list:
     python -c "from benchmarks.run import list_available; list_available()"
 
