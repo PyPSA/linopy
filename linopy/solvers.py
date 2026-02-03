@@ -1955,8 +1955,8 @@ class Knitro(Solver[None]):
 
             reported_runtime = None
             try:
-                val, rc = knitro.KN_get_solve_time_real(kc)
-                if rc == 0:
+                val = knitro.KN_get_solve_time_real(kc)
+                if val:
                     reported_runtime = float(val)
             except Exception:
                 pass
@@ -2072,36 +2072,6 @@ class Knitro(Solver[None]):
                     logger.info("Could not write solution file. Error: %s", err)
 
             return Result(status, solution, reported_runtime)
-
-            solution = self.safe_get_solution(status=status, func=get_solver_solution)
-            solution = maybe_adjust_objective_sign(solution, io_api, sense)
-
-            # Save basis if requested
-            if basis_fn is not None:
-                try:
-                    # Knitro doesn't have direct basis export for LP files
-                    logger.info(
-                        "Basis export not directly supported by Knitro LP interface"
-                    )
-                except Exception as err:
-                    logger.info("No basis stored. Error: %s", err)
-
-            # Save solution if requested
-            if solution_fn is not None:
-                try:
-                    write_sol = getattr(knitro, "KN_write_sol_file", None)
-                    if write_sol is None:
-                        logger.info(
-                            "Solution export not supported by Knitro interface; ignoring solution_fn=%s",
-                            solution_fn,
-                        )
-                    else:
-                        solution_fn.parent.mkdir(parents=True, exist_ok=True)
-                        write_sol(kc, path_to_string(solution_fn))
-                except Exception as err:
-                    logger.info("Could not write solution file. Error: %s", err)
-
-            return Result(status, solution, kc)
 
         finally:
             if kc is not None:
