@@ -1980,7 +1980,7 @@ class Knitro(Solver[None]):
                     n_vars = int(n_vars_val) if n_vars_rc == 0 else 0
 
                     x_val, x_rc = unpack_value_and_rc(
-                        knitro.KN_get_var_primal_values(kc, n_vars-1)
+                        knitro.KN_get_var_primal_values(kc, n_vars - 1)
                     )
                     if x_rc == 0 and n_vars > 0:
                         # Get variable names
@@ -2007,7 +2007,7 @@ class Knitro(Solver[None]):
 
                     if n_cons > 0:
                         dual_val, dual_rc = unpack_value_and_rc(
-                            knitro.KN_get_con_dual_values(kc, n_cons-1)
+                            knitro.KN_get_con_dual_values(kc, n_cons - 1)
                         )
                         if dual_rc == 0:
                             # Get constraint names
