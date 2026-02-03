@@ -1953,6 +1953,14 @@ class Knitro(Solver[None]):
             # Solve the problem
             ret = int(knitro.KN_solve(kc))
 
+            reported_runtime = None
+            try:
+                val, rc = knitro.KN_get_solve_time_real(kc)
+                if rc == 0:
+                    reported_runtime = float(val)
+            except Exception:
+                pass
+
             # Get termination condition
             if ret in CONDITION_MAP:
                 termination_condition = CONDITION_MAP[ret]
@@ -1967,7 +1975,9 @@ class Knitro(Solver[None]):
             def get_solver_solution() -> Solution:
                 # Get objective value
                 try:
-                    obj_val, obj_rc = unpack_value_and_rc(knitro.KN_get_obj_value(kc))
+                    obj_val, obj_rc = unpack_value_and_rc(
+                        knitro.KN_get_obj_value(kc)
+                    )
                     objective = float(obj_val) if obj_rc == 0 else np.nan
                 except Exception:
                     objective = np.nan
@@ -1979,19 +1989,26 @@ class Knitro(Solver[None]):
                     )
                     n_vars = int(n_vars_val) if n_vars_rc == 0 else 0
 
-                    x_val, x_rc = unpack_value_and_rc(
-                        knitro.KN_get_var_primal_values(kc, n_vars-1)
-                    )
-                    if x_rc == 0 and n_vars > 0:
-                        # Get variable names
-                        var_names = []
-                        for i in range(n_vars):
-                            name_val, name_rc = unpack_value_and_rc(
-                                knitro.KN_get_var_name(kc, i)
-                            )
-                            var_names.append(str(name_val) if name_rc == 0 else f"x{i}")
+                    if n_vars > 0:
+                        x_val, x_rc = unpack_value_and_rc(
+                            knitro.KN_get_var_primal_values(kc, n_vars - 1)
+                        )
 
-                        sol = pd.Series(x_val, index=var_names, dtype=float)
+                        if x_rc == 0:
+                            names_val, names_rc = unpack_value_and_rc(
+                                knitro.KN_get_var_names(kc)
+                            )
+
+                            if names_rc == 0 and names_val is not None:
+                                var_names = list(names_val)
+                            else:
+                                var_names = [f"x{i}" for i in range(n_vars)]
+
+                            sol = pd.Series(
+                                x_val, index=var_names, dtype=float
+                            )
+                        else:
+                            sol = pd.Series(dtype=float)
                     else:
                         sol = pd.Series(dtype=float)
                 except Exception as e:
@@ -2007,18 +2024,17 @@ class Knitro(Solver[None]):
 
                     if n_cons > 0:
                         dual_val, dual_rc = unpack_value_and_rc(
-                            knitro.KN_get_con_dual_values(kc, n_cons-1)
+                            knitro.KN_get_con_dual_values(kc, n_cons - 1)
                         )
                         if dual_rc == 0:
-                            # Get constraint names
-                            con_names = []
-                            for i in range(n_cons):
-                                name_val, name_rc = unpack_value_and_rc(
-                                    knitro.KN_get_con_name(kc, i)
-                                )
-                                con_names.append(
-                                    str(name_val) if name_rc == 0 else f"c{i}"
-                                )
+                            names_val, names_rc = unpack_value_and_rc(
+                                knitro.KN_get_con_names(kc)
+                            )
+
+                            if names_rc == 0 and names_val is not None:
+                                con_names = list(names_val)
+                            else:
+                                con_names = [f"c{i}" for i in range(n_cons)]
 
                             dual = pd.Series(dual_val, index=con_names, dtype=float)
                         else:
@@ -2059,7 +2075,37 @@ class Knitro(Solver[None]):
                 except Exception as err:
                     logger.info("Could not write solution file. Error: %s", err)
 
-            return Result(status, solution)
+            return Result(status, solution, reported_runtime)
+
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+            # Save basis if requested
+            if basis_fn is not None:
+                try:
+                    # Knitro doesn't have direct basis export for LP files
+                    logger.info(
+                        "Basis export not directly supported by Knitro LP interface"
+                    )
+                except Exception as err:
+                    logger.info("No basis stored. Error: %s", err)
+
+            # Save solution if requested
+            if solution_fn is not None:
+                try:
+                    write_sol = getattr(knitro, "KN_write_sol_file", None)
+                    if write_sol is None:
+                        logger.info(
+                            "Solution export not supported by Knitro interface; ignoring solution_fn=%s",
+                            solution_fn,
+                        )
+                    else:
+                        solution_fn.parent.mkdir(parents=True, exist_ok=True)
+                        write_sol(kc, path_to_string(solution_fn))
+                except Exception as err:
+                    logger.info("Could not write solution file. Error: %s", err)
+
+            return Result(status, solution, kc)
 
         finally:
             if kc is not None:
