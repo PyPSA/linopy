@@ -1936,10 +1936,6 @@ class Knitro(Solver[None]):
                 with open(path_to_string(log_fn), "w", encoding="utf-8") as f:
                     f.write("linopy: knitro log\n")
 
-                set_param_by_name(kc, "outlev", 6)
-                set_param_by_name(kc, "outmode", 1)
-                set_param_by_name(kc, "outname", path_to_string(log_fn))
-
             # Set solver options
             for k, v in self.solver_options.items():
                 set_param_by_name(kc, k, v)
@@ -1984,7 +1980,7 @@ class Knitro(Solver[None]):
                     n_vars = int(n_vars_val) if n_vars_rc == 0 else 0
 
                     x_val, x_rc = unpack_value_and_rc(
-                        knitro.KN_get_var_primal_values(kc, n_vars)
+                        knitro.KN_get_var_primal_values(kc, n_vars-1)
                     )
                     if x_rc == 0 and n_vars > 0:
                         # Get variable names
@@ -2011,7 +2007,7 @@ class Knitro(Solver[None]):
 
                     if n_cons > 0:
                         dual_val, dual_rc = unpack_value_and_rc(
-                            knitro.KN_get_con_dual_values(kc, n_cons)
+                            knitro.KN_get_con_dual_values(kc, n_cons-1)
                         )
                         if dual_rc == 0:
                             # Get constraint names
