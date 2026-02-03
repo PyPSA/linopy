@@ -1975,9 +1975,7 @@ class Knitro(Solver[None]):
             def get_solver_solution() -> Solution:
                 # Get objective value
                 try:
-                    obj_val, obj_rc = unpack_value_and_rc(
-                        knitro.KN_get_obj_value(kc)
-                    )
+                    obj_val, obj_rc = unpack_value_and_rc(knitro.KN_get_obj_value(kc))
                     objective = float(obj_val) if obj_rc == 0 else np.nan
                 except Exception:
                     objective = np.nan
@@ -2004,9 +2002,7 @@ class Knitro(Solver[None]):
                             else:
                                 var_names = [f"x{i}" for i in range(n_vars)]
 
-                            sol = pd.Series(
-                                x_val, index=var_names, dtype=float
-                            )
+                            sol = pd.Series(x_val, index=var_names, dtype=float)
                         else:
                             sol = pd.Series(dtype=float)
                     else:
