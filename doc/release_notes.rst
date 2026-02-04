@@ -6,6 +6,7 @@ Upcoming Version
 
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
+* Add support for the `knitro` solver via the knitro python API
 
 Version 0.6.1
 --------------
