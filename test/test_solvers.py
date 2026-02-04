@@ -119,9 +119,9 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
     assert result.solution.objective == 28.0
 
 
-# @pytest.mark.skipif(
-#    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-# )
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
 def test_knitro_solver_with_options(tmp_path: Path) -> None:
     """Test Knitro solver with custom options."""
     # Set some common Knitro options
