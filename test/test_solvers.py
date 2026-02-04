@@ -111,6 +111,42 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_with_model(model: Model, tmp_path: Path) -> None:  # noqa: F811
+    """Test Knitro solver with a linopy Model instance."""
+    knitro = solvers.Knitro()
+    sol_file = tmp_path / "solution.sol"
+    result = knitro.solve_problem(model=model, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    # The objective for the 'model' fixture is different from the MPS file
+    assert abs(result.solution.objective - 10.0) < 1e-6
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_no_log(tmp_path: Path) -> None:
+    """Test Knitro solver with logging disabled via options."""
+    # outlev=0 should suppress log output
+    knitro = solvers.Knitro(outlev=0)
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+    log_file = tmp_path / "knitro.log"
+
+    result = knitro.solve_problem(
+        problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
+    )
+
+    assert result.status.is_ok
+    assert not log_file.exists()
+
+
+@pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
 def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # noqa: F811
