@@ -113,16 +113,13 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
 )
-def test_knitro_solver_with_model(model: Model, tmp_path: Path) -> None:  # noqa: F811
-    """Test Knitro solver with a linopy Model instance."""
+def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F811
+    """Test Knitro solver raises NotImplementedError for model-based solving."""
     knitro = solvers.Knitro()
-    sol_file = tmp_path / "solution.sol"
-    result = knitro.solve_problem(model=model, solution_fn=sol_file)
-
-    assert result.status.is_ok
-    assert result.solution is not None
-    # The objective for the 'model' fixture is different from the MPS file
-    assert abs(result.solution.objective - 10.0) < 1e-6
+    with pytest.raises(
+        NotImplementedError, match="Direct API not implemented for Knitro"
+    ):
+        knitro.solve_problem(model=model)
 
 
 @pytest.mark.skipif(
