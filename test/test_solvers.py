@@ -45,6 +45,18 @@ BOUNDS
 ENDATA
 """
 
+free_lp_problem = """
+Maximize
+    z: 3 x + 4 y
+Subject To
+    c1: 2 x + y <= 10
+    c2: x + 2 y <= 12
+Bounds
+    0 <= x
+    0 <= y
+End
+"""
+
 
 @pytest.mark.parametrize("solver", set(solvers.available_solvers))
 def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
@@ -74,7 +86,7 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
 )
-def test_knitro_solver(tmp_path: Path) -> None:
+def test_knitro_solver_for_mps(tmp_path: Path) -> None:
     """Test Knitro solver with a simple MPS problem."""
     knitro = solvers.Knitro()
 
@@ -87,6 +99,24 @@ def test_knitro_solver(tmp_path: Path) -> None:
     assert result.status.is_ok
     assert result.solution is not None
     assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_for_lp(tmp_path: Path) -> None:
+    """Test Knitro solver with a simple MPS problem."""
+    knitro = solvers.Knitro()
+
+    mps_file = tmp_path / "problem.lp"
+    mps_file.write_text(free_lp_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    assert result.solution.objective == 28.0
 
 
 @pytest.mark.skipif(
