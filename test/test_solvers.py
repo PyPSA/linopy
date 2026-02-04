@@ -83,9 +83,9 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     assert result.solution.objective == 30.0
 
 
-#@pytest.mark.skipif(
+# @pytest.mark.skipif(
 #    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-#)
+# )
 def test_knitro_solver_for_mps(tmp_path: Path) -> None:
     """Test Knitro solver with a simple MPS problem."""
     knitro = solvers.Knitro()
@@ -101,9 +101,9 @@ def test_knitro_solver_for_mps(tmp_path: Path) -> None:
     assert result.solution.objective == 30.0
 
 
-#@pytest.mark.skipif(
+# @pytest.mark.skipif(
 #    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-#)
+# )
 def test_knitro_solver_for_lp(tmp_path: Path) -> None:
     """Test Knitro solver with a simple MPS problem."""
     knitro = solvers.Knitro()
@@ -119,9 +119,9 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
     assert result.solution.objective == 28.0
 
 
-#@pytest.mark.skipif(
+# @pytest.mark.skipif(
 #    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-#)
+# )
 def test_knitro_solver_with_options(tmp_path: Path) -> None:
     """Test Knitro solver with custom options."""
     # Set some common Knitro options
@@ -140,9 +140,9 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
     assert log_file.exists()
 
 
-#@pytest.mark.skipif(
+# @pytest.mark.skipif(
 #    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-#)
+# )
 def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F811
     """Test Knitro solver raises NotImplementedError for model-based solving."""
     knitro = solvers.Knitro()
@@ -152,9 +152,9 @@ def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F
         knitro.solve_problem(model=model)
 
 
-#@pytest.mark.skipif(
+# @pytest.mark.skipif(
 #    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
-#)
+# )
 def test_knitro_solver_no_log(tmp_path: Path) -> None:
     """Test Knitro solver with logging disabled via options."""
     # outlev=0 should suppress log output
