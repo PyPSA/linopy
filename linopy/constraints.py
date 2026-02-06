@@ -40,10 +40,9 @@ from linopy.common import (
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
-    group_terms_polars,
     has_optimized_model,
-    infer_schema_polars,
     iterate_slices,
+    maybe_group_terms_polars,
     maybe_replace_signs,
     print_coord,
     print_single_constraint,
@@ -622,21 +621,38 @@ class Constraint:
         long = to_polars(ds[keys])
 
         long = filter_nulls_polars(long)
-        long = group_terms_polars(long)
+        if ds.sizes.get("_term", 1) > 1:
+            long = maybe_group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
-        short_ds = ds[[k for k in ds if "_term" not in ds[k].dims]]
-        schema = infer_schema_polars(short_ds)
-        schema["sign"] = pl.Enum(["=", "<=", ">="])
-        short = to_polars(short_ds, schema=schema)
-        short = filter_nulls_polars(short)
-        check_has_nulls_polars(short, name=f"{self.type} {self.name}")
+        # Build short DataFrame (labels, rhs, sign) without xarray broadcast.
+        # Apply labels mask directly instead of filter_nulls_polars.
+        labels_flat = ds["labels"].values.reshape(-1)
+        mask = labels_flat != -1
+        labels_masked = labels_flat[mask]
+        rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
 
-        df = pl.concat([short, long], how="diagonal_relaxed").sort(["labels", "rhs"])
-        # delete subsequent non-null rhs (happens is all vars per label are -1)
-        is_non_null = df["rhs"].is_not_null()
-        prev_non_is_null = is_non_null.shift(1).fill_null(False)
-        df = df.filter(is_non_null & ~prev_non_is_null | ~is_non_null)
+        sign_values = ds["sign"].values
+        sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
+        all_same_sign = len(sign_flat) > 0 and (
+            sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
+        )
+
+        short_data: dict = {
+            "labels": labels_masked,
+            "rhs": rhs_flat[mask],
+        }
+        if all_same_sign:
+            short = pl.DataFrame(short_data).with_columns(
+                pl.lit(sign_flat[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+            )
+        else:
+            short_data["sign"] = pl.Series(
+                "sign", sign_flat[mask], dtype=pl.Enum(["=", "<=", ">="])
+            )
+            short = pl.DataFrame(short_data)
+
+        df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     # Wrapped function which would convert variable to dataarray

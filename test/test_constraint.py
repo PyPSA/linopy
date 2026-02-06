@@ -437,6 +437,20 @@ def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
+def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
+    """Test to_polars when a constraint has mixed sign values across dims."""
+    # Create a constraint, then manually patch the sign to have mixed values
+    m.add_constraints(x >= 0, name="mixed")
+    con = m.constraints["mixed"]
+    # Replace sign data with mixed signs across the first dimension
+    n = con.data.sizes["first"]
+    signs = np.array(["<=" if i % 2 == 0 else ">=" for i in range(n)])
+    con.data["sign"] = xr.DataArray(signs, dims=con.data["sign"].dims)
+    df = con.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert set(df["sign"].to_list()) == {"<=", ">="}
+
+
 def test_constraint_assignment_with_anonymous_constraints(
     m: Model, x: linopy.Variable, y: linopy.Variable
 ) -> None:
