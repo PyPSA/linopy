@@ -14,10 +14,10 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_equal
 
-from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
+from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.constants import HELPER_DIMS, TERM_DIM
-from linopy.expressions import ScalarLinearExpression
-from linopy.testing import assert_linequal, assert_quadequal
+from linopy.expressions import ScalarLinearExpression, merge
+from linopy.testing import assert_linequal, assert_lists_equal, assert_quadequal
 from linopy.variables import ScalarVariable
 
 
@@ -236,6 +236,44 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     assert isinstance(expr, LinearExpression)
     assert expr.__mul__(object()) is NotImplemented
     assert expr.__rmul__(object()) is NotImplemented
+
+
+def test_linear_expression_multiplication_with_missing_coords() -> None:
+    m = Model()
+    full_index = pd.Index(range(5), name="i")
+    x = m.add_variables(coords=[full_index])
+    nan = float("nan")
+    scale = xr.DataArray([10.0, 30.0], dims=["i"], coords={"i": [1, 3]})
+
+    # These two expressions should produce the same result
+    r1 = x * scale
+    r2 = (1 * x) * scale
+
+    for result in [r1, r2]:
+        assert result.coords.equals(x.coords)
+        assert result.vars.equals(r1.vars)
+
+        # Use pandas to make sure nans are considered equal
+        expected_coeffs = [nan, 10.0, nan, 30.0, nan]
+        assert_lists_equal(result.coeffs.values.squeeze(), expected_coeffs)
+
+
+def test_linear_expression_with_missing_coords_in_coeff_and_const() -> None:
+    m = Model()
+    full_index = pd.Index(range(5), name="i")
+    x = m.add_variables(coords=[full_index])
+    nan = float("nan")
+    scale = xr.DataArray([10.0, 30.0], dims=["i"], coords={"i": [1, 3]})
+    const = xr.DataArray([1.0, 2.0], dims=["i"], coords={"i": [0, 1]})
+
+    # These two expressions should produce the same result
+    result = (x + const) * scale
+    assert result.coords.equals(x.coords)
+
+    expected_coeffs = [nan, 10.0, nan, 30.0, nan]
+    expected_const = [nan, 20.0, nan, 0.0, nan]  # Constants are filled with zeros
+    assert_lists_equal(result.coeffs.values.squeeze(), expected_coeffs)
+    assert_lists_equal(result.const.values.squeeze(), expected_const)
 
 
 def test_linear_expression_with_addition(m: Model, x: Variable, y: Variable) -> None:

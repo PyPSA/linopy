@@ -538,7 +538,6 @@ class BaseExpression(ABC):
     ) -> GenericExpression:
         multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         coeffs = self.coeffs * multiplier
-        assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
         const = self.const * multiplier
         return self.assign(coeffs=coeffs, const=const)
 

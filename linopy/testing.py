@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+import numpy as np
 from xarray.testing import assert_equal
 
 from linopy.constraints import Constraint, _con_unwrap
@@ -72,3 +75,13 @@ def assert_model_equal(a: Model, b: Model) -> None:
     assert a.termination_condition == b.termination_condition
 
     assert a.type == b.type
+
+
+def assert_lists_equal(x: Iterable[float], b: Iterable[float]) -> None:
+    x = list(x)
+    b = list(b)
+    assert len(x) == len(b)
+    for xi, bi in zip(x, b):
+        if np.isnan(xi) and np.isnan(bi):
+            continue
+        assert xi == bi

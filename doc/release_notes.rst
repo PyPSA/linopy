@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Fix the handling of multiplication between ``LinearExpression`` and constants with a subset of dimensions. Align with ``Variable`` behaviour
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 * Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
