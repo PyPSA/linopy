@@ -4,8 +4,14 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 * Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
+
+Upcoming Version
+----------------
+
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
 
 Version 0.6.1
 --------------
