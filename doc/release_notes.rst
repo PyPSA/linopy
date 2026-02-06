@@ -6,6 +6,7 @@ Upcoming Version
 
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
+* Speed up LP file writing by 2-2.7x on large models through Polars streaming engine, join-based constraint assembly, and reduced per-constraint overhead
 
 Upcoming Version
 ----------------
