@@ -33,7 +33,7 @@ dependencies = [
     "numexpr",
     "xarray>=2024.2.0",
     "dask>=0.18.0",
-    "polars",
+    "polars>=1.31",
     "tqdm",
     "deprecation",
     "packaging",

@@ -60,23 +60,11 @@ def _format_and_write(
     """
     Format columns via concat_str and write to file.
 
-    Uses Polars streaming engine for better performance when available,
-    with automatic fallback to eager evaluation.
+    Uses Polars streaming engine for better memory efficiency.
     """
-    try:
-        formatted = (
-            df.lazy()
-            .select(pl.concat_str(columns, ignore_nulls=True))
-            .collect(engine="streaming")
-        )
-    except Exception:
-        logger.warning(
-            "Polars streaming engine failed, falling back to eager evaluation. "
-            "Please report this at https://github.com/PyPSA/linopy/issues",
-            exc_info=True,
-        )
-        formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-    formatted.write_csv(
+    df.lazy().select(pl.concat_str(columns, ignore_nulls=True)).collect(
+        engine="streaming"
+    ).write_csv(
         f, separator=" ", null_value="", quote_style="never", include_header=False
     )
 

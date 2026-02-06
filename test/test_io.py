@@ -7,8 +7,6 @@ Created on Thu Mar 18 09:03:35 2021.
 
 import pickle
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -17,7 +15,7 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
-from linopy.io import _format_and_write, signed_number
+from linopy.io import signed_number
 from linopy.testing import assert_model_equal
 
 
@@ -338,34 +336,6 @@ def test_to_file_lp_with_negative_zero_coefficients(tmp_path: Path) -> None:
 
     # Verify Gurobi can read it without errors
     gurobipy.read(str(fn))
-
-
-def test_format_and_write_streaming_fallback(tmp_path: Path) -> None:
-    """Test that _format_and_write falls back to eager when streaming fails."""
-    df = pl.DataFrame({"a": ["x", "y"], "b": ["1", "2"]})
-    columns = [pl.col("a"), pl.lit(" "), pl.col("b")]
-
-    # Normal path
-    fn1 = tmp_path / "normal.lp"
-    with open(fn1, "wb") as f:
-        _format_and_write(df, columns, f)
-    content_normal = fn1.read_text()
-
-    # Force streaming to fail
-    original_collect = pl.LazyFrame.collect
-
-    def failing_collect(self: pl.LazyFrame, *args: Any, **kwargs: Any) -> pl.DataFrame:
-        if kwargs.get("engine") == "streaming":
-            raise RuntimeError("simulated streaming failure")
-        return original_collect(self, *args, **kwargs)
-
-    fn2 = tmp_path / "fallback.lp"
-    with patch.object(pl.LazyFrame, "collect", failing_collect):
-        with open(fn2, "wb") as f:
-            _format_and_write(df, columns, f)
-    content_fallback = fn2.read_text()
-
-    assert content_normal == content_fallback
 
 
 def test_to_file_lp_same_sign_constraints(tmp_path: Path) -> None:
