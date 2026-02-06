@@ -63,9 +63,6 @@ def _format_and_write(
     Uses Polars streaming engine for better performance when available,
     with automatic fallback to eager evaluation.
     """
-    kwargs: Any = dict(
-        separator=" ", null_value="", quote_style="never", include_header=False
-    )
     try:
         formatted = (
             df.lazy()
@@ -79,7 +76,9 @@ def _format_and_write(
             exc_info=True,
         )
         formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-    formatted.write_csv(f, **kwargs)
+    formatted.write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
 
 
 def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
