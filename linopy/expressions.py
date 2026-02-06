@@ -507,12 +507,18 @@ class BaseExpression(ABC):
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
-    ) -> QuadraticExpression:
+    ) -> LinearExpression | QuadraticExpression:
         if isinstance(other, ScalarLinearExpression):
             other = other.to_linexpr()
 
         if other.nterm > 1:
             raise TypeError("Multiplication of multiple terms is not supported.")
+
+        if other.is_constant:
+            return self._multiply_by_constant(other.const)
+        if self.is_constant:
+            return other._multiply_by_constant(self.const)
+
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants
         # merge on factor dimension only returns v1 * v2 + c1 * c2

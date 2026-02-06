@@ -3,6 +3,11 @@ Release Notes
 
 .. Upcoming Version
 
+Upcoming Version
+----------------
+
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
+
 Version 0.6.1
 --------------
 
