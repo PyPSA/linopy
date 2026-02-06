@@ -7,6 +7,11 @@ Upcoming Version
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 
+Upcoming Version
+----------------
+
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
+
 Version 0.6.1
 --------------
 
