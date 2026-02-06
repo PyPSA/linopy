@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -515,9 +515,9 @@ class BaseExpression(ABC):
             raise TypeError("Multiplication of multiple terms is not supported.")
 
         if other.is_constant:
-            return self._multiply_by_constant(other.const)
+            return cast(LinearExpression, self._multiply_by_constant(other.const))
         if self.is_constant:
-            return other._multiply_by_constant(self.const)
+            return cast(LinearExpression, other._multiply_by_constant(self.const))
 
         # multiplication: (v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2
         # with v being the variables and c the constants

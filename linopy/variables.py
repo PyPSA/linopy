@@ -420,7 +420,9 @@ class Variable:
             return NotImplemented
         if other == 2:
             expr = self.to_linexpr()
-            return expr._multiply_by_linear_expression(expr)
+            result = expr._multiply_by_linear_expression(expr)
+            assert isinstance(result, QuadraticExpression)
+            return result
         raise ValueError("Can only raise to the power of 2")
 
     @overload
