@@ -12,12 +12,13 @@ import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypeVar, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 import polars as pl
+import xarray as xr
 from numpy import arange, signedinteger
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
@@ -43,6 +44,48 @@ if TYPE_CHECKING:
     from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
+
+
+class CoordAlignWarning(UserWarning): ...
+
+
+class TimezoneAlignError(ValueError): ...
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class CatchDatetimeTypeError:
+    """Context manager that catches datetime-related TypeErrors and re-raises as TimezoneAlignError."""
+
+    def __enter__(self) -> CatchDatetimeTypeError:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> Literal[False]:
+        if exc_type is TypeError and exc_val is not None:
+            if "Cannot interpret 'datetime" in str(exc_val):
+                raise TimezoneAlignError(
+                    "Timezone information across datetime coordinates not aligned."
+                ) from exc_val
+        return False
+
+
+def catch_datetime_type_error_and_re_raise(func: Callable[P, R]) -> Callable[P, R]:
+    """Decorator that catches datetime-related TypeErrors and re-raises as TimezoneAlignError."""
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        with CatchDatetimeTypeError():
+            result = func(*args, **kwargs)
+        return result
+
+    return wrapper
 
 
 def set_int_index(series: pd.Series) -> pd.Series:
@@ -128,6 +171,21 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     return lst[index] if 0 <= index < len(lst) else None
 
 
+def try_to_convert_to_pd_datetime_index(
+    coord: xr.DataArray | Sequence | pd.Index | Any,
+) -> pd.DatetimeIndex | xr.DataArray | Sequence | pd.Index | Any:
+    if isinstance(coord, pd.DatetimeIndex):
+        return coord
+    try:
+        if isinstance(coord, xr.DataArray):
+            index = coord.to_index()
+            assert isinstance(index, pd.DatetimeIndex)
+            return index
+        return pd.DatetimeIndex(coord)
+    except Exception:
+        return coord
+
+
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
     coords: CoordsLike | None = None,
@@ -168,7 +226,10 @@ def pandas_to_dataarray(
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
         for dim in shared_dims:
+            pd_coord = pandas_coords[dim]
             coord = coords[dim]
+            if isinstance(pd_coord, pd.DatetimeIndex):
+                coord = try_to_convert_to_pd_datetime_index(coord)
             if not isinstance(coord, pd.Index):
                 coord = pd.Index(coord)
             if not pandas_coords[dim].equals(coord):
@@ -178,7 +239,8 @@ def pandas_to_dataarray(
                 f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
                 "Previously, the indexes of the pandas were ignored and overwritten in "
                 "these cases. Now, the pandas object's coordinates are taken considered"
-                " for alignment."
+                " for alignment.",
+                CoordAlignWarning,
             )
 
     return DataArray(arr, coords=None, dims=dims, **kwargs)
@@ -468,6 +530,7 @@ def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df.select(keys + ["coeffs"] + rest)
 
 
+@catch_datetime_type_error_and_re_raise
 def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
@@ -477,7 +540,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     except ValueError:
         warn(
             "Coordinates across variables not equal. Perform outer join.",
-            UserWarning,
+            CoordAlignWarning,
         )
         arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
@@ -485,6 +548,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     return Dataset({ds.name: ds for ds in arrs})
 
 
+@catch_datetime_type_error_and_re_raise
 def assign_multiindex_safe(ds: Dataset, **fields: Any) -> Dataset:
     """
     Assign a field to a xarray Dataset while being safe against warnings about multiindex corruption.

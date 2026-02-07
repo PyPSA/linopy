@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Fix warning when multiplying variables with pd.Series containing time-zone aware index
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 * Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
@@ -20,7 +21,6 @@ Version 0.6.0
 --------------
 
 **Features**
-
 * Add ``mock_solve`` option to ``Model.solve()`` for quick testing without actual solving
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
 * Add ``simplify`` method to ``LinearExpression`` to combine duplicate terms

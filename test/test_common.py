@@ -5,6 +5,9 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -16,6 +19,7 @@ from xarray.testing.assertions import assert_equal
 
 from linopy import LinearExpression, Model, Variable
 from linopy.common import (
+    CoordAlignWarning,
     align,
     as_dataarray,
     assign_multiindex_safe,
@@ -26,6 +30,8 @@ from linopy.common import (
     maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
+
+UTC = ZoneInfo("UTC")
 
 
 def test_as_dataarray_with_series_dims_default() -> None:
@@ -74,6 +80,67 @@ def test_as_dataarray_with_series_dims_priority() -> None:
     assert list(da.coords[target_dim].values) == target_index
 
 
+def test_as_datarray_with_tz_aware_series_index() -> None:
+    time_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    other_index = pd.Index(name="time", data=[0, 1, 2, 3])
+
+    panda_series = pd.Series(index=time_index, data=1.0)
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[time_index])
+    result = as_dataarray(arr=panda_series, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[other_index])
+    with pytest.warns(CoordAlignWarning):
+        result = as_dataarray(arr=panda_series, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": time_index}
+    result = as_dataarray(arr=panda_series, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": [0, 1, 2, 3]}
+    result = as_dataarray(arr=panda_series, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+
+def test_as_datarray_with_tz_aware_dataframe_columns_index() -> None:
+    time_index = pd.date_range(
+        start=datetime(2025, 1, 1),
+        freq="15min",
+        periods=4,
+        tz=UTC,
+        name="time",
+    )
+    other_index = pd.Index(name="time", data=[0, 1, 2, 3])
+
+    index = pd.Index([0, 1, 2, 3], name="x")
+    pandas_df = pd.DataFrame(index=index, columns=time_index, data=1.0)
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[time_index])
+    result = as_dataarray(arr=pandas_df, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    data_array = xr.DataArray(data=[0, 1, 2, 3], coords=[other_index])
+    with pytest.warns(CoordAlignWarning):
+        result = as_dataarray(arr=pandas_df, coords=data_array.coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": time_index}
+    result = as_dataarray(arr=pandas_df, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+    coords = {"time": [0, 1, 2, 3]}
+    result = as_dataarray(arr=pandas_df, coords=coords)
+    assert time_index.equals(result.coords["time"].to_index())
+
+
 def test_as_dataarray_with_series_dims_subset() -> None:
     target_dim = "dim_0"
     target_index = ["a", "b", "c"]
@@ -100,7 +167,7 @@ def test_as_dataarray_with_series_override_coords() -> None:
     target_dim = "dim_0"
     target_index = ["a", "b", "c"]
     s = pd.Series([1, 2, 3], index=target_index)
-    with pytest.warns(UserWarning):
+    with pytest.warns(CoordAlignWarning):
         da = as_dataarray(s, coords=[[1, 2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
@@ -219,7 +286,7 @@ def test_as_dataarray_dataframe_override_coords() -> None:
     target_index = ["a", "b"]
     target_columns = ["A", "B"]
     df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    with pytest.warns(UserWarning):
+    with pytest.warns(CoordAlignWarning):
         da = as_dataarray(df, coords=[[1, 2], [2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == target_dims

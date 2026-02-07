@@ -47,6 +47,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    catch_datetime_type_error_and_re_raise,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
@@ -506,6 +507,7 @@ class BaseExpression(ABC):
         """
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
+    @catch_datetime_type_error_and_re_raise
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
     ) -> LinearExpression | QuadraticExpression:
@@ -533,6 +535,7 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const
         return res
 
+    @catch_datetime_type_error_and_re_raise
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike
     ) -> GenericExpression:
@@ -1456,7 +1459,7 @@ class LinearExpression(BaseExpression):
 
         The resulting DataFrame represents a long table format of the all
         non-masked expressions with non-zero coefficients. It contains the
-        columns `coeffs`, `vars`, `const`. The coeffs and vars columns will be null if the expression is constant.
+        columns `vars`, `coeffs`, `const`. The coeffs and vars columns will be null if the expression is constant.
 
         Returns
         -------
@@ -1472,7 +1475,7 @@ class LinearExpression(BaseExpression):
         df = filter_nulls_polars(df)
         df = maybe_group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
-        return df
+        return df.select(["vars", "coeffs", "const"])
 
     def simplify(self) -> LinearExpression:
         """

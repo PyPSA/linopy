@@ -35,6 +35,7 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    catch_datetime_type_error_and_re_raise,
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
@@ -296,6 +297,7 @@ class Variable:
     def to_pandas(self) -> pd.Series:
         return self.labels.to_pandas()
 
+    @catch_datetime_type_error_and_re_raise
     def to_linexpr(
         self,
         coefficient: ConstantLike = 1,
