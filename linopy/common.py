@@ -510,7 +510,7 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     df = df.group_by(by, maintain_order=True).agg(agg_list)
     return df
 
-  
+
 def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     """
     Group terms only if there are duplicate (labels, vars) pairs.
