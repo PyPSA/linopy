@@ -527,7 +527,7 @@ def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
         return group_terms_polars(df)
     # Match column order of group_terms (group-by keys, coeffs, rest)
     rest = [c for c in df.columns if c not in keys and c != "coeffs"]
-    return df
+    return df.select([*keys, "coeffs", *rest])
 
 
 @catch_datetime_type_error_and_re_raise
