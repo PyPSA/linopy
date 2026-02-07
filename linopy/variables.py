@@ -14,6 +14,7 @@ from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    cast,
     overload,
 )
 from warnings import warn
@@ -422,7 +423,9 @@ class Variable:
             return NotImplemented
         if other == 2:
             expr = self.to_linexpr()
-            return expr._multiply_by_linear_expression(expr)
+            return cast(
+                "QuadraticExpression", expr._multiply_by_linear_expression(expr)
+            )
         raise ValueError("Can only raise to the power of 2")
 
     @overload

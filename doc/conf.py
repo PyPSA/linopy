@@ -42,7 +42,11 @@ extensions = [
     "nbsphinx",
     "nbsphinx_link",
     "sphinx.ext.imgconverter",  # for SVG conversion
+    "sphinx_copybutton",
 ]
+
+copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
+copybutton_prompt_is_regexp = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

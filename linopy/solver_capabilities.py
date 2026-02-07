@@ -10,14 +10,29 @@ from __future__ import annotations
 import platform
 from dataclasses import dataclass
 from enum import Enum, auto
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import TYPE_CHECKING
+
+from packaging.specifiers import SpecifierSet
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+def _xpress_supports_gpu() -> bool:
+    """Check if installed xpress version supports GPU acceleration (>=9.8.0)."""
+    try:
+        return package_version("xpress") in SpecifierSet(">=9.8.0")
+    except PackageNotFoundError:
+        return False
+
+
 class SolverFeature(Enum):
     """Enumeration of all solver capabilities tracked by linopy."""
+
+    # Model feature support
+    INTEGER_VARIABLES = auto()  # Support for integer variables
 
     # Objective function support
     QUADRATIC_OBJECTIVE = auto()
@@ -25,9 +40,11 @@ class SolverFeature(Enum):
     # I/O capabilities
     DIRECT_API = auto()  # Solve directly from Model without writing files
     LP_FILE_NAMES = auto()  # Support for named variables/constraints in LP files
+    READ_MODEL_FROM_FILE = auto()  # Ability to read models from file
     SOLUTION_FILE_NOT_NEEDED = auto()  # Solver doesn't need a solution file
 
     # Advanced features
+    GPU_ACCELERATION = auto()  # GPU-accelerated solving
     IIS_COMPUTATION = auto()  # Irreducible Infeasible Set computation
 
     # Special constraint types
@@ -61,9 +78,11 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="Gurobi",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
                 SolverFeature.SOS_CONSTRAINTS,
@@ -76,9 +95,11 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="HiGHS",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
         ),
@@ -86,20 +107,32 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
     "glpk": SolverInfo(
         name="glpk",
         display_name="GLPK",
-        features=frozenset(),  # No LP_FILE_NAMES support
+        features=frozenset(
+            {
+                SolverFeature.INTEGER_VARIABLES,
+                SolverFeature.READ_MODEL_FROM_FILE,
+            }
+        ),  # No LP_FILE_NAMES support
     ),
     "cbc": SolverInfo(
         name="cbc",
         display_name="CBC",
-        features=frozenset(),  # No LP_FILE_NAMES support
+        features=frozenset(
+            {
+                SolverFeature.INTEGER_VARIABLES,
+                SolverFeature.READ_MODEL_FROM_FILE,
+            }
+        ),  # No LP_FILE_NAMES support
     ),
     "cplex": SolverInfo(
         name="cplex",
         display_name="CPLEX",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOS_CONSTRAINTS,
             }
         ),
@@ -109,8 +142,20 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="FICO Xpress",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+                SolverFeature.GPU_ACCELERATION,
+                SolverFeature.IIS_COMPUTATION,
+            }
+            if _xpress_supports_gpu()
+            else {
+                SolverFeature.INTEGER_VARIABLES,
+                SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
             }
@@ -121,13 +166,17 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="SCIP",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
             if platform.system() == "Windows"
             else {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
             # SCIP has a bug with quadratic models on Windows, see:
@@ -139,9 +188,11 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="MOSEK",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
         ),
@@ -151,8 +202,10 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="COPT",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
         ),
@@ -162,8 +215,21 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="MindOpt",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
+                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            }
+        ),
+    ),
+    "cupdlpx": SolverInfo(
+        name="cupdlpx",
+        display_name="cuPDLPx",
+        features=frozenset(
+            {
+                SolverFeature.DIRECT_API,
+                SolverFeature.GPU_ACCELERATION,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
         ),

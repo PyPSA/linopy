@@ -1,15 +1,49 @@
 Release Notes
 =============
 
-.. Upcoming Version
+Upcoming Version
+----------------
 
 * Fix warning when multiplying variables with pd.Series containing time-zone aware index
+* Fix docs (pick highs solver)
+* Add the `sphinx-copybutton` to the documentation
+* Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
+* Speed up LP file writing by 2-2.7x on large models through Polars streaming engine, join-based constraint assembly, and reduced per-constraint overhead
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
+
+Version 0.6.1
+--------------
+
+* Avoid Gurobi initialization on linopy import.
+* Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
+
+Version 0.6.0
+--------------
+
+**Features**
+* Add ``mock_solve`` option to ``Model.solve()`` for quick testing without actual solving
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
-* Add simplify method to LinearExpression to combine duplicate terms
-* Add convenience function to create LinearExpression from constant
-* Fix compatibility for xpress versions below 9.6 (regression)
-* Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
-* Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
+* Add ``simplify`` method to ``LinearExpression`` to combine duplicate terms
+* Add convenience function to create ``LinearExpression`` from constant
+* Add support for GPU-accelerated solver `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`_
+* Add solver features registry for introspection of solver capabilities
+
+**Performance**
+
+* Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
+* Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
+
+**Bug Fixes**
+
+* Fix HiGHS solver to properly stop on Ctrl-C keyboard interrupt
+* Fix CBC solver to correctly parse negative objective values
+* Fix Xpress compatibility for versions below 9.6 (regression from namespace change)
+* Fix Xpress ``getDual()`` fallback for older versions
+* Fix missing dependency for jupyter notebook example in documentation
+
+**Solver Updates**
+
+* Add Xpress 9.8+ API support with full backward compatibility to 9.6+
 
 Version 0.5.8
 --------------

@@ -50,6 +50,7 @@ from linopy.expressions import (
 )
 from linopy.io import (
     to_block_files,
+    to_cupdlpx,
     to_file,
     to_gurobipy,
     to_highspy,
@@ -133,6 +134,7 @@ class Model:
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
+        "_auto_mask",
         "_solver_dir",
         "solver_model",
         "solver_name",
@@ -144,6 +146,7 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
+        auto_mask: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -163,6 +166,10 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
+        auto_mask : bool
+            Whether to automatically mask variables and constraints where
+            bounds, coefficients, or RHS values contain NaN. The default is
+            False.
 
         Returns
         -------
@@ -183,6 +190,7 @@ class Model:
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
+        self._auto_mask: bool = bool(auto_mask)
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -314,6 +322,18 @@ class Model:
         self._force_dim_names = bool(value)
 
     @property
+    def auto_mask(self) -> bool:
+        """
+        If True, automatically mask variables and constraints where bounds,
+        coefficients, or RHS values contain NaN.
+        """
+        return self._auto_mask
+
+    @auto_mask.setter
+    def auto_mask(self, value: bool) -> None:
+        self._auto_mask = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -340,6 +360,7 @@ class Model:
             "_varnameCounter",
             "_connameCounter",
             "force_dim_names",
+            "auto_mask",
         ]
 
     def __repr__(self) -> str:
@@ -531,13 +552,27 @@ class Model:
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
 
+        # Auto-mask based on NaN in bounds (use numpy for speed)
+        if self.auto_mask:
+            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
+                data.upper.values
+            )
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.coords, dims=data.dims
+            )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
+
         start = self._xCounter
         end = start + data.labels.size
         data.labels.values = np.arange(start, end).reshape(data.labels.shape)
         self._xCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            # Use numpy where for speed (38x faster than xarray where)
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -655,6 +690,14 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
+        # Capture original RHS for auto-masking before constraint creation
+        # (NaN values in RHS are lost during constraint creation)
+        # Use numpy for speed instead of xarray's notnull()
+        original_rhs_mask = None
+        if self.auto_mask and rhs is not None:
+            rhs_da = as_dataarray(rhs)
+            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
+
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
@@ -707,6 +750,32 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
+            # Broadcast mask to match data shape for correct numpy where behavior
+            if mask.shape != data.labels.shape:
+                mask, _ = xr.broadcast(mask, data.labels)
+
+        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
+        if self.auto_mask:
+            # Check if expression is null: all vars == -1
+            # Use max() instead of all() - if max == -1, all are -1 (since valid vars >= 0)
+            # This is ~30% faster for large term dimensions
+            vars_all_invalid = data.vars.values.max(axis=-1) == -1
+            auto_mask_values = ~vars_all_invalid
+            if original_rhs_mask is not None:
+                coords, dims, rhs_notnull = original_rhs_mask
+                # Broadcast RHS mask to match data shape if needed
+                if rhs_notnull.shape != auto_mask_values.shape:
+                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
+                    rhs_da, _ = xr.broadcast(rhs_da, data.labels)
+                    rhs_notnull = rhs_da.values
+                auto_mask_values = auto_mask_values & rhs_notnull
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
+            )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
 
         self.check_force_dim_names(data)
 
@@ -716,7 +785,8 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            # Use numpy where for speed (38x faster than xarray where)
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
@@ -1124,6 +1194,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
+        mock_solve: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1191,6 +1262,8 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        mock_solve : bool, optional
+            Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1200,6 +1273,11 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        if mock_solve:
+            return self._mock_solve(
+                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
@@ -1375,6 +1453,40 @@ class Model:
 
         return result.status.status.value, result.status.termination_condition.value
 
+    def _mock_solve(
+        self,
+        sanitize_zeros: bool = True,
+        sanitize_infinities: bool = True,
+    ) -> tuple[str, str]:
+        solver_name = "mock"
+
+        # clear cached matrix properties potentially present from previous solve commands
+        self.matrices.clean_cached_properties()
+
+        logger.info(f" Solve problem using {solver_name.title()} solver")
+        # reset result
+        self.reset_solution()
+
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
+
+        self.objective._value = 0.0
+        self.status = "ok"
+        self.termination_condition = TerminationCondition.optimal.value
+        self.solver_model = None
+        self.solver_name = solver_name
+
+        for name, var in self.variables.items():
+            var.solution = xr.DataArray(0.0, var.coords)
+
+        for name, con in self.constraints.items():
+            con.dual = xr.DataArray(0.0, con.labels.coords)
+
+        return "ok", "none"
+
     def compute_infeasibilities(self) -> list[int]:
         """
         Compute a set of infeasible constraints.
@@ -1458,7 +1570,10 @@ class Model:
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
         """Compute infeasibilities for Xpress solver."""
         # Compute all IIS
-        solver_model.iisall()
+        try:  # Try new API first
+            solver_model.IISAll()
+        except AttributeError:  # Fallback to old API
+            solver_model.iisall()
 
         # Get the number of IIS found
         num_iis = solver_model.attributes.numiis
@@ -1502,28 +1617,55 @@ class Model:
         list[Any]
             List of xpress.constraint objects in the IIS
         """
-        # Prepare lists to receive IIS data
-        miisrow: list[Any] = []  # xpress.constraint objects in the IIS
-        miiscol: list[Any] = []  # xpress.variable objects in the IIS
-        constrainttype: list[str] = []  # Constraint types ('L', 'G', 'E')
-        colbndtype: list[str] = []  # Column bound types
-        duals: list[float] = []  # Dual values
-        rdcs: list[float] = []  # Reduced costs
-        isolationrows: list[str] = []  # Row isolation info
-        isolationcols: list[str] = []  # Column isolation info
+        # Declare variables before try/except to avoid mypy redefinition errors
+        miisrow: list[Any]
+        miiscol: list[Any]
+        constrainttype: list[str]
+        colbndtype: list[str]
+        duals: list[float]
+        rdcs: list[float]
+        isolationrows: list[str]
+        isolationcols: list[str]
 
-        # Get IIS data from Xpress
-        solver_model.getiisdata(
-            iis_num,
-            miisrow,
-            miiscol,
-            constrainttype,
-            colbndtype,
-            duals,
-            rdcs,
-            isolationrows,
-            isolationcols,
-        )
+        try:  # Try new API first
+            (
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            ) = solver_model.getIISData(iis_num)
+
+            # Transform list of indices to list of constraint objects
+            for i in range(len(miisrow)):
+                miisrow[i] = solver_model.getConstraint(miisrow[i])
+
+        except AttributeError:  # Fallback to old API
+            # Prepare lists to receive IIS data
+            miisrow = []  # xpress.constraint objects in the IIS
+            miiscol = []  # xpress.variable objects in the IIS
+            constrainttype = []  # Constraint types ('L', 'G', 'E')
+            colbndtype = []  # Column bound types
+            duals = []  # Dual values
+            rdcs = []  # Reduced costs
+            isolationrows = []  # Row isolation info
+            isolationcols = []  # Column isolation info
+
+            # Get IIS data from Xpress
+            solver_model.getiisdata(
+                iis_num,
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            )
 
         return miisrow
 
@@ -1588,5 +1730,7 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
