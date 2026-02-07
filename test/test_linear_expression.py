@@ -8,13 +8,13 @@ Created on Wed Mar 17 17:06:36 2021.
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from pytz import UTC
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
@@ -23,6 +23,8 @@ from linopy.constants import HELPER_DIMS, TERM_DIM
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
 from linopy.variables import ScalarVariable
+
+UTC = ZoneInfo("UTC")
 
 
 @pytest.fixture

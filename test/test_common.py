@@ -6,13 +6,13 @@ Created on Mon Jun 19 12:11:03 2023
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from pytz import UTC
 from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
@@ -30,6 +30,8 @@ from linopy.common import (
     maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
+
+UTC = ZoneInfo("UTC")
 
 
 def test_as_dataarray_with_series_dims_default() -> None:

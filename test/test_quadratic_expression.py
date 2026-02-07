@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
-from pytz import UTC
 from scipy.sparse import csc_matrix
 from xarray import DataArray
 
@@ -15,6 +14,8 @@ from linopy.common import TimezoneAlignError
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.testing import assert_quadequal
+
+UTC = ZoneInfo("UTC")
 
 
 @pytest.fixture

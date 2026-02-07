@@ -5,6 +5,7 @@ This module aims at testing the correct behavior of the Variables class.
 
 import warnings
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -12,13 +13,14 @@ import pytest
 import xarray as xr
 import xarray.core.indexes
 import xarray.core.utils
-from pytz import UTC
 
 import linopy
 from linopy import Model
 from linopy.common import CoordAlignWarning, TimezoneAlignError
 from linopy.testing import assert_varequal
 from linopy.variables import ScalarVariable
+
+UTC = ZoneInfo("UTC")
 
 
 @pytest.fixture
