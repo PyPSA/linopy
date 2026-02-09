@@ -1426,7 +1426,7 @@ def test_variable_names() -> None:
     assert expr.variable_names == set()
 
 
-def test_nvar_and_nterm() -> None:
+def test_nterm() -> None:
     m = Model()
     time = pd.Index(range(3), name="time")
     all_false = xr.DataArray(False, coords=[time])
@@ -1440,12 +1440,9 @@ def test_nvar_and_nterm() -> None:
 
     expr = (a.where(not_0) + b.where(not_1) + c.where(not_2)).densify_terms()
     assert expr.nterm == 3
-    assert expr.nvar == 3
 
     expr = a + b.where(all_false)
     assert expr.nterm == 2
-    assert expr.nvar == 1
 
     expr = expr.simplify()
     assert expr.nterm == 1
-    assert expr.nvar == 1

@@ -1079,14 +1079,6 @@ class BaseExpression(ABC):
         return len(self.data._term)
 
     @property
-    def nvar(self) -> int:
-        """
-        Get the number of unique variables in the linear expression.
-        Note that nvar <= nterm, as variables can appear multiple times and there can be terms which are completely masked out.
-        """
-        return len(self.variable_names)
-
-    @property
     def variable_names(self) -> set[str]:
         """
         The names of the unique variables present in the expression

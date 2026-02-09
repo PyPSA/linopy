@@ -4,7 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` and `BaseExpression.nvar` properties.
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 
 Version 0.6.2
 --------------
