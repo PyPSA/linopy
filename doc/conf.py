@@ -13,16 +13,16 @@
 # import os
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
+import linopy
+
 # -- Project information -----------------------------------------------------
-import pkg_resources
 
 project = "linopy"
 copyright = "2021, Fabian Hofmann"
 author = "Fabian Hofmann"
 
-text = "text"
 # The full version, including alpha/beta/rc tags
-version = pkg_resources.get_distribution("linopy").version
+version = linopy.__version__
 release = "master" if "dev" in version else version
 
 # For some reason is this needed, otherwise autosummary does fail on RTD but not locally
