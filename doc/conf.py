@@ -25,8 +25,6 @@ author = "Fabian Hofmann"
 version = linopy.__version__
 release = "master" if "dev" in version else version
 
-# For some reason is this needed, otherwise autosummary does fail on RTD but not locally
-
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be
