@@ -295,6 +295,7 @@ Given base name ``name``, the following objects are created:
 See Also
 --------
 
+- :doc:`piecewise-linear-constraints-tutorial` -- Worked examples with all three formulations
 - :doc:`sos-constraints` -- Low-level SOS1/SOS2 constraint API
 - :doc:`creating-constraints` -- General constraint creation
 - :doc:`user-guide` -- Overall linopy usage patterns
