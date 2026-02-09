@@ -76,6 +76,7 @@ from linopy.constants import (
     GROUPED_TERM_DIM,
     HELPER_DIMS,
     LESS_EQUAL,
+    QTERM_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
 )
@@ -89,7 +90,11 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, Constraint
+    from linopy.constraints import (
+        AnonymousScalarConstraint,
+        Constraint,
+        QuadraticConstraint,
+    )
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
 
@@ -805,55 +810,6 @@ class BaseExpression(ABC):
 
         return res
 
-    def cumsum(
-        self,
-        dim: DimsLike | None = None,
-        *,
-        skipna: bool | None = None,
-        keep_attrs: bool | None = None,
-        **kwargs: Any,
-    ) -> LinearExpression:
-        """
-        Cumulated sum along a given axis.
-
-        Docstring and arguments are borrowed from `xarray.Dataset.cumsum`
-
-        Parameters
-        ----------
-        dim : str, Iterable of Hashable, "..." or None, default: None
-            Name of dimension[s] along which to apply ``cumsum``. For e.g. ``dim="x"``
-            or ``dim=["x", "y"]``. If "..." or None, will reduce over all dimensions.
-        skipna : bool or None, optional
-            If True, skip missing values (as marked by NaN). By default, only
-            skips missing values for float dtypes; other dtypes either do not
-            have a sentinel missing value (int) or ``skipna=True`` has not been
-            implemented (object, datetime64 or timedelta64).
-        keep_attrs : bool or None, optional
-            If True, ``attrs`` will be copied from the original
-            object to the new one.  If False, the new object will be
-            returned without attributes.
-        **kwargs : Any
-            Additional keyword arguments passed on to the appropriate array
-            function for calculating ``cumsum`` on this object's data.
-            These could include dask-specific kwargs like ``split_every``.
-
-        Returns
-        -------
-        linopy.expression.LinearExpression
-        """
-        # Along every dimensions, we want to perform cumsum along, get the size of the
-        # dimension to pass that to self.rolling.
-        if not dim:
-            # If user did not specify a dimension to sum over, use all relevant
-            # dimensions
-            dim = self.coord_dims
-        if isinstance(dim, str):
-            dim = [dim]
-        elif isinstance(dim, EllipsisType) or dim is None:
-            dim = self.coord_dims
-        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
-        return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
-
     def to_constraint(self, sign: SignLike, rhs: SideLike) -> Constraint:
         """
         Convert a linear expression to a constraint.
@@ -1003,74 +959,6 @@ class BaseExpression(ABC):
         """
         return self - self.shift({dim: n})
 
-    def groupby(
-        self,
-        group: DataFrame | Series | DataArray,
-        restore_coord_dims: bool | None = None,
-        **kwargs: Any,
-    ) -> LinearExpressionGroupby:
-        """
-        Returns a LinearExpressionGroupBy object for performing grouped
-        operations.
-
-        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
-
-        Parameters
-        ----------
-        group : str, DataArray or IndexVariable
-            Array whose unique values should be used to group this array. If a
-            string, must be the name of a variable contained in this dataset.
-        restore_coord_dims : bool, optional
-            If True, also restore the dimension order of multi-dimensional
-            coordinates.
-
-        Returns
-        -------
-        grouped
-            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
-            the correct return type.
-        """
-        ds = self.data
-        kwargs = dict(restore_coord_dims=restore_coord_dims, **kwargs)
-        return LinearExpressionGroupby(ds, group, model=self.model, kwargs=kwargs)
-
-    def rolling(
-        self,
-        dim: Mapping[Any, int] | None = None,
-        min_periods: int | None = None,
-        center: bool | Mapping[Any, bool] = False,
-        **window_kwargs: int,
-    ) -> LinearExpressionRolling:
-        """
-        Rolling window object.
-
-        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
-
-        Parameters
-        ----------
-        dim : dict, optional
-            Mapping from the dimension name to create the rolling iterator
-            along (e.g. `time`) to its moving window size.
-        min_periods : int, default: None
-            Minimum number of observations in window required to have a value
-            (otherwise result is NA). The default, None, is equivalent to
-            setting min_periods equal to the size of the window.
-        center : bool or mapping, default: False
-            Set the labels at the center of the window.
-        **window_kwargs : optional
-            The keyword arguments form of ``dim``.
-            One of dim or window_kwargs must be provided.
-
-        Returns
-        -------
-        linopy.expression.LinearExpressionRolling
-        """
-        ds = self.data
-        rolling = ds.rolling(
-            dim=dim, min_periods=min_periods, center=center, **window_kwargs
-        )
-        return LinearExpressionRolling(rolling, model=self.model)
-
     @property
     def nterm(self) -> int:
         """
@@ -1081,10 +969,9 @@ class BaseExpression(ABC):
     @property
     def shape(self) -> tuple[int, ...]:
         """
-        Get the total shape of the linear expression.
+        Get the shape of the expression (excluding term dimension).
         """
-        assert self.vars.shape == self.coeffs.shape
-        return self.vars.shape
+        return tuple(v for k, v in self.sizes.items() if k != TERM_DIM)
 
     @property
     def size(self) -> int:
@@ -1758,6 +1645,119 @@ class LinearExpression(BaseExpression):
 
         return merge(exprs, cls=cls) if len(exprs) > 1 else exprs[0]
 
+    def cumsum(
+        self,
+        dim: DimsLike | None = None,
+        *,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
+        **kwargs: Any,
+    ) -> LinearExpression:
+        """
+        Cumulated sum along a given axis.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.cumsum`
+
+        Parameters
+        ----------
+        dim : str, Iterable of Hashable, "..." or None, default: None
+            Name of dimension[s] along which to apply ``cumsum``. For e.g. ``dim="x"``
+            or ``dim=["x", "y"]``. If "..." or None, will reduce over all dimensions.
+        skipna : bool or None, optional
+            If True, skip missing values (as marked by NaN). By default, only
+            skips missing values for float dtypes; other dtypes either do not
+            have a sentinel missing value (int) or ``skipna=True`` has not been
+            implemented (object, datetime64 or timedelta64).
+        keep_attrs : bool or None, optional
+            If True, ``attrs`` will be copied from the original
+            object to the new one.  If False, the new object will be
+            returned without attributes.
+        **kwargs : Any
+            Additional keyword arguments passed on to the appropriate array
+            function for calculating ``cumsum`` on this object's data.
+            These could include dask-specific kwargs like ``split_every``.
+
+        Returns
+        -------
+        linopy.expression.LinearExpression
+        """
+        if not dim:
+            dim = self.coord_dims
+        if isinstance(dim, str):
+            dim = [dim]
+        elif isinstance(dim, EllipsisType) or dim is None:
+            dim = self.coord_dims
+        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
+        return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
+
+    def groupby(
+        self,
+        group: DataFrame | Series | DataArray,
+        restore_coord_dims: bool | None = None,
+        **kwargs: Any,
+    ) -> LinearExpressionGroupby:
+        """
+        Returns a LinearExpressionGroupBy object for performing grouped
+        operations.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.groupby`
+
+        Parameters
+        ----------
+        group : str, DataArray or IndexVariable
+            Array whose unique values should be used to group this array. If a
+            string, must be the name of a variable contained in this dataset.
+        restore_coord_dims : bool, optional
+            If True, also restore the dimension order of multi-dimensional
+            coordinates.
+
+        Returns
+        -------
+        grouped
+            A `LinearExpressionGroupBy` containing the xarray groups and ensuring
+            the correct return type.
+        """
+        ds = self.data
+        kwargs = dict(restore_coord_dims=restore_coord_dims, **kwargs)
+        return LinearExpressionGroupby(ds, group, model=self.model, kwargs=kwargs)
+
+    def rolling(
+        self,
+        dim: Mapping[Any, int] | None = None,
+        min_periods: int | None = None,
+        center: bool | Mapping[Any, bool] = False,
+        **window_kwargs: int,
+    ) -> LinearExpressionRolling:
+        """
+        Rolling window object.
+
+        Docstring and arguments are borrowed from `xarray.Dataset.rolling`
+
+        Parameters
+        ----------
+        dim : dict, optional
+            Mapping from the dimension name to create the rolling iterator
+            along (e.g. `time`) to its moving window size.
+        min_periods : int, default: None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : bool or mapping, default: False
+            Set the labels at the center of the window.
+        **window_kwargs : optional
+            The keyword arguments form of ``dim``.
+            One of dim or window_kwargs must be provided.
+
+        Returns
+        -------
+        linopy.expression.LinearExpressionRolling
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return LinearExpressionRolling(rolling, model=self.model)
+
     @classmethod
     def from_constant(cls, model: Model, constant: ConstantLike) -> LinearExpression:
         """
@@ -1815,9 +1815,11 @@ class QuadraticExpression(BaseExpression):
 
     @property
     def shape(self) -> tuple[int, ...]:
-        # TODO Implement this
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support shape property"
+        """
+        Get the shape of the expression (excluding term dimensions).
+        """
+        return tuple(
+            v for k, v in self.sizes.items() if k not in (TERM_DIM, FACTOR_DIM)
         )
 
     def __mul__(self, other: SideLike) -> QuadraticExpression:
@@ -1933,10 +1935,83 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
-        raise NotImplementedError(
-            "Quadratic expressions cannot be used in constraints."
+    def to_constraint(self, sign: SignLike, rhs: ConstantLike) -> QuadraticConstraint:  # type: ignore[override]
+        """
+        Convert a quadratic expression to a quadratic constraint.
+
+        Parameters
+        ----------
+        sign : str
+            Constraint sense: '<=', '>=', or '='
+        rhs : float or array-like
+            Right-hand side constant
+
+        Returns
+        -------
+        QuadraticConstraint
+
+        Examples
+        --------
+        >>> from linopy import Model
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> y = m.add_variables(name="y")
+        >>> qc = (x**2 + y**2).to_constraint("<=", 25)  # x² + y² <= 25
+        """
+        # Move rhs to left-hand side to get: quadexpr - rhs {sign} 0
+        all_to_lhs = self - rhs
+
+        # Separate quadratic and linear terms
+        # QuadraticExpression has vars with shape (..., _factor, _term)
+        # where _factor has size 2 (vars1, vars2)
+        vars_data = all_to_lhs.vars
+        coeffs_data = all_to_lhs.coeffs
+
+        # Identify linear terms: where one of the factors is -1 (missing)
+        is_linear = (vars_data.isel({FACTOR_DIM: 0}) == -1) | (
+            vars_data.isel({FACTOR_DIM: 1}) == -1
         )
+
+        # Extract quadratic terms (neither var is -1)
+        is_quadratic = ~is_linear
+
+        # Get quadratic parts
+        # Note: coeffs only has _term dim, vars has both _factor and _term
+        quad_vars = vars_data.where(is_quadratic, -1)
+        quad_coeffs = coeffs_data.where(is_quadratic, 0)
+
+        # Expand quad_coeffs to have _factor dimension (for consistency with quad_vars)
+        quad_coeffs = quad_coeffs.expand_dims({FACTOR_DIM: 2}, axis=-2)
+
+        # Rename TERM_DIM to QTERM_DIM for quadratic terms
+        quad_vars = quad_vars.rename({TERM_DIM: QTERM_DIM})
+        quad_coeffs = quad_coeffs.rename({TERM_DIM: QTERM_DIM})
+
+        # Get linear parts - extract the non-missing variable
+        lin_vars_factor0 = vars_data.isel({FACTOR_DIM: 0})
+        lin_vars_factor1 = vars_data.isel({FACTOR_DIM: 1})
+        # For linear terms, one factor is -1, use the other
+        lin_vars = xr.where(
+            is_linear & (lin_vars_factor0 != -1),
+            lin_vars_factor0,
+            xr.where(is_linear & (lin_vars_factor1 != -1), lin_vars_factor1, -1),
+        )
+        # Get linear coefficients (coeffs doesn't have _factor dim)
+        lin_coeffs = coeffs_data.where(is_linear, 0)
+
+        # Build the constraint data
+        data = Dataset(
+            {
+                "quad_coeffs": quad_coeffs,
+                "quad_vars": quad_vars,
+                "lin_coeffs": lin_coeffs,
+                "lin_vars": lin_vars,
+                "sign": sign,
+                "rhs": -all_to_lhs.const,  # Move constant to RHS
+            }
+        )
+
+        return constraints.QuadraticConstraint(data, model=self.model)
 
     @property
     def flat(self) -> DataFrame:
@@ -2018,6 +2093,193 @@ class QuadraticExpression(BaseExpression):
         col = df.vars2
         nvars = self.model.shape[1]
         return csc_matrix((data, (row, col)), shape=(nvars, nvars))
+
+    def groupby(
+        self,
+        group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame,
+        restore_coord_dims: bool = True,
+        **kwargs: Any,
+    ) -> QuadraticExpressionGroupby:
+        """
+        GroupBy operation for QuadraticExpression.
+
+        Returns a QuadraticExpressionGroupby object for performing grouped
+        operations.
+        """
+        ds = self.data
+        kwargs_dict = dict(restore_coord_dims=restore_coord_dims, **kwargs)
+        return QuadraticExpressionGroupby(
+            ds, group, model=self.model, kwargs=kwargs_dict
+        )
+
+    def rolling(
+        self,
+        dim: Mapping[Any, int] | None = None,
+        min_periods: int | None = None,
+        center: bool | Mapping[Any, bool] = False,
+        **window_kwargs: int,
+    ) -> QuadraticExpressionRolling:
+        """
+        Rolling window object for QuadraticExpression.
+
+        Returns a QuadraticExpressionRolling object for performing rolling
+        operations.
+        """
+        ds = self.data
+        rolling = ds.rolling(
+            dim=dim, min_periods=min_periods, center=center, **window_kwargs
+        )
+        return QuadraticExpressionRolling(rolling, model=self.model)
+
+    def cumsum(
+        self,
+        dim: DimsLike | None = None,
+        *,
+        skipna: bool | None = None,
+        keep_attrs: bool | None = None,
+        **kwargs: Any,
+    ) -> QuadraticExpression:
+        """
+        Cumulated sum along a given axis.
+
+        Returns
+        -------
+        QuadraticExpression
+        """
+        if not dim:
+            dim = self.coord_dims
+        if isinstance(dim, str):
+            dim = [dim]
+        elif isinstance(dim, EllipsisType) or dim is None:
+            dim = self.coord_dims
+        dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
+        return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
+
+
+@dataclass
+@forward_as_properties(groupby=["dims", "groups"])
+class QuadraticExpressionGroupby:
+    """
+    GroupBy object specialized to grouping QuadraticExpression objects.
+    """
+
+    data: xr.Dataset
+    group: Hashable | DataArray | IndexVariable | pd.Series | pd.DataFrame
+    model: Any
+    kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def groupby(self) -> xarray.core.groupby.DatasetGroupBy:
+        """
+        Groups the data using the specified group and kwargs.
+        """
+        if isinstance(self.group, pd.DataFrame):
+            raise ValueError(
+                "Grouping by a DataFrame only supported for `sum` operation with `use_fallback=False`."
+            )
+        if isinstance(self.group, pd.Series):
+            group_name = self.group.name or "group"
+            group = DataArray(self.group, name=group_name)
+        else:
+            group = self.group  # type: ignore
+
+        return self.data.groupby(group=group, **self.kwargs)
+
+    def map(
+        self,
+        func: Callable[..., Dataset],
+        shortcut: bool = False,
+        args: tuple[()] = (),
+        **kwargs: Any,
+    ) -> QuadraticExpression:
+        """
+        Apply a specified function to the groupby object.
+        """
+        return QuadraticExpression(
+            self.groupby.map(func, shortcut=shortcut, args=args, **kwargs), self.model
+        )
+
+    def sum(self, use_fallback: bool = False, **kwargs: Any) -> QuadraticExpression:
+        """
+        Sum the groupby object.
+        """
+        non_fallback_types = (pd.Series, pd.DataFrame, xr.DataArray)
+        if isinstance(self.group, non_fallback_types) and not use_fallback:
+            group: pd.Series | pd.DataFrame | xr.DataArray = self.group
+            if isinstance(group, pd.DataFrame):
+                final_group_name = "group"
+            else:
+                final_group_name = getattr(group, "name", "group") or "group"
+
+            if isinstance(group, DataArray):
+                group = group.to_pandas()
+
+            int_map = None
+            if isinstance(group, pd.DataFrame):
+                index_name = group.index.name
+                group = group.reindex(self.data.indexes[group.index.name])
+                group.index.name = index_name
+                int_map = get_index_map(*group.values.T)
+                orig_group = group
+                group = group.apply(tuple, axis=1).map(int_map)
+
+            assert isinstance(group, pd.Series)
+            group_dim = group.index.name
+
+            arrays = [group, group.groupby(group).cumcount()]
+            idx = pd.MultiIndex.from_arrays(arrays, names=[GROUP_DIM, GROUPED_TERM_DIM])
+            new_coords = Coordinates.from_pandas_multiindex(idx, group_dim)
+            coords = self.data.indexes[group_dim]
+            names_to_drop = [coords.name]
+            if isinstance(coords, pd.MultiIndex):
+                names_to_drop += list(coords.names)
+            ds = self.data.drop_vars(names_to_drop).assign_coords(new_coords)
+            ds = ds.unstack(group_dim, fill_value=QuadraticExpression._fill_value)
+            ds = LinearExpression._sum(ds, dim=GROUPED_TERM_DIM)
+
+            if int_map is not None:
+                index = ds.indexes[GROUP_DIM].map({v: k for k, v in int_map.items()})
+                index.names = [str(col) for col in orig_group.columns]
+                index.name = GROUP_DIM
+                new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
+                ds = xr.Dataset(ds.assign_coords(new_coords))
+
+            ds = ds.rename({GROUP_DIM: final_group_name})
+            return QuadraticExpression(ds, self.model)
+
+        def func(ds: Dataset) -> Dataset:
+            ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
+            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
+            return ds
+
+        return self.map(func, **kwargs, shortcut=True)
+
+    def roll(self, **kwargs: Any) -> QuadraticExpression:
+        """
+        Roll the groupby object.
+        """
+        return self.map(Dataset.roll, **kwargs)
+
+
+@dataclass
+@forward_as_properties(rolling=["center", "dim", "obj", "rollings", "window"])
+class QuadraticExpressionRolling:
+    """
+    Rolling object specialized to rolling QuadraticExpression objects.
+    """
+
+    rolling: DatasetRolling
+    model: Any
+
+    def sum(self, **kwargs: Any) -> QuadraticExpression:
+        data = self.rolling.construct("_rolling_term", keep_attrs=True)
+        ds = (
+            data[["coeffs", "vars"]]
+            .rename({TERM_DIM: STACKED_TERM_DIM})
+            .stack({TERM_DIM: [STACKED_TERM_DIM, "_rolling_term"]}, create_index=False)
+        )
+        ds = assign_multiindex_safe(ds, const=data.const.sum("_rolling_term"))
+        return QuadraticExpression(ds, self.model)
 
 
 def as_expression(

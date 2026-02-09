@@ -1062,9 +1062,22 @@ def print_single_expression(
                 coeff_string = f"{coeff_string[0]} {coeff_string[1:]}"
 
             if isinstance(var, list):
-                var_string = ""
-                for name, coords in var:
-                    if name is not None:
+                # Quadratic term - check if it's a squared term (same variable twice)
+                var_parts = [(name, coords) for name, coords in var if name is not None]
+                if len(var_parts) == 2:
+                    (name1, coords1), (name2, coords2) = var_parts
+                    coord_string1 = print_coord(coords1)
+                    coord_string2 = print_coord(coords2)
+                    if name1 == name2 and coord_string1 == coord_string2:
+                        # Squared term: x² instead of x x
+                        var_string = f" {name1}{coord_string1}²"
+                    else:
+                        # Cross term: x·y
+                        var_string = f" {name1}{coord_string1}·{name2}{coord_string2}"
+                else:
+                    # Fallback for other cases
+                    var_string = ""
+                    for name, coords in var_parts:
                         coord_string = print_coord(coords)
                         var_string += f" {name}{coord_string}"
             else:
@@ -1113,6 +1126,21 @@ def print_single_expression(
 
 
 def print_single_constraint(model: Any, label: int) -> str:
+    """
+    Print a single linear constraint by its label.
+
+    Parameters
+    ----------
+    model : linopy.Model
+        The model containing the constraint.
+    label : int
+        The label of the constraint to print.
+
+    Returns
+    -------
+    str
+        Formatted string representation of the constraint.
+    """
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -1125,6 +1153,56 @@ def print_single_constraint(model: Any, label: int) -> str:
     sign = SIGNS_pretty[sign]
 
     return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
+
+
+def print_single_quadratic_constraint(model: Any, label: int) -> str:
+    """
+    Print a single quadratic constraint by its label.
+
+    Parameters
+    ----------
+    model : linopy.Model
+        The model containing the constraint.
+    label : int
+        The label of the constraint to print.
+
+    Returns
+    -------
+    str
+        Formatted string representation of the constraint.
+    """
+    qconstraints = model.quadratic_constraints
+    name, coord = qconstraints.get_label_position(label)
+
+    qcon = model.quadratic_constraints[name]
+    quad_coeffs = qcon.quad_coeffs.sel(coord).values  # shape: (qterm, factor)
+    quad_vars = qcon.quad_vars.sel(coord).values  # shape: (qterm, factor)
+    lin_coeffs = qcon.lin_coeffs.sel(coord).values  # shape: (term,)
+    lin_vars = qcon.lin_vars.sel(coord).values  # shape: (term,)
+    sign = qcon.sign.sel(coord).item()
+    rhs = qcon.rhs.sel(coord).item()
+
+    # Combine quadratic and linear terms for print_single_expression
+    # Quadratic terms: coeffs shape (qterm,), vars shape (2, qterm)
+    # Linear terms: coeffs shape (term,), vars shape (term,) -> need to expand to (2, term)
+    n_lterms = len(lin_vars)
+
+    # Stack coefficients
+    coeffs = np.concatenate([quad_coeffs[:, 0], lin_coeffs])
+
+    # Stack vars: quad_vars is (qterm, 2), need (2, qterm); lin_vars needs -1 padding
+    quad_vars_t = quad_vars.T  # shape (2, qterm)
+    lin_vars_expanded = np.stack(
+        [lin_vars, np.full(n_lterms, -1)], axis=0
+    )  # shape (2, term)
+    vars_combined = np.concatenate(
+        [quad_vars_t, lin_vars_expanded], axis=1
+    )  # shape (2, total)
+
+    expr = print_single_expression(coeffs, vars_combined, 0, model)
+    sign_pretty = SIGNS_pretty[sign]
+
+    return f"{name}{print_coord(coord)}: {expr} {sign_pretty} {rhs:.12g}"
 
 
 def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:

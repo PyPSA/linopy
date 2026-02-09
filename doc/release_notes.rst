@@ -4,6 +4,14 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add support for quadratic constraints (QCP/QCQP). Use `model.add_quadratic_constraints()` to add constraints of the form x'Qx + a'x <= b. Supported solvers: Gurobi, MOSEK, COPT. Gurobi also supports nonconvex quadratic constraints.
+* Add MPS export support for models with quadratic constraints (requires Gurobi).
+* Add netCDF serialization support for models with quadratic constraints.
+* Add MOSEK direct API support for quadratic constraints.
+* Add dual values for quadratic constraints (use `QCPDual=1` solver option with Gurobi).
+* Add `model.quadratic_constraints` container for inspecting quadratic constraints.
+* Add `model.matrices` accessor properties for quadratic constraints: `qclabels`, `qc_sense`, `qc_rhs`, `Qc`, `qc_linear`.
+* Fix `expression.shape`to always exclude the _term dimension
 * Fix docs (pick highs solver)
 * Add the `sphinx-copybutton` to the documentation
 * Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.

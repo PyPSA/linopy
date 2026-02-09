@@ -39,6 +39,7 @@ GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
 CONCAT_DIM = "_concat"
+QTERM_DIM = "_qterm"  # Quadratic term dimension for quadratic constraints
 CV_DIM = "_cv"
 HELPER_DIMS: list[str] = [
     TERM_DIM,
@@ -46,6 +47,7 @@ HELPER_DIMS: list[str] = [
     GROUPED_TERM_DIM,
     FACTOR_DIM,
     CONCAT_DIM,
+    QTERM_DIM,
     CV_DIM,
 ]
 
@@ -209,6 +211,7 @@ class Solution:
     primal: pd.Series = field(default_factory=_pd_series_float)
     dual: pd.Series = field(default_factory=_pd_series_float)
     objective: float = field(default=np.nan)
+    qc_dual: pd.Series = field(default_factory=_pd_series_float)
 
 
 @dataclass
@@ -226,8 +229,11 @@ class Result:
             "not available" if self.solver_model is None else "available"
         )
         if self.solution is not None:
+            n_qc_duals = len(self.solution.qc_dual)
+            qc_dual_str = f", {n_qc_duals} qc_duals" if n_qc_duals > 0 else ""
             solution_string = (
-                f"Solution: {len(self.solution.primal)} primals, {len(self.solution.dual)} duals\n"
+                f"Solution: {len(self.solution.primal)} primals, "
+                f"{len(self.solution.dual)} duals{qc_dual_str}\n"
                 f"Objective: {self.solution.objective:.2e}\n"
             )
         else:

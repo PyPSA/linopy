@@ -9,7 +9,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -89,11 +89,10 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     )
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
+    from linopy.common import print_coord as _print_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
-    return coord
+    return _print_coord(coord).translate(coord_sanitizer)
 
 
 def get_printers_scalar(
@@ -207,10 +206,11 @@ def objective_to_file(
     f.write(f"{sense}\n\nobj:\n\n".encode())
     df = m.objective.to_polars()
 
-    if m.is_linear:
+    if m.objective.is_linear:
         objective_write_linear_terms(f, df, print_variable)
 
-    elif m.is_quadratic:
+    else:
+        # Quadratic objective
         linear_terms = df.filter(pl.col("vars1").eq(-1) | pl.col("vars2").eq(-1))
         linear_terms = linear_terms.with_columns(
             pl.when(pl.col("vars1").eq(-1))
@@ -466,6 +466,127 @@ def constraints_to_file(
             # formatted.sink_csv(f,  **kwargs)
 
 
+def quadratic_constraints_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    explicit_coordinate_names: bool = False,
+    write_section_header: bool = True,
+) -> None:
+    """
+    Write out quadratic constraints of a model to an LP file.
+
+    LP format for quadratic constraints (Gurobi/CPLEX style):
+    qc0: 3.1 x + 4.5 y + [ x ^ 2 + 2 x * y + 3 y ^ 2 ] <= 10
+    """
+    if not len(m.quadratic_constraints):
+        return
+
+    # Write "s.t." section header if needed (when there are no linear constraints)
+    if write_section_header and not len(m.constraints):
+        f.write(b"\n\ns.t.\n\n")
+
+    print_variable, _ = get_printers_scalar(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    if progress:
+        logger.info("Writing quadratic constraints.")
+
+    names = list(m.quadratic_constraints)
+    if progress:
+        names = tqdm(
+            names,
+            desc="Writing quadratic constraints.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        qcon = m.quadratic_constraints[name]
+        df = qcon.to_polars()
+
+        if df.height == 0:
+            continue
+
+        # Build label -> (sign, rhs) lookup for multi-dimensional constraints
+        labels_flat = qcon.labels.values.ravel()
+        signs_flat = np.broadcast_to(qcon.sign.values, qcon.labels.shape).ravel()
+        rhs_flat = np.broadcast_to(qcon.rhs.values, qcon.labels.shape).ravel()
+        label_metadata = {
+            int(lab): (str(signs_flat[i]), float(rhs_flat[i]))
+            for i, lab in enumerate(labels_flat)
+            if lab != -1
+        }
+
+        # Get unique labels (constraint indices)
+        labels = df["labels"].unique().to_list()
+
+        for label in labels:
+            label_df = df.filter(pl.col("labels") == label)
+            label_int = int(label)
+            if label_int not in label_metadata:
+                msg = (
+                    f"Label {label_int} from flat representation not found in "
+                    f"constraint metadata for '{name}'. This indicates a mismatch "
+                    "between the flat DataFrame and constraint labels."
+                )
+                raise ValueError(msg)
+            sign, rhs = label_metadata[label_int]
+
+            # Start constraint line with label
+            constraint_name = clean_name(name)
+            if explicit_coordinate_names:
+                label_pos = m.quadratic_constraints.get_label_position(label)
+                if label_pos and label_pos[0] is not None:
+                    con_name, coord = label_pos
+                    assert isinstance(con_name, str)
+                    assert isinstance(coord, dict)
+                    coord_str = print_coord(coord)
+                    constraint_name = f"{clean_name(con_name)}{coord_str}#{label}"
+                else:
+                    constraint_name = f"{constraint_name}#{label}"
+            else:
+                constraint_name = f"qc{label}"
+
+            f.write(f"{constraint_name}:\n".encode())
+
+            # Write linear terms first
+            linear_terms = label_df.filter(~pl.col("is_quadratic"))
+            for row in linear_terms.iter_rows(named=True):
+                coeff = row["coeffs"]
+                var_idx = int(row["vars"])
+                if var_idx >= 0:
+                    var_name = print_variable(var_idx)
+                    sign_char = "+" if coeff >= 0 else ""
+                    f.write(f"{sign_char}{coeff} {var_name}\n".encode())
+
+            # Write quadratic terms in brackets
+            quad_terms = label_df.filter(pl.col("is_quadratic"))
+            if quad_terms.height > 0:
+                f.write(b"+ [\n")
+                for i, row in enumerate(quad_terms.iter_rows(named=True)):
+                    coeff = row["coeffs"]
+                    var1 = int(row["vars1"])
+                    var2 = int(row["vars2"])
+                    var1_name = print_variable(var1)
+                    var2_name = print_variable(var2)
+
+                    sign_char = "+" if coeff >= 0 or i == 0 else ""
+                    if var1 == var2:
+                        # Squared term: x ^ 2
+                        f.write(f"{sign_char}{coeff} {var1_name} ^ 2\n".encode())
+                    else:
+                        # Cross term: x * y
+                        f.write(
+                            f"{sign_char}{coeff} {var1_name} * {var2_name}\n".encode()
+                        )
+                f.write(b"]\n")
+
+            # Write comparison and RHS
+            rhs_sign = "+" if rhs >= 0 else ""
+            f.write(f"{sign} {rhs_sign}{rhs}\n".encode())
+
+
 def to_lp_file(
     m: Model,
     fn: Path,
@@ -485,6 +606,12 @@ def to_lp_file(
             f=f,
             progress=progress,
             slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        quadratic_constraints_to_file(
+            m,
+            f=f,
+            progress=progress,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
@@ -557,15 +684,23 @@ def to_file(
         )
 
     elif io_api == "mps":
-        if "highs" not in solvers.available_solvers:
-            raise RuntimeError(
-                "Package highspy not installed. This is required to exporting to MPS file."
-            )
-
-        # Use very fast highspy implementation
-        # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
-        h.writeModel(str(fn))
+        if m.has_quadratic_constraints:
+            # MPS with quadratic constraints requires Gurobi
+            if "gurobi" not in solvers.available_solvers:
+                raise RuntimeError(
+                    "Package Gurobipy not installed. This is requiredd for MPS export with quadratic constraints. "
+                    "Use LP format instead"
+                )
+            gm = m.to_gurobipy(explicit_coordinate_names=explicit_coordinate_names)
+            gm.write(str(fn))
+        else:
+            # Use fast HiGHS implementation for models without QC
+            if "highs" not in solvers.available_solvers:
+                raise RuntimeError(
+                    "Package highspy not installed. This is required for exporting to MPS file."
+                )
+            h = m.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+            h.writeModel(str(fn))
     else:
         raise ValueError(
             f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
@@ -612,7 +747,12 @@ def to_mosek(
 
     labels = np.vectorize(print_variable)(M.vlabels).astype(object)
     task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+        np.arange(0, len(labels), dtype=np.int32),
+        "%0",
+        [len(labels)],
+        None,
+        [0],
+        list(labels),
     )
 
     ## Variables
@@ -671,7 +811,12 @@ def to_mosek(
         if M.A is not None:
             A = M.A.tocsr()
             task.putarowslice(
-                0, m.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+                0,
+                m.ncons,
+                A.indptr[:-1].astype(np.int64),
+                A.indptr[1:].astype(np.int64),
+                A.indices.astype(np.int32),
+                A.data.astype(np.float64),
             )
             task.putconboundslice(0, m.ncons, bkc, blc, buc)
 
@@ -685,6 +830,65 @@ def to_mosek(
         task.putobjsense(mosek.objsense.maximize)
     else:
         task.putobjsense(mosek.objsense.minimize)
+
+    ## Quadratic Constraints
+    if len(m.quadratic_constraints):
+        # Get the number of quadratic constraints
+        n_qcons = len(M.qclabels)
+
+        # Append quadratic constraints to the task
+        # In MOSEK, quadratic constraints are added to regular constraints
+        # with quadratic terms via putqconk
+        qc_start_idx = m.ncons  # Start after linear constraints
+        task.appendcons(n_qcons)
+
+        # Get matrices for QC
+        Qc_list = M.Qc
+        qc_linear = M.qc_linear
+        qc_sense = M.qc_sense
+        qc_rhs = M.qc_rhs
+
+        for i, label in enumerate(M.qclabels):
+            con_idx = qc_start_idx + i
+
+            # Set constraint name
+            task.putconname(con_idx, f"qc{label}")
+
+            # Set constraint bound based on sense
+            # Note: For boundkey.up, bound_lo is ignored; for boundkey.lo, bound_up is ignored
+            # We use -inf/+inf to match linear constraint handling pattern
+            sense = qc_sense[i]
+            rhs = qc_rhs[i]
+            if sense == "<=":
+                bk = mosek.boundkey.up
+                bound_lo, bound_up = -np.inf, rhs
+            elif sense == ">=":
+                bk = mosek.boundkey.lo
+                bound_lo, bound_up = rhs, np.inf
+            else:  # "="
+                bk = mosek.boundkey.fx
+                bound_lo, bound_up = rhs, rhs
+            task.putconbound(con_idx, bk, bound_lo, bound_up)
+
+            # Add linear terms if any
+            if qc_linear is not None:
+                row = qc_linear.getrow(i).tocoo()
+                if row.nnz > 0:
+                    task.putarow(con_idx, list(row.col), list(row.data))
+
+            # Add quadratic terms
+            # MOSEK expects lower triangular part only
+            Q = Qc_list[i]
+            if Q.nnz > 0:
+                # Get lower triangular part (MOSEK requirement)
+                Q_lower = tril(Q).tocoo()
+                # MOSEK uses 0.5 * x'Qx convention, and our Q matrix is already
+                # built with doubled diagonal terms for this convention.
+                # So we pass Q directly without dividing.
+                task.putqconk(
+                    con_idx, list(Q_lower.row), list(Q_lower.col), list(Q_lower.data)
+                )
+
     return task
 
 
@@ -724,7 +928,7 @@ def to_gurobipy(
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
-    if m.is_quadratic:
+    if not m.objective.is_linear:
         model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
     else:
         model.setObjective(M.c @ x)
@@ -736,6 +940,72 @@ def to_gurobipy(
         names = np.vectorize(print_constraint)(M.clabels).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         c.setAttr("ConstrName", list(names))  # type: ignore
+
+    # Add quadratic constraints
+    if len(m.quadratic_constraints):
+        for name in m.quadratic_constraints:
+            qcon = m.quadratic_constraints[name]
+            df = qcon.to_polars()
+
+            # Build label -> (sign, rhs) lookup for multi-dimensional constraints
+            labels_flat = qcon.labels.values.ravel()
+            signs_flat = np.broadcast_to(qcon.sign.values, qcon.labels.shape).ravel()
+            rhs_flat = np.broadcast_to(qcon.rhs.values, qcon.labels.shape).ravel()
+            label_metadata = {
+                int(lab): (str(signs_flat[i]), float(rhs_flat[i]))
+                for i, lab in enumerate(labels_flat)
+                if lab != -1
+            }
+
+            # Build QuadExpr for each constraint label
+            for label in df["labels"].unique().to_list():
+                label_df = df.filter(pl.col("labels") == label)
+
+                # Build the quadratic expression
+                qexpr = gurobipy.QuadExpr()
+
+                # Add linear terms
+                linear_terms = label_df.filter(~pl.col("is_quadratic"))
+                for row in linear_terms.iter_rows(named=True):
+                    coeff = row["coeffs"]
+                    var_idx = int(row["vars"])
+                    if var_idx >= 0:
+                        qexpr.addTerms(coeff, x[var_idx].item())
+
+                # Add quadratic terms
+                quad_terms = label_df.filter(pl.col("is_quadratic"))
+                for row in quad_terms.iter_rows(named=True):
+                    coeff = row["coeffs"]
+                    var1 = int(row["vars1"])
+                    var2 = int(row["vars2"])
+                    qexpr.addTerms(coeff, x[var1].item(), x[var2].item())
+
+                # Get sign and rhs for this specific label
+                sign, rhs = label_metadata[int(label)]
+
+                # Map sign to gurobipy sense
+                if sign == "<=":
+                    sense = gurobipy.GRB.LESS_EQUAL
+                elif sign == ">=":
+                    sense = gurobipy.GRB.GREATER_EQUAL
+                else:
+                    sense = gurobipy.GRB.EQUAL
+
+                # Determine constraint name
+                if explicit_coordinate_names:
+                    label_pos = m.quadratic_constraints.get_label_position(label)
+                    if label_pos and label_pos[0] is not None:
+                        con_name, coord = label_pos
+                        assert isinstance(con_name, str)
+                        assert isinstance(coord, dict)
+                        coord_str = print_coord(coord)
+                        qc_name = f"{clean_name(con_name)}{coord_str}#{label}"
+                    else:
+                        qc_name = f"{clean_name(name)}#{label}"
+                else:
+                    qc_name = f"qc{label}"
+
+                model.addQConstr(qexpr, sense, rhs, name=qc_name)
 
     if m.variables.sos:
         for var_name in m.variables.sos:
@@ -785,6 +1055,12 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         )
 
     import highspy
+
+    if m.has_quadratic_constraints:
+        raise ValueError(
+            "HiGHS does not support quadratic constraints. "
+            "Use a solver that supports QCP: gurobi, cplex, mosek, xpress, copt, scip."
+        )
 
     print_variable, print_constraint = get_printers_scalar(
         m, explicit_coordinate_names=explicit_coordinate_names
@@ -1063,6 +1339,10 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(con.data, f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
+    qcons = [
+        with_prefix(qcon.data, f"quadratic_constraints-{name}")
+        for name, qcon in m.quadratic_constraints.items()
+    ]
     objective = m.objective.data
     objective = objective.assign_attrs(sense=m.objective.sense)
     if m.objective.value is not None:
@@ -1071,7 +1351,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     params = [with_prefix(m.parameters, "parameters")]
 
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
-    ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
+    ds = xr.merge(vars + cons + qcons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
     ds.attrs = non_bool_dict(ds.attrs)
 
@@ -1096,6 +1376,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     -------
     m : linopy.Model
     """
+    from linopy.constraints import QuadraticConstraint, QuadraticConstraints
     from linopy.model import (
         Constraint,
         Constraints,
@@ -1148,13 +1429,23 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     m._variables = Variables(variables, m)
 
-    cons = [str(k) for k in ds if str(k).startswith("constraints")]
+    cons = [str(k) for k in ds if str(k).startswith("constraints-")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
         constraints[name] = Constraint(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
+
+    qcons = [str(k) for k in ds if str(k).startswith("quadratic_constraints-")]
+    qcon_names = list({str(k).rsplit("-", 1)[0] for k in qcons})
+    quadratic_constraints = {}
+    for k in sorted(qcon_names):
+        name = remove_prefix(k, "quadratic_constraints")
+        quadratic_constraints[name] = QuadraticConstraint(
+            get_prefix(ds, k), m, name, skip_broadcast=True
+        )
+    m._quadratic_constraints = QuadraticConstraints(quadratic_constraints, m)
 
     objective = get_prefix(ds, "objective")
     m.objective = Objective(

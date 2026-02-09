@@ -345,8 +345,10 @@ def test_matrices_matrix_mixed_linear_and_quadratic(
 
 
 def test_quadratic_to_constraint(x: Variable, y: Variable) -> None:
-    with pytest.raises(NotImplementedError):
-        x * y <= 10
+    from linopy.constraints import QuadraticConstraint
+
+    con = x * y <= 10
+    assert isinstance(con, QuadraticConstraint)
 
 
 def test_power_of_three(x: Variable) -> None:
@@ -360,3 +362,165 @@ def test_power_of_three(x: Variable) -> None:
         x**3
     with pytest.raises(TypeError):
         (x * x) * (x * x)
+
+
+class TestQuadraticExpressionOperations:
+    """Tests for QuadraticExpression groupby, rolling, and cumsum operations."""
+
+    def test_quadratic_expression_cumsum(self) -> None:
+        """Test cumsum returns QuadraticExpression."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(5)], name="x")
+        y = m.add_variables(lower=0, coords=[range(5)], name="y")
+
+        qexpr = x * x + y * y
+
+        # Test cumsum
+        result = qexpr.cumsum()
+        assert isinstance(result, QuadraticExpression)
+        # Cumsum should preserve shape
+        assert result.shape == qexpr.shape
+
+    def test_quadratic_expression_cumsum_with_dim(self) -> None:
+        """Test cumsum with specific dimension."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3), range(4)], name="x")
+
+        qexpr = x * x
+
+        # Test cumsum along first dimension
+        result = qexpr.cumsum(dim="dim_0")
+        assert isinstance(result, QuadraticExpression)
+        assert result.shape == qexpr.shape
+
+    def test_quadratic_expression_groupby_sum(self) -> None:
+        """Test groupby().sum() returns QuadraticExpression."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(6)], name="x")
+        y = m.add_variables(lower=0, coords=[range(6)], name="y")
+
+        qexpr = x * x + y * y
+
+        # Create a grouping - index name must match dimension name
+        index = pd.Index(range(6), name="dim_0")
+        groups = pd.Series([0, 0, 1, 1, 2, 2], index=index, name="group")
+
+        # Test groupby sum
+        result = qexpr.groupby(groups).sum()
+        assert isinstance(result, QuadraticExpression)
+        # Should have 3 groups
+        assert result.shape == (3,)
+
+    def test_quadratic_expression_rolling_sum(self) -> None:
+        """Test rolling().sum() returns QuadraticExpression."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(5)], name="x")
+        y = m.add_variables(lower=0, coords=[range(5)], name="y")
+
+        qexpr = x * x + y * y
+
+        # Test rolling sum with window of 2
+        result = qexpr.rolling(dim_0=2).sum()
+        assert isinstance(result, QuadraticExpression)
+        # Rolling preserves shape
+        assert result.shape == qexpr.shape
+
+    def test_quadratic_expression_rolling_different_window(self) -> None:
+        """Test rolling with different window sizes."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(10)], name="x")
+
+        qexpr = x * x
+
+        # Test with window of 3
+        result = qexpr.rolling(dim_0=3).sum()
+        assert isinstance(result, QuadraticExpression)
+        assert result.shape == (10,)
+
+    def test_quadratic_expression_groupby_with_dataarray(self) -> None:
+        """Test groupby with DataArray group."""
+        import xarray as xr
+
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(6)], name="x")
+
+        qexpr = x * x
+
+        # Create a DataArray for grouping
+        groups = xr.DataArray([0, 0, 1, 1, 2, 2], dims=["dim_0"], name="group")
+
+        result = qexpr.groupby(groups).sum()
+        assert isinstance(result, QuadraticExpression)
+        assert result.shape == (3,)
+
+    def test_quadratic_expression_shape_property(self) -> None:
+        """Test shape property for QuadraticExpression."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(3), range(4)], name="x")
+        y = m.add_variables(lower=0, coords=[range(3), range(4)], name="y")
+
+        qexpr = x * x + y * y
+
+        # Shape should exclude TERM_DIM and FACTOR_DIM
+        assert qexpr.shape == (3, 4)
+
+    def test_quadratic_expression_cumsum_preserves_model(self) -> None:
+        """Test that cumsum preserves the model reference."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(5)], name="x")
+
+        qexpr = x * x
+        result = qexpr.cumsum()
+
+        assert result.model is m
+
+    def test_quadratic_expression_groupby_preserves_model(self) -> None:
+        """Test that groupby().sum() preserves the model reference."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(6)], name="x")
+
+        qexpr = x * x
+        index = pd.Index(range(6), name="dim_0")
+        groups = pd.Series([0, 0, 1, 1, 2, 2], index=index, name="group")
+
+        result = qexpr.groupby(groups).sum()
+        assert result.model is m
+
+    def test_quadratic_expression_rolling_preserves_model(self) -> None:
+        """Test that rolling().sum() preserves the model reference."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(5)], name="x")
+
+        qexpr = x * x
+        result = qexpr.rolling(dim_0=2).sum()
+
+        assert result.model is m
+
+    def test_quadratic_expression_cross_product_cumsum(self) -> None:
+        """Test cumsum with cross product terms."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(4)], name="x")
+        y = m.add_variables(lower=0, coords=[range(4)], name="y")
+
+        # Cross product creates off-diagonal terms
+        qexpr = x * y
+
+        result = qexpr.cumsum()
+        assert isinstance(result, QuadraticExpression)
+        assert result.shape == (4,)
+
+    def test_quadratic_expression_mixed_terms_groupby(self) -> None:
+        """Test groupby with both quadratic and linear terms."""
+        m = Model()
+        x = m.add_variables(lower=0, coords=[range(6)], name="x")
+        y = m.add_variables(lower=0, coords=[range(6)], name="y")
+
+        # Mixed quadratic and linear terms
+        qexpr = x * x + 2 * x + y
+
+        index = pd.Index(range(6), name="dim_0")
+        groups = pd.Series([0, 0, 1, 1, 2, 2], index=index, name="group")
+        result = qexpr.groupby(groups).sum()
+
+        assert isinstance(result, QuadraticExpression)
+        assert result.shape == (3,)
