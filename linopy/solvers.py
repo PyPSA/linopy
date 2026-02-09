@@ -131,11 +131,7 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
 with contextlib.suppress(ModuleNotFoundError):
     import gurobipy
 
-    try:
-        with contextlib.closing(gurobipy.Env()):
-            available_solvers.append("gurobi")
-    except gurobipy.GurobiError:
-        pass
+    available_solvers.append("gurobi")
 with contextlib.suppress(ModuleNotFoundError):
     _new_highspy_mps_layout = None
     import highspy

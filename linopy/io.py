@@ -57,6 +57,41 @@ def clean_name(name: str) -> str:
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
 
 
+def _format_and_write(
+    df: pl.DataFrame, columns: list[pl.Expr], f: BufferedWriter
+) -> None:
+    """
+    Format columns via concat_str and write to file.
+
+    Uses Polars streaming engine for better memory efficiency.
+    """
+    df.lazy().select(pl.concat_str(columns, ignore_nulls=True)).collect(
+        engine="streaming"
+    ).write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
+
+
+def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
+    """
+    Return polars expressions for a signed number string, handling -0.0 correctly.
+
+    Parameters
+    ----------
+    expr : pl.Expr
+        Numeric value
+
+    Returns
+    -------
+    tuple[pl.Expr, pl.Expr]
+        value_string with sign
+    """
+    return (
+        pl.when(expr >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
+        pl.when(expr == 0).then(pl.lit("0.0")).otherwise(expr.cast(pl.String)),
+    )
+
+
 def print_coord(coord: str) -> str:
     from linopy.common import print_coord
 
@@ -135,31 +170,23 @@ def objective_write_linear_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").cast(pl.String),
+        *signed_number(pl.col("coeffs")),
         *print_variable(pl.col("vars")),
     ]
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
 
 
 def objective_write_quadratic_terms(
     f: BufferedWriter, df: pl.DataFrame, print_variable: Callable
 ) -> None:
     cols = [
-        pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-        pl.col("coeffs").mul(2).cast(pl.String),
+        *signed_number(pl.col("coeffs").mul(2)),
         *print_variable(pl.col("vars1")),
         pl.lit(" *"),
         *print_variable(pl.col("vars2")),
     ]
     f.write(b"+ [\n")
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
     f.write(b"] / 2\n")
 
 
@@ -262,20 +289,14 @@ def bounds_to_file(
                 )
 
             columns = [
-                pl.when(pl.col("lower") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("lower").cast(pl.String),
+                *signed_number(pl.col("lower")),
                 pl.lit(" <= "),
                 *print_variable(pl.col("labels")),
                 pl.lit(" <= "),
-                pl.when(pl.col("upper") >= 0).then(pl.lit("+")).otherwise(pl.lit("")),
-                pl.col("upper").cast(pl.String),
+                *signed_number(pl.col("upper")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def binaries_to_file(
@@ -313,11 +334,7 @@ def binaries_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def integers_to_file(
@@ -356,11 +373,7 @@ def integers_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def sos_to_file(
@@ -416,11 +429,7 @@ def sos_to_file(
                 pl.col("var_weights"),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def constraints_to_file(
@@ -489,59 +498,32 @@ def constraints_to_file(
             if df.height == 0:
                 continue
 
-            # Ensure each constraint has both coefficient and RHS terms
-            analysis = df.group_by("labels").agg(
-                [
-                    pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
-                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
-                ]
-            )
-
-            valid = analysis.filter(
-                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
-            )
-
-            if valid.height == 0:
-                continue
-
-            # Keep only constraints that have both parts
-            df = df.join(valid.select("labels"), on="labels", how="inner")
-
             # Sort by labels and mark first/last occurrences
             df = df.sort("labels").with_columns(
                 [
-                    pl.when(pl.col("labels").is_first_distinct())
-                    .then(pl.col("labels"))
-                    .otherwise(pl.lit(None))
-                    .alias("labels_first"),
+                    pl.col("labels").is_first_distinct().alias("is_first_in_group"),
                     (pl.col("labels") != pl.col("labels").shift(-1))
                     .fill_null(True)
                     .alias("is_last_in_group"),
                 ]
             )
 
-            row_labels = print_constraint(pl.col("labels_first"))
+            row_labels = print_constraint(pl.col("labels"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[0]),
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[1]),
-                pl.when(pl.col("labels_first").is_not_null())
-                .then(pl.lit(":\n"))
-                .alias(":"),
-                pl.when(pl.col("coeffs") >= 0).then(pl.lit("+")),
-                pl.col("coeffs").cast(pl.String),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[0]),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[1]),
+                pl.when(pl.col("is_first_in_group")).then(pl.lit(":\n")).alias(":"),
+                *signed_number(pl.col("coeffs")),
+                col_labels[0],
+                col_labels[1],
+                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
                 pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
             # in the future, we could use lazy dataframes when they support appending
             # tp existent files
