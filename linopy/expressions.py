@@ -60,6 +60,7 @@ from linopy.common import (
     has_optimized_model,
     is_constant,
     iterate_slices,
+    maybe_group_terms_polars,
     print_coord,
     print_single_expression,
     to_dataframe,
@@ -1499,7 +1500,7 @@ class LinearExpression(BaseExpression):
 
         df = to_polars(self.data)
         df = filter_nulls_polars(df)
-        df = group_terms_polars(df)
+        df = maybe_group_terms_polars(df)
         check_has_nulls_polars(df, name=self.type)
         return df
 

@@ -12,10 +12,8 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-
-Upcoming Version
-----------------
-
+* Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
+* Speed up LP file writing by 2-2.7x on large models through Polars streaming engine, join-based constraint assembly, and reduced per-constraint overhead
 * Fix multiplication of constant-only ``LinearExpression`` with other expressions
 
 Version 0.6.1
