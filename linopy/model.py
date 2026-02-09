@@ -699,6 +699,16 @@ class Model:
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
 
+        rhs_nan = data.rhs.isnull()
+        if rhs_nan.any():
+            data["rhs"] = data.rhs.fillna(0)
+            rhs_mask = ~rhs_nan
+            mask = (
+                rhs_mask
+                if mask is None
+                else (as_dataarray(mask).astype(bool) & rhs_mask)
+            )
+
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 

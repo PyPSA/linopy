@@ -532,13 +532,29 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const
         return res
 
+    def _add_constant(
+        self: GenericExpression, other: ConstantLike
+    ) -> GenericExpression:
+        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = da.reindex_like(self.const, fill_value=0)
+        return self.assign(const=self.const + da)
+
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike
     ) -> GenericExpression:
         multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        multiplier = multiplier.reindex_like(self.const, fill_value=0)
         coeffs = self.coeffs * multiplier
-        assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
         const = self.const * multiplier
+        return self.assign(coeffs=coeffs, const=const)
+
+    def _divide_by_constant(
+        self: GenericExpression, other: ConstantLike
+    ) -> GenericExpression:
+        divisor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        divisor = divisor.reindex_like(self.const, fill_value=1)
+        coeffs = self.coeffs / divisor
+        const = self.const / divisor
         return self.assign(coeffs=coeffs, const=const)
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
@@ -556,7 +572,7 @@ class BaseExpression(ABC):
                     f"{type(self)} and {type(other)}"
                     "Non-linear expressions are not yet supported."
                 )
-            return self._multiply_by_constant(other=1 / other)
+            return self._divide_by_constant(other)
         except TypeError:
             return NotImplemented
 
@@ -862,7 +878,10 @@ class BaseExpression(ABC):
         sign : str, array-like
             Sign(s) of the constraints.
         rhs : constant, Variable, LinearExpression
-            Right-hand side of the constraint.
+            Right-hand side of the constraint. If a DataArray, it is
+            reindexed to match expression coordinates (fill_value=np.nan).
+            Extra dimensions in the RHS not present in the expression
+            raise a ValueError. NaN entries in the RHS mean "no constraint".
 
         Returns
         -------
@@ -874,6 +893,15 @@ class BaseExpression(ABC):
             raise ValueError(
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
+
+        if isinstance(rhs, DataArray):
+            extra_dims = set(rhs.dims) - set(self.coord_dims)
+            if extra_dims:
+                raise ValueError(
+                    f"RHS DataArray has dimensions {extra_dims} not present "
+                    f"in the expression. Cannot create constraint."
+                )
+            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
 
         all_to_lhs = (self - rhs).data
         data = assign_multiindex_safe(
@@ -1313,9 +1341,11 @@ class LinearExpression(BaseExpression):
         try:
             if np.isscalar(other):
                 return self.assign(const=self.const + other)
-
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
-            return merge([self, other], cls=self.__class__)
+            elif isinstance(other, SUPPORTED_CONSTANT_TYPES):
+                return self._add_constant(other)
+            else:
+                other = as_expression(other, model=self.model, dims=self.coord_dims)
+                return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
 
@@ -1853,13 +1883,15 @@ class QuadraticExpression(BaseExpression):
         try:
             if np.isscalar(other):
                 return self.assign(const=self.const + other)
+            elif isinstance(other, SUPPORTED_CONSTANT_TYPES):
+                return self._add_constant(other)
+            else:
+                other = as_expression(other, model=self.model, dims=self.coord_dims)
 
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
+                if isinstance(other, LinearExpression):
+                    other = other.to_quadexpr()
 
-            if isinstance(other, LinearExpression):
-                other = other.to_quadexpr()
-
-            return merge([self, other], cls=self.__class__)
+                return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
 
@@ -1877,13 +1909,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const - other)
-
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
-            if type(other) is LinearExpression:
-                other = other.to_quadexpr()
-            return merge([self, -other], cls=self.__class__)
+            return self.__add__(-other)
         except TypeError:
             return NotImplemented
 

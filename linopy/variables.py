@@ -315,6 +315,7 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -454,7 +455,7 @@ class Variable:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self.to_linexpr(1 / other)
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
         self, coefficient: float | int | LinearExpression | Variable

@@ -1,37 +1,45 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partialmethod, update_wrapper
-from types import NotImplementedType
+from functools import update_wrapper
 from typing import Any
 
 from xarray import DataArray
 
 from linopy import expressions, variables
 
-
-def monkey_patch(cls: type[DataArray], pass_unpatched_method: bool = False) -> Callable:
-    def deco(func: Callable) -> Callable:
-        func_name = func.__name__
-        wrapped = getattr(cls, func_name)
-        update_wrapper(func, wrapped)
-        if pass_unpatched_method:
-            func = partialmethod(func, unpatched_method=wrapped)  # type: ignore
-        setattr(cls, func_name, func)
-        return func
-
-    return deco
+_LINOPY_TYPES = (
+    variables.Variable,
+    variables.ScalarVariable,
+    expressions.LinearExpression,
+    expressions.ScalarLinearExpression,
+    expressions.QuadraticExpression,
+)
 
 
-@monkey_patch(DataArray, pass_unpatched_method=True)
-def __mul__(
-    da: DataArray, other: Any, unpatched_method: Callable
-) -> DataArray | NotImplementedType:
-    if isinstance(
-        other,
-        variables.Variable
-        | expressions.LinearExpression
-        | expressions.QuadraticExpression,
-    ):
-        return NotImplemented
-    return unpatched_method(da, other)
+def _make_patched_op(op_name: str) -> None:
+    """Patch a DataArray operator to return NotImplemented for linopy types, enabling reflected operators."""
+    original = getattr(DataArray, op_name)
+
+    def patched(
+        da: DataArray, other: Any, unpatched_method: Callable = original
+    ) -> Any:
+        if isinstance(other, _LINOPY_TYPES):
+            return NotImplemented
+        return unpatched_method(da, other)
+
+    update_wrapper(patched, original)
+    setattr(DataArray, op_name, patched)
+
+
+for _op in (
+    "__mul__",
+    "__add__",
+    "__sub__",
+    "__truediv__",
+    "__le__",
+    "__ge__",
+    "__eq__",
+):
+    _make_patched_op(_op)
+del _op
