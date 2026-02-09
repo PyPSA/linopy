@@ -697,7 +697,7 @@ class TestIncrementalFormulation:
         breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
 
         with pytest.raises(ValueError, match="method must be"):
-            m.add_piecewise_constraints(x, breakpoints, dim="bp", method="invalid")
+            m.add_piecewise_constraints(x, breakpoints, dim="bp", method="invalid")  # type: ignore[arg-type]
 
     def test_incremental_with_coords(self) -> None:
         """Test incremental formulation with extra coordinates."""
