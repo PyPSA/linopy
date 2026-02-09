@@ -824,6 +824,56 @@ class TestDisjunctiveBasicSingleVariable:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
 
+    def test_single_variable_with_coords(self) -> None:
+        """Test coordinates are preserved on binary and lambda variables."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+
+        breakpoints = xr.DataArray(
+            [
+                [[0, 10], [50, 100]],
+                [[0, 20], [60, 90]],
+            ],
+            dims=["generator", "segment", "breakpoint"],
+            coords={
+                "generator": generators,
+                "segment": [0, 1],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+
+        # Both should preserve generator coordinates
+        assert list(binary_var.coords["generator"].values) == ["gen1", "gen2"]
+        assert list(lambda_var.coords["generator"].values) == ["gen1", "gen2"]
+
+        # Binary has (generator, segment), lambda has (generator, segment, breakpoint)
+        assert set(binary_var.dims) == {"generator", "segment"}
+        assert set(lambda_var.dims) == {"generator", "segment", "breakpoint"}
+
+    def test_return_value_is_selection_constraint(self) -> None:
+        """Test the return value is the selection constraint."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        result = m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        # Return value should be the selection constraint
+        assert result is not None
+        select_name = f"pwl0{PWL_SELECT_SUFFIX}"
+        assert select_name in m.constraints
+
 
 class TestDisjunctiveDictOfVariables:
     """Tests for dict of variables with disjunctive constraints."""
@@ -910,6 +960,178 @@ class TestDisjunctiveExtraDimensions:
         assert "segment" in binary_var.dims
         assert "segment" in lambda_var.dims
 
+    def test_multi_dimensional_generator_time(self) -> None:
+        """Test variable with generator + time coords, verify all dims present."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        timesteps = pd.Index([0, 1, 2], name="time")
+        x = m.add_variables(coords=[generators, timesteps], name="x")
+
+        rng = np.random.default_rng(42)
+        bp_data = rng.random((2, 3, 2, 2)) * 100
+        # Sort breakpoints within each segment
+        bp_data = np.sort(bp_data, axis=-1)
+
+        breakpoints = xr.DataArray(
+            bp_data,
+            dims=["generator", "time", "segment", "breakpoint"],
+            coords={
+                "generator": generators,
+                "time": timesteps,
+                "segment": [0, 1],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+
+        # All extra dims should be present
+        for dim_name in ["generator", "time", "segment"]:
+            assert dim_name in binary_var.dims
+        for dim_name in ["generator", "time", "segment", "breakpoint"]:
+            assert dim_name in lambda_var.dims
+
+    def test_dict_with_additional_coords(self) -> None:
+        """Test dict of variables with extra generator dim, binary/lambda exclude link_dim."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        power = m.add_variables(coords=[generators], name="power")
+        cost = m.add_variables(coords=[generators], name="cost")
+
+        breakpoints = xr.DataArray(
+            [
+                [[[0, 50], [0, 10]], [[80, 100], [20, 30]]],
+                [[[0, 40], [0, 8]], [[70, 90], [15, 25]]],
+            ],
+            dims=["generator", "segment", "var", "breakpoint"],
+            coords={
+                "generator": generators,
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+        )
+
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+
+        # link_dim (var) should NOT be in binary or lambda dims
+        assert "var" not in binary_var.dims
+        assert "var" not in lambda_var.dims
+
+        # generator should be present
+        assert "generator" in binary_var.dims
+        assert "generator" in lambda_var.dims
+
+
+class TestDisjunctiveMasking:
+    """Tests for masking functionality in disjunctive constraints."""
+
+    def test_nan_masking_labels(self) -> None:
+        """Test NaN breakpoints mask lambda labels to -1."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 5, 10], [50, 100, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        # Segment 0: all 3 breakpoints valid (labels != -1)
+        seg0_labels = lambda_var.labels.sel(segment=0)
+        assert (seg0_labels != -1).all()
+        # Segment 1: breakpoint 2 is NaN → masked (label == -1)
+        seg1_bp2_label = lambda_var.labels.sel(segment=1, breakpoint=2)
+        assert int(seg1_bp2_label) == -1
+
+        # Binary: both segments have at least one valid breakpoint
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        assert (binary_var.labels != -1).all()
+
+    def test_nan_masking_partial_segment(self) -> None:
+        """Test partial NaN — lambda masked but segment binary still valid."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Segment 0 has 3 valid breakpoints, segment 1 has 2 valid + 1 NaN
+        breakpoints = xr.DataArray(
+            [[0, 5, 10], [50, 100, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+
+        # Segment 1 binary is still valid (has 2 valid breakpoints)
+        assert int(binary_var.labels.sel(segment=1)) != -1
+
+        # Segment 1 valid lambdas (breakpoint 0, 1) should be valid
+        assert int(lambda_var.labels.sel(segment=1, breakpoint=0)) != -1
+        assert int(lambda_var.labels.sel(segment=1, breakpoint=1)) != -1
+
+    def test_explicit_mask(self) -> None:
+        """Test user-provided mask disables specific entries."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        # Mask out entire segment 1
+        mask = xr.DataArray(
+            [[True, True], [False, False]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints, mask=mask)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+
+        # Segment 0 lambdas should be valid
+        assert (lambda_var.labels.sel(segment=0) != -1).all()
+        # Segment 1 lambdas should be masked
+        assert (lambda_var.labels.sel(segment=1) == -1).all()
+        # Segment 1 binary should be masked (no valid breakpoints)
+        assert int(binary_var.labels.sel(segment=1)) == -1
+
+    def test_skip_nan_check(self) -> None:
+        """Test skip_nan_check=True treats all breakpoints as valid."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 5, 10], [50, 100, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints, skip_nan_check=True)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        # All labels should be valid (no masking)
+        assert (lambda_var.labels != -1).all()
+
 
 class TestDisjunctiveValidationErrors:
     """Tests for validation errors in disjunctive constraints."""
@@ -987,6 +1209,66 @@ class TestDisjunctiveValidationErrors:
         ):
             m.add_disjunctive_piecewise_constraints("invalid", breakpoints)  # type: ignore
 
+    def test_expression_support(self) -> None:
+        """Test that LinearExpression (x + y) works as input."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x + y, breakpoints)
+
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_link_dim_not_in_breakpoints(self) -> None:
+        """Test error when explicit link_dim not in breakpoints."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[0, 50], [80, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        with pytest.raises(ValueError, match="not found in breakpoints dimensions"):
+            m.add_disjunctive_piecewise_constraints(
+                {"power": power, "cost": cost},
+                breakpoints,
+                link_dim="var",
+            )
+
+    def test_link_dim_coords_mismatch(self) -> None:
+        """Test error when link_dim coords don't match dict keys."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[[0, 50], [0, 10]], [[80, 100], [20, 30]]],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["wrong1", "wrong2"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        with pytest.raises(ValueError, match="don't match expression keys"):
+            m.add_disjunctive_piecewise_constraints(
+                {"power": power, "cost": cost},
+                breakpoints,
+                link_dim="var",
+            )
+
 
 class TestDisjunctiveNameGeneration:
     """Tests for name generation in disjunctive constraints."""
@@ -1060,14 +1342,95 @@ class TestDisjunctiveLPFileOutput:
         assert "binary" in content.lower() or "binaries" in content.lower()
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+class TestDisjunctiveMultiBreakpointSegments:
+    """Tests for segments with multiple breakpoints (unique to disjunctive formulation)."""
+
+    def test_three_breakpoints_per_segment(self) -> None:
+        """Test segments with 3 breakpoints each — verify lambda shape."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # 2 segments, each with 3 breakpoints
+        breakpoints = xr.DataArray(
+            [[0, 5, 10], [50, 75, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        # Lambda should have shape (2 segments, 3 breakpoints)
+        assert lambda_var.labels.sizes["segment"] == 2
+        assert lambda_var.labels.sizes["breakpoint"] == 3
+        # All labels valid (no NaN)
+        assert (lambda_var.labels != -1).all()
+
+    def test_mixed_segment_lengths_nan_padding(self) -> None:
+        """Test one segment with 4 breakpoints, another with 2 (NaN-padded)."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Segment 0: 4 valid breakpoints
+        # Segment 1: 2 valid breakpoints + 2 NaN
+        breakpoints = xr.DataArray(
+            [[0, 5, 10, 15], [50, 100, np.nan, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2, 3]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+
+        # Lambda shape: (2 segments, 4 breakpoints)
+        assert lambda_var.labels.sizes["segment"] == 2
+        assert lambda_var.labels.sizes["breakpoint"] == 4
+
+        # Segment 0: all 4 lambdas valid
+        assert (lambda_var.labels.sel(segment=0) != -1).all()
+
+        # Segment 1: first 2 valid, last 2 masked
+        assert (lambda_var.labels.sel(segment=1, breakpoint=0) != -1).item()
+        assert (lambda_var.labels.sel(segment=1, breakpoint=1) != -1).item()
+        assert (lambda_var.labels.sel(segment=1, breakpoint=2) == -1).item()
+        assert (lambda_var.labels.sel(segment=1, breakpoint=3) == -1).item()
+
+        # Both segment binaries valid (both have at least one valid breakpoint)
+        assert (binary_var.labels != -1).all()
+
+
+_disjunctive_solvers = [s for s in ["gurobi", "highs"] if s in available_solvers]
+
+
+@pytest.mark.skipif(
+    len(_disjunctive_solvers) == 0,
+    reason="No supported solver (gurobi/highs) installed",
+)
 class TestDisjunctiveSolverIntegration:
-    """Integration tests for disjunctive piecewise constraints with Gurobi."""
+    """Integration tests for disjunctive piecewise constraints."""
 
-    def test_minimize_picks_low_segment(self) -> None:
+    @pytest.fixture(params=_disjunctive_solvers)
+    def solver_name(self, request: pytest.FixtureRequest) -> str:
+        return request.param
+
+    def _solve(self, m: Model, solver_name: str) -> tuple:
+        """Solve model, skipping if solver environment is unavailable."""
+        try:
+            if solver_name == "gurobi":
+                gurobipy = pytest.importorskip("gurobipy")
+                try:
+                    return m.solve(solver_name="gurobi", io_api="direct")
+                except gurobipy.GurobiError as exc:
+                    pytest.skip(f"Gurobi environment unavailable: {exc}")
+            else:
+                return m.solve(solver_name=solver_name)
+        except Exception as exc:
+            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
+
+    def test_minimize_picks_low_segment(self, solver_name: str) -> None:
         """Test minimizing x picks the lower segment."""
-        gurobipy = pytest.importorskip("gurobipy")
-
         m = Model()
         x = m.add_variables(name="x")
 
@@ -1081,19 +1444,14 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         m.add_objective(x)
 
-        try:
-            status, cond = m.solve(solver_name="gurobi", io_api="direct")
-        except gurobipy.GurobiError as exc:
-            pytest.skip(f"Gurobi environment unavailable: {exc}")
+        status, cond = self._solve(m, solver_name)
 
         assert status == "ok"
         # Should pick x=0 (minimum of low segment)
         assert np.isclose(x.solution.values, 0.0, atol=1e-5)
 
-    def test_maximize_picks_high_segment(self) -> None:
+    def test_maximize_picks_high_segment(self, solver_name: str) -> None:
         """Test maximizing x picks the upper segment."""
-        gurobipy = pytest.importorskip("gurobipy")
-
         m = Model()
         x = m.add_variables(name="x")
 
@@ -1107,19 +1465,14 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         m.add_objective(x, sense="max")
 
-        try:
-            status, cond = m.solve(solver_name="gurobi", io_api="direct")
-        except gurobipy.GurobiError as exc:
-            pytest.skip(f"Gurobi environment unavailable: {exc}")
+        status, cond = self._solve(m, solver_name)
 
         assert status == "ok"
         # Should pick x=100 (maximum of high segment)
         assert np.isclose(x.solution.values, 100.0, atol=1e-5)
 
-    def test_dict_case_solver(self) -> None:
+    def test_dict_case_solver(self, solver_name: str) -> None:
         """Test disjunctive with dict of variables and solver."""
-        gurobipy = pytest.importorskip("gurobipy")
-
         m = Model()
         power = m.add_variables(name="power")
         cost = m.add_variables(name="cost")
@@ -1146,12 +1499,135 @@ class TestDisjunctiveSolverIntegration:
         # Minimize cost
         m.add_objective(cost)
 
-        try:
-            status, cond = m.solve(solver_name="gurobi", io_api="direct")
-        except gurobipy.GurobiError as exc:
-            pytest.skip(f"Gurobi environment unavailable: {exc}")
+        status, cond = self._solve(m, solver_name)
 
         assert status == "ok"
         # Should pick region 0, minimum cost = 0
         assert np.isclose(cost.solution.values, 0.0, atol=1e-5)
         assert np.isclose(power.solution.values, 0.0, atol=1e-5)
+
+    def test_three_segments_min(self, solver_name: str) -> None:
+        """Test 3 segments, minimize picks lowest."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Three segments: [0, 10], [30, 50], [80, 100]
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [30.0, 50.0], [80.0, 100.0]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1, 2], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        m.add_objective(x)
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        assert np.isclose(x.solution.values, 0.0, atol=1e-5)
+
+    def test_constrained_mid_segment(self, solver_name: str) -> None:
+        """Test constraint forcing x into middle of a segment, verify interpolation."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Two segments: [0, 10] and [50, 100]
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [50.0, 100.0]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        # Force x >= 60, so must be in segment 1
+        m.add_constraints(x >= 60, name="x_lower")
+        m.add_objective(x)
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        # Minimum in segment 1 with x >= 60 → x = 60
+        assert np.isclose(x.solution.values, 60.0, atol=1e-5)
+
+    def test_multi_breakpoint_segment_solver(self, solver_name: str) -> None:
+        """Test segment with 3 breakpoints, verify correct interpolated value."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        # Both segments have 3 breakpoints (no NaN padding needed)
+        # Segment 0: 3-breakpoint curve (power [0,50,100], cost [0,10,50])
+        # Segment 1: 3-breakpoint curve (power [200,250,300], cost [80,90,100])
+        breakpoints = xr.DataArray(
+            [
+                [[0.0, 50.0, 100.0], [0.0, 10.0, 50.0]],
+                [[200.0, 250.0, 300.0], [80.0, 90.0, 100.0]],
+            ],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1, 2],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+        )
+
+        # Constraint: power >= 50, minimize cost → picks segment 0, power=50, cost=10
+        m.add_constraints(power >= 50, name="power_min")
+        m.add_constraints(power <= 150, name="power_max")
+        m.add_objective(cost)
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        assert np.isclose(power.solution.values, 50.0, atol=1e-5)
+        assert np.isclose(cost.solution.values, 10.0, atol=1e-5)
+
+    def test_multi_generator_solver(self, solver_name: str) -> None:
+        """Test multiple generators with different disjunctive segments."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        power = m.add_variables(lower=0, coords=[generators], name="power")
+        cost = m.add_variables(coords=[generators], name="cost")
+
+        # gen1: two operating regions
+        #   Region 0: power [0,50], cost [0,15]
+        #   Region 1: power [80,100], cost [30,50]
+        # gen2: two operating regions
+        #   Region 0: power [0,60], cost [0,10]
+        #   Region 1: power [70,100], cost [12,40]
+        breakpoints = xr.DataArray(
+            [
+                [[[0.0, 50.0], [0.0, 15.0]], [[80.0, 100.0], [30.0, 50.0]]],
+                [[[0.0, 60.0], [0.0, 10.0]], [[70.0, 100.0], [12.0, 40.0]]],
+            ],
+            dims=["generator", "segment", "var", "breakpoint"],
+            coords={
+                "generator": generators,
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+        )
+
+        # Total power demand >= 100
+        m.add_constraints(power.sum() >= 100, name="demand")
+        m.add_objective(cost.sum())
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        total_power = power.solution.sum().values
+        assert total_power >= 100 - 1e-5
