@@ -449,6 +449,25 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Group terms only if there are duplicate (labels, vars) pairs.
+
+    This avoids the expensive group_by operation when terms already
+    reference distinct variables (e.g. ``x - y`` has ``_term=2`` but
+    no duplicates). When skipping, columns are reordered to match the
+    output of ``group_terms_polars``.
+    """
+    varcols = [c for c in df.columns if c.startswith("vars")]
+    keys = [c for c in ["labels"] + varcols if c in df.columns]
+    key_count = df.select(pl.struct(keys).n_unique()).item()
+    if key_count < df.height:
+        return group_terms_polars(df)
+    # Match column order of group_terms (group-by keys, coeffs, rest)
+    rest = [c for c in df.columns if c not in keys and c != "coeffs"]
+    return df.select(keys + ["coeffs"] + rest)
+
+
 def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
     """
     Join multiple xarray Dataarray's to a Dataset and warn if coordinates are not equal.
