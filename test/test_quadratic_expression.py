@@ -366,5 +366,5 @@ def test_variable_names(x: Variable, y: Variable) -> None:
     expr = 2 * (x * x) + 3 * y + 1
     assert expr.variable_names == {"x", "y"}
 
-    expr = 2 * (y * y) + 1
-    assert expr.variable_names == {"y"}
+    expr = 2 * (x * x) + 1
+    assert expr.variable_names == {"x"}
