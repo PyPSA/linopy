@@ -36,14 +36,17 @@ from linopy.common import (
 )
 from linopy.constants import (
     DEFAULT_BREAKPOINT_DIM,
+    DEFAULT_SEGMENT_DIM,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_FILL_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
+    PWL_SELECT_SUFFIX,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -831,6 +834,176 @@ class Model:
                 resolved_link_dim,
             )
 
+    def add_disjunctive_piecewise_constraints(
+        self,
+        expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
+        breakpoints: DataArray,
+        link_dim: str | None = None,
+        dim: str = DEFAULT_BREAKPOINT_DIM,
+        segment_dim: str = DEFAULT_SEGMENT_DIM,
+        mask: DataArray | None = None,
+        name: str | None = None,
+        skip_nan_check: bool = False,
+    ) -> Constraint:
+        """
+        Add a disjunctive piecewise linear constraint for disconnected segments.
+
+        Unlike ``add_piecewise_constraints``, which models continuous piecewise
+        linear functions (all segments connected end-to-end), this method handles
+        **disconnected segments** (with gaps between them). The variable must lie
+        on exactly one segment, selected by binary indicator variables.
+
+        Uses the disaggregated convex combination formulation (no big-M needed,
+        tight LP relaxation):
+
+        1. Binary ``y_k ∈ {0,1}`` per segment, ``Σ y_k = 1``
+        2. Lambda ``λ_{k,i} ∈ [0,1]`` per breakpoint in each segment
+        3. Convexity: ``Σ_i λ_{k,i} = y_k``
+        4. SOS2 within each segment (along breakpoint dim)
+        5. Linking: ``expr = Σ_k Σ_i λ_{k,i} × bp_{k,i}``
+
+        Parameters
+        ----------
+        expr : Variable, LinearExpression, or dict of these
+            The variable(s) or expression(s) to be linked by the piecewise
+            constraint.
+        breakpoints : xr.DataArray
+            Breakpoint values with at least ``dim`` and ``segment_dim``
+            dimensions. Each slice along ``segment_dim`` defines one segment.
+            Use NaN to pad segments with fewer breakpoints.
+        link_dim : str, optional
+            Dimension in breakpoints linking to different expressions (dict
+            case). Auto-detected if None.
+        dim : str, default "breakpoint"
+            Dimension for breakpoint indices within each segment.
+            Must have numeric coordinates.
+        segment_dim : str, default "segment"
+            Dimension indexing the segments.
+        mask : xr.DataArray, optional
+            Boolean mask. If None, auto-detected from NaN values.
+        name : str, optional
+            Base name for generated variables/constraints. Auto-generated
+            if None using the shared ``_pwlCounter``.
+        skip_nan_check : bool, default False
+            If True, skip NaN detection in breakpoints.
+
+        Returns
+        -------
+        Constraint
+            The selection constraint (``Σ y_k = 1``).
+
+        Raises
+        ------
+        ValueError
+            If ``dim`` or ``segment_dim`` not in breakpoints dimensions.
+            If ``dim == segment_dim``.
+            If ``dim`` coordinates are not numeric.
+            If ``expr`` is not a Variable, LinearExpression, or dict.
+
+        Examples
+        --------
+        Two disconnected segments [0,10] and [50,100]:
+
+        >>> m = Model()
+        >>> x = m.add_variables(name="x")
+        >>> breakpoints = xr.DataArray(
+        ...     [[0, 10], [50, 100]],
+        ...     dims=["segment", "breakpoint"],
+        ...     coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        ... )
+        >>> _ = m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        """
+        # --- Input validation ---
+        if dim not in breakpoints.dims:
+            raise ValueError(
+                f"breakpoints must have dimension '{dim}', "
+                f"but only has dimensions {list(breakpoints.dims)}"
+            )
+        if segment_dim not in breakpoints.dims:
+            raise ValueError(
+                f"breakpoints must have dimension '{segment_dim}', "
+                f"but only has dimensions {list(breakpoints.dims)}"
+            )
+        if dim == segment_dim:
+            raise ValueError(f"dim and segment_dim must be different, both are '{dim}'")
+        if not pd.api.types.is_numeric_dtype(breakpoints.coords[dim]):
+            raise ValueError(
+                f"Breakpoint dimension '{dim}' must have numeric coordinates "
+                f"for SOS2 weights, but got {breakpoints.coords[dim].dtype}"
+            )
+
+        # --- Generate name using shared counter ---
+        if name is None:
+            name = f"pwl{self._pwlCounter}"
+            self._pwlCounter += 1
+
+        # --- Determine target expression ---
+        is_single = isinstance(expr, Variable | LinearExpression)
+        is_dict = isinstance(expr, dict)
+
+        if not is_single and not is_dict:
+            raise ValueError(
+                f"'expr' must be a Variable, LinearExpression, or dict of these, "
+                f"got {type(expr)}"
+            )
+
+        if is_single:
+            assert isinstance(expr, Variable | LinearExpression)
+            target_expr = self._to_linexpr(expr)
+            resolved_link_dim = None
+            computed_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
+            lambda_mask = computed_mask
+        else:
+            assert isinstance(expr, dict)
+            expr_dict: dict[str, Variable | LinearExpression] = expr
+            expr_keys = set(expr_dict.keys())
+            resolved_link_dim = self._resolve_pwl_link_dim(
+                link_dim,
+                breakpoints,
+                dim,
+                expr_keys,
+                exclude_dims={dim, segment_dim},
+            )
+            computed_mask = self._compute_pwl_mask(mask, breakpoints, skip_nan_check)
+            lambda_mask = (
+                computed_mask.any(dim=resolved_link_dim)
+                if computed_mask is not None
+                else None
+            )
+            target_expr = self._build_stacked_expr(
+                expr_dict, breakpoints, resolved_link_dim
+            )
+
+        # Build coordinate lists excluding special dimensions
+        exclude_dims_set = {dim, segment_dim, resolved_link_dim} - {None}
+        extra_coords = [
+            pd.Index(breakpoints.coords[d].values, name=d)
+            for d in breakpoints.dims
+            if d not in exclude_dims_set
+        ]
+        lambda_coords = extra_coords + [
+            pd.Index(breakpoints.coords[segment_dim].values, name=segment_dim),
+            pd.Index(breakpoints.coords[dim].values, name=dim),
+        ]
+        binary_coords = extra_coords + [
+            pd.Index(breakpoints.coords[segment_dim].values, name=segment_dim),
+        ]
+
+        # Binary mask: valid if any breakpoint in segment is valid
+        binary_mask = lambda_mask.any(dim=dim) if lambda_mask is not None else None
+
+        return self._add_dpwl_sos2(
+            name,
+            breakpoints,
+            dim,
+            segment_dim,
+            target_expr,
+            lambda_coords,
+            lambda_mask,
+            binary_coords,
+            binary_mask,
+        )
+
     def _add_pwl_sos2(
         self,
         name: str,
@@ -931,6 +1104,59 @@ class Model:
 
         return fill_con if fill_con is not None else link_con
 
+    def _add_dpwl_sos2(
+        self,
+        name: str,
+        breakpoints: DataArray,
+        dim: str,
+        segment_dim: str,
+        target_expr: LinearExpression,
+        lambda_coords: list[pd.Index],
+        lambda_mask: DataArray | None,
+        binary_coords: list[pd.Index],
+        binary_mask: DataArray | None,
+    ) -> Constraint:
+        """
+        Create disjunctive piecewise linear constraint using disaggregated
+        convex combination.
+
+        Each segment gets a binary indicator y_k and per-breakpoint lambdas.
+        When y_k=1, standard SOS2 interpolation applies within that segment.
+        When y_k=0, all lambdas for that segment are forced to zero.
+        """
+        binary_name = f"{name}{PWL_BINARY_SUFFIX}"
+        select_name = f"{name}{PWL_SELECT_SUFFIX}"
+        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+        link_name = f"{name}{PWL_LINK_SUFFIX}"
+
+        # 1. Binary variables y_k ∈ {0,1}, one per segment
+        binary_var = self.add_variables(
+            binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
+        )
+
+        # 2. Selection constraint: Σ y_k = 1
+        select_con = self.add_constraints(
+            binary_var.sum(dim=segment_dim) == 1, name=select_name
+        )
+
+        # 3. Lambda variables λ_{k,i} ∈ [0,1], per segment per breakpoint
+        lambda_var = self.add_variables(
+            lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+        )
+
+        # 4. SOS2 within each segment (along breakpoint dim)
+        self.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+
+        # 5. Convexity: Σ_i λ_{k,i} = y_k (lambdas sum to binary indicator)
+        self.add_constraints(lambda_var.sum(dim=dim) == binary_var, name=convex_name)
+
+        # 6. Linking: expr = Σ_k Σ_i λ_{k,i} × bp_{k,i}
+        weighted_sum = (lambda_var * breakpoints).sum(dim=[segment_dim, dim])
+        self.add_constraints(target_expr == weighted_sum, name=link_name)
+
+        return select_con
+
     @staticmethod
     def _check_strict_monotonicity(breakpoints: DataArray, dim: str) -> bool:
         """
@@ -976,11 +1202,14 @@ class Model:
         breakpoints: DataArray,
         dim: str,
         expr_keys: set[str],
+        exclude_dims: set[str] | None = None,
     ) -> str:
         """Auto-detect or validate link_dim for dict case."""
+        if exclude_dims is None:
+            exclude_dims = {dim}
         if link_dim is None:
             for d in breakpoints.dims:
-                if d == dim:
+                if d in exclude_dims:
                     continue
                 coords_set = set(str(c) for c in breakpoints.coords[d].values)
                 if coords_set == expr_keys:

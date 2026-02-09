@@ -11,11 +11,13 @@ import xarray as xr
 
 from linopy import Model, available_solvers
 from linopy.constants import (
+    PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_FILL_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
+    PWL_SELECT_SUFFIX,
 )
 
 
@@ -754,3 +756,402 @@ class TestIncrementalSolverIntegration:
         assert status == "ok"
         assert np.isclose(x.solution.values, 50, atol=1e-5)
         assert np.isclose(cost.solution.values, 10, atol=1e-5)
+
+
+# ===== Disjunctive Piecewise Linear Constraint Tests =====
+
+
+class TestDisjunctiveBasicSingleVariable:
+    """Tests for single variable disjunctive piecewise constraints."""
+
+    def test_two_equal_segments(self) -> None:
+        """Test with two equal-length segments."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        # Binary variables created
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        # Selection constraint
+        assert f"pwl0{PWL_SELECT_SUFFIX}" in m.constraints
+        # Lambda variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        # Convexity constraint
+        assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
+        # Link constraint
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+        # SOS2 on lambda
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert lambda_var.attrs.get("sos_type") == 2
+        assert lambda_var.attrs.get("sos_dim") == "breakpoint"
+
+    def test_uneven_segments_with_nan(self) -> None:
+        """Test segments of different lengths with NaN padding."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 5, 10], [50, 100, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1, 2]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        # Lambda for NaN breakpoint should be masked
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "segment" in lambda_var.dims
+        assert "breakpoint" in lambda_var.dims
+
+    def test_single_breakpoint_segment(self) -> None:
+        """Test with a segment that has only one valid breakpoint (point segment)."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [42, np.nan]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+
+
+class TestDisjunctiveDictOfVariables:
+    """Tests for dict of variables with disjunctive constraints."""
+
+    def test_dict_with_two_segments(self) -> None:
+        """Test dict of variables with two segments."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[[0, 50], [0, 10]], [[80, 100], [20, 50]]],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+        )
+
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_auto_detect_link_dim_with_segment_dim(self) -> None:
+        """Test auto-detection of link_dim when segment_dim is also present."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[[0, 50], [0, 10]], [[80, 100], [20, 50]]],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        # Should auto-detect link_dim="var" (not segment)
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+        )
+
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+
+class TestDisjunctiveExtraDimensions:
+    """Tests for extra dimensions on disjunctive constraints."""
+
+    def test_extra_generator_dimension(self) -> None:
+        """Test with an extra generator dimension."""
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+
+        breakpoints = xr.DataArray(
+            [
+                [[0, 10], [50, 100]],
+                [[0, 20], [60, 90]],
+            ],
+            dims=["generator", "segment", "breakpoint"],
+            coords={
+                "generator": generators,
+                "segment": [0, 1],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+        # Binary and lambda should have generator dimension
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "generator" in binary_var.dims
+        assert "generator" in lambda_var.dims
+        assert "segment" in binary_var.dims
+        assert "segment" in lambda_var.dims
+
+
+class TestDisjunctiveValidationErrors:
+    """Tests for validation errors in disjunctive constraints."""
+
+    def test_missing_dim(self) -> None:
+        """Test error when breakpoints don't have dim."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "wrong"],
+            coords={"segment": [0, 1], "wrong": [0, 1]},
+        )
+
+        with pytest.raises(ValueError, match="must have dimension"):
+            m.add_disjunctive_piecewise_constraints(x, breakpoints, dim="breakpoint")
+
+    def test_missing_segment_dim(self) -> None:
+        """Test error when breakpoints don't have segment_dim."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, 10, 50],
+            dims=["breakpoint"],
+            coords={"breakpoint": [0, 1, 2]},
+        )
+
+        with pytest.raises(ValueError, match="must have dimension"):
+            m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+    def test_same_dim_segment_dim(self) -> None:
+        """Test error when dim == segment_dim."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        with pytest.raises(ValueError, match="must be different"):
+            m.add_disjunctive_piecewise_constraints(
+                x, breakpoints, dim="segment", segment_dim="segment"
+            )
+
+    def test_non_numeric_coords(self) -> None:
+        """Test error when dim coordinates are not numeric."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": ["a", "b"]},
+        )
+
+        with pytest.raises(ValueError, match="numeric coordinates"):
+            m.add_disjunctive_piecewise_constraints(x, breakpoints)
+
+    def test_invalid_expr(self) -> None:
+        """Test error when expr is invalid type."""
+        m = Model()
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        with pytest.raises(
+            ValueError, match="must be a Variable, LinearExpression, or dict"
+        ):
+            m.add_disjunctive_piecewise_constraints("invalid", breakpoints)  # type: ignore
+
+
+class TestDisjunctiveNameGeneration:
+    """Tests for name generation in disjunctive constraints."""
+
+    def test_shared_counter_with_continuous(self) -> None:
+        """Test that disjunctive and continuous PWL share the counter."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+
+        bp_continuous = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
+        m.add_piecewise_constraints(x, bp_continuous, dim="bp")
+
+        bp_disjunctive = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+        m.add_disjunctive_piecewise_constraints(y, bp_disjunctive)
+
+        # First is pwl0, second is pwl1
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl1{PWL_BINARY_SUFFIX}" in m.variables
+
+    def test_custom_name(self) -> None:
+        """Test custom name for disjunctive constraints."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints, name="my_dpwl")
+
+        assert f"my_dpwl{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"my_dpwl{PWL_SELECT_SUFFIX}" in m.constraints
+        assert f"my_dpwl{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"my_dpwl{PWL_CONVEX_SUFFIX}" in m.constraints
+        assert f"my_dpwl{PWL_LINK_SUFFIX}" in m.constraints
+
+
+class TestDisjunctiveLPFileOutput:
+    """Tests for LP file output with disjunctive piecewise constraints."""
+
+    def test_lp_contains_sos2_and_binary(self, tmp_path: Path) -> None:
+        """Test LP file contains SOS2 section and binary variables."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [50.0, 100.0]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        m.add_objective(x)
+
+        fn = tmp_path / "dpwl.lp"
+        m.to_file(fn, io_api="lp")
+        content = fn.read_text()
+
+        # Should contain SOS2 section
+        assert "\nsos\n" in content.lower()
+        assert "s2" in content.lower()
+
+        # Should contain binary section
+        assert "binary" in content.lower() or "binaries" in content.lower()
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+class TestDisjunctiveSolverIntegration:
+    """Integration tests for disjunctive piecewise constraints with Gurobi."""
+
+    def test_minimize_picks_low_segment(self) -> None:
+        """Test minimizing x picks the lower segment."""
+        gurobipy = pytest.importorskip("gurobipy")
+
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Two segments: [0, 10] and [50, 100]
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [50.0, 100.0]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        m.add_objective(x)
+
+        try:
+            status, cond = m.solve(solver_name="gurobi", io_api="direct")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        assert status == "ok"
+        # Should pick x=0 (minimum of low segment)
+        assert np.isclose(x.solution.values, 0.0, atol=1e-5)
+
+    def test_maximize_picks_high_segment(self) -> None:
+        """Test maximizing x picks the upper segment."""
+        gurobipy = pytest.importorskip("gurobipy")
+
+        m = Model()
+        x = m.add_variables(name="x")
+
+        # Two segments: [0, 10] and [50, 100]
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [50.0, 100.0]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints)
+        m.add_objective(x, sense="max")
+
+        try:
+            status, cond = m.solve(solver_name="gurobi", io_api="direct")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        assert status == "ok"
+        # Should pick x=100 (maximum of high segment)
+        assert np.isclose(x.solution.values, 100.0, atol=1e-5)
+
+    def test_dict_case_solver(self) -> None:
+        """Test disjunctive with dict of variables and solver."""
+        gurobipy = pytest.importorskip("gurobipy")
+
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        # Two operating regions:
+        # Region 0: power [0,50], cost [0,10]
+        # Region 1: power [80,100], cost [20,30]
+        breakpoints = xr.DataArray(
+            [[[0.0, 50.0], [0.0, 10.0]], [[80.0, 100.0], [20.0, 30.0]]],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+        )
+
+        # Minimize cost
+        m.add_objective(cost)
+
+        try:
+            status, cond = m.solve(solver_name="gurobi", io_api="direct")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        assert status == "ok"
+        # Should pick region 0, minimum cost = 0
+        assert np.isclose(cost.solution.values, 0.0, atol=1e-5)
+        assert np.isclose(power.solution.values, 0.0, atol=1e-5)
