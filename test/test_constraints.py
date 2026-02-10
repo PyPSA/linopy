@@ -191,6 +191,11 @@ def test_masked_constraints_broadcast() -> None:
     assert (m.constraints.labels.bc3[2:5, :] == -1).all()
     assert (m.constraints.labels.bc3[5:10, :] == -1).all()
 
+    # Mask with extra dimension not in data should raise
+    mask4 = xr.DataArray([True, False], dims=["extra_dim"])
+    with pytest.raises(AssertionError, match="not a subset"):
+        m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc4", mask=mask4)
+
 
 def test_non_aligned_constraints() -> None:
     m: Model = Model()

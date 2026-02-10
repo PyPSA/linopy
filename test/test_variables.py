@@ -134,6 +134,11 @@ def test_variables_mask_broadcast() -> None:
     assert (z.labels[2:5, :] == -1).all()
     assert (z.labels[5:10, :] == -1).all()
 
+    # Mask with extra dimension not in data should raise
+    mask4 = xr.DataArray([True, False], dims=["extra_dim"])
+    with pytest.raises(AssertionError, match="not a subset"):
+        m.add_variables(lower, upper, name="w", mask=mask4)
+
 
 def test_variables_get_name_by_label(m: Model) -> None:
     assert m.variables.get_name_by_label(4) == "x"

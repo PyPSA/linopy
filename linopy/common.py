@@ -287,6 +287,16 @@ def as_dataarray(
 
 
 def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
+    """
+    Broadcast a boolean mask to match the shape of labels.
+
+    Ensures that mask dimensions are a subset of labels dimensions, broadcasts
+    the mask accordingly, and fills any NaN values (from missing coordinates)
+    with False while emitting a FutureWarning.
+    """
+    assert set(mask.dims).issubset(labels.dims), (
+        "Dimensions of mask not a subset of resulting labels dimensions."
+    )
     mask = mask.broadcast_like(labels)
     if mask.isnull().any():
         warn(
