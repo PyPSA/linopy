@@ -2073,7 +2073,9 @@ class Knitro(Solver[None]):
                 except Exception as err:
                     logger.info("Could not write solution file. Error: %s", err)
 
-            return Result(status, solution, knitro_model(reported_runtime=reported_runtime))
+            return Result(
+                status, solution, knitro_model(reported_runtime=reported_runtime)
+            )
 
         finally:
             if kc is not None:
