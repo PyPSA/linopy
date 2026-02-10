@@ -227,7 +227,8 @@ def test_variable_assigment_masked() -> None:
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.Series(np.ones(10))
     mask = pd.Series([True] * 5 + [False] * 5)
-    m.add_variables(lower, upper, mask=mask)
+    with pytest.warns(FutureWarning, match="Mask dimensions"):
+        m.add_variables(lower, upper, mask=mask)
     assert m.variables.labels.var0[-1, -1].item() == -1
 
 
