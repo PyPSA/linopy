@@ -107,6 +107,46 @@ def test_variables_nvars(m: Model) -> None:
     assert m.variables.nvars == 19
 
 
+def test_variables_mask_broadcast() -> None:
+    """Test that a mask with fewer dimensions broadcasts correctly."""
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+
+    # 1D mask applied to 2D variable — must broadcast over second dim
+    mask = pd.Series([True] * 5 + [False] * 5)
+    with pytest.warns(FutureWarning, match="Mask dimensions"):
+        x = m.add_variables(lower, upper, name="x", mask=mask)
+    assert (x.labels[0:5, :] != -1).all()
+    assert (x.labels[5:10, :] == -1).all()
+
+    # Mask along second dimension only
+    mask2 = xr.DataArray([True] * 5 + [False] * 5, dims=["dim_1"])
+    with pytest.warns(FutureWarning, match="Mask dimensions"):
+        y = m.add_variables(lower, upper, name="y", mask=mask2)
+    assert (y.labels[:, 0:5] != -1).all()
+    assert (y.labels[:, 5:10] == -1).all()
+
+
+def test_variables_mask_no_warning_when_aligned() -> None:
+    """Test that no FutureWarning is emitted when mask has same dims as data."""
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+
+    mask = xr.DataArray(
+        np.array([[True] * 10] * 5 + [[False] * 10] * 5),
+        coords=[range(10), range(10)],
+    )
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        m.add_variables(lower, upper, name="x", mask=mask)
+
+
 def test_variables_get_name_by_label(m: Model) -> None:
     assert m.variables.get_name_by_label(4) == "x"
     assert m.variables.get_name_by_label(12) == "y"
