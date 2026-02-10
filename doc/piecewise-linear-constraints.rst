@@ -40,11 +40,18 @@ be non-zero, so :math:`x` is interpolated within one segment.
 breakpoints carry an extra *link* dimension :math:`v \in V` and linking becomes
 :math:`x_v = \sum_i \lambda_i \, b_{v,i}` for all :math:`v`.
 
+.. note::
+
+   SOS2 is a combinatorial constraint handled via branch-and-bound, similar to
+   integer variables. It cannot be reformulated as a pure LP. Prefer the
+   incremental method (``method="incremental"`` or ``method="auto"``) when
+   breakpoints are monotonic.
+
 Incremental (Delta) Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For **strictly monotonic** breakpoints :math:`b_0 < b_1 < \cdots < b_n`, the
-incremental formulation is a pure LP (no SOS2 or binary variables):
+incremental formulation is a **pure LP** (no SOS2 or binary variables):
 
 .. math::
 
@@ -54,6 +61,11 @@ incremental formulation is a pure LP (no SOS2 or binary variables):
 
 The filling-order constraints enforce that segment :math:`i+1` cannot be
 partially filled unless segment :math:`i` is completely filled.
+
+**Limitation:** Breakpoints must be strictly monotonic for every linked
+variable. In the dict case, each variable is checked independently -- e.g.
+power increasing while fuel decreases is fine, but a curve that rises then
+falls is not. For non-monotonic curves, use SOS2.
 
 Disjunctive (Disaggregated Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -77,6 +89,10 @@ Given :math:`K` segments, each with breakpoints :math:`b_{k,0}, \ldots, b_{k,n_k
 Choosing a Formulation
 ~~~~~~~~~~~~~~~~~~~~~~
 
+The incremental method is the fastest to solve (pure LP), but requires strictly
+monotonic breakpoints. Pass ``method="auto"`` to use it automatically when
+applicable, falling back to SOS2 otherwise.
+
 .. list-table::
    :header-rows: 1
    :widths: 25 25 25 25
@@ -97,10 +113,10 @@ Choosing a Formulation
      - Continuous + SOS2
      - Continuous only (pure LP)
      - Binary + SOS2
-   * - Best for
-     - General piecewise functions
-     - Monotonic curves
-     - Forbidden zones, discrete modes
+   * - Solver support
+     - Solvers with SOS2 support
+     - **Any LP solver**
+     - Solvers with SOS2 + MIP support
 
 Basic Usage
 -----------
