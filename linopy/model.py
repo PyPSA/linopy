@@ -552,9 +552,6 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            assert set(mask.dims).issubset(data.dims), (
-                "Dimensions of mask not a subset of resulting labels dimensions."
-            )
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
@@ -750,9 +747,6 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
-            assert set(mask.dims).issubset(data.dims), (
-                "Dimensions of mask not a subset of resulting labels dimensions."
-            )
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
