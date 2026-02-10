@@ -29,6 +29,7 @@ from linopy.common import (
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     set_int_index,
@@ -554,8 +555,7 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
-            # for dataarray masks with different shapes, apply broadcasting
-            mask = mask.broadcast_like(data.labels)
+            mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -753,8 +753,7 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
-            # for dataarray masks with different shapes, apply broadcasting
-            mask = mask.broadcast_like(data.labels)
+            mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:

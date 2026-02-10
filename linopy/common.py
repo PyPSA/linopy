@@ -286,6 +286,22 @@ def as_dataarray(
     return arr
 
 
+def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
+    mask = mask.broadcast_like(labels)
+    if mask.isnull().any():
+        warn(
+            "Mask contains coordinates not covered by the data dimensions. "
+            "Missing values will be filled with False (masked out). "
+            "In a future version, this will raise an error. "
+            "Use mask.reindex() or `linopy.align()` to explicitly handle missing "
+            "coordinates.",
+            FutureWarning,
+            stacklevel=3,
+        )
+        mask = mask.fillna(False).astype(bool)
+    return mask
+
+
 # TODO: rename to to_pandas_dataframe
 def to_dataframe(
     ds: Dataset,
