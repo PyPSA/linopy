@@ -571,8 +571,7 @@ class Model:
         self._xCounter += data.labels.size
 
         if mask is not None:
-            # Use numpy where for speed (38x faster than xarray where)
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
         data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -750,9 +749,6 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
-            # Broadcast mask to match data shape for correct numpy where behavior
-            if mask.shape != data.labels.shape:
-                mask, _ = xr.broadcast(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
@@ -785,8 +781,7 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            # Use numpy where for speed (38x faster than xarray where)
-            data.labels.values = np.where(mask.values, data.labels.values, -1)
+            data.labels.values = data.labels.where(mask, -1).values
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
