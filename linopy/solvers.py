@@ -41,7 +41,9 @@ from linopy.solver_capabilities import (
 if TYPE_CHECKING:
     import gurobipy
 
+    from linopy.matrices import MatrixAccessor
     from linopy.model import Model
+    from linopy.scaling import ScaledMatrices
 
 EnvType = TypeVar("EnvType")
 
@@ -337,6 +339,7 @@ class Solver(ABC, Generic[EnvType]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a model.
@@ -376,6 +379,7 @@ class Solver(ABC, Generic[EnvType]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem either from a model or a problem file.
@@ -396,6 +400,7 @@ class Solver(ABC, Generic[EnvType]):
                 basis_fn=basis_fn,
                 env=env,
                 explicit_coordinate_names=explicit_coordinate_names,
+                matrices=matrices,
             )
         elif problem_fn is not None:
             return self.solve_problem_from_file(
@@ -440,6 +445,7 @@ class CBC(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
@@ -626,6 +632,7 @@ class GLPK(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for GLPK"
         raise NotImplementedError(msg)
@@ -806,6 +813,7 @@ class Highs(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Highs solver.
@@ -848,7 +856,9 @@ class Highs(Solver[None]):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = model.to_highspy(
+            explicit_coordinate_names=explicit_coordinate_names, matrices=matrices
+        )
         self._set_solver_params(h, log_fn)
 
         return self._solve(
@@ -1047,6 +1057,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         basis_fn: Path | None = None,
         env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Gurobi solver.
@@ -1083,7 +1094,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 env_ = env
 
             m = model.to_gurobipy(
-                env=env_, explicit_coordinate_names=explicit_coordinate_names
+                env=env_,
+                explicit_coordinate_names=explicit_coordinate_names,
+                matrices=matrices,
             )
 
             return self._solve(
@@ -1286,6 +1299,7 @@ class Cplex(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for Cplex"
         raise NotImplementedError(msg)
@@ -1438,6 +1452,7 @@ class SCIP(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for SCIP"
         raise NotImplementedError(msg)
@@ -1594,6 +1609,7 @@ class Xpress(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for Xpress"
         raise NotImplementedError(msg)
@@ -1774,6 +1790,7 @@ class Mosek(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the MOSEK solver.
@@ -1810,7 +1827,11 @@ class Mosek(Solver[None]):
                 stacklevel=2,
             )
         with mosek.Task() as m:
-            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
+            m = model.to_mosek(
+                m,
+                explicit_coordinate_names=explicit_coordinate_names,
+                matrices=matrices,
+            )
 
             return self._solve(
                 m,
@@ -2108,6 +2129,7 @@ class COPT(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for COPT"
         raise NotImplementedError(msg)
@@ -2249,6 +2271,7 @@ class MindOpt(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         msg = "Direct API not implemented for MindOpt"
         raise NotImplementedError(msg)
@@ -2410,7 +2433,7 @@ class cuPDLPx(Solver[None]):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: EnvType | None = None,
+        env: None = None,
     ) -> Result:
         """
         Solve a linear problem from a problem file using the solver cuPDLPx.
@@ -2466,8 +2489,9 @@ class cuPDLPx(Solver[None]):
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
-        env: EnvType | None = None,
+        env: None = None,
         explicit_coordinate_names: bool = False,
+        matrices: MatrixAccessor | ScaledMatrices | None = None,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the solver cuPDLPx.
@@ -2490,6 +2514,8 @@ class cuPDLPx(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        matrices : MatrixAccessor | ScaledMatrices, optional
+            Pre-computed matrices for the problem (default: None)
 
         Returns
         -------

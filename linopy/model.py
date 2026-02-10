@@ -60,6 +60,7 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.remote import OetcHandler, RemoteHandler
+from linopy.scaling import ScaleOptions, ScalingContext, resolve_options
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -1194,6 +1195,7 @@ class Model:
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
+        scale: bool | str | ScaleOptions | None = None,
         mock_solve: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
@@ -1262,6 +1264,10 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        scale : bool | str | ScaleOptions, optional
+            Enable pre-solve scaling. Use True for default row scaling,
+            a string ('row-max', 'row-l2') to choose the norm, or pass a
+            ScaleOptions instance for fine-grained control.
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         **solver_options : kwargs
@@ -1280,6 +1286,8 @@ class Model:
 
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
+        scale_options = resolve_options(scale)
+        scaling: ScalingContext | None = None
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
@@ -1288,6 +1296,10 @@ class Model:
             )
 
         if remote is not None:
+            if scale_options.enabled:
+                raise NotImplementedError(
+                    "Scaling is not supported for remote solving yet."
+                )
             if isinstance(remote, OetcHandler):
                 solved = remote.solve_on_oetc(self)
             else:
@@ -1354,6 +1366,10 @@ class Model:
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
 
+        if scale_options.enabled:
+            scaling = ScalingContext.from_model(self.matrices, scale_options)
+        matrices_override = scaling.matrices if scaling is not None else None
+
         if self.is_quadratic and not solver_supports(
             solver_name, SolverFeature.QUADRATIC_OBJECTIVE
         ):
@@ -1383,6 +1399,7 @@ class Model:
                     basis_fn=to_path(basis_fn),
                     env=env,
                     explicit_coordinate_names=explicit_coordinate_names,
+                    matrices=matrices_override,
                 )
             else:
                 if (
@@ -1399,6 +1416,7 @@ class Model:
                     explicit_coordinate_names=explicit_coordinate_names,
                     slice_size=slice_size,
                     progress=progress,
+                    scaling=scaling,
                 )
                 result = solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),
@@ -1413,6 +1431,9 @@ class Model:
             for fn in (problem_fn, solution_fn):
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
+
+        if scaling is not None:
+            result = scaling.unscale_solution(result)
 
         result.info()
 
