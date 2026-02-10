@@ -551,6 +551,11 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            assert set(mask.dims).issubset(data.dims), (
+                "Dimensions of mask not a subset of resulting labels dimensions."
+            )
+            # for dataarray masks with different shapes, apply broadcasting
+            mask = mask.broadcast_like(data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -571,7 +576,7 @@ class Model:
         self._xCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -749,6 +754,8 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
+            # for dataarray masks with different shapes, apply broadcasting
+            mask = mask.broadcast_like(data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
@@ -759,11 +766,9 @@ class Model:
             auto_mask_values = ~vars_all_invalid
             if original_rhs_mask is not None:
                 coords, dims, rhs_notnull = original_rhs_mask
-                # Broadcast RHS mask to match data shape if needed
                 if rhs_notnull.shape != auto_mask_values.shape:
                     rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
-                    rhs_da, _ = xr.broadcast(rhs_da, data.labels)
-                    rhs_notnull = rhs_da.values
+                    rhs_notnull = rhs_da.broadcast_like(data.labels).values
                 auto_mask_values = auto_mask_values & rhs_notnull
             auto_mask_arr = DataArray(
                 auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
@@ -781,7 +786,7 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
