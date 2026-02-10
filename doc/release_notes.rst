@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+**Fix Regression**
+
+*  Reinsert broadcasting logic of mask object to be fully compatible with performance improvements in version 0.6.2 using `np.where` instead of `xr.where`.
+
+
 Version 0.6.2
 --------------
 
