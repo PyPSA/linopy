@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -551,6 +552,16 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            if set(mask.dims) != set(data["labels"].dims):
+                warnings.warn(
+                    f"Mask dimensions {set(mask.dims)} do not match the data "
+                    f"dimensions {set(data['labels'].dims)}. The mask will be "
+                    f"broadcast across the missing dimensions "
+                    f"{set(data['labels'].dims) - set(mask.dims)}. In a future "
+                    "version, this will raise an error.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -749,6 +760,16 @@ class Model:
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
+            if set(mask.dims) != set(data["labels"].dims):
+                warnings.warn(
+                    f"Mask dimensions {set(mask.dims)} do not match the data "
+                    f"dimensions {set(data['labels'].dims)}. The mask will be "
+                    f"broadcast across the missing dimensions "
+                    f"{set(data['labels'].dims) - set(mask.dims)}. In a future "
+                    "version, this will raise an error.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
