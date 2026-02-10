@@ -260,6 +260,11 @@ Common Patterns
 Piecewise Linear Cost Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+.. note::
+
+   For a higher-level API that handles all the SOS2 bookkeeping automatically,
+   see :doc:`piecewise-linear-constraints`.
+
 .. code-block:: python
 
     def add_piecewise_cost(model, variable, breakpoints, costs):
