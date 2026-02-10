@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -30,6 +29,7 @@ from linopy.common import (
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     set_int_index,
@@ -552,16 +552,7 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
-            if set(mask.dims) != set(data["labels"].dims):
-                warnings.warn(
-                    f"Mask dimensions {set(mask.dims)} do not match the data "
-                    f"dimensions {set(data['labels'].dims)}. The mask will be "
-                    f"broadcast across the missing dimensions "
-                    f"{set(data['labels'].dims) - set(mask.dims)}. In a future "
-                    "version, this will raise an error.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
+            mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
         if self.auto_mask:
@@ -582,7 +573,7 @@ class Model:
         self._xCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
             label_range=(start, end), name=name, binary=binary, integer=integer
@@ -756,20 +747,7 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask).astype(bool)
-            # TODO: simplify
-            assert set(mask.dims).issubset(data.dims), (
-                "Dimensions of mask not a subset of resulting labels dimensions."
-            )
-            if set(mask.dims) != set(data["labels"].dims):
-                warnings.warn(
-                    f"Mask dimensions {set(mask.dims)} do not match the data "
-                    f"dimensions {set(data['labels'].dims)}. The mask will be "
-                    f"broadcast across the missing dimensions "
-                    f"{set(data['labels'].dims) - set(mask.dims)}. In a future "
-                    "version, this will raise an error.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
+            mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
         if self.auto_mask:
@@ -780,11 +758,9 @@ class Model:
             auto_mask_values = ~vars_all_invalid
             if original_rhs_mask is not None:
                 coords, dims, rhs_notnull = original_rhs_mask
-                # Broadcast RHS mask to match data shape if needed
                 if rhs_notnull.shape != auto_mask_values.shape:
                     rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
-                    rhs_da, _ = xr.broadcast(rhs_da, data.labels)
-                    rhs_notnull = rhs_da.values
+                    rhs_notnull = rhs_da.broadcast_like(data.labels).values
                 auto_mask_values = auto_mask_values & rhs_notnull
             auto_mask_arr = DataArray(
                 auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
@@ -802,7 +778,7 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
