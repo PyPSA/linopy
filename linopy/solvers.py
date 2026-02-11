@@ -958,7 +958,7 @@ class Highs(Solver[None]):
 
         def _highs_info(key: str) -> float:
             status, val = h.getInfoValue(key)
-            if status != highspy.HighsStatus.kOk:
+            if status != highspy.HighsStatus.kOk:  # pragma: no cover
                 msg = f"Failed to get HiGHS info: {key}"
                 raise RuntimeError(msg)
             return val
