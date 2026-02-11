@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``best_bound``, and ``mip_gap`` in a solver-independent way. Gurobi, HiGHS, SCIP, and CBC populate solver-specific fields; other solvers provide the baseline.
+
 Version 0.6.3
 --------------
 
