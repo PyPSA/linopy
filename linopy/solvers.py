@@ -1213,7 +1213,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 sense=sense,
             )
 
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
         return dataclasses.replace(
@@ -1348,7 +1350,9 @@ class Cplex(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
         return dataclasses.replace(
@@ -1447,10 +1451,10 @@ class Cplex(Solver[None]):
 
         is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
-        _t0 = time.perf_counter()
+        _t0 = time.perf_counter()  # pragma: no cover
         with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
             m.solve()
-        self._solve_time = time.perf_counter() - _t0
+        self._solve_time = time.perf_counter() - _t0  # pragma: no cover
 
         if solution_fn is not None:
             try:
@@ -1680,7 +1684,9 @@ class Xpress(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
 
@@ -1879,7 +1885,9 @@ class Mosek(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
         return dataclasses.replace(
