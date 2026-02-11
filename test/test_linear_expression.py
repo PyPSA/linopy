@@ -441,7 +441,7 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # test special case override coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
@@ -465,7 +465,7 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # test special case override coords
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
@@ -1192,6 +1192,66 @@ def test_merge(x: Variable, y: Variable, z: Variable) -> None:
 
     with pytest.warns(DeprecationWarning):
         merge(expr1, expr2)
+
+
+def test_merge_with_override_and_reordered_coords(m: Model) -> None:
+    """Test merge with join='override' when coordinates have same values but different order."""
+    import pandas as pd
+
+    # Create variables with same coordinate values but different order
+    coords_a = pd.Index(["x", "y", "z"], name="dim_0")
+    coords_b = pd.Index(["z", "x", "y"], name="dim_0")  # Same values, different order
+
+    v1 = m.add_variables(coords=[coords_a], name="v1")
+    v2 = m.add_variables(coords=[coords_b], name="v2")
+
+    expr1 = 1 * v1
+    expr2 = 2 * v2
+
+    # Merging along _term (default) triggers the override logic because
+    # both expressions have the same dimension sizes
+    res = merge([expr1, expr2], cls=LinearExpression)
+
+    # Verify that the coordinates match the first expression's order
+    assert list(res.coords["dim_0"].values) == ["x", "y", "z"]
+    # The result should have 2 terms (one from each expression)
+    assert res.nterm == 2
+    # Verify the coefficients are correctly aligned (not mismatched due to positional concat)
+    assert res.sel(dim_0="x").coeffs.values.tolist() == [1.0, 2.0]
+    assert res.sel(dim_0="z").coeffs.values.tolist() == [1.0, 2.0]
+
+
+def test_align_with_overlapping_coords(m: Model) -> None:
+    """
+    Test that linopy.align enables correct addition of expressions with
+    overlapping but different coordinate subsets.
+    """
+    import pandas as pd
+
+    from linopy import align
+
+    coords_a = pd.Index(["alice", "bob"], name="person")
+    coords_b = pd.Index(["bob", "charlie"], name="person")
+
+    v1 = m.add_variables(coords=[coords_a], name="ov1")
+    v2 = m.add_variables(coords=[coords_b], name="ov2")
+
+    expr1, expr2 = align(1 * v1, 2 * v2, join="outer")
+    res = expr1 + expr2
+
+    # Union coords should be alice, bob, charlie
+    assert list(res.coords["person"].values) == ["alice", "bob", "charlie"]
+    assert res.nterm == 2
+    # bob: in both → coeffs [1, 2]
+    assert res.sel(person="bob").coeffs.values.tolist() == [1.0, 2.0]
+    # alice: only in expr1 → first term has coeff 1, second is fill (nan)
+    alice_coeffs = res.sel(person="alice").coeffs.values
+    assert alice_coeffs[0] == 1.0
+    assert np.isnan(alice_coeffs[1])
+    # charlie: only in expr2 → first term is fill (nan), second has coeff 2
+    charlie_coeffs = res.sel(person="charlie").coeffs.values
+    assert np.isnan(charlie_coeffs[0])
+    assert charlie_coeffs[1] == 2.0
 
 
 def test_linear_expression_outer_sum(x: Variable, y: Variable) -> None:
