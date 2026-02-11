@@ -95,6 +95,7 @@ if TYPE_CHECKING:
 
 SUPPORTED_CONSTANT_TYPES = (
     np.number,
+    np.bool_,
     int,
     float,
     DataArray,
@@ -536,6 +537,8 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike
     ) -> GenericExpression:
+        if np.isscalar(other):
+            return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         da = da.reindex_like(self.const, fill_value=0)
         return self.assign(const=self.const + da)
@@ -1340,9 +1343,7 @@ class LinearExpression(BaseExpression):
             return other.__add__(self)
 
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const + other)
-            elif isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
@@ -1882,9 +1883,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const + other)
-            elif isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
