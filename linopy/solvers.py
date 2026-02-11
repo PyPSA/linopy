@@ -176,6 +176,14 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             SET = 3
 
 
+with contextlib.suppress(ModuleNotFoundError, ImportError):
+    import knitro
+
+    with contextlib.suppress(Exception):
+        kc = knitro.KN_new()
+        knitro.KN_free(kc)
+        available_solvers.append("knitro")
+
 with contextlib.suppress(ModuleNotFoundError):
     import mosek
 
@@ -239,6 +247,7 @@ class SolverName(enum.Enum):
     Gurobi = "gurobi"
     SCIP = "scip"
     Xpress = "xpress"
+    Knitro = "knitro"
     Mosek = "mosek"
     COPT = "copt"
     MindOpt = "mindopt"
@@ -1252,7 +1261,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -1734,6 +1743,344 @@ class Xpress(Solver[None]):
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
+
+
+class Knitro(Solver[None]):
+    """
+    Solver subclass for the Knitro solver.
+
+    Knitro is a powerful nonlinear optimization solver that also handles
+    linear and quadratic problems efficiently.
+
+    For more information on solver options, see
+    https://www.artelys.com/app/docs/knitro/3_referenceManual/knitroPythonReference.html
+
+    Attributes
+    ----------
+    **solver_options
+        options for the given solver
+    """
+
+    def __init__(
+        self,
+        **solver_options: Any,
+    ) -> None:
+        super().__init__(**solver_options)
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        msg = "Direct API not implemented for Knitro"
+        raise NotImplementedError(msg)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a problem file using the Knitro solver.
+
+        This function reads the linear problem file and passes it to the Knitro
+        solver. If the solution is successful it returns variable solutions and
+        constraint dual values.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver
+
+        Returns
+        -------
+        Result
+        """
+        # Knitro status codes: https://www.artelys.com/app/docs/knitro/3_referenceManual/knitroReturnCodes.html
+        CONDITION_MAP: dict[int, TerminationCondition] = {
+            0: TerminationCondition.optimal,
+            -100: TerminationCondition.suboptimal,
+            -101: TerminationCondition.infeasible,
+            -102: TerminationCondition.suboptimal,
+            -200: TerminationCondition.unbounded,
+            -201: TerminationCondition.infeasible_or_unbounded,
+            -202: TerminationCondition.iteration_limit,
+            -203: TerminationCondition.time_limit,
+            -204: TerminationCondition.terminated_by_limit,
+            -300: TerminationCondition.unbounded,
+            -400: TerminationCondition.iteration_limit,
+            -401: TerminationCondition.time_limit,
+            -410: TerminationCondition.terminated_by_limit,
+            -411: TerminationCondition.terminated_by_limit,
+        }
+
+        io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
+
+        def unpack_value_and_rc(obj: Any) -> tuple[Any, int]:
+            if isinstance(obj, tuple) and len(obj) == 2:
+                return obj[0], int(obj[1])
+            return obj, 0
+
+        def set_param_by_name(kc: Any, name: str, value: Any) -> None:
+            if isinstance(value, bool):
+                value = int(value)
+
+            if isinstance(value, int):
+                setter = getattr(knitro, "KN_set_int_param_by_name", None) or getattr(
+                    knitro, "KN_set_param_by_name", None
+                )
+            elif isinstance(value, float):
+                setter = getattr(
+                    knitro, "KN_set_double_param_by_name", None
+                ) or getattr(knitro, "KN_set_param_by_name", None)
+            elif isinstance(value, str):
+                setter = getattr(knitro, "KN_set_char_param_by_name", None)
+            else:
+                logger.warning(
+                    "Ignoring unsupported Knitro option %r=%r (type %s)",
+                    name,
+                    value,
+                    type(value).__name__,
+                )
+                return
+
+            if setter is None:
+                logger.warning(
+                    "Could not set Knitro option %r; required setter not available in knitro Python API.",
+                    name,
+                )
+                return
+
+            try:
+                setter(kc, name, value)
+            except Exception as e:
+                logger.warning("Could not set Knitro option %r=%r: %s", name, value, e)
+
+        kc = None
+        try:
+            kc = knitro.KN_new()
+        except Exception as e:
+            msg = f"Failed to create Knitro solver instance: {e}"
+            raise RuntimeError(msg)
+
+        try:
+            # Read the problem file
+            problem_path = path_to_string(problem_fn)
+            suffix = problem_fn.suffix.lower()
+            if suffix == ".lp":
+                read_options = "l"
+            elif suffix == ".mps":
+                read_options = "m"
+            else:
+                read_options = ""
+
+            try:
+                knitro.KN_read_problem(kc, problem_path, read_options=read_options)
+            except AttributeError as attr_err:
+                msg = (
+                    "Knitro Python API method not found. "
+                    f"Possible API changes or incorrect Knitro installation. "
+                    f"Original error: {attr_err}"
+                )
+                raise RuntimeError(msg) from attr_err
+            except TypeError as type_err:
+                msg = (
+                    "Invalid argument types passed to KN_read_problem. "
+                    f"Check problem_path and read_options types. "
+                    f"Original error: {type_err}"
+                )
+                raise RuntimeError(msg) from type_err
+            except FileNotFoundError as file_err:
+                msg = (
+                    f"Optimization problem file not found: {problem_path}. "
+                    "Please verify the file path and existence."
+                )
+                raise RuntimeError(msg) from file_err
+            except PermissionError as perm_err:
+                msg = (
+                    f"Permission denied when accessing: {problem_path}. "
+                    "Check file permissions and access rights."
+                )
+                raise RuntimeError(msg) from perm_err
+            except Exception as unexpected_err:
+                msg = (
+                    "Unexpected error occurred while loading Knitro problem. "
+                    f"File: {problem_path}, "
+                    f"Error details: {unexpected_err}"
+                )
+                raise RuntimeError(msg) from unexpected_err
+
+            # Set log file if specified
+            if log_fn is not None:
+                log_fn.parent.mkdir(parents=True, exist_ok=True)
+                with open(path_to_string(log_fn), "w", encoding="utf-8") as f:
+                    f.write("linopy: knitro log\n")
+
+            # Set solver options
+            for k, v in self.solver_options.items():
+                set_param_by_name(kc, k, v)
+
+            # Load warmstart if provided
+            if warmstart_fn is not None:
+                try:
+                    # Knitro doesn't have direct basis loading, but we can set initial values
+                    logger.info(
+                        "Warmstart not directly supported by Knitro LP interface"
+                    )
+                except Exception as err:
+                    logger.info("Warmstart could not be loaded. Error: %s", err)
+
+            # Solve the problem
+            ret = int(knitro.KN_solve(kc))
+
+            reported_runtime = None
+            try:
+                val = knitro.KN_get_solve_time_real(kc)
+                if val:
+                    reported_runtime = float(val)
+            except Exception:
+                pass
+
+            knitro_model = namedtuple("KnitroModel", "reported_runtime")
+
+            # Get termination condition
+            if ret in CONDITION_MAP:
+                termination_condition = CONDITION_MAP[ret]
+            elif ret > 0:
+                termination_condition = TerminationCondition.internal_solver_error
+            else:
+                termination_condition = TerminationCondition.unknown
+
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = str(ret)
+
+            def get_solver_solution() -> Solution:
+                # Get objective value
+                try:
+                    obj_val, obj_rc = unpack_value_and_rc(knitro.KN_get_obj_value(kc))
+                    objective = float(obj_val) if obj_rc == 0 else np.nan
+                except Exception:
+                    objective = np.nan
+
+                # Get variable values
+                try:
+                    n_vars_val, n_vars_rc = unpack_value_and_rc(
+                        knitro.KN_get_number_vars(kc)
+                    )
+                    n_vars = int(n_vars_val) if n_vars_rc == 0 else 0
+
+                    if n_vars > 0:
+                        x_val, x_rc = unpack_value_and_rc(
+                            knitro.KN_get_var_primal_values(kc, n_vars - 1)
+                        )
+
+                        if x_rc == 0:
+                            names_val, names_rc = unpack_value_and_rc(
+                                knitro.KN_get_var_names(kc)
+                            )
+
+                            if names_rc == 0 and names_val is not None:
+                                var_names = list(names_val)
+                            else:
+                                var_names = [f"x{i}" for i in range(n_vars)]
+
+                            sol = pd.Series(x_val, index=var_names, dtype=float)
+                        else:
+                            sol = pd.Series(dtype=float)
+                    else:
+                        sol = pd.Series(dtype=float)
+                except Exception as e:
+                    logger.warning(f"Could not extract primal solution: {e}")
+                    sol = pd.Series(dtype=float)
+
+                # Get dual values (constraint multipliers)
+                try:
+                    n_cons_val, n_cons_rc = unpack_value_and_rc(
+                        knitro.KN_get_number_cons(kc)
+                    )
+                    n_cons = int(n_cons_val) if n_cons_rc == 0 else 0
+
+                    if n_cons > 0:
+                        dual_val, dual_rc = unpack_value_and_rc(
+                            knitro.KN_get_con_dual_values(kc, n_cons - 1)
+                        )
+                        if dual_rc == 0:
+                            names_val, names_rc = unpack_value_and_rc(
+                                knitro.KN_get_con_names(kc)
+                            )
+
+                            if names_rc == 0 and names_val is not None:
+                                con_names = list(names_val)
+                            else:
+                                con_names = [f"c{i}" for i in range(n_cons)]
+
+                            dual = pd.Series(dual_val, index=con_names, dtype=float)
+                        else:
+                            dual = pd.Series(dtype=float)
+                    else:
+                        dual = pd.Series(dtype=float)
+                except Exception as e:
+                    logger.warning(f"Could not extract dual solution: {e}")
+                    dual = pd.Series(dtype=float)
+
+                return Solution(sol, dual, objective)
+
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+            # Save basis if requested
+            if basis_fn is not None:
+                try:
+                    # Knitro doesn't have direct basis export for LP files
+                    logger.info(
+                        "Basis export not directly supported by Knitro LP interface"
+                    )
+                except Exception as err:
+                    logger.info("No basis stored. Error: %s", err)
+
+            # Save solution if requested
+            if solution_fn is not None:
+                try:
+                    write_sol = getattr(knitro, "KN_write_sol_file", None)
+                    if write_sol is None:
+                        logger.info(
+                            "Solution export not supported by Knitro interface; ignoring solution_fn=%s",
+                            solution_fn,
+                        )
+                    else:
+                        solution_fn.parent.mkdir(parents=True, exist_ok=True)
+                        write_sol(kc, path_to_string(solution_fn))
+                except Exception as err:
+                    logger.info("Could not write solution file. Error: %s", err)
+
+            return Result(
+                status, solution, knitro_model(reported_runtime=reported_runtime)
+            )
+
+        finally:
+            if kc is not None:
+                with contextlib.suppress(Exception):
+                    knitro.KN_free(kc)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
