@@ -423,8 +423,9 @@ class Solver(ABC, Generic[EnvType]):
         """
         Extract solver performance metrics.
 
-        Default implementation returns basic metrics. Subclasses override
-        to provide solver-specific metrics.
+        Base implementation populates solver_name and objective_value.
+        Subclasses should call super(), then set solver-specific fields
+        on the returned object.
         """
         return SolverMetrics(
             solver_name=self.solver_name.value,
@@ -455,14 +456,10 @@ class CBC(Solver[None]):
         super().__init__(**solver_options)
 
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
-        return SolverMetrics(
-            solver_name=self.solver_name.value,
-            objective_value=_safe_get(
-                lambda: solution.objective if not np.isnan(solution.objective) else None
-            ),
-            solve_time=_safe_get(lambda: solver_model.runtime),
-            mip_gap=_safe_get(lambda: solver_model.mip_gap),
-        )
+        metrics = super()._extract_metrics(solver_model, solution)
+        metrics.solve_time = _safe_get(lambda: solver_model.runtime)
+        metrics.mip_gap = _safe_get(lambda: solver_model.mip_gap)
+        return metrics
 
     def solve_problem_from_model(
         self,
@@ -763,8 +760,10 @@ class GLPK(Solver[None]):
 
         if not os.path.exists(solution_fn):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-            metrics = SolverMetrics(solver_name=self.solver_name.value)
-            return Result(status, Solution(), metrics=metrics)
+            solution = Solution()
+            return Result(
+                status, solution, metrics=self._extract_metrics(None, solution)
+            )
 
         f = open(solution_fn)
 
@@ -950,20 +949,16 @@ class Highs(Solver[None]):
 
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         h = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        metrics.solve_time = _safe_get(lambda: h.getRunTime())
+        metrics.mip_gap = _safe_get(lambda: h.getInfoValue("mip_gap")[1])
 
         def _highs_best_bound() -> float | None:
             status, val = h.getInfoValue("mip_objective_bound")
             return val if status == 0 else None  # 0 = HighsStatus.kOk
 
-        return SolverMetrics(
-            solver_name=self.solver_name.value,
-            objective_value=_safe_get(
-                lambda: solution.objective if not np.isnan(solution.objective) else None
-            ),
-            solve_time=_safe_get(lambda: h.getRunTime()),
-            mip_gap=_safe_get(lambda: h.getInfoValue("mip_gap")[1]),
-            best_bound=_safe_get(_highs_best_bound),
-        )
+        metrics.best_bound = _safe_get(_highs_best_bound)
+        return metrics
 
     def _set_solver_params(
         self,
@@ -1210,15 +1205,11 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
-        return SolverMetrics(
-            solver_name=self.solver_name.value,
-            objective_value=_safe_get(
-                lambda: solution.objective if not np.isnan(solution.objective) else None
-            ),
-            solve_time=_safe_get(lambda: m.Runtime),
-            best_bound=_safe_get(lambda: m.ObjBound),
-            mip_gap=_safe_get(lambda: m.MIPGap),
-        )
+        metrics = super()._extract_metrics(solver_model, solution)
+        metrics.solve_time = _safe_get(lambda: m.Runtime)
+        metrics.best_bound = _safe_get(lambda: m.ObjBound)
+        metrics.mip_gap = _safe_get(lambda: m.MIPGap)
+        return metrics
 
     def _solve(
         self,
@@ -1500,15 +1491,11 @@ class SCIP(Solver[None]):
 
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
-        return SolverMetrics(
-            solver_name=self.solver_name.value,
-            objective_value=_safe_get(
-                lambda: solution.objective if not np.isnan(solution.objective) else None
-            ),
-            solve_time=_safe_get(lambda: m.getSolvingTime()),
-            best_bound=_safe_get(lambda: m.getDualbound()),
-            mip_gap=_safe_get(lambda: m.getGap()),
-        )
+        metrics = super()._extract_metrics(solver_model, solution)
+        metrics.solve_time = _safe_get(lambda: m.getSolvingTime())
+        metrics.best_bound = _safe_get(lambda: m.getDualbound())
+        metrics.mip_gap = _safe_get(lambda: m.getGap())
+        return metrics
 
     def solve_problem_from_model(
         self,
