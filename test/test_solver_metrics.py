@@ -48,6 +48,12 @@ def test_solver_metrics_repr_empty() -> None:
     assert repr(m) == "SolverMetrics()"
 
 
+def test_solver_metrics_frozen() -> None:
+    m = SolverMetrics(solver_name="test")
+    with pytest.raises(AttributeError):
+        m.solver_name = "other"  # type: ignore[misc]
+
+
 # ---------------------------------------------------------------------------
 # Result backward compatibility tests
 # ---------------------------------------------------------------------------

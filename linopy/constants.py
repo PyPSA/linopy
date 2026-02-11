@@ -3,6 +3,7 @@
 Linopy module for defining constant values used within the package.
 """
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -211,7 +212,7 @@ class Solution:
     objective: float = field(default=np.nan)
 
 
-@dataclass
+@dataclass(frozen=True)
 class SolverMetrics:
     """
     Unified solver performance metrics.
@@ -229,10 +230,10 @@ class SolverMetrics:
 
     def __repr__(self) -> str:
         fields = []
-        for f in self.__dataclass_fields__:
-            val = getattr(self, f)
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
             if val is not None:
-                fields.append(f"{f}={val!r}")
+                fields.append(f"{f.name}={val!r}")
         return f"SolverMetrics({', '.join(fields)})"
 
 

@@ -6,6 +6,7 @@ Linopy module for solving lp files with different solvers.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import enum
 import io
 import logging
@@ -222,6 +223,7 @@ def _safe_get(func: Callable[[], Any]) -> Any:
     try:
         return func()
     except Exception:
+        logger.debug("Failed to extract solver metric", exc_info=True)
         return None
 
 
@@ -457,9 +459,11 @@ class CBC(Solver[None]):
 
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         metrics = super()._extract_metrics(solver_model, solution)
-        metrics.solve_time = _safe_get(lambda: solver_model.runtime)
-        metrics.mip_gap = _safe_get(lambda: solver_model.mip_gap)
-        return metrics
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: solver_model.runtime),
+            mip_gap=_safe_get(lambda: solver_model.mip_gap),
+        )
 
     def solve_problem_from_model(
         self,
@@ -950,15 +954,17 @@ class Highs(Solver[None]):
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         h = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
-        metrics.solve_time = _safe_get(lambda: h.getRunTime())
-        metrics.mip_gap = _safe_get(lambda: h.getInfoValue("mip_gap")[1])
 
         def _highs_best_bound() -> float | None:
             status, val = h.getInfoValue("mip_objective_bound")
             return val if status == 0 else None  # 0 = HighsStatus.kOk
 
-        metrics.best_bound = _safe_get(_highs_best_bound)
-        return metrics
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: h.getRunTime()),
+            mip_gap=_safe_get(lambda: h.getInfoValue("mip_gap")[1]),
+            best_bound=_safe_get(_highs_best_bound),
+        )
 
     def _set_solver_params(
         self,
@@ -1206,10 +1212,12 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
-        metrics.solve_time = _safe_get(lambda: m.Runtime)
-        metrics.best_bound = _safe_get(lambda: m.ObjBound)
-        metrics.mip_gap = _safe_get(lambda: m.MIPGap)
-        return metrics
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.Runtime),
+            best_bound=_safe_get(lambda: m.ObjBound),
+            mip_gap=_safe_get(lambda: m.MIPGap),
+        )
 
     def _solve(
         self,
@@ -1335,6 +1343,16 @@ class Cplex(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.solution.progress.get_time()),
+            best_bound=_safe_get(lambda: m.solution.MIP.get_best_objective()),
+            mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap()),
+        )
 
     def solve_problem_from_model(
         self,
@@ -1492,10 +1510,12 @@ class SCIP(Solver[None]):
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
-        metrics.solve_time = _safe_get(lambda: m.getSolvingTime())
-        metrics.best_bound = _safe_get(lambda: m.getDualbound())
-        metrics.mip_gap = _safe_get(lambda: m.getGap())
-        return metrics
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.getSolvingTime()),
+            best_bound=_safe_get(lambda: m.getDualbound()),
+            mip_gap=_safe_get(lambda: m.getGap()),
+        )
 
     def solve_problem_from_model(
         self,
@@ -1653,6 +1673,16 @@ class Xpress(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.attributes.time),
+            best_bound=_safe_get(lambda: m.attributes.bestbound),
+            mip_gap=_safe_get(lambda: m.attributes.miprelgap),
+        )
 
     def solve_problem_from_model(
         self,
@@ -1834,6 +1864,14 @@ class Mosek(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.getdouinf(mosek.dinfitem.optimizer_time)),
+        )
 
     def solve_problem_from_model(
         self,
@@ -2145,7 +2183,7 @@ class Mosek(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        metrics = self._extract_metrics(None, solution)
+        metrics = self._extract_metrics(m, solution)
         return Result(status, solution, metrics=metrics)
 
 
@@ -2169,6 +2207,16 @@ class COPT(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.SolvingTime),
+            best_bound=_safe_get(lambda: m.BestBnd),
+            mip_gap=_safe_get(lambda: m.BestGap),
+        )
 
     def solve_problem_from_model(
         self,
@@ -2285,9 +2333,9 @@ class COPT(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        metrics = self._extract_metrics(m, solution)
         env_.close()
 
-        metrics = self._extract_metrics(m, solution)
         return Result(status, solution, m, metrics)
 
 
@@ -2311,6 +2359,14 @@ class MindOpt(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.getAttr("SolvingTime")),
+        )
 
     def solve_problem_from_model(
         self,
@@ -2429,10 +2485,11 @@ class MindOpt(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        metrics = self._extract_metrics(m, solution)
+
         m.dispose()
         env_.dispose()
 
-        metrics = self._extract_metrics(m, solution)
         return Result(status, solution, m, metrics)
 
 
@@ -2475,6 +2532,13 @@ class cuPDLPx(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: solver_model.SolveTime),
+        )
 
     def solve_problem_from_file(
         self,
