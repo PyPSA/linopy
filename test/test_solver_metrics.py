@@ -126,9 +126,12 @@ direct_solvers = get_available_solvers_with_feature(
 file_io_solvers = get_available_solvers_with_feature(
     SolverFeature.READ_MODEL_FROM_FILE, available_solvers
 )
+mip_solvers = get_available_solvers_with_feature(
+    SolverFeature.INTEGER_VARIABLES, available_solvers
+)
 
 
-def _make_simple_model() -> Model:
+def _make_simple_lp() -> Model:
     m = Model()
     x = m.add_variables(
         lower=xr.DataArray(np.zeros(3), dims=["i"]),
@@ -140,9 +143,17 @@ def _make_simple_model() -> Model:
     return m
 
 
+def _make_simple_mip() -> Model:
+    m = Model()
+    x = m.add_variables(coords=[np.arange(3)], name="x", binary=True)
+    m.add_constraints(x.sum() >= 1, name="con")
+    m.add_objective(x.sum())
+    return m
+
+
 @pytest.mark.parametrize("solver", direct_solvers)
 def test_solver_metrics_direct(solver: str) -> None:
-    m = _make_simple_model()
+    m = _make_simple_lp()
     m.solve(solver_name=solver, io_api="direct")
     metrics = m.solver_metrics
     assert metrics is not None
@@ -155,7 +166,7 @@ def test_solver_metrics_direct(solver: str) -> None:
 
 @pytest.mark.parametrize("solver", file_io_solvers)
 def test_solver_metrics_file_io(solver: str) -> None:
-    m = _make_simple_model()
+    m = _make_simple_lp()
     m.solve(solver_name=solver, io_api="lp")
     metrics = m.solver_metrics
     assert metrics is not None
@@ -164,3 +175,23 @@ def test_solver_metrics_file_io(solver: str) -> None:
     assert metrics.objective_value == pytest.approx(1.0)
     assert metrics.solve_time is not None
     assert metrics.solve_time >= 0
+
+
+@pytest.mark.parametrize("solver", mip_solvers)
+def test_solver_metrics_mip(solver: str) -> None:
+    """Solve a MIP and verify mip_gap and best_bound are populated."""
+    m = _make_simple_mip()
+    if solver in direct_solvers:
+        m.solve(solver_name=solver, io_api="direct")
+    else:
+        m.solve(solver_name=solver, io_api="lp")
+    metrics = m.solver_metrics
+    assert metrics is not None
+    assert metrics.solver_name == solver
+    assert metrics.objective_value == pytest.approx(1.0)
+    assert metrics.solve_time is not None
+    assert metrics.solve_time >= 0
+    assert metrics.mip_gap is not None
+    assert metrics.mip_gap >= 0
+    assert metrics.best_bound is not None
+    assert isinstance(metrics.best_bound, float)

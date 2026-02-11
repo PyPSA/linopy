@@ -955,15 +955,18 @@ class Highs(Solver[None]):
         h = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
 
-        def _highs_best_bound() -> float | None:
-            status, val = h.getInfoValue("mip_objective_bound")
-            return val if status == 0 else None  # 0 = HighsStatus.kOk
+        def _highs_info(key: str) -> float:
+            status, val = h.getInfoValue(key)
+            if status != highspy.HighsStatus.kOk:
+                msg = f"Failed to get HiGHS info: {key}"
+                raise RuntimeError(msg)
+            return val
 
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: h.getRunTime()),
-            mip_gap=_safe_get(lambda: h.getInfoValue("mip_gap")[1]),
-            best_bound=_safe_get(_highs_best_bound),
+            mip_gap=_safe_get(lambda: _highs_info("mip_gap")),
+            best_bound=_safe_get(lambda: _highs_info("mip_dual_bound")),
         )
 
     def _set_solver_params(
