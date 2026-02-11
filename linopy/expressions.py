@@ -523,28 +523,66 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const
         return res
 
+    def _align_constant(
+        self: GenericExpression,
+        other: DataArray,
+        fill_value: float = 0,
+        join: str | None = None,
+    ) -> tuple[DataArray, DataArray, bool]:
+        """
+        Align a constant DataArray with self.const.
+
+        Parameters
+        ----------
+        other : DataArray
+            The constant to align.
+        fill_value : float, default: 0
+            Fill value for missing coordinates.
+        join : str, optional
+            Alignment method. If None, uses size-aware default behavior.
+
+        Returns
+        -------
+        self_const : DataArray
+            The expression's const, potentially reindexed.
+        aligned : DataArray
+            The aligned constant.
+        needs_data_reindex : bool
+            Whether the expression's data needs reindexing.
+        """
+        if join is None:
+            if other.sizes == self.const.sizes:
+                return self.const, other.assign_coords(coords=self.coords), False
+            return (
+                self.const,
+                other.reindex_like(self.const, fill_value=fill_value),
+                False,
+            )
+        elif join == "override":
+            return self.const, other.assign_coords(coords=self.coords), False
+        else:
+            self_const, aligned = xr.align(
+                self.const, other, join=join, fill_value=fill_value
+            )
+            return self_const, aligned, True
+
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
     ) -> GenericExpression:
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        if join is None:
-            if da.sizes == self.const.sizes:
-                da = da.assign_coords(coords=self.coords)
-            else:
-                da = da.reindex_like(self.const, fill_value=0)
-        elif join == "override":
-            da = da.assign_coords(coords=self.coords)
-        else:
-            self_const, da = xr.align(self.const, da, join=join, fill_value=0)
+        self_const, da, needs_data_reindex = self._align_constant(
+            da, fill_value=0, join=join
+        )
+        if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
                     const=self_const + da
                 ),
                 self.model,
             )
-        return self.assign(const=self.const + da)
+        return self.assign(const=self_const + da)
 
     def _apply_constant_op(
         self: GenericExpression,
@@ -554,14 +592,10 @@ class BaseExpression(ABC):
         join: str | None = None,
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        if join is None:
-            factor = factor.reindex_like(self.const, fill_value=fill_value)
-        elif join == "override":
-            factor = factor.assign_coords(coords=self.coords)
-        else:
-            self_const, factor = xr.align(
-                self.const, factor, join=join, fill_value=fill_value
-            )
+        self_const, factor, needs_data_reindex = self._align_constant(
+            factor, fill_value=fill_value, join=join
+        )
+        if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
             return self.__class__(
                 assign_multiindex_safe(
@@ -569,7 +603,7 @@ class BaseExpression(ABC):
                 ),
                 self.model,
             )
-        return self.assign(coeffs=op(self.coeffs, factor), const=op(self.const, factor))
+        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
