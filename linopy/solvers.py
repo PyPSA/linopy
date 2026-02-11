@@ -957,16 +957,6 @@ class Highs(Solver[None]):
         except Exception:
             pass
         try:
-            metrics.node_count = float(h.getInfoValue("mip_node_count")[1])
-        except Exception:
-            pass
-        try:
-            metrics.iteration_count = float(
-                h.getInfoValue("simplex_iteration_count")[1]
-            )
-        except Exception:
-            pass
-        try:
             metrics.mip_gap = h.getInfoValue("mip_gap")[1]
         except Exception:
             pass
@@ -1238,14 +1228,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             pass
         try:
             metrics.mip_gap = m.MIPGap
-        except Exception:
-            pass
-        try:
-            metrics.node_count = float(m.NodeCount)
-        except Exception:
-            pass
-        try:
-            metrics.iteration_count = float(m.IterCount)
         except Exception:
             pass
         return metrics
@@ -1545,14 +1527,6 @@ class SCIP(Solver[None]):
             pass
         try:
             metrics.mip_gap = m.getGap()
-        except Exception:
-            pass
-        try:
-            metrics.node_count = float(m.getNNodes())
-        except Exception:
-            pass
-        try:
-            metrics.iteration_count = float(m.getNLPIterations())
         except Exception:
             pass
         return metrics

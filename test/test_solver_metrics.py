@@ -25,8 +25,6 @@ def test_solver_metrics_defaults() -> None:
     assert m.objective_value is None
     assert m.best_bound is None
     assert m.mip_gap is None
-    assert m.node_count is None
-    assert m.iteration_count is None
 
 
 def test_solver_metrics_partial() -> None:

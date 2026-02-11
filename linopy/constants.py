@@ -225,8 +225,6 @@ class SolverMetrics:
     objective_value: float | None = None
     best_bound: float | None = None
     mip_gap: float | None = None
-    node_count: float | None = None
-    iteration_count: float | None = None
 
     def __repr__(self) -> str:
         fields = []
