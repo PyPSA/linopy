@@ -205,7 +205,23 @@ class Model:
     @property
     def solver_metrics(self) -> SolverMetrics | None:
         """
-        Solver performance metrics from the last solve, or None if not yet solved.
+        Solver performance metrics from the last solve, or ``None``
+        if the model has not been solved yet.
+
+        Returns a :class:`~linopy.constants.SolverMetrics` with fields
+        ``solver_name``, ``solve_time``, ``objective_value``,
+        ``best_bound``, and ``mip_gap``.  Fields the solver cannot
+        provide remain ``None``.
+
+        Reset to ``None`` by :meth:`reset_solution`.
+
+        Examples
+        --------
+        >>> m.solve(solver_name="highs")  # doctest: +SKIP
+        >>> m.solver_metrics.solve_time  # doctest: +SKIP
+        0.003
+        >>> m.solver_metrics.objective_value  # doctest: +SKIP
+        0.0
         """
         return self._solver_metrics
 

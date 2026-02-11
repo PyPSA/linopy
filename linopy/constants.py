@@ -216,8 +216,9 @@ class SolverMetrics:
     """
     Unified solver performance metrics.
 
-    All fields default to None and are populated by solvers on a best-effort
-    basis. Fields that a particular solver cannot provide remain None.
+    All fields default to ``None``. Solvers populate what they can;
+    unsupported fields remain ``None``.  Access via
+    :attr:`Model.solver_metrics` after calling :meth:`Model.solve`.
     """
 
     solver_name: str | None = None
