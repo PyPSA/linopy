@@ -714,6 +714,63 @@ class BaseExpression(ABC):
             )
         return self._divide_by_constant(other, join=join)
 
+    def le(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(LESS_EQUAL, rhs, join=join)
+
+    def ge(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(GREATER_EQUAL, rhs, join=join)
+
+    def eq(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(EQUAL, rhs, join=join)
+
     def pow(self, other: int) -> QuadraticExpression:
         """
         Power of the expression with a coefficient.
@@ -953,7 +1010,9 @@ class BaseExpression(ABC):
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> Constraint:
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: str | None = None
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -966,6 +1025,10 @@ class BaseExpression(ABC):
             reindexed to match expression coordinates (fill_value=np.nan).
             Extra dimensions in the RHS not present in the expression
             raise a ValueError. NaN entries in the RHS mean "no constraint".
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
 
         Returns
         -------
@@ -987,7 +1050,7 @@ class BaseExpression(ABC):
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
 
-        all_to_lhs = (self - rhs).data
+        all_to_lhs = self.sub(rhs, join=join).data
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
         )

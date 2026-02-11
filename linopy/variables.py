@@ -605,6 +605,51 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
+    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().le(rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().ge(rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().eq(rhs, join=join)
+
     def pow(self, other: int) -> QuadraticExpression:
         """
         Power of the variables with a coefficient. The only coefficient allowed is 2.
