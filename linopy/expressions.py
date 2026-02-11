@@ -540,7 +540,11 @@ class BaseExpression(ABC):
         if np.isscalar(other):
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        da = da.reindex_like(self.const, fill_value=0)
+        if da.sizes == self.const.sizes:
+            # follow overwriting logic from merge function
+            da = da.assign_coords(coords=self.coords)
+        else:
+            da = da.reindex_like(self.const, fill_value=0)
         return self.assign(const=self.const + da)
 
     def _multiply_by_constant(
