@@ -445,6 +445,22 @@ class CBC(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        objective = None if np.isnan(solution.objective) else solution.objective
+        metrics = SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=objective,
+        )
+        try:
+            metrics.solve_time = solver_model.runtime
+        except Exception:
+            pass
+        try:
+            metrics.mip_gap = solver_model.mip_gap
+        except Exception:
+            pass
+        return metrics
+
     def solve_problem_from_model(
         self,
         model: Model,
@@ -613,13 +629,7 @@ class CBC(Solver[None]):
         CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
 
         solver_model = CbcModel(mip_gap, runtime)
-        objective = None if np.isnan(solution.objective) else solution.objective
-        metrics = SolverMetrics(
-            solver_name=self.solver_name.value,
-            solve_time=runtime,
-            objective_value=objective,
-            mip_gap=mip_gap,
-        )
+        metrics = self._extract_metrics(solver_model, solution)
         return Result(status, solution, solver_model, metrics)
 
 
