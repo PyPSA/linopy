@@ -5,6 +5,9 @@ Tests for the SolverMetrics feature.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -12,6 +15,18 @@ import xarray as xr
 from linopy import Model, available_solvers
 from linopy.constants import Result, Solution, SolverMetrics, Status
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
+from linopy.solvers import (
+    CBC,
+    COPT,
+    SCIP,
+    Cplex,
+    Gurobi,
+    Highs,
+    MindOpt,
+    Mosek,
+    Xpress,
+    cuPDLPx,
+)
 
 # ---------------------------------------------------------------------------
 # SolverMetrics dataclass tests
@@ -164,3 +179,130 @@ def test_solver_metrics_file_io(solver: str) -> None:
     assert metrics.solver_name == solver
     assert metrics.objective_value is not None
     assert metrics.objective_value == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Mock-based _extract_metrics unit tests for each solver override
+# ---------------------------------------------------------------------------
+
+_SOLUTION = Solution(objective=42.0)
+
+
+@pytest.mark.skipif("cbc" not in available_solvers, reason="CBC not installed")
+def test_cbc_extract_metrics() -> None:
+    solver_model = SimpleNamespace(runtime=1.5, mip_gap=0.01)
+    solver = CBC()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 1.5
+    assert metrics.mip_gap == 0.01
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+def test_highs_extract_metrics() -> None:
+    solver_model = MagicMock()
+    solver_model.getRunTime.return_value = 2.0
+    solver_model.getInfoValue.side_effect = lambda key: {
+        "mip_gap": (0, 0.05),
+        "mip_objective_bound": (0, 40.0),
+    }[key]
+    solver = Highs()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 2.0
+    assert metrics.mip_gap == 0.05
+    assert metrics.best_bound == 40.0
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_gurobi_extract_metrics() -> None:
+    solver_model = SimpleNamespace(Runtime=3.0, ObjBound=39.0, MIPGap=0.02)
+    solver = Gurobi()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 3.0
+    assert metrics.best_bound == 39.0
+    assert metrics.mip_gap == 0.02
+
+
+@pytest.mark.skipif("scip" not in available_solvers, reason="SCIP not installed")
+def test_scip_extract_metrics() -> None:
+    solver_model = MagicMock()
+    solver_model.getSolvingTime.return_value = 4.0
+    solver_model.getDualbound.return_value = 38.0
+    solver_model.getGap.return_value = 0.03
+    solver = SCIP()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 4.0
+    assert metrics.best_bound == 38.0
+    assert metrics.mip_gap == 0.03
+
+
+@pytest.mark.skipif("cplex" not in available_solvers, reason="CPLEX not installed")
+def test_cplex_extract_metrics() -> None:
+    solver_model = MagicMock()
+    solver_model.solution.progress.get_time.return_value = 5.0
+    solver_model.solution.MIP.get_best_objective.return_value = 37.0
+    solver_model.solution.MIP.get_mip_relative_gap.return_value = 0.04
+    solver = Cplex()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 5.0
+    assert metrics.best_bound == 37.0
+    assert metrics.mip_gap == 0.04
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_xpress_extract_metrics() -> None:
+    solver_model = SimpleNamespace(
+        attributes=SimpleNamespace(time=6.0, bestbound=36.0, miprelgap=0.05)
+    )
+    solver = Xpress()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 6.0
+    assert metrics.best_bound == 36.0
+    assert metrics.mip_gap == 0.05
+
+
+@pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
+def test_mosek_extract_metrics() -> None:
+    solver_model = MagicMock()
+    solver_model.getdouinf.return_value = 7.0
+    solver = Mosek()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 7.0
+
+
+@pytest.mark.skipif("copt" not in available_solvers, reason="COPT not installed")
+def test_copt_extract_metrics() -> None:
+    solver_model = SimpleNamespace(SolvingTime=8.0, BestBnd=35.0, BestGap=0.06)
+    solver = COPT()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 8.0
+    assert metrics.best_bound == 35.0
+    assert metrics.mip_gap == 0.06
+
+
+@pytest.mark.skipif("mindopt" not in available_solvers, reason="MindOpt not installed")
+def test_mindopt_extract_metrics() -> None:
+    solver_model = MagicMock()
+    solver_model.getAttr.return_value = 9.0
+    solver = MindOpt()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 9.0
+
+
+@pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
+def test_cupdlpx_extract_metrics() -> None:
+    solver_model = SimpleNamespace(SolveTime=10.0)
+    solver = cuPDLPx()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time == 10.0
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_extract_metrics_graceful_on_missing_attr() -> None:
+    """_safe_get should return None when attributes are missing."""
+    solver_model = SimpleNamespace()  # no attributes at all
+    solver = Gurobi()
+    metrics = solver._extract_metrics(solver_model, _SOLUTION)
+    assert metrics.solve_time is None
+    assert metrics.best_bound is None
+    assert metrics.mip_gap is None
+    assert metrics.objective_value == 42.0
