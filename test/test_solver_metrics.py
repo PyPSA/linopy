@@ -120,15 +120,30 @@ def test_model_metrics_reset() -> None:
 # Solver-specific integration tests (parametrized over available solvers)
 # ---------------------------------------------------------------------------
 
-direct_solvers = get_available_solvers_with_feature(
-    SolverFeature.DIRECT_API, available_solvers
-)
-file_io_solvers = get_available_solvers_with_feature(
-    SolverFeature.READ_MODEL_FROM_FILE, available_solvers
-)
-mip_solvers = get_available_solvers_with_feature(
-    SolverFeature.INTEGER_VARIABLES, available_solvers
-)
+# Solvers that have a tested _extract_metrics override providing solve_time etc.
+_solvers_with_metrics = {"gurobi", "highs", "scip", "cplex", "xpress", "mosek"}
+
+direct_solvers = [
+    s
+    for s in get_available_solvers_with_feature(
+        SolverFeature.DIRECT_API, available_solvers
+    )
+    if s in _solvers_with_metrics
+]
+file_io_solvers = [
+    s
+    for s in get_available_solvers_with_feature(
+        SolverFeature.READ_MODEL_FROM_FILE, available_solvers
+    )
+    if s in _solvers_with_metrics
+]
+mip_solvers = [
+    s
+    for s in get_available_solvers_with_feature(
+        SolverFeature.INTEGER_VARIABLES, available_solvers
+    )
+    if s in _solvers_with_metrics
+]
 
 
 def _make_simple_lp() -> Model:
