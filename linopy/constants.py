@@ -212,6 +212,32 @@ class Solution:
 
 
 @dataclass
+class SolverMetrics:
+    """
+    Unified solver performance metrics.
+
+    All fields default to None and are populated by solvers on a best-effort
+    basis. Fields that a particular solver cannot provide remain None.
+    """
+
+    solver_name: str | None = None
+    solve_time: float | None = None
+    objective_value: float | None = None
+    best_bound: float | None = None
+    mip_gap: float | None = None
+    node_count: float | None = None
+    iteration_count: float | None = None
+
+    def __repr__(self) -> str:
+        fields = []
+        for f in self.__dataclass_fields__:
+            val = getattr(self, f)
+            if val is not None:
+                fields.append(f"{f}={val!r}")
+        return f"SolverMetrics({', '.join(fields)})"
+
+
+@dataclass
 class Result:
     """
     Result of the optimization.
@@ -220,6 +246,7 @@ class Result:
     status: Status
     solution: Solution | None = None
     solver_model: Any = None
+    metrics: SolverMetrics | None = None
 
     def __repr__(self) -> str:
         solver_model_string = (
@@ -232,12 +259,16 @@ class Result:
             )
         else:
             solution_string = "Solution: None\n"
+        metrics_string = ""
+        if self.metrics is not None:
+            metrics_string = f"Solver metrics: {self.metrics}\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
             + solution_string
             + f"Solver model: {solver_model_string}\n"
-            f"Solver message: {self.status.legacy_status}"
+            + metrics_string
+            + f"Solver message: {self.status.legacy_status}"
         )
 
     def info(self) -> None:

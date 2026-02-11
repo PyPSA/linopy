@@ -29,6 +29,7 @@ import linopy.io
 from linopy.constants import (
     Result,
     Solution,
+    SolverMetrics,
     SolverStatus,
     Status,
     TerminationCondition,
@@ -410,6 +411,19 @@ class Solver(ABC, Generic[EnvType]):
             msg = "No problem file or model specified."
             raise ValueError(msg)
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        """
+        Extract solver performance metrics.
+
+        Default implementation returns basic metrics. Subclasses override
+        to provide solver-specific metrics.
+        """
+        objective = None if np.isnan(solution.objective) else solution.objective
+        return SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=objective,
+        )
+
     @property
     def solver_name(self) -> SolverName:
         return SolverName[self.__class__.__name__]
@@ -598,7 +612,15 @@ class CBC(Solver[None]):
             runtime = float(m.group(1))
         CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
 
-        return Result(status, solution, CbcModel(mip_gap, runtime))
+        solver_model = CbcModel(mip_gap, runtime)
+        objective = None if np.isnan(solution.objective) else solution.objective
+        metrics = SolverMetrics(
+            solver_name=self.solver_name.value,
+            solve_time=runtime,
+            objective_value=objective,
+            mip_gap=mip_gap,
+        )
+        return Result(status, solution, solver_model, metrics)
 
 
 class GLPK(Solver[None]):
@@ -728,7 +750,8 @@ class GLPK(Solver[None]):
 
         if not os.path.exists(solution_fn):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-            return Result(status, Solution())
+            metrics = SolverMetrics(solver_name=self.solver_name.value)
+            return Result(status, Solution(), metrics=metrics)
 
         f = open(solution_fn)
 
@@ -768,7 +791,8 @@ class GLPK(Solver[None]):
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
-        return Result(status, solution)
+        metrics = self._extract_metrics(None, solution)
+        return Result(status, solution, metrics=metrics)
 
 
 class Highs(Solver[None]):
@@ -911,6 +935,39 @@ class Highs(Solver[None]):
             sense=read_sense_from_problem_file(problem_fn),
         )
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        h = solver_model
+        objective = None if np.isnan(solution.objective) else solution.objective
+        metrics = SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=objective,
+        )
+        try:
+            metrics.solve_time = h.getRunTime()
+        except Exception:
+            pass
+        try:
+            metrics.node_count = float(h.getInfoValue("mip_node_count")[1])
+        except Exception:
+            pass
+        try:
+            metrics.iteration_count = float(
+                h.getInfoValue("simplex_iteration_count")[1]
+            )
+        except Exception:
+            pass
+        try:
+            metrics.mip_gap = h.getInfoValue("mip_gap")[1]
+        except Exception:
+            pass
+        try:
+            obj_bound = h.getInfoValue("mip_objective_bound")
+            if obj_bound[0] == 0:  # HighsStatus.kOk
+                metrics.best_bound = obj_bound[1]
+        except Exception:
+            pass
+        return metrics
+
     def _set_solver_params(
         self,
         highs_solver: highspy.Highs,
@@ -1019,7 +1076,8 @@ class Highs(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, h)
+        metrics = self._extract_metrics(h, solution)
+        return Result(status, solution, h, metrics)
 
 
 class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
@@ -1153,6 +1211,35 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 sense=sense,
             )
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        objective = None if np.isnan(solution.objective) else solution.objective
+        metrics = SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=objective,
+        )
+        try:
+            metrics.solve_time = m.Runtime
+        except Exception:
+            pass
+        try:
+            metrics.best_bound = m.ObjBound
+        except Exception:
+            pass
+        try:
+            metrics.mip_gap = m.MIPGap
+        except Exception:
+            pass
+        try:
+            metrics.node_count = float(m.NodeCount)
+        except Exception:
+            pass
+        try:
+            metrics.iteration_count = float(m.IterCount)
+        except Exception:
+            pass
+        return metrics
+
     def _solve(
         self,
         m: gurobipy.Model,
@@ -1254,7 +1341,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class Cplex(Solver[None]):
@@ -1410,7 +1498,8 @@ class Cplex(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class SCIP(Solver[None]):
@@ -1428,6 +1517,35 @@ class SCIP(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        objective = None if np.isnan(solution.objective) else solution.objective
+        metrics = SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=objective,
+        )
+        try:
+            metrics.solve_time = m.getSolvingTime()
+        except Exception:
+            pass
+        try:
+            metrics.best_bound = m.getDualbound()
+        except Exception:
+            pass
+        try:
+            metrics.mip_gap = m.getGap()
+        except Exception:
+            pass
+        try:
+            metrics.node_count = float(m.getNNodes())
+        except Exception:
+            pass
+        try:
+            metrics.iteration_count = float(m.getNLPIterations())
+        except Exception:
+            pass
+        return metrics
 
     def solve_problem_from_model(
         self,
@@ -1563,7 +1681,8 @@ class SCIP(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class Xpress(Solver[None]):
@@ -1733,7 +1852,8 @@ class Xpress(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
@@ -2075,7 +2195,8 @@ class Mosek(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        metrics = self._extract_metrics(None, solution)
+        return Result(status, solution, metrics=metrics)
 
 
 class COPT(Solver[None]):
@@ -2216,7 +2337,8 @@ class COPT(Solver[None]):
 
         env_.close()
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class MindOpt(Solver[None]):
@@ -2360,7 +2482,8 @@ class MindOpt(Solver[None]):
         m.dispose()
         env_.dispose()
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class PIPS(Solver[None]):
@@ -2609,7 +2732,8 @@ class cuPDLPx(Solver[None]):
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
-        return Result(status, solution, cu_model)
+        metrics = self._extract_metrics(cu_model, solution)
+        return Result(status, solution, cu_model, metrics)
 
     def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
         """
