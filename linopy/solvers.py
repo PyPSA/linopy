@@ -15,6 +15,7 @@ import re
 import subprocess as sub
 import sys
 import threading
+import time
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -1352,7 +1353,7 @@ class Cplex(Solver[None]):
         metrics = super()._extract_metrics(solver_model, solution)
         return dataclasses.replace(
             metrics,
-            solve_time=_safe_get(lambda: m.solution.progress.get_time()),
+            solve_time=_safe_get(lambda: self._solve_time),
             dual_bound=_safe_get(lambda: m.solution.MIP.get_best_objective()),
             mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap()),
         )
@@ -1446,8 +1447,10 @@ class Cplex(Solver[None]):
 
         is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
+        _t0 = time.perf_counter()
         with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
             m.solve()
+        self._solve_time = time.perf_counter() - _t0
 
         if solution_fn is not None:
             try:
@@ -1680,11 +1683,19 @@ class Xpress(Solver[None]):
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+
+        def _xpress_mip_gap() -> float | None:
+            obj = m.attributes.mipbestobjval
+            bound = m.attributes.bestbound
+            if obj == 0:
+                return 0.0 if bound == 0 else None
+            return abs(obj - bound) / abs(obj)
+
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.attributes.time),
             dual_bound=_safe_get(lambda: m.attributes.bestbound),
-            mip_gap=_safe_get(lambda: m.attributes.miprelgap),
+            mip_gap=_safe_get(_xpress_mip_gap),
         )
 
     def solve_problem_from_model(
@@ -1874,6 +1885,8 @@ class Mosek(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.getdouinf(mosek.dinfitem.optimizer_time)),
+            dual_bound=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_bound)),
+            mip_gap=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_rel_gap)),
         )
 
     def solve_problem_from_model(
@@ -2211,16 +2224,6 @@ class COPT(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
-        m = solver_model
-        metrics = super()._extract_metrics(solver_model, solution)
-        return dataclasses.replace(
-            metrics,
-            solve_time=_safe_get(lambda: m.SolvingTime),
-            dual_bound=_safe_get(lambda: m.BestBnd),
-            mip_gap=_safe_get(lambda: m.BestGap),
-        )
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -2362,14 +2365,6 @@ class MindOpt(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
-
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
-        m = solver_model
-        metrics = super()._extract_metrics(solver_model, solution)
-        return dataclasses.replace(
-            metrics,
-            solve_time=_safe_get(lambda: m.getAttr("SolvingTime")),
-        )
 
     def solve_problem_from_model(
         self,
@@ -2535,13 +2530,6 @@ class cuPDLPx(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
-
-    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
-        metrics = super()._extract_metrics(solver_model, solution)
-        return dataclasses.replace(
-            metrics,
-            solve_time=_safe_get(lambda: solver_model.SolveTime),
-        )
 
     def solve_problem_from_file(
         self,
