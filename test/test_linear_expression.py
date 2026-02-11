@@ -1764,3 +1764,286 @@ def test_constant_only_expression_mul_linexpr_with_vars_and_const(
     assert not result_rev.is_constant
     assert (result_rev.coeffs == expected_coeffs).all()
     assert (result_rev.const == expected_const).all()
+
+
+class TestJoinParameter:
+    @pytest.fixture
+    def m2(self) -> Model:
+        m = Model()
+        m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        m.add_variables(coords=[pd.Index([1, 2, 3], name="i")], name="b")
+        m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="c")
+        return m
+
+    @pytest.fixture
+    def a(self, m2: Model) -> Variable:
+        return m2.variables["a"]
+
+    @pytest.fixture
+    def b(self, m2: Model) -> Variable:
+        return m2.variables["b"]
+
+    @pytest.fixture
+    def c(self, m2: Model) -> Variable:
+        return m2.variables["c"]
+
+    def test_add_join_none_preserves_default(self, a: Variable, b: Variable) -> None:
+        result_default = a.to_linexpr() + b.to_linexpr()
+        result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
+        assert_linequal(result_default, result_none)
+
+    def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
+        result = a.to_linexpr().add(b.to_linexpr(), join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_add_expr_join_outer(self, a: Variable, b: Variable) -> None:
+        result = a.to_linexpr().add(b.to_linexpr(), join="outer")
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+
+    def test_add_expr_join_left(self, a: Variable, b: Variable) -> None:
+        result = a.to_linexpr().add(b.to_linexpr(), join="left")
+        assert list(result.data.indexes["i"]) == [0, 1, 2]
+
+    def test_add_expr_join_right(self, a: Variable, b: Variable) -> None:
+        result = a.to_linexpr().add(b.to_linexpr(), join="right")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_add_constant_join_inner(self, a: Variable) -> None:
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_add_constant_join_outer(self, a: Variable) -> None:
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().add(const, join="outer")
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+
+    def test_add_constant_join_override(self, a: Variable, c: Variable) -> None:
+        expr = a.to_linexpr()
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [0, 1, 2]})
+        result = expr.add(const, join="override")
+        assert list(result.data.indexes["i"]) == [0, 1, 2]
+        assert (result.const.values == const.values).all()
+
+    def test_sub_expr_join_inner(self, a: Variable, b: Variable) -> None:
+        result = a.to_linexpr().sub(b.to_linexpr(), join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_mul_constant_join_inner(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().mul(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_mul_constant_join_outer(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().mul(const, join="outer")
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+        assert result.coeffs.sel(i=0).item() == 0
+        assert result.coeffs.sel(i=1).item() == 2
+        assert result.coeffs.sel(i=2).item() == 3
+
+    def test_div_constant_join_inner(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().div(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_div_constant_join_outer(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.to_linexpr().div(const, join="outer")
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+
+    def test_variable_add_join(self, a: Variable, b: Variable) -> None:
+        result = a.add(b, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_variable_sub_join(self, a: Variable, b: Variable) -> None:
+        result = a.sub(b, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_variable_mul_join(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.mul(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_variable_div_join(self, a: Variable) -> None:
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = a.div(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_mul_expr_with_join_raises(self, a: Variable, b: Variable) -> None:
+        with pytest.raises(TypeError, match="join parameter is not supported"):
+            a.to_linexpr().mul(b.to_linexpr(), join="inner")
+
+    def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
+        result = merge([a.to_linexpr(), b.to_linexpr()], join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2]
+
+    def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
+        result = a.to_linexpr().add(c.to_linexpr(), join="override")
+        assert list(result.data.indexes["i"]) == [0, 1, 2]
+
+    def test_add_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
+        expr_a = 1 * a + 5
+        expr_b = 2 * b + 10
+        result = expr_a.add(expr_b, join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.const.sel(i=0).item() == 5
+        assert result.const.sel(i=1).item() == 15
+        assert result.const.sel(i=2).item() == 15
+        assert result.const.sel(i=3).item() == 10
+
+    def test_add_expr_inner_const_values(self, a: Variable, b: Variable) -> None:
+        expr_a = 1 * a + 5
+        expr_b = 2 * b + 10
+        result = expr_a.add(expr_b, join="inner")
+        assert list(result.coords["i"].values) == [1, 2]
+        assert result.const.sel(i=1).item() == 15
+        assert result.const.sel(i=2).item() == 15
+
+    def test_add_constant_outer_fill_values(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        const = xr.DataArray([10, 20], dims=["i"], coords={"i": [1, 3]})
+        result = expr.add(const, join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.const.sel(i=0).item() == 5
+        assert result.const.sel(i=1).item() == 15
+        assert result.const.sel(i=2).item() == 5
+        assert result.const.sel(i=3).item() == 20
+
+    def test_add_constant_inner_fill_values(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        const = xr.DataArray([10, 20], dims=["i"], coords={"i": [1, 3]})
+        result = expr.add(const, join="inner")
+        assert list(result.coords["i"].values) == [1]
+        assert result.const.sel(i=1).item() == 15
+
+    def test_add_constant_override_positional(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr.add(other, join="override")
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [15, 25, 35])
+
+    def test_sub_constant_override(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr.sub(other, join="override")
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [-5, -15, -25])
+
+    def test_sub_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
+        expr_a = 1 * a + 5
+        expr_b = 2 * b + 10
+        result = expr_a.sub(expr_b, join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.const.sel(i=0).item() == 5
+        assert result.const.sel(i=1).item() == -5
+        assert result.const.sel(i=2).item() == -5
+        assert result.const.sel(i=3).item() == -10
+
+    def test_mul_constant_override_positional(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr.mul(other, join="override")
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [10, 15, 20])
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
+
+    def test_mul_constant_outer_fill_values(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
+        result = expr.mul(other, join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.const.sel(i=0).item() == 0
+        assert result.const.sel(i=1).item() == 10
+        assert result.const.sel(i=2).item() == 0
+        assert result.const.sel(i=3).item() == 0
+        assert result.coeffs.squeeze().sel(i=1).item() == 2
+        assert result.coeffs.squeeze().sel(i=0).item() == 0
+
+    def test_div_constant_override_positional(self, a: Variable) -> None:
+        expr = 1 * a + 10
+        other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr.div(other, join="override")
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
+
+    def test_div_constant_outer_fill_values(self, a: Variable) -> None:
+        expr = 1 * a + 10
+        other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
+        result = expr.div(other, join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.const.sel(i=1).item() == pytest.approx(5.0)
+        assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
+        assert result.const.sel(i=0).item() == pytest.approx(10.0)
+        assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
+
+    def test_div_expr_with_join_raises(self, a: Variable, b: Variable) -> None:
+        with pytest.raises(TypeError):
+            a.to_linexpr().div(b.to_linexpr(), join="outer")
+
+    def test_variable_add_outer_values(self, a: Variable, b: Variable) -> None:
+        result = a.add(b, join="outer")
+        assert isinstance(result, LinearExpression)
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+        assert result.nterm == 2
+
+    def test_variable_mul_override(self, a: Variable) -> None:
+        other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
+        result = a.mul(other, join="override")
+        assert isinstance(result, LinearExpression)
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
+
+    def test_variable_div_override(self, a: Variable) -> None:
+        other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
+        result = a.div(other, join="override")
+        assert isinstance(result, LinearExpression)
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_almost_equal(
+            result.coeffs.squeeze().values, [0.5, 0.2, 0.1]
+        )
+
+    def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
+        result = merge([a.to_linexpr(), b.to_linexpr()], join="outer")
+        assert set(result.coords["i"].values) == {0, 1, 2, 3}
+
+    def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
+        expr_a = 1 * a + 5
+        const = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})
+        for join in ["override", "outer", "inner"]:
+            result = expr_a.add(const, join=join)
+            assert list(result.coords["i"].values) == [0, 1, 2]
+            np.testing.assert_array_equal(result.const.values, [6, 7, 8])
+
+    def test_add_scalar_with_explicit_join(self, a: Variable) -> None:
+        expr = 1 * a + 5
+        result = expr.add(10, join="override")
+        np.testing.assert_array_equal(result.const.values, [15, 15, 15])
+        assert list(result.coords["i"].values) == [0, 1, 2]
+
+    def test_quadratic_add_constant_join_inner(self, a: Variable, b: Variable) -> None:
+        quad = a.to_linexpr() * b.to_linexpr()
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
+        result = quad.add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
+        quad = a.to_linexpr() * a.to_linexpr()
+        const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
+        result = quad.add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [0, 1]
+
+    def test_quadratic_mul_constant_join_inner(self, a: Variable, b: Variable) -> None:
+        quad = a.to_linexpr() * b.to_linexpr()
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = quad.mul(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_merge_join_left(self, a: Variable, b: Variable) -> None:
+        result = merge([a.to_linexpr(), b.to_linexpr()], join="left")
+        assert list(result.data.indexes["i"]) == [0, 1, 2]
+
+    def test_merge_join_right(self, a: Variable, b: Variable) -> None:
+        result = merge([a.to_linexpr(), b.to_linexpr()], join="right")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
