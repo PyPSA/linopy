@@ -749,7 +749,7 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask).astype(bool)
+            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
             assert set(mask.dims).issubset(data.dims), (
                 "Dimensions of mask not a subset of resulting labels dimensions."
             )
