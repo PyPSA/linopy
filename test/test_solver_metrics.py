@@ -23,7 +23,7 @@ def test_solver_metrics_defaults() -> None:
     assert m.solver_name is None
     assert m.solve_time is None
     assert m.objective_value is None
-    assert m.best_bound is None
+    assert m.dual_bound is None
     assert m.mip_gap is None
 
 
@@ -40,7 +40,7 @@ def test_solver_metrics_repr_only_non_none() -> None:
     assert "solver_name='gurobi'" in r
     assert "solve_time=2.3" in r
     assert "objective_value" not in r
-    assert "best_bound" not in r
+    assert "dual_bound" not in r
 
 
 def test_solver_metrics_repr_empty() -> None:
@@ -179,7 +179,7 @@ def test_solver_metrics_file_io(solver: str) -> None:
 
 @pytest.mark.parametrize("solver", mip_solvers)
 def test_solver_metrics_mip(solver: str) -> None:
-    """Solve a MIP and verify mip_gap and best_bound are populated."""
+    """Solve a MIP and verify mip_gap and dual_bound are populated."""
     m = _make_simple_mip()
     if solver in direct_solvers:
         m.solve(solver_name=solver, io_api="direct")
@@ -193,5 +193,5 @@ def test_solver_metrics_mip(solver: str) -> None:
     assert metrics.solve_time >= 0
     assert metrics.mip_gap is not None
     assert metrics.mip_gap >= 0
-    assert metrics.best_bound is not None
-    assert isinstance(metrics.best_bound, float)
+    assert metrics.dual_bound is not None
+    assert isinstance(metrics.dual_bound, float)

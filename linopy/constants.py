@@ -220,12 +220,27 @@ class SolverMetrics:
     All fields default to ``None``. Solvers populate what they can;
     unsupported fields remain ``None``.  Access via
     :attr:`Model.solver_metrics` after calling :meth:`Model.solve`.
+
+    Attributes
+    ----------
+    solver_name : str or None
+        Name of the solver used.
+    solve_time : float or None
+        Wall-clock time spent solving (seconds).
+    objective_value : float or None
+        Objective value of the best solution found.
+    dual_bound : float or None
+        Best bound on the objective from the MIP relaxation (also known as
+        "best bound"). Only populated for integer programs.
+    mip_gap : float or None
+        Relative gap between the objective value and the dual bound.
+        Only populated for integer programs.
     """
 
     solver_name: str | None = None
     solve_time: float | None = None
     objective_value: float | None = None
-    best_bound: float | None = None
+    dual_bound: float | None = None
     mip_gap: float | None = None
 
     def __repr__(self) -> str:

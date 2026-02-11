@@ -966,7 +966,7 @@ class Highs(Solver[None]):
             metrics,
             solve_time=_safe_get(lambda: h.getRunTime()),
             mip_gap=_safe_get(lambda: _highs_info("mip_gap")),
-            best_bound=_safe_get(lambda: _highs_info("mip_dual_bound")),
+            dual_bound=_safe_get(lambda: _highs_info("mip_dual_bound")),
         )
 
     def _set_solver_params(
@@ -1218,7 +1218,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.Runtime),
-            best_bound=_safe_get(lambda: m.ObjBound),
+            dual_bound=_safe_get(lambda: m.ObjBound),
             mip_gap=_safe_get(lambda: m.MIPGap),
         )
 
@@ -1353,7 +1353,7 @@ class Cplex(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.solution.progress.get_time()),
-            best_bound=_safe_get(lambda: m.solution.MIP.get_best_objective()),
+            dual_bound=_safe_get(lambda: m.solution.MIP.get_best_objective()),
             mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap()),
         )
 
@@ -1516,7 +1516,7 @@ class SCIP(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.getSolvingTime()),
-            best_bound=_safe_get(lambda: m.getDualbound()),
+            dual_bound=_safe_get(lambda: m.getDualbound()),
             mip_gap=_safe_get(lambda: m.getGap()),
         )
 
@@ -1683,7 +1683,7 @@ class Xpress(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.attributes.time),
-            best_bound=_safe_get(lambda: m.attributes.bestbound),
+            dual_bound=_safe_get(lambda: m.attributes.bestbound),
             mip_gap=_safe_get(lambda: m.attributes.miprelgap),
         )
 
@@ -2217,7 +2217,7 @@ class COPT(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.SolvingTime),
-            best_bound=_safe_get(lambda: m.BestBnd),
+            dual_bound=_safe_get(lambda: m.BestBnd),
             mip_gap=_safe_get(lambda: m.BestGap),
         )
 
