@@ -1399,3 +1399,50 @@ def test_constant_only_expression_mul_linexpr_with_vars_and_const(
     assert not result_rev.is_constant
     assert (result_rev.coeffs == expected_coeffs).all()
     assert (result_rev.const == expected_const).all()
+
+
+def test_variable_names() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+
+    expr = a + b
+    assert expr.nterm == 2
+    assert expr.variable_names == {"a", "b"}
+
+    mask = xr.DataArray(False, coords=[time])
+    expr = a + (b * 1).where(mask)
+    assert expr.nterm == 2
+    assert expr.variable_names == {"a"}
+
+    expr = (b * 1).where(mask)
+    assert expr.nterm == 1
+    assert expr.variable_names == set()
+
+    expr = LinearExpression.from_constant(model=m, constant=5)
+    assert expr.nterm == 0
+    assert expr.variable_names == set()
+
+
+def test_nterm() -> None:
+    m = Model()
+    time = pd.Index(range(3), name="time")
+    all_false = xr.DataArray(False, coords=[time])
+    not_0 = xr.DataArray([False, True, True], coords=[time])
+    not_1 = xr.DataArray([True, False, True], coords=[time])
+    not_2 = xr.DataArray([True, True, False], coords=[time])
+
+    a = m.add_variables(name="a", coords=[time])
+    b = m.add_variables(name="b", coords=[time])
+    c = m.add_variables(name="c", coords=[time])
+
+    expr = (a.where(not_0) + b.where(not_1) + c.where(not_2)).densify_terms()
+    assert expr.nterm == 3
+
+    expr = a + b.where(all_false)
+    assert expr.nterm == 2
+
+    expr = expr.simplify()
+    assert expr.nterm == 1

@@ -4,13 +4,14 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
+
 Version 0.6.3
 --------------
 
 **Fix Regression**
 
 *  Reinsert broadcasting logic of mask object to be fully compatible with performance improvements in version 0.6.2 using `np.where` instead of `xr.where`.
-
 
 Version 0.6.2
 --------------
