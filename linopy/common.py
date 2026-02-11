@@ -286,6 +286,32 @@ def as_dataarray(
     return arr
 
 
+def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
+    """
+    Broadcast a boolean mask to match the shape of labels.
+
+    Ensures that mask dimensions are a subset of labels dimensions, broadcasts
+    the mask accordingly, and fills any NaN values (from missing coordinates)
+    with False while emitting a FutureWarning.
+    """
+    assert set(mask.dims).issubset(labels.dims), (
+        "Dimensions of mask not a subset of resulting labels dimensions."
+    )
+    mask = mask.broadcast_like(labels)
+    if mask.isnull().any():
+        warn(
+            "Mask contains coordinates not covered by the data dimensions. "
+            "Missing values will be filled with False (masked out). "
+            "In a future version, this will raise an error. "
+            "Use mask.reindex() or `linopy.align()` to explicitly handle missing "
+            "coordinates.",
+            FutureWarning,
+            stacklevel=3,
+        )
+        mask = mask.fillna(False).astype(bool)
+    return mask
+
+
 # TODO: rename to to_pandas_dataframe
 def to_dataframe(
     ds: Dataset,
@@ -447,6 +473,25 @@ def group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
     by = [c for c in ["labels"] + varcols if c in df.columns]
     df = df.group_by(by, maintain_order=True).agg(agg_list)
     return df
+
+
+def maybe_group_terms_polars(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Group terms only if there are duplicate (labels, vars) pairs.
+
+    This avoids the expensive group_by operation when terms already
+    reference distinct variables (e.g. ``x - y`` has ``_term=2`` but
+    no duplicates). When skipping, columns are reordered to match the
+    output of ``group_terms_polars``.
+    """
+    varcols = [c for c in df.columns if c.startswith("vars")]
+    keys = [c for c in ["labels"] + varcols if c in df.columns]
+    key_count = df.select(pl.struct(keys).n_unique()).item()
+    if key_count < df.height:
+        return group_terms_polars(df)
+    # Match column order of group_terms (group-by keys, coeffs, rest)
+    rest = [c for c in df.columns if c not in keys and c != "coeffs"]
+    return df.select(keys + ["coeffs"] + rest)
 
 
 def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:

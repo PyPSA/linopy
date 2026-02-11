@@ -4,20 +4,37 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Fix docs (pick highs solver)
-* Add the `sphinx-copybutton` to the documentation
 * Add support for the `knitro` solver via the knitro python API
+
+Version 0.6.3
+--------------
+
+**Fix Regression**
+
+*  Reinsert broadcasting logic of mask object to be fully compatible with performance improvements in version 0.6.2 using `np.where` instead of `xr.where`.
+
+
+Version 0.6.2
+--------------
+
+**Features**
+
+* Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
+
+**Performance**
+
+* Speed up LP file writing by 2-2.7x on large models through Polars streaming engine, join-based constraint assembly, and reduced per-constraint overhead
+
+**Bug Fixes**
+
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
+* Fix docs and Gurobi license handling
 
 Version 0.6.1
 --------------
 
 * Avoid Gurobi initialization on linopy import.
 * Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
-
-* Fix compatibility for xpress versions below 9.6 (regression)
-* Add support for the Artelys Knitro solver (via the Knitro Python API)
-* Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
-* Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
 
 Version 0.6.0
 --------------
