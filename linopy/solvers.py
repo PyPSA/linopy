@@ -963,11 +963,15 @@ class Highs(Solver[None]):
                 raise RuntimeError(msg)
             return val
 
+        is_mip = _safe_get(lambda: _highs_info("mip_node_count")) not in (None, -1)
+
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: h.getRunTime()),
-            mip_gap=_safe_get(lambda: _highs_info("mip_gap")),
-            dual_bound=_safe_get(lambda: _highs_info("mip_dual_bound")),
+            mip_gap=_safe_get(lambda: _highs_info("mip_gap")) if is_mip else None,
+            dual_bound=_safe_get(lambda: _highs_info("mip_dual_bound"))
+            if is_mip
+            else None,
         )
 
     def _set_solver_params(
@@ -1218,11 +1222,12 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.IsMIP) == 1
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.Runtime),
-            dual_bound=_safe_get(lambda: m.ObjBound),
-            mip_gap=_safe_get(lambda: m.MIPGap),
+            dual_bound=_safe_get(lambda: m.ObjBound) if is_mip else None,
+            mip_gap=_safe_get(lambda: m.MIPGap) if is_mip else None,
         )
 
     def _solve(
@@ -1355,11 +1360,16 @@ class Cplex(Solver[None]):
     ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.problem_type[m.get_problem_type()] != "LP")
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: self._solve_time),
-            dual_bound=_safe_get(lambda: m.solution.MIP.get_best_objective()),
-            mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap()),
+            dual_bound=_safe_get(lambda: m.solution.MIP.get_best_objective())
+            if is_mip
+            else None,
+            mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap())
+            if is_mip
+            else None,
         )
 
     def solve_problem_from_model(
@@ -1520,11 +1530,12 @@ class SCIP(Solver[None]):
     def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = getattr(self, "_is_mip", False)
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.getSolvingTime()),
-            dual_bound=_safe_get(lambda: m.getDualbound()),
-            mip_gap=_safe_get(lambda: m.getGap()),
+            dual_bound=_safe_get(lambda: m.getDualbound()) if is_mip else None,
+            mip_gap=_safe_get(lambda: m.getGap()) if is_mip else None,
         )
 
     def solve_problem_from_model(
@@ -1618,6 +1629,7 @@ class SCIP(Solver[None]):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
+        self._is_mip = m.getNIntVars() + m.getNBinVars() > 0
         m.optimize()
 
         if basis_fn:
@@ -1689,6 +1701,7 @@ class Xpress(Solver[None]):
     ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.attributes.mipents) not in (None, 0)
 
         def _xpress_mip_gap() -> float | None:
             obj = m.attributes.mipbestobjval
@@ -1700,8 +1713,8 @@ class Xpress(Solver[None]):
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.attributes.time),
-            dual_bound=_safe_get(lambda: m.attributes.bestbound),
-            mip_gap=_safe_get(_xpress_mip_gap),
+            dual_bound=_safe_get(lambda: m.attributes.bestbound) if is_mip else None,
+            mip_gap=_safe_get(_xpress_mip_gap) if is_mip else None,
         )
 
     def solve_problem_from_model(
@@ -1890,11 +1903,16 @@ class Mosek(Solver[None]):
     ) -> SolverMetrics:  # pragma: no cover
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.getnumintvar()) not in (None, 0)
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.getdouinf(mosek.dinfitem.optimizer_time)),
-            dual_bound=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_bound)),
-            mip_gap=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_rel_gap)),
+            dual_bound=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_bound))
+            if is_mip
+            else None,
+            mip_gap=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_rel_gap))
+            if is_mip
+            else None,
         )
 
     def solve_problem_from_model(
