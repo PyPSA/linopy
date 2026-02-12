@@ -39,6 +39,9 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SOS_BIG_M_ATTR,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -66,6 +69,7 @@ from linopy.solvers import (
     IO_APIS,
     available_solvers,
 )
+from linopy.sos_reformulation import reformulate_all_sos
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -591,6 +595,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
+        big_m: float | None = None,
     ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
@@ -604,15 +609,26 @@ class Model:
             Type of SOS
         sos_dim : str
             Which dimension of variable to add SOS constraint to
+        big_m : float | None, optional
+            Big-M value for SOS reformulation. Only used when reformulating
+            SOS constraints for solvers that don't support them natively.
+
+            - None (default): Use variable upper bounds as Big-M
+            - float: Custom Big-M value
+
+            The reformulation uses the tighter of big_m and variable upper bound:
+            M = min(big_m, var.upper).
+
+            Tighter Big-M values improve LP relaxation quality and solve time.
         """
         if sos_type not in (1, 2):
             raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
         if sos_dim not in variable.dims:
             raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
 
-        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
-            existing_sos_type = variable.attrs.get("sos_type")
-            existing_sos_dim = variable.attrs.get("sos_dim")
+        if SOS_TYPE_ATTR in variable.attrs or SOS_DIM_ATTR in variable.attrs:
+            existing_sos_type = variable.attrs.get(SOS_TYPE_ATTR)
+            existing_sos_dim = variable.attrs.get(SOS_DIM_ATTR)
             raise ValueError(
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
@@ -624,7 +640,12 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
+        # Process and store big_m value
+        attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
+        if big_m is not None:
+            attrs_update[SOS_BIG_M_ATTR] = float(big_m)
+
+        variable.attrs.update(attrs_update)
 
     def add_constraints(
         self,
@@ -891,17 +912,64 @@ class Model:
         -------
         None.
         """
-        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+        if SOS_TYPE_ATTR not in variable.attrs or SOS_DIM_ATTR not in variable.attrs:
             raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
 
-        sos_type = variable.attrs["sos_type"]
-        sos_dim = variable.attrs["sos_dim"]
+        sos_type = variable.attrs[SOS_TYPE_ATTR]
+        sos_dim = variable.attrs[SOS_DIM_ATTR]
 
-        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+        del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
+
+        # Also remove big_m attribute if present
+        variable.attrs.pop(SOS_BIG_M_ATTR, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
+
+    def reformulate_sos_constraints(self, prefix: str = "_sos_reform_") -> list[str]:
+        """
+        Reformulate SOS constraints as binary + linear constraints.
+
+        This converts SOS1 and SOS2 constraints into equivalent binary variable
+        formulations using the Big-M method. This allows solving models with SOS
+        constraints using solvers that don't support them natively (e.g., HiGHS, GLPK).
+
+        Big-M values are determined as follows:
+        1. If custom big_m was specified in add_sos_constraints(), use that
+        2. Otherwise, use the variable bounds (tightest valid Big-M)
+
+        Parameters
+        ----------
+        prefix : str, optional
+            Prefix for naming auxiliary variables and constraints.
+            Default is "_sos_reform_".
+
+        Returns
+        -------
+        list[str]
+            List of variable names that were reformulated.
+
+        Raises
+        ------
+        ValueError
+            If any SOS variable has infinite bounds and no custom big_m was specified.
+
+        Examples
+        --------
+        >>> m = Model()
+        >>> x = m.add_variables(
+        ...     lower=0, upper=1, coords=[pd.Index([0, 1, 2], name="i")], name="x"
+        ... )
+        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        >>> m.reformulate_sos_constraints()  # Now solvable with HiGHS
+        ['x']
+
+        With custom big_m for tighter relaxation:
+
+        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=0.5)
+        """
+        return reformulate_all_sos(self, prefix=prefix)
 
     def remove_objective(self) -> None:
         """
@@ -1187,6 +1255,7 @@ class Model:
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         mock_solve: bool = False,
+        reformulate_sos: bool = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1256,6 +1325,11 @@ class Model:
             than 10000 variables and constraints.
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
+        reformulate_sos : bool, optional
+            Whether to automatically reformulate SOS constraints as binary + linear
+            constraints for solvers that don't support them natively.
+            This uses the Big-M method and requires all SOS variables to have finite bounds.
+            Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1354,10 +1428,17 @@ class Model:
             )
 
         # SOS constraints are not supported by all solvers
-        if self.variables.sos and not solver_supports(
-            solver_name, SolverFeature.SOS_CONSTRAINTS
-        ):
-            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
+        if self.variables.sos:
+            if reformulate_sos and not solver_supports(
+                solver_name, SolverFeature.SOS_CONSTRAINTS
+            ):
+                logger.info(f"Reformulating SOS constraints for solver {solver_name}")
+                self.reformulate_sos_constraints()
+            elif not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS):
+                raise ValueError(
+                    f"Solver {solver_name} does not support SOS constraints. "
+                    "Use reformulate_sos=True or a solver that supports SOS (gurobi, cplex)."
+                )
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")

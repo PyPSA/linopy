@@ -33,6 +33,7 @@ Version 0.6.1
 
 * Avoid Gurobi initialization on linopy import.
 * Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
 
 Version 0.6.0
 --------------

@@ -49,6 +49,11 @@ HELPER_DIMS: list[str] = [
     CV_DIM,
 ]
 
+# SOS constraint attribute keys
+SOS_TYPE_ATTR = "sos_type"
+SOS_DIM_ATTR = "sos_dim"
+SOS_BIG_M_ATTR = "big_m_upper"
+
 
 class ModelStatus(Enum):
     """
