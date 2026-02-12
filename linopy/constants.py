@@ -3,6 +3,7 @@
 Linopy module for defining constant values used within the package.
 """
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -211,6 +212,46 @@ class Solution:
     objective: float = field(default=np.nan)
 
 
+@dataclass(frozen=True)
+class SolverMetrics:
+    """
+    Unified solver performance metrics.
+
+    All fields default to ``None``. Solvers populate what they can;
+    unsupported fields remain ``None``.  Access via
+    :attr:`Model.solver_metrics` after calling :meth:`Model.solve`.
+
+    Attributes
+    ----------
+    solver_name : str or None
+        Name of the solver used.
+    solve_time : float or None
+        Wall-clock time spent solving (seconds).
+    objective_value : float or None
+        Objective value of the best solution found.
+    dual_bound : float or None
+        Best bound on the objective from the MIP relaxation (also known as
+        "best bound"). Only populated for integer programs.
+    mip_gap : float or None
+        Relative gap between the objective value and the dual bound.
+        Only populated for integer programs.
+    """
+
+    solver_name: str | None = None
+    solve_time: float | None = None
+    objective_value: float | None = None
+    dual_bound: float | None = None
+    mip_gap: float | None = None
+
+    def __repr__(self) -> str:
+        fields = []
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
+            if val is not None:
+                fields.append(f"{f.name}={val!r}")
+        return f"SolverMetrics({', '.join(fields)})"
+
+
 @dataclass
 class Result:
     """
@@ -220,6 +261,7 @@ class Result:
     status: Status
     solution: Solution | None = None
     solver_model: Any = None
+    metrics: SolverMetrics | None = None
 
     def __repr__(self) -> str:
         solver_model_string = (
@@ -232,12 +274,16 @@ class Result:
             )
         else:
             solution_string = "Solution: None\n"
+        metrics_string = ""
+        if self.metrics is not None:
+            metrics_string = f"Solver metrics: {self.metrics}\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
             + solution_string
             + f"Solver model: {solver_model_string}\n"
-            f"Solver message: {self.status.legacy_status}"
+            + metrics_string
+            + f"Solver message: {self.status.legacy_status}"
         )
 
     def info(self) -> None:
