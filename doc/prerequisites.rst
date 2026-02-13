@@ -35,7 +35,7 @@ CPU-based solvers
 
 -  `Cbc <https://projects.coin-or.org/Cbc>`__ - open source, free, fast
 -  `GLPK <https://www.gnu.org/software/glpk/>`__ - open source, free, not very fast
--  `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__ - open source, free, fast
+-  `HiGHS <https://highs.dev/>`__ - open source, free, fast
 -  `Gurobi <https://www.gurobi.com/>`__  - closed source, commercial, very fast
 -  `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__ - closed source, commercial, very fast (GPU acceleration available in v9.8+)
 -  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
