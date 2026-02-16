@@ -41,6 +41,7 @@ from linopy.constants import (
     LESS_EQUAL,
     TERM_DIM,
     ModelStatus,
+    SolverMetrics,
     TerminationCondition,
 )
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
@@ -97,6 +98,7 @@ class Model:
 
     solver_model: Any
     solver_name: str
+    _solver_metrics: SolverMetrics | None
     _variables: Variables
     _constraints: Constraints
     _objective: Objective
@@ -137,6 +139,7 @@ class Model:
         "_force_dim_names",
         "_auto_mask",
         "_solver_dir",
+        "_solver_metrics",
         "solver_model",
         "solver_name",
         "matrices",
@@ -197,6 +200,28 @@ class Model:
         )
 
         self.matrices: MatrixAccessor = MatrixAccessor(self)
+        self._solver_metrics: SolverMetrics | None = None
+
+    @property
+    def solver_metrics(self) -> SolverMetrics | None:
+        """
+        Solver performance metrics from the last solve, or ``None``
+        if the model has not been solved yet.
+
+        Returns a :class:`~linopy.constants.SolverMetrics` instance.
+        Fields the solver cannot provide remain ``None``.
+
+        Reset to ``None`` by :meth:`reset_solution`.
+
+        Examples
+        --------
+        >>> m.solve(solver_name="highs")  # doctest: +SKIP
+        >>> m.solver_metrics.solve_time  # doctest: +SKIP
+        0.003
+        >>> m.solver_metrics.objective_value  # doctest: +SKIP
+        0.0
+        """
+        return self._solver_metrics
 
     @property
     def variables(self) -> Variables:
@@ -1413,6 +1438,7 @@ class Model:
         self.termination_condition = result.status.termination_condition.value
         self.solver_model = result.solver_model
         self.solver_name = solver_name
+        self._solver_metrics = result.metrics
 
         if not result.status.is_ok:
             return result.status.status.value, result.status.termination_condition.value
@@ -1470,6 +1496,7 @@ class Model:
         self.termination_condition = TerminationCondition.optimal.value
         self.solver_model = None
         self.solver_name = solver_name
+        self._solver_metrics = SolverMetrics(solver_name="mock", objective_value=0.0)
 
         for name, var in self.variables.items():
             var.solution = xr.DataArray(0.0, var.coords)
@@ -1712,6 +1739,7 @@ class Model:
         """
         self.variables.reset_solution()
         self.constraints.reset_dual()
+        self._solver_metrics = None
 
     to_netcdf = to_netcdf
 

@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``best_bound``, and ``mip_gap`` in a solver-independent way. All solvers populate solver-specific fields where available.
+
 Version 0.6.3
 --------------
 

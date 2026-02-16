@@ -6,6 +6,7 @@ Linopy module for solving lp files with different solvers.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import enum
 import io
 import logging
@@ -14,6 +15,7 @@ import re
 import subprocess as sub
 import sys
 import threading
+import time
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -29,6 +31,7 @@ import linopy.io
 from linopy.constants import (
     Result,
     Solution,
+    SolverMetrics,
     SolverStatus,
     Status,
     TerminationCondition,
@@ -214,6 +217,15 @@ with contextlib.suppress(ModuleNotFoundError):
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
+
+
+def _safe_get(func: Callable[[], Any]) -> Any:
+    """Call *func* and return its result, or None if it raises."""
+    try:
+        return func()
+    except Exception:
+        logger.debug("Failed to extract solver metric", exc_info=True)
+        return None
 
 
 io_structure = dict(
@@ -410,6 +422,21 @@ class Solver(ABC, Generic[EnvType]):
             msg = "No problem file or model specified."
             raise ValueError(msg)
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        """
+        Extract solver performance metrics.
+
+        Base implementation populates solver_name and objective_value.
+        Subclasses should call super(), then set solver-specific fields
+        on the returned object.
+        """
+        return SolverMetrics(
+            solver_name=self.solver_name.value,
+            objective_value=_safe_get(
+                lambda: solution.objective if not np.isnan(solution.objective) else None
+            ),
+        )
+
     @property
     def solver_name(self) -> SolverName:
         return SolverName[self.__class__.__name__]
@@ -430,6 +457,14 @@ class CBC(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        metrics = super()._extract_metrics(solver_model, solution)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: solver_model.runtime),
+            mip_gap=_safe_get(lambda: solver_model.mip_gap),
+        )
 
     def solve_problem_from_model(
         self,
@@ -598,7 +633,9 @@ class CBC(Solver[None]):
             runtime = float(m.group(1))
         CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
 
-        return Result(status, solution, CbcModel(mip_gap, runtime))
+        solver_model = CbcModel(mip_gap, runtime)
+        metrics = self._extract_metrics(solver_model, solution)
+        return Result(status, solution, solver_model, metrics)
 
 
 class GLPK(Solver[None]):
@@ -728,7 +765,10 @@ class GLPK(Solver[None]):
 
         if not os.path.exists(solution_fn):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-            return Result(status, Solution())
+            solution = Solution()
+            return Result(
+                status, solution, metrics=self._extract_metrics(None, solution)
+            )
 
         f = open(solution_fn)
 
@@ -768,7 +808,8 @@ class GLPK(Solver[None]):
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
-        return Result(status, solution)
+        metrics = self._extract_metrics(None, solution)
+        return Result(status, solution, metrics=metrics)
 
 
 class Highs(Solver[None]):
@@ -911,6 +952,28 @@ class Highs(Solver[None]):
             sense=read_sense_from_problem_file(problem_fn),
         )
 
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        h = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+
+        def _highs_info(key: str) -> float:
+            status, val = h.getInfoValue(key)
+            if status != highspy.HighsStatus.kOk:  # pragma: no cover
+                msg = f"Failed to get HiGHS info: {key}"
+                raise RuntimeError(msg)
+            return val
+
+        is_mip = _safe_get(lambda: _highs_info("mip_node_count")) not in (None, -1)
+
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: h.getRunTime()),
+            mip_gap=_safe_get(lambda: _highs_info("mip_gap")) if is_mip else None,
+            dual_bound=_safe_get(lambda: _highs_info("mip_dual_bound"))
+            if is_mip
+            else None,
+        )
+
     def _set_solver_params(
         self,
         highs_solver: highspy.Highs,
@@ -1019,7 +1082,8 @@ class Highs(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, h)
+        metrics = self._extract_metrics(h, solution)
+        return Result(status, solution, h, metrics)
 
 
 class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
@@ -1153,6 +1217,19 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 sense=sense,
             )
 
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.IsMIP) == 1
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.Runtime),
+            dual_bound=_safe_get(lambda: m.ObjBound) if is_mip else None,
+            mip_gap=_safe_get(lambda: m.MIPGap) if is_mip else None,
+        )
+
     def _solve(
         self,
         m: gurobipy.Model,
@@ -1254,7 +1331,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class Cplex(Solver[None]):
@@ -1276,6 +1354,23 @@ class Cplex(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.problem_type[m.get_problem_type()] != "LP")
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: self._solve_time),
+            dual_bound=_safe_get(lambda: m.solution.MIP.get_best_objective())
+            if is_mip
+            else None,
+            mip_gap=_safe_get(lambda: m.solution.MIP.get_mip_relative_gap())
+            if is_mip
+            else None,
+        )
 
     def solve_problem_from_model(
         self,
@@ -1366,8 +1461,10 @@ class Cplex(Solver[None]):
 
         is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
+        _t0 = time.perf_counter()  # pragma: no cover
         with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
             m.solve()
+        self._solve_time = time.perf_counter() - _t0  # pragma: no cover
 
         if solution_fn is not None:
             try:
@@ -1410,7 +1507,8 @@ class Cplex(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class SCIP(Solver[None]):
@@ -1428,6 +1526,17 @@ class SCIP(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(self, solver_model: Any, solution: Solution) -> SolverMetrics:
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = getattr(self, "_is_mip", False)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.getSolvingTime()),
+            dual_bound=_safe_get(lambda: m.getDualbound()) if is_mip else None,
+            mip_gap=_safe_get(lambda: m.getGap()) if is_mip else None,
+        )
 
     def solve_problem_from_model(
         self,
@@ -1520,6 +1629,7 @@ class SCIP(Solver[None]):
         if warmstart_fn:
             logger.warning("Warmstart not implemented for SCIP")
 
+        self._is_mip = m.getNIntVars() + m.getNBinVars() > 0
         m.optimize()
 
         if basis_fn:
@@ -1563,7 +1673,8 @@ class SCIP(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 class Xpress(Solver[None]):
@@ -1584,6 +1695,27 @@ class Xpress(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.attributes.mipents) not in (None, 0)
+
+        def _xpress_mip_gap() -> float | None:
+            obj = m.attributes.mipbestobjval
+            bound = m.attributes.bestbound
+            if obj == 0:
+                return 0.0 if bound == 0 else None
+            return abs(obj - bound) / abs(obj)
+
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.attributes.time),
+            dual_bound=_safe_get(lambda: m.attributes.bestbound) if is_mip else None,
+            mip_gap=_safe_get(_xpress_mip_gap) if is_mip else None,
+        )
 
     def solve_problem_from_model(
         self,
@@ -1733,7 +1865,8 @@ class Xpress(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, m, metrics)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
@@ -1764,6 +1897,23 @@ class Mosek(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _extract_metrics(
+        self, solver_model: Any, solution: Solution
+    ) -> SolverMetrics:  # pragma: no cover
+        m = solver_model
+        metrics = super()._extract_metrics(solver_model, solution)
+        is_mip = _safe_get(lambda: m.getnumintvar()) not in (None, 0)
+        return dataclasses.replace(
+            metrics,
+            solve_time=_safe_get(lambda: m.getdouinf(mosek.dinfitem.optimizer_time)),
+            dual_bound=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_bound))
+            if is_mip
+            else None,
+            mip_gap=_safe_get(lambda: m.getdouinf(mosek.dinfitem.mio_obj_rel_gap))
+            if is_mip
+            else None,
+        )
 
     def solve_problem_from_model(
         self,
@@ -2075,7 +2225,8 @@ class Mosek(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        metrics = self._extract_metrics(m, solution)
+        return Result(status, solution, metrics=metrics)
 
 
 class COPT(Solver[None]):
@@ -2214,9 +2365,10 @@ class COPT(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        metrics = self._extract_metrics(m, solution)
         env_.close()
 
-        return Result(status, solution, m)
+        return Result(status, solution, m, metrics)
 
 
 class MindOpt(Solver[None]):
@@ -2357,10 +2509,12 @@ class MindOpt(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
+        metrics = self._extract_metrics(m, solution)
+
         m.dispose()
         env_.dispose()
 
-        return Result(status, solution, m)
+        return Result(status, solution, m, metrics)
 
 
 class PIPS(Solver[None]):
@@ -2609,7 +2763,8 @@ class cuPDLPx(Solver[None]):
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
-        return Result(status, solution, cu_model)
+        metrics = self._extract_metrics(cu_model, solution)
+        return Result(status, solution, cu_model, metrics)
 
     def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
         """
