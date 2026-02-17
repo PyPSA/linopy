@@ -782,10 +782,10 @@ class GLPK(Solver[None]):
 
 class Highs(Solver[None]):
     """
-    Solver subclass for the Highs solver. Highs must be installed
-    for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
+    Solver subclass for the HiGHS solver. HiGHS must be installed
+    for usage. Find the documentation at https://highs.dev/.
 
-    The full list of solver options is documented at https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set.
+    The full list of solver options is documented at https://ergo-code.github.io/HiGHS/stable/options/definitions/.
 
     Some exemplary options are:
 
@@ -817,8 +817,8 @@ class Highs(Solver[None]):
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
-        Solve a linear problem directly from a linopy model using the Highs solver.
-        Reads a linear problem file and passes it to the highs solver.
+        Solve a linear problem directly from a linopy model using the HiGHS solver.
+        Reads a linear problem file and passes it to the HiGHS solver.
         If the solution is feasible the function returns the
         objective, solution and dual constraint variables.
 
@@ -843,7 +843,7 @@ class Highs(Solver[None]):
         -------
         Result
         """
-        # check for Highs solver compatibility
+        # check for HiGHS solver compatibility
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
@@ -880,8 +880,8 @@ class Highs(Solver[None]):
         env: None = None,
     ) -> Result:
         """
-        Solve a linear problem from a problem file using the Highs solver.
-        Reads a linear problem file and passes it to the highs solver.
+        Solve a linear problem from a problem file using the HiGHS solver.
+        Reads a linear problem file and passes it to the HiGHS solver.
         If the solution is feasible the function returns the
         objective, solution and dual constraint variables.
 
@@ -943,13 +943,13 @@ class Highs(Solver[None]):
         sense: str | None = None,
     ) -> Result:
         """
-        Solve a linear problem from a Highs object.
+        Solve a linear problem from a HiGHS object.
 
 
         Parameters
         ----------
         h : highspy.Highs
-            Highs object.
+            HiGHS object.
         solution_fn : Path, optional
             Path to the solution file.
         log_fn : Path, optional
