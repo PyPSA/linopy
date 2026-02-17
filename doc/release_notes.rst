@@ -4,8 +4,6 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Fix docs (pick highs solver)
-* Add the `sphinx-copybutton` to the documentation
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
   - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
@@ -13,6 +11,10 @@ Upcoming Version
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c650560 (update release notes)
 Version 0.6.3
 --------------
 
