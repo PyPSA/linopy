@@ -162,6 +162,41 @@ def test_masked_constraints() -> None:
     assert (m.constraints.labels.con0[5:10, :] == -1).all()
 
 
+def test_masked_constraints_broadcast() -> None:
+    m: Model = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper)
+    y = m.add_variables()
+
+    mask = pd.Series([True] * 5 + [False] * 5)
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc1", mask=mask)
+    assert (m.constraints.labels.bc1[0:5, :] != -1).all()
+    assert (m.constraints.labels.bc1[5:10, :] == -1).all()
+
+    mask2 = xr.DataArray([True] * 5 + [False] * 5, dims=["dim_1"])
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc2", mask=mask2)
+    assert (m.constraints.labels.bc2[:, 0:5] != -1).all()
+    assert (m.constraints.labels.bc2[:, 5:10] == -1).all()
+
+    mask3 = xr.DataArray(
+        [True, True, False, False, False],
+        dims=["dim_0"],
+        coords={"dim_0": range(5)},
+    )
+    with pytest.warns(FutureWarning, match="Missing values will be filled"):
+        m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc3", mask=mask3)
+    assert (m.constraints.labels.bc3[0:2, :] != -1).all()
+    assert (m.constraints.labels.bc3[2:5, :] == -1).all()
+    assert (m.constraints.labels.bc3[5:10, :] == -1).all()
+
+    # Mask with extra dimension not in data should raise
+    mask4 = xr.DataArray([True, False], dims=["extra_dim"])
+    with pytest.raises(AssertionError, match="not a subset"):
+        m.add_constraints(1 * x + 10 * y, EQUAL, 0, name="bc4", mask=mask4)
+
+
 def test_non_aligned_constraints() -> None:
     m: Model = Model()
 
