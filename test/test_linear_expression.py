@@ -7,6 +7,8 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -621,7 +623,7 @@ class TestSubsetCoordinateAlignment:
         ids=["subset*var", "subset*expr", "subset+var", "subset+expr"],
     )
     def test_commutativity(
-        self, v: Variable, subset: xr.DataArray, make_lhs: object, make_rhs: object
+        self, v: Variable, subset: xr.DataArray, make_lhs: Any, make_rhs: Any
     ) -> None:
         assert_linequal(make_lhs(v, subset), make_rhs(v, subset))
 
@@ -889,7 +891,7 @@ class TestSubsetCoordinateAlignment:
     def test_da_truediv_var_raises(self, v: Variable) -> None:
         da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
         with pytest.raises(TypeError):
-            da / v
+            da / v  # type: ignore[operator]
 
     def test_disjoint_mul_produces_zeros(self, v: Variable) -> None:
         disjoint = xr.DataArray(
@@ -1875,7 +1877,7 @@ class TestJoinParameter:
             a.to_linexpr().mul(b.to_linexpr(), join="inner")
 
     def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
-        result = merge([a.to_linexpr(), b.to_linexpr()], join="inner")
+        result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="inner")
         assert list(result.data.indexes["i"]) == [1, 2]
 
     def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
@@ -2005,7 +2007,7 @@ class TestJoinParameter:
         )
 
     def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
-        result = merge([a.to_linexpr(), b.to_linexpr()], join="outer")
+        result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="outer")
         assert set(result.coords["i"].values) == {0, 1, 2, 3}
 
     def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
@@ -2041,9 +2043,9 @@ class TestJoinParameter:
         assert list(result.data.indexes["i"]) == [1, 2, 3]
 
     def test_merge_join_left(self, a: Variable, b: Variable) -> None:
-        result = merge([a.to_linexpr(), b.to_linexpr()], join="left")
+        result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="left")
         assert list(result.data.indexes["i"]) == [0, 1, 2]
 
     def test_merge_join_right(self, a: Variable, b: Variable) -> None:
-        result = merge([a.to_linexpr(), b.to_linexpr()], join="right")
+        result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="right")
         assert list(result.data.indexes["i"]) == [1, 2, 3]

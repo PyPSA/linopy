@@ -444,7 +444,7 @@ class Variable:
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: float | int | LinearExpression | Variable
+        self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -458,7 +458,7 @@ class Variable:
         return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
-        self, coefficient: float | int | LinearExpression | Variable
+        self, coefficient: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -545,7 +545,9 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: SideLike, join: str | None = None) -> LinearExpression:
+    def add(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
 
@@ -560,7 +562,9 @@ class Variable:
         """
         return self.to_linexpr().add(other, join=join)
 
-    def sub(self, other: SideLike, join: str | None = None) -> LinearExpression:
+    def sub(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
 
@@ -575,7 +579,9 @@ class Variable:
         """
         return self.to_linexpr().sub(other, join=join)
 
-    def mul(self, other: ConstantLike, join: str | None = None) -> LinearExpression:
+    def mul(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
 
@@ -590,7 +596,9 @@ class Variable:
         """
         return self.to_linexpr().mul(other, join=join)
 
-    def div(self, other: ConstantLike, join: str | None = None) -> LinearExpression:
+    def div(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
 
