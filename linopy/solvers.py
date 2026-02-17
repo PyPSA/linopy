@@ -1961,7 +1961,7 @@ class Knitro(Solver[None]):
             except Exception:
                 pass
 
-            knitro_model = namedtuple("KnitroModel", "reported_runtime")
+            knitro_model = namedtuple("knitro_model", "reported_runtime")
 
             # Get termination condition
             if ret in CONDITION_MAP:
