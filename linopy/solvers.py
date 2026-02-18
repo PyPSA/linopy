@@ -1786,11 +1786,11 @@ class Knitro(Solver[None]):
             value = int(value)
 
         if isinstance(value, int):
-            knitro.KN_set_int_param_by_name(kc, name, value)
+            knitro.KN_set_int_param(kc, name, value)
         elif isinstance(value, float):
-            knitro.KN_set_double_param_by_name(kc, name, value)
+            knitro.KN_set_double_param(kc, name, value)
         elif isinstance(value, str):
-            knitro.KN_set_char_param_by_name(kc, name, value)
+            knitro.KN_set_char_param(kc, name, value)
         else:
             msg = f"Unsupported Knitro option type for {name!r}: {type(value).__name__}"
             raise TypeError(msg)
@@ -1878,8 +1878,8 @@ class Knitro(Solver[None]):
 
             if log_fn is not None:
                 log_fn.parent.mkdir(parents=True, exist_ok=True)
-                knitro.KN_set_char_param_by_name(kc, "outdir", str(log_fn.parent))
-                knitro.KN_set_char_param_by_name(kc, "outname", log_fn.stem)
+                knitro.KN_set_char_param(kc, "outdir", str(log_fn.parent))
+                knitro.KN_set_char_param(kc, "outname", log_fn.stem)
 
             for k, v in self.solver_options.items():
                 self._set_option(kc, k, v)
@@ -1928,7 +1928,7 @@ class Knitro(Solver[None]):
 
             if solution_fn is not None:
                 solution_fn.parent.mkdir(exist_ok=True)
-                knitro.KN_write_sol_file(kc, path_to_string(solution_fn))
+                knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
             return Result(
                 status, solution, KnitroResult(reported_runtime=reported_runtime)

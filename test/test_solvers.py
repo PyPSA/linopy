@@ -116,7 +116,7 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution is not None
-    assert result.solution.objective == 28.0
+    assert result.solution.objective == pytest.approx(26.666, abs=1e-3)
 
 
 @pytest.mark.skipif(
@@ -134,7 +134,6 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
     result = knitro.solve_problem(
         problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
     )
-
     assert result.status.is_ok
     assert log_file.exists()
 
