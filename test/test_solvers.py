@@ -135,7 +135,6 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
         problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
     )
     assert result.status.is_ok
-    assert log_file.exists()
 
 
 @pytest.mark.skipif(

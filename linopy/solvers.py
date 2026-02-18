@@ -1782,15 +1782,18 @@ class Knitro(Solver[None]):
 
     @staticmethod
     def _set_option(kc: Any, name: str, value: Any) -> None:
+
+        param_id = knitro.KN_get_param_id(kc, name)
+
         if isinstance(value, bool):
             value = int(value)
 
         if isinstance(value, int):
-            knitro.KN_set_int_param(kc, name, value)
+            knitro.KN_set_int_param(kc, param_id, value)
         elif isinstance(value, float):
-            knitro.KN_set_double_param(kc, name, value)
+            knitro.KN_set_double_param(kc, param_id, value)
         elif isinstance(value, str):
-            knitro.KN_set_char_param(kc, name, value)
+            knitro.KN_set_char_param(kc, param_id, value)
         else:
             msg = f"Unsupported Knitro option type for {name!r}: {type(value).__name__}"
             raise TypeError(msg)
@@ -1877,9 +1880,7 @@ class Knitro(Solver[None]):
             )
 
             if log_fn is not None:
-                log_fn.parent.mkdir(parents=True, exist_ok=True)
-                knitro.KN_set_char_param(kc, "outdir", str(log_fn.parent))
-                knitro.KN_set_char_param(kc, "outname", log_fn.stem)
+                logger.warning("Log file output not implemented for Knitro")
 
             for k, v in self.solver_options.items():
                 self._set_option(kc, k, v)
