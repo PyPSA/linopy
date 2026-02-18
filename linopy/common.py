@@ -213,18 +213,19 @@ def numpy_to_dataarray(
     if arr.ndim == 0:
         return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
 
-    ndim = max(arr.ndim, 0 if coords is None else len(coords))
     if isinstance(dims, Iterable | Sequence):
         dims = list(dims)
     elif dims is not None:
         dims = [dims]
 
     if dims is not None and len(dims):
-        # fill up dims with default names to match the number of dimensions
-        dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
+        dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(arr.ndim)]
 
-    if isinstance(coords, list) and dims is not None and len(dims):
-        coords = dict(zip(dims, coords))
+    if dims is not None and len(dims) and coords is not None:
+        if isinstance(coords, list):
+            coords = dict(zip(dims, coords[: arr.ndim]))
+        elif is_dict_like(coords):
+            coords = {k: v for k, v in coords.items() if k in dims}
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 

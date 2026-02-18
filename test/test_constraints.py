@@ -139,22 +139,71 @@ def test_constraint_assignment_with_reindex() -> None:
     assert (con.coords["dim_0"].values == shuffled_coords).all()
 
 
-def test_constraint_rhs_lower_dim_numpy() -> None:
+@pytest.mark.parametrize(
+    "rhs_factory",
+    [
+        pytest.param(lambda m, v: v, id="numpy"),
+        pytest.param(lambda m, v: xr.DataArray(v, dims=["dim_0"]), id="dataarray"),
+        pytest.param(lambda m, v: pd.Series(v, index=v), id="series"),
+        pytest.param(
+            lambda m, v: m.add_variables(coords=[v]),
+            id="variable",
+        ),
+        pytest.param(
+            lambda m, v: 2 * m.add_variables(coords=[v]) + 1,
+            id="linexpr",
+        ),
+    ],
+)
+def test_constraint_rhs_lower_dim(rhs_factory) -> None:
     m = Model()
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
     x = m.add_variables(coords=[naxis, maxis])
     y = m.add_variables(coords=[naxis, maxis])
 
-    naxis_da = xr.DataArray(naxis, dims=["dim_0"])
-    c_da = m.add_constraints(x - y >= naxis_da)
-    assert c_da.shape == (10, 10)
+    c = m.add_constraints(x - y >= rhs_factory(m, naxis))
+    assert c.shape == (10, 10)
 
-    c_series = m.add_constraints(x - y >= pd.Series(naxis, index=naxis))
-    assert c_series.shape == (10, 10)
 
-    c_np = m.add_constraints(x - y >= naxis)
-    assert c_np.shape == (10, 10)
+@pytest.mark.parametrize(
+    "rhs_factory",
+    [
+        pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
+        pytest.param(
+            lambda m: xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"]),
+            id="dataarray",
+        ),
+        pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
+    ],
+)
+def test_constraint_rhs_higher_dim_constant_raises(rhs_factory) -> None:
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+
+    with pytest.raises(ValueError, match="dimensions"):
+        m.add_constraints(x >= rhs_factory(m))
+
+
+@pytest.mark.parametrize(
+    "rhs_factory",
+    [
+        pytest.param(
+            lambda m: m.add_variables(coords=[range(5), range(3)]),
+            id="variable",
+        ),
+        pytest.param(
+            lambda m: 2 * m.add_variables(coords=[range(5), range(3)]) + 1,
+            id="linexpr",
+        ),
+    ],
+)
+def test_constraint_rhs_higher_dim_expression(rhs_factory) -> None:
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+
+    c = m.add_constraints(x >= rhs_factory(m))
+    assert c.shape == (5, 3)
 
 
 def test_wrong_constraint_assignment_repeated() -> None:

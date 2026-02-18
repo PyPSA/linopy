@@ -1083,6 +1083,13 @@ class BaseExpression(ABC):
                     f"in the expression. Cannot create constraint."
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
+            self.coord_dims
+        ):
+            raise ValueError(
+                f"RHS has {rhs.ndim} dimensions, but the expression only "
+                f"has {len(self.coord_dims)}. Cannot create constraint."
+            )
 
         all_to_lhs = self.sub(rhs, join=join).data
         data = assign_multiindex_safe(
