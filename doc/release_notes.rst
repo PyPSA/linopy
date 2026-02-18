@@ -11,10 +11,7 @@ Upcoming Version
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
 
-<<<<<<< HEAD
-=======
 
->>>>>>> c650560 (update release notes)
 Version 0.6.3
 --------------
 

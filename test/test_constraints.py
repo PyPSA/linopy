@@ -139,6 +139,24 @@ def test_constraint_assignment_with_reindex() -> None:
     assert (con.coords["dim_0"].values == shuffled_coords).all()
 
 
+def test_constraint_rhs_lower_dim_numpy() -> None:
+    m = Model()
+    naxis = np.arange(10, dtype=float)
+    maxis = np.arange(10).astype(str)
+    x = m.add_variables(coords=[naxis, maxis])
+    y = m.add_variables(coords=[naxis, maxis])
+
+    naxis_da = xr.DataArray(naxis, dims=["dim_0"])
+    c_da = m.add_constraints(x - y >= naxis_da)
+    assert c_da.shape == (10, 10)
+
+    c_series = m.add_constraints(x - y >= pd.Series(naxis, index=naxis))
+    assert c_series.shape == (10, 10)
+
+    c_np = m.add_constraints(x - y >= naxis)
+    assert c_np.shape == (10, 10)
+
+
 def test_wrong_constraint_assignment_repeated() -> None:
     # repeated variable assignment is forbidden
     m: Model = Model()
