@@ -4,6 +4,9 @@ Release Notes
 Upcoming Version
 ----------------
 
+Version 0.6.4
+--------------
+
 * Add support for the `knitro` solver via the knitro python API
 
 Version 0.6.3
