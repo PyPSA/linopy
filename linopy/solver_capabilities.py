@@ -180,20 +180,11 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         features=frozenset(
             {
                 SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-            if platform.system() == "Windows"
-            else {
-                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
-            # SCIP has a bug with quadratic models on Windows, see:
-            # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
         ),
     ),
     "mosek": SolverInfo(
