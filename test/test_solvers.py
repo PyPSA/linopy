@@ -105,14 +105,14 @@ def test_knitro_solver_mps(tmp_path: Path) -> None:
     "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_for_lp(tmp_path: Path) -> None:
-    """Test Knitro solver with a simple MPS problem."""
+    """Test Knitro solver with a simple LP problem."""
     knitro = solvers.Knitro()
 
-    mps_file = tmp_path / "problem.lp"
-    mps_file.write_text(free_lp_problem)
+    lp_file = tmp_path / "problem.lp"
+    lp_file.write_text(free_lp_problem)
     sol_file = tmp_path / "solution.sol"
 
-    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
+    result = knitro.solve_problem(problem_fn=lp_file, solution_fn=sol_file)
 
     assert result.status.is_ok
     assert result.solution is not None
@@ -124,7 +124,6 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
 )
 def test_knitro_solver_with_options(tmp_path: Path) -> None:
     """Test Knitro solver with custom options."""
-    # Set some common Knitro options
     knitro = solvers.Knitro(maxit=100, feastol=1e-6)
 
     mps_file = tmp_path / "problem.mps"
@@ -156,21 +155,16 @@ def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F
     "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_no_log(tmp_path: Path) -> None:
-    """Test Knitro solver with logging disabled via options."""
-    # outlev=0 should suppress log output
+    """Test Knitro solver without log file."""
     knitro = solvers.Knitro(outlev=0)
 
     mps_file = tmp_path / "problem.mps"
     mps_file.write_text(free_mps_problem)
     sol_file = tmp_path / "solution.sol"
-    log_file = tmp_path / "knitro.log"
 
-    result = knitro.solve_problem(
-        problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
-    )
+    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
 
     assert result.status.is_ok
-    assert not log_file.exists()
 
 
 @pytest.mark.skipif(

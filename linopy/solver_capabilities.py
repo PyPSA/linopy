@@ -166,8 +166,10 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         display_name="Artelys Knitro",
         features=frozenset(
             {
+                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
+                SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
         ),
