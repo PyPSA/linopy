@@ -1782,7 +1782,6 @@ class Knitro(Solver[None]):
 
     @staticmethod
     def _set_option(kc: Any, name: str, value: Any) -> None:
-
         param_id = knitro.KN_get_param_id(kc, name)
 
         if isinstance(value, bool):
