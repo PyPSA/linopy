@@ -7,7 +7,6 @@ replacing scattered hardcoded checks throughout the codebase.
 
 from __future__ import annotations
 
-import platform
 from dataclasses import dataclass
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
