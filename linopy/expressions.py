@@ -536,7 +536,9 @@ class BaseExpression(ABC):
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike
     ) -> GenericExpression:
-        multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        multiplier = as_dataarray(
+            other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+        )
         coeffs = self.coeffs * multiplier
         assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
         const = self.const * multiplier
@@ -1413,7 +1415,9 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = as_dataarray(
+                other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+            )
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)

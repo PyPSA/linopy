@@ -470,10 +470,12 @@ class Model:
             Upper bound of the variable(s). Ignored if `binary` is True.
             The default is inf.
         coords : list/xarray.Coordinates, optional
-            The coords of the variable array.
-            These are directly passed to the DataArray creation of
-            `lower` and `upper`. For every single combination of
-            coordinates a optimization variable is added to the model.
+            The coords of the variable array. For every single
+            combination of coordinates an optimization variable is
+            added to the model. Data for `lower`, `upper` and `mask`
+            is fitted to these coords: shared dimensions must have
+            matching coordinates, and missing dimensions are broadcast.
+            A ValueError is raised if the data is not compatible.
             The default is None.
         name : str, optional
             Reference name of the added variables. The default None results in
@@ -495,7 +497,9 @@ class Model:
         ------
         ValueError
             If neither lower bound and upper bound have coordinates, nor
-            `coords` are directly given.
+            `coords` are directly given. Also raised if `lower` or
+            `upper` are DataArrays whose coordinates do not match the
+            provided `coords`.
 
         Returns
         -------
@@ -551,7 +555,10 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            # TODO: Simplify when removing Future Warning from broadcast_mask
+            if not isinstance(mask, DataArray):
+                mask = as_dataarray(mask, coords=data.coords, dims=data.dims)
+            mask = mask.astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
@@ -746,7 +753,10 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            # TODO: Simplify when removing Future Warning from broadcast_mask
+            if not isinstance(mask, DataArray):
+                mask = as_dataarray(mask, coords=data.coords, dims=data.dims)
+            mask = mask.astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)

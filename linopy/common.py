@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
@@ -128,6 +128,66 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     return lst[index] if 0 <= index < len(lst) else None
 
 
+def _coords_to_mapping(coords: CoordsLike, dims: DimsLike | None = None) -> Mapping:
+    """
+    Normalize coords to a Mapping.
+
+    If coords is already a Mapping, return as-is. If it's a sequence,
+    convert to a dict using dims (if provided) or Index names.
+    """
+    if isinstance(coords, Mapping):
+        return coords
+    seq = list(coords)
+    if dims is not None:
+        dim_names: list[str] = [dims] if isinstance(dims, str) else list(dims)  # type: ignore[arg-type]
+        return dict(zip(dim_names, seq))
+    return {c.name: c for c in seq if hasattr(c, "name") and c.name}
+
+
+def _validate_dataarray_coords(
+    arr: DataArray,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    allow_extra_dims: bool = False,
+) -> DataArray:
+    """
+    Validate a DataArray's coordinates against expected coords.
+
+    For shared dimensions, coordinates must match exactly. Extra
+    dimensions in the DataArray raise unless allow_extra_dims is True.
+    Missing dimensions are broadcast via expand_dims.
+    """
+    if coords is None:
+        return arr
+
+    expected = _coords_to_mapping(coords, dims)
+    if not expected:
+        return arr
+
+    if not allow_extra_dims:
+        extra = set(arr.dims) - set(expected)
+        if extra:
+            raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+
+    expand = {}
+    for k, v in expected.items():
+        if k not in arr.dims:
+            expand[k] = v
+            continue
+        actual = arr.coords[k]
+        v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
+        if not actual.to_index().equals(v_idx):
+            raise ValueError(
+                f"Coordinates for dimension '{k}' do not match: "
+                f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
+            )
+
+    if expand:
+        arr = arr.expand_dims(expand)
+
+    return arr
+
+
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
     coords: CoordsLike | None = None,
@@ -163,8 +223,7 @@ def pandas_to_dataarray(
     ]
     if coords is not None:
         pandas_coords = dict(zip(dims, arr.axes))
-        if isinstance(coords, Sequence):
-            coords = dict(zip(dims, coords))
+        coords = _coords_to_mapping(coords, dims)
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
         for dim in shared_dims:
@@ -224,7 +283,7 @@ def numpy_to_dataarray(
         dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
     if isinstance(coords, list) and dims is not None and len(dims):
-        coords = dict(zip(dims, coords))
+        coords = _coords_to_mapping(coords, dims)
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
@@ -233,6 +292,7 @@ def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    allow_extra_dims: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -246,6 +306,10 @@ def as_dataarray(
             The coordinates for the DataArray. If None, default coordinates will be used.
         dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+        allow_extra_dims:
+            If False (default), raise ValueError when a DataArray input has
+            dimensions not present in coords. Set to True to allow extra
+            dimensions for broadcasting.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
@@ -253,6 +317,16 @@ def as_dataarray(
     -------
         DataArray:
             The converted DataArray.
+
+    Raises
+    ------
+    ValueError
+        If arr is a DataArray and coords is provided: raised when
+        coordinates for shared dimensions do not match, or when the
+        DataArray has dimensions not covered by coords (unless
+        allow_extra_dims is True). The DataArray's dimensions may be
+        a subset of coords — missing dimensions are added via
+        expand_dims.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -264,7 +338,9 @@ def as_dataarray(
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
+    elif isinstance(arr, DataArray):
+        if coords is not None:
+            arr = _validate_dataarray_coords(arr, coords, dims, allow_extra_dims)
     elif not isinstance(arr, DataArray):
         supported_types = [
             np.number,
