@@ -169,17 +169,19 @@ def _validate_dataarray_coords(
         if extra:
             raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
 
+    expand = {}
     for k, v in expected.items():
-        if k in arr.dims:
-            expected_idx = pd.Index(v)
-            actual_idx = pd.Index(arr.coords[k].values)
-            if not actual_idx.equals(expected_idx):
-                raise ValueError(
-                    f"Coordinates for dimension '{k}' do not match: "
-                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-                )
+        if k not in arr.dims:
+            expand[k] = v
+            continue
+        actual = arr.coords[k]
+        v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
+        if not actual.to_index().equals(v_idx):
+            raise ValueError(
+                f"Coordinates for dimension '{k}' do not match: "
+                f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
+            )
 
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
     if expand:
         arr = arr.expand_dims(expand)
 
@@ -337,7 +339,8 @@ def as_dataarray(
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, DataArray):
-        arr = _validate_dataarray_coords(arr, coords, dims, allow_extra_dims)
+        if coords is not None:
+            arr = _validate_dataarray_coords(arr, coords, dims, allow_extra_dims)
     elif not isinstance(arr, DataArray):
         supported_types = [
             np.number,
