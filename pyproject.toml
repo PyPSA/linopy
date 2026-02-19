@@ -33,7 +33,7 @@ dependencies = [
     "numexpr",
     "xarray>=2024.2.0",
     "dask>=0.18.0",
-    "polars",
+    "polars>=1.31.1",
     "tqdm",
     "deprecation",
     "packaging",
@@ -52,6 +52,7 @@ docs = [
     "sphinx==7.3.7",
     "sphinx_rtd_theme==2.0.0",
     "sphinx_book_theme==1.1.3",
+    "sphinx-copybutton==0.5.2",
     "nbsphinx==0.9.4",
     "nbsphinx-link==1.3.0",
     "docutils<0.21",
@@ -83,6 +84,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    "knitro>=15.1.0",
     # "cupdlpx>=0.1.2", pip package currently unstable
 ]
 

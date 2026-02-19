@@ -1313,3 +1313,89 @@ def test_simplify_partial_cancellation(x: Variable, y: Variable) -> None:
     assert all(simplified.coeffs.values == 3.0), (
         f"Expected coefficient 3.0, got {simplified.coeffs.values}"
     )
+
+
+def test_constant_only_expression_mul_dataarray(m: Model) -> None:
+    const_arr = xr.DataArray([2, 3], dims=["dim_0"])
+    const_expr = LinearExpression(const_arr, m)
+    assert const_expr.is_constant
+    assert const_expr.nterm == 0
+
+    data_arr = xr.DataArray([10, 20], dims=["dim_0"])
+    expected_const = const_arr * data_arr
+
+    result = const_expr * data_arr
+    assert isinstance(result, LinearExpression)
+    assert result.is_constant
+    assert (result.const == expected_const).all()
+
+    result_rev = data_arr * const_expr
+    assert isinstance(result_rev, LinearExpression)
+    assert result_rev.is_constant
+    assert (result_rev.const == expected_const).all()
+
+
+def test_constant_only_expression_mul_linexpr_with_vars(m: Model, x: Variable) -> None:
+    const_arr = xr.DataArray([2, 3], dims=["dim_0"])
+    const_expr = LinearExpression(const_arr, m)
+    assert const_expr.is_constant
+    assert const_expr.nterm == 0
+
+    expr_with_vars = 1 * x + 5
+    expected_coeffs = const_arr
+    expected_const = const_arr * 5
+
+    result = const_expr * expr_with_vars
+    assert isinstance(result, LinearExpression)
+    assert (result.coeffs == expected_coeffs).all()
+    assert (result.const == expected_const).all()
+
+    result_rev = expr_with_vars * const_expr
+    assert isinstance(result_rev, LinearExpression)
+    assert (result_rev.coeffs == expected_coeffs).all()
+    assert (result_rev.const == expected_const).all()
+
+
+def test_constant_only_expression_mul_constant_only(m: Model) -> None:
+    const_arr = xr.DataArray([2, 3], dims=["dim_0"])
+    const_arr2 = xr.DataArray([4, 5], dims=["dim_0"])
+    const_expr = LinearExpression(const_arr, m)
+    const_expr2 = LinearExpression(const_arr2, m)
+    assert const_expr.is_constant
+    assert const_expr2.is_constant
+
+    expected_const = const_arr * const_arr2
+
+    result = const_expr * const_expr2
+    assert isinstance(result, LinearExpression)
+    assert result.is_constant
+    assert (result.const == expected_const).all()
+
+    result_rev = const_expr2 * const_expr
+    assert isinstance(result_rev, LinearExpression)
+    assert result_rev.is_constant
+    assert (result_rev.const == expected_const).all()
+
+
+def test_constant_only_expression_mul_linexpr_with_vars_and_const(
+    m: Model, x: Variable
+) -> None:
+    const_arr = xr.DataArray([2, 3], dims=["dim_0"])
+    const_expr = LinearExpression(const_arr, m)
+    assert const_expr.is_constant
+
+    expr_with_vars_and_const = 4 * x + 10
+    expected_coeffs = const_arr * 4
+    expected_const = const_arr * 10
+
+    result = const_expr * expr_with_vars_and_const
+    assert isinstance(result, LinearExpression)
+    assert not result.is_constant
+    assert (result.coeffs == expected_coeffs).all()
+    assert (result.const == expected_const).all()
+
+    result_rev = expr_with_vars_and_const * const_expr
+    assert isinstance(result_rev, LinearExpression)
+    assert not result_rev.is_constant
+    assert (result_rev.coeffs == expected_coeffs).all()
+    assert (result_rev.const == expected_const).all()

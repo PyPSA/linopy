@@ -129,11 +129,7 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
 with contextlib.suppress(ModuleNotFoundError):
     import gurobipy
 
-    try:
-        with contextlib.closing(gurobipy.Env()):
-            available_solvers.append("gurobi")
-    except gurobipy.GurobiError:
-        pass
+    available_solvers.append("gurobi")
 with contextlib.suppress(ModuleNotFoundError):
     _new_highspy_mps_layout = None
     import highspy
@@ -179,6 +175,14 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             COLUMN = 2
             SET = 3
 
+
+with contextlib.suppress(ModuleNotFoundError, ImportError):
+    import knitro
+
+    with contextlib.suppress(Exception):
+        kc = knitro.KN_new()
+        knitro.KN_free(kc)
+        available_solvers.append("knitro")
 
 with contextlib.suppress(ModuleNotFoundError):
     import mosek
@@ -243,6 +247,7 @@ class SolverName(enum.Enum):
     Gurobi = "gurobi"
     SCIP = "scip"
     Xpress = "xpress"
+    Knitro = "knitro"
     Mosek = "mosek"
     COPT = "copt"
     MindOpt = "mindopt"
@@ -777,10 +782,10 @@ class GLPK(Solver[None]):
 
 class Highs(Solver[None]):
     """
-    Solver subclass for the Highs solver. Highs must be installed
-    for usage. Find the documentation at https://www.maths.ed.ac.uk/hall/HiGHS/.
+    Solver subclass for the HiGHS solver. HiGHS must be installed
+    for usage. Find the documentation at https://highs.dev/.
 
-    The full list of solver options is documented at https://www.maths.ed.ac.uk/hall/HiGHS/HighsOptions.set.
+    The full list of solver options is documented at https://ergo-code.github.io/HiGHS/stable/options/definitions/.
 
     Some exemplary options are:
 
@@ -812,8 +817,8 @@ class Highs(Solver[None]):
         explicit_coordinate_names: bool = False,
     ) -> Result:
         """
-        Solve a linear problem directly from a linopy model using the Highs solver.
-        Reads a linear problem file and passes it to the highs solver.
+        Solve a linear problem directly from a linopy model using the HiGHS solver.
+        Reads a linear problem file and passes it to the HiGHS solver.
         If the solution is feasible the function returns the
         objective, solution and dual constraint variables.
 
@@ -838,7 +843,7 @@ class Highs(Solver[None]):
         -------
         Result
         """
-        # check for Highs solver compatibility
+        # check for HiGHS solver compatibility
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
@@ -875,8 +880,8 @@ class Highs(Solver[None]):
         env: None = None,
     ) -> Result:
         """
-        Solve a linear problem from a problem file using the Highs solver.
-        Reads a linear problem file and passes it to the highs solver.
+        Solve a linear problem from a problem file using the HiGHS solver.
+        Reads a linear problem file and passes it to the HiGHS solver.
         If the solution is feasible the function returns the
         objective, solution and dual constraint variables.
 
@@ -938,13 +943,13 @@ class Highs(Solver[None]):
         sense: str | None = None,
     ) -> Result:
         """
-        Solve a linear problem from a Highs object.
+        Solve a linear problem from a HiGHS object.
 
 
         Parameters
         ----------
         h : highspy.Highs
-            Highs object.
+            HiGHS object.
         solution_fn : Path, optional
             Path to the solution file.
         log_fn : Path, optional
@@ -1256,7 +1261,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
-        solution = solution = maybe_adjust_objective_sign(solution, io_api, sense)
+        solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
 
@@ -1738,6 +1743,200 @@ class Xpress(Solver[None]):
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
         return Result(status, solution, m)
+
+
+KnitroResult = namedtuple("KnitroResult", "reported_runtime")
+
+
+class Knitro(Solver[None]):
+    """
+    Solver subclass for the Knitro solver.
+
+    For more information on solver options, see
+    https://www.artelys.com/app/docs/knitro/3_referenceManual/knitroPythonReference.html
+
+    Attributes
+    ----------
+    **solver_options
+        options for the given solver
+    """
+
+    def __init__(
+        self,
+        **solver_options: Any,
+    ) -> None:
+        super().__init__(**solver_options)
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        msg = "Direct API not implemented for Knitro"
+        raise NotImplementedError(msg)
+
+    @staticmethod
+    def _set_option(kc: Any, name: str, value: Any) -> None:
+        param_id = knitro.KN_get_param_id(kc, name)
+
+        if isinstance(value, bool):
+            value = int(value)
+
+        if isinstance(value, int):
+            knitro.KN_set_int_param(kc, param_id, value)
+        elif isinstance(value, float):
+            knitro.KN_set_double_param(kc, param_id, value)
+        elif isinstance(value, str):
+            knitro.KN_set_char_param(kc, param_id, value)
+        else:
+            msg = f"Unsupported Knitro option type for {name!r}: {type(value).__name__}"
+            raise TypeError(msg)
+
+    @staticmethod
+    def _extract_values(
+        kc: Any,
+        get_count_fn: Callable[..., Any],
+        get_values_fn: Callable[..., Any],
+        get_names_fn: Callable[..., Any],
+    ) -> pd.Series:
+        n = int(get_count_fn(kc))
+        if n == 0:
+            return pd.Series(dtype=float)
+
+        values = get_values_fn(kc, n - 1)
+        names = list(get_names_fn(kc))
+        return pd.Series(values, index=names, dtype=float)
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+    ) -> Result:
+        """
+        Solve a linear problem from a problem file using the Knitro solver.
+
+        Parameters
+        ----------
+        problem_fn : Path
+            Path to the problem file.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : None, optional
+            Environment for the solver.
+
+        Returns
+        -------
+        Result
+        """
+        CONDITION_MAP: dict[int, TerminationCondition] = {
+            0: TerminationCondition.optimal,
+            -100: TerminationCondition.suboptimal,
+            -101: TerminationCondition.infeasible,
+            -102: TerminationCondition.suboptimal,
+            -200: TerminationCondition.unbounded,
+            -201: TerminationCondition.infeasible_or_unbounded,
+            -202: TerminationCondition.iteration_limit,
+            -203: TerminationCondition.time_limit,
+            -204: TerminationCondition.terminated_by_limit,
+            -300: TerminationCondition.unbounded,
+            -400: TerminationCondition.iteration_limit,
+            -401: TerminationCondition.time_limit,
+            -410: TerminationCondition.terminated_by_limit,
+            -411: TerminationCondition.terminated_by_limit,
+        }
+
+        READ_OPTIONS: dict[str, str] = {".lp": "l", ".mps": "m"}
+
+        io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
+
+        suffix = problem_fn.suffix.lower()
+        if suffix not in READ_OPTIONS:
+            msg = f"Unsupported problem file format: {suffix}"
+            raise ValueError(msg)
+
+        kc = knitro.KN_new()
+        try:
+            knitro.KN_read_problem(
+                kc,
+                path_to_string(problem_fn),
+                read_options=READ_OPTIONS[suffix],
+            )
+
+            if log_fn is not None:
+                logger.warning("Log file output not implemented for Knitro")
+
+            for k, v in self.solver_options.items():
+                self._set_option(kc, k, v)
+
+            ret = int(knitro.KN_solve(kc))
+
+            reported_runtime: float | None = None
+            with contextlib.suppress(Exception):
+                reported_runtime = float(knitro.KN_get_solve_time_real(kc))
+
+            if ret in CONDITION_MAP:
+                termination_condition = CONDITION_MAP[ret]
+            elif ret > 0:
+                termination_condition = TerminationCondition.internal_solver_error
+            else:
+                termination_condition = TerminationCondition.unknown
+
+            status = Status.from_termination_condition(termination_condition)
+            status.legacy_status = str(ret)
+
+            def get_solver_solution() -> Solution:
+                objective = float(knitro.KN_get_obj_value(kc))
+
+                sol = self._extract_values(
+                    kc,
+                    knitro.KN_get_number_vars,
+                    knitro.KN_get_var_primal_values,
+                    knitro.KN_get_var_names,
+                )
+
+                try:
+                    dual = self._extract_values(
+                        kc,
+                        knitro.KN_get_number_cons,
+                        knitro.KN_get_con_dual_values,
+                        knitro.KN_get_con_names,
+                    )
+                except Exception:
+                    logger.warning("Dual values couldn't be parsed")
+                    dual = pd.Series(dtype=float)
+
+                return Solution(sol, dual, objective)
+
+            solution = self.safe_get_solution(status=status, func=get_solver_solution)
+            solution = maybe_adjust_objective_sign(solution, io_api, sense)
+
+            if solution_fn is not None:
+                solution_fn.parent.mkdir(exist_ok=True)
+                knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
+
+            return Result(
+                status, solution, KnitroResult(reported_runtime=reported_runtime)
+            )
+
+        finally:
+            with contextlib.suppress(Exception):
+                knitro.KN_free(kc)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
