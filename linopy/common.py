@@ -270,6 +270,14 @@ def as_dataarray(
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, DataArray):
+        if coords is not None and not isinstance(coords, Mapping):
+            # Normalize sequence coords to a dict
+            seq = list(coords)
+            if dims is not None:
+                dim_names = [dims] if isinstance(dims, str) else list(dims)
+                coords = dict(zip(dim_names, seq))
+            else:
+                coords = {c.name: c for c in seq if hasattr(c, "name") and c.name}
         if coords is not None and isinstance(coords, Mapping):
             if not allow_extra_dims:
                 extra_dims = set(arr.dims) - set(coords)
