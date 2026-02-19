@@ -265,13 +265,17 @@ def as_dataarray(
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, DataArray):
-        # Apply coords via reindex/expand if provided as dict (for consistency with other input types)
         if coords is not None and isinstance(coords, Mapping):
-            # Reindex dimensions that exist in both arr and coords
-            reindex_coords = {k: v for k, v in coords.items() if k in arr.dims}
-            if reindex_coords:
-                arr = arr.reindex(reindex_coords)
-            # Expand to new dimensions from coords
+            for k, v in coords.items():
+                if k in arr.dims:
+                    expected = pd.Index(v)
+                    actual = pd.Index(arr.coords[k].values)
+                    if not actual.equals(expected):
+                        raise ValueError(
+                            f"Coordinates for dimension '{k}' do not match: "
+                            f"expected {expected.tolist()}, got {actual.tolist()}"
+                        )
+            # Expand to new dimensions from coords (broadcast)
             expand_coords = {k: v for k, v in coords.items() if k not in arr.dims}
             if expand_coords:
                 arr = arr.expand_dims(expand_coords)
