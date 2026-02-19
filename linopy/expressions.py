@@ -48,7 +48,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -537,9 +536,9 @@ class BaseExpression(ABC):
         other : DataArray
             The constant to align.
         fill_value : float, default: 0
-            Fill value for missing coordinates.
+            Fill value for missing coordinates in the other operand.
         join : str, optional
-            Alignment method. If None, uses size-aware default behavior.
+            Alignment method. If None, defaults to "outer".
 
         Returns
         -------
@@ -551,19 +550,20 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            if other.sizes == self.const.sizes:
-                return self.const, other.assign_coords(coords=self.coords), False
+            join = "outer"
+
+        if join == "override":
+            return self.const, other.assign_coords(coords=self.coords), False
+        elif join == "left":
             return (
                 self.const,
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        elif join == "override":
-            return self.const, other.assign_coords(coords=self.coords), False
         else:
-            self_const, aligned = xr.align(
-                self.const, other, join=join, fill_value=fill_value
-            )
+            self_const, aligned = xr.align(self.const, other, join=join)
+            self_const = self_const.fillna(0)  # expression const: always 0 when missing
+            aligned = aligned.fillna(fill_value)  # operand fill: operation-dependent
             return self_const, aligned, True
 
     def _add_constant(
@@ -597,9 +597,12 @@ class BaseExpression(ABC):
         )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
+            # Positions where expression was missing get coeffs=NaN from fill.
+            # Replace with 0 so op(0, factor) = 0 instead of NaN.
+            coeffs = data.coeffs.fillna(0)
             return self.__class__(
                 assign_multiindex_safe(
-                    data, coeffs=op(data.coeffs, factor), const=op(self_const, factor)
+                    data, coeffs=op(coeffs, factor), const=op(self_const, factor)
                 ),
                 self.model,
             )
@@ -1082,8 +1085,31 @@ class BaseExpression(ABC):
                     f"RHS DataArray has dimensions {extra_dims} not present "
                     f"in the expression. Cannot create constraint."
                 )
-            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
+            # Align rhs to expression coordinates. NaN = "no constraint".
+            if join is None or join == "left":
+                aligned_rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                expr_data = self.data
+                expr_const = self.const
+            elif join == "override":
+                aligned_rhs = rhs.assign_coords(coords=self.const.coords)
+                expr_data = self.data
+                expr_const = self.const
+            else:
+                expr_const_aligned, aligned_rhs = xr.align(
+                    self.const, rhs, join=join, fill_value=np.nan
+                )
+                expr_data = self.data.reindex_like(
+                    expr_const_aligned, fill_value=self._fill_value
+                )
+                expr_const = expr_const_aligned.fillna(0)
+            # Compute constraint directly: rhs = aligned_rhs - expr_const
+            constraint_rhs = aligned_rhs - expr_const
+            data = assign_multiindex_safe(
+                expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+            )
+            return constraints.Constraint(data, model=self.model)
+
+        if isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
             self.coord_dims
         ):
             raise ValueError(
@@ -2320,16 +2346,6 @@ def merge(
 
     model = exprs[0].model
 
-    if join is not None:
-        override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
-    else:
-        override = False
-
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
@@ -2345,10 +2361,8 @@ def merge(
 
         if join is not None:
             kwargs["join"] = join
-        elif override:
-            kwargs["join"] = "override"
         else:
-            kwargs.setdefault("join", "outer")
+            kwargs["join"] = "outer"
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)

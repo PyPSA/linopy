@@ -443,10 +443,10 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # With "outer" default, disjoint coord slices produce the full union
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
-    assert len(expr.coords["dim_2"]) == 10
+    assert len(expr.coords["dim_2"]) == 20
 
 
 def test_linear_expression_sum_with_const(
@@ -467,8 +467,8 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
-    expr = v.loc[:9] + v.loc[10:]
+    # With "outer" default, disjoint coord slices produce the full union
+    expr = v.loc[:9].add(v.loc[10:], "override")
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -712,11 +712,11 @@ class TestSubsetCoordinateAlignment:
         )
         assert_linequal(v + full, full + v)
 
-    def test_superset_addition_pins_to_lhs(
+    def test_superset_addition_expands_to_union(
         self, v: Variable, superset: xr.DataArray
     ) -> None:
         result = v + superset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert result.sizes["dim_2"] == superset.sizes["dim_2"]  # union = superset
         assert not np.isnan(result.const.values).any()
 
     def test_superset_add_var(self, v: Variable, superset: xr.DataArray) -> None:
@@ -740,14 +740,17 @@ class TestSubsetCoordinateAlignment:
         assert not np.isnan(con.lhs.coeffs.values).any()
         assert not np.isnan(con.rhs.values).any()
 
-    def test_disjoint_addition_pins_to_lhs(self, v: Variable) -> None:
+    def test_disjoint_addition_expands_to_union(self, v: Variable) -> None:
         disjoint = xr.DataArray(
             [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
         result = v + disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert result.sizes["dim_2"] == 22  # union: 20 from v + 2 disjoint
         assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, np.zeros(20))
+        # v's positions get const=0, disjoint positions get const=100/200
+        assert result.const.sel(dim_2=0).item() == 0.0
+        assert result.const.sel(dim_2=50).item() == 100.0
+        assert result.const.sel(dim_2=60).item() == 200.0
 
     def test_expr_div_subset(self, v: Variable, subset: xr.DataArray) -> None:
         expr = 1 * v
@@ -783,21 +786,23 @@ class TestSubsetCoordinateAlignment:
         assert np.isnan(con.rhs.sel(dim_2=0).item())
         assert con.rhs.sel(dim_2=1).item() == pytest.approx(10.0)
 
-    def test_superset_mul_pins_to_lhs(
+    def test_superset_mul_expands_to_union(
         self, v: Variable, superset: xr.DataArray
     ) -> None:
         result = v * superset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert result.sizes["dim_2"] == superset.sizes["dim_2"]  # union = superset
         assert not np.isnan(result.coeffs.values).any()
 
-    def test_superset_div_pins_to_lhs(self, v: Variable) -> None:
+    def test_superset_div_expands_to_union(self, v: Variable) -> None:
         superset_nonzero = xr.DataArray(
             np.arange(1, 26, dtype=float),
             dims=["dim_2"],
             coords={"dim_2": range(25)},
         )
         result = v / superset_nonzero
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert (
+            result.sizes["dim_2"] == superset_nonzero.sizes["dim_2"]
+        )  # union = superset
         assert not np.isnan(result.coeffs.values).any()
 
     def test_quadexpr_add_subset(
@@ -894,22 +899,28 @@ class TestSubsetCoordinateAlignment:
             da / v  # type: ignore[operator]
 
     def test_disjoint_mul_produces_zeros(self, v: Variable) -> None:
+        # Variable.__mul__ pins to variable's labels (via to_linexpr(coeff))
         disjoint = xr.DataArray(
             [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
         result = v * disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert result.sizes["dim_2"] == 22  # union: 20 from v + 2 disjoint
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(20))
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(22))
 
     def test_disjoint_div_preserves_coeffs(self, v: Variable) -> None:
         disjoint = xr.DataArray(
             [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
         result = v / disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+        assert result.sizes["dim_2"] == 22  # union: 20 from v + 2 disjoint
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
+        # v's positions get divisor=1 (unchanged), disjoint positions have no vars (coeffs=0)
+        np.testing.assert_array_equal(
+            result.coeffs.squeeze().sel(dim_2=range(20)).values, np.ones(20)
+        )
+        assert result.coeffs.squeeze().sel(dim_2=50).item() == 0.0
+        assert result.coeffs.squeeze().sel(dim_2=60).item() == 0.0
 
     def test_da_eq_da_still_works(self) -> None:
         da1 = xr.DataArray([1, 2, 3])
@@ -2049,3 +2060,76 @@ class TestJoinParameter:
     def test_merge_join_right(self, a: Variable, b: Variable) -> None:
         result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="right")
         assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_constraint_rhs_join_inner(self, a: Variable) -> None:
+        rhs = xr.DataArray([10, 20], dims=["i"], coords={"i": [1, 2]})
+        con = a.to_linexpr().le(rhs, join="inner")
+        assert list(con.data.indexes["i"]) == [1, 2]
+        assert con.rhs.sel(i=1).item() == 10.0
+        assert con.rhs.sel(i=2).item() == 20.0
+
+    def test_constraint_rhs_join_outer(self, a: Variable) -> None:
+        rhs = xr.DataArray([10, 20], dims=["i"], coords={"i": [1, 2]})
+        con = a.to_linexpr().le(rhs, join="outer")
+        assert list(con.data.indexes["i"]) == [0, 1, 2]
+        assert np.isnan(con.rhs.sel(i=0).item())
+        assert con.rhs.sel(i=1).item() == 10.0
+        assert con.rhs.sel(i=2).item() == 20.0
+
+
+class TestAssociativity:
+    """Verify that addition is associative with the 'outer' default."""
+
+    @pytest.fixture
+    def m3(self) -> Model:
+        m = Model()
+        m.add_variables(coords=[pd.Index([0, 1, 2], name="t")], name="y")
+        m.add_variables(coords=[pd.Index(range(5), name="t")], name="x")
+        return m
+
+    def test_associativity_with_constant(self, m3: Model) -> None:
+        y = m3.variables["y"]
+        x = m3.variables["x"]
+        factor = xr.DataArray(
+            np.arange(6, dtype=float), dims=["t"], coords={"t": range(6)}
+        )
+        r1 = (y + x) + factor
+        r2 = (y + factor) + x
+        r3 = y + (x + factor)
+        assert_linequal(r1, r2)
+        assert_linequal(r1, r3)
+
+    def test_same_shape_disjoint_add(self, m3: Model) -> None:
+        m = Model()
+        a = m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        b = m.add_variables(coords=[pd.Index([5, 6, 7], name="i")], name="b")
+        result = a + b
+        assert set(result.coords["i"].values) == {0, 1, 2, 5, 6, 7}
+
+    def test_same_shape_disjoint_mul(self, m3: Model) -> None:
+        m = Model()
+        a = m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        factor = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
+        result = a * factor
+        assert set(result.coords["i"].values) == {0, 1, 2, 5, 6, 7}
+        # a's positions get factor=0, disjoint positions have no vars
+        assert result.coeffs.squeeze().sel(i=0).item() == 0.0
+        assert result.coeffs.squeeze().sel(i=5).item() == 0.0
+
+    def test_same_shape_disjoint_div(self, m3: Model) -> None:
+        m = Model()
+        a = m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        divisor = xr.DataArray([10.0, 20.0, 30.0], dims=["i"], coords={"i": [5, 6, 7]})
+        result = a / divisor
+        assert set(result.coords["i"].values) == {0, 1, 2, 5, 6, 7}
+        # a's positions get divisor=1 (unchanged), disjoint positions have no vars
+        assert result.coeffs.squeeze().sel(i=0).item() == 1.0
+        assert result.coeffs.squeeze().sel(i=5).item() == 0.0
+
+    def test_override_gives_positional_matching(self, m3: Model) -> None:
+        m = Model()
+        a = m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        b = m.add_variables(coords=[pd.Index([5, 6, 7], name="i")], name="b")
+        result = a.add(b, join="override")
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        assert result.nterm == 2

@@ -401,7 +401,10 @@ class Variable:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
 
-            return self.to_linexpr(other)
+            if isinstance(other, expressions.LinearExpression):
+                return self.to_linexpr() * other
+
+            return self.to_linexpr()._multiply_by_constant(other)
         except TypeError:
             return NotImplemented
 
