@@ -60,7 +60,12 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.remote import OetcHandler, RemoteHandler
+from linopy.remote import RemoteHandler
+
+try:
+    from linopy.remote import OetcHandler
+except ImportError:
+    OetcHandler = None  # type: ignore
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
