@@ -273,6 +273,16 @@ def as_dataarray(
     -------
         DataArray:
             The converted DataArray.
+
+    Raises
+    ------
+    ValueError
+        If arr is a DataArray and coords is provided: raised when
+        coordinates for shared dimensions do not match, or when the
+        DataArray has dimensions not covered by coords (unless
+        allow_extra_dims is True). The DataArray's dimensions may be
+        a subset of coords — missing dimensions are added via
+        expand_dims.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
