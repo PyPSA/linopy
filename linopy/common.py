@@ -233,6 +233,7 @@ def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
+    allow_extra_dims: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -246,6 +247,10 @@ def as_dataarray(
             The coordinates for the DataArray. If None, default coordinates will be used.
         dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+        allow_extra_dims:
+            If False (default), raise ValueError when a DataArray input has
+            dimensions not present in coords. Set to True to allow extra
+            dimensions for broadcasting.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
@@ -266,6 +271,12 @@ def as_dataarray(
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, DataArray):
         if coords is not None and isinstance(coords, Mapping):
+            if not allow_extra_dims:
+                extra_dims = set(arr.dims) - set(coords)
+                if extra_dims:
+                    raise ValueError(
+                        f"DataArray has extra dimensions not in coords: {extra_dims}"
+                    )
             for k, v in coords.items():
                 if k in arr.dims:
                     expected = pd.Index(v)
