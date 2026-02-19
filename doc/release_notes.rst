@@ -8,6 +8,19 @@ Upcoming Version
 * Add ``add_disjunctive_piecewise_constraints()`` for disconnected piecewise linear segments (e.g. forbidden operating zones).
 * Add the `sphinx-copybutton` to the documentation
 
+Version 0.6.4
+--------------
+
+* Add support for the `knitro` solver via the knitro python API
+
+Version 0.6.3
+--------------
+
+**Fix Regression**
+
+*  Reinsert broadcasting logic of mask object to be fully compatible with performance improvements in version 0.6.2 using `np.where` instead of `xr.where`.
+
+
 Version 0.6.2
 --------------
 
@@ -674,7 +687,7 @@ Version 0.0.5
 * The `Variable` class now has a `lower` and `upper` accessor, which allows to inspect and modify the lower and upper bounds of a assigned variable.
 * The `Constraint` class now has a `lhs`, `vars`, `coeffs`, `rhs` and `sign` accessor, which allows to inspect and modify the left-hand-side, the signs and right-hand-side of a assigned constraint.
 * Constraints can now be build combining linear expressions with right-hand-side via a `>=`, `<=` or a `==` operator. This creates an `AnonymousConstraint` which can be passed to `Model.add_constraints`.
-* Add support of the HiGHS open source solver https://www.maths.ed.ac.uk/hall/HiGHS/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
+* Add support of the HiGHS open source solver https://highs.dev/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
 
 
 **Breaking changes**
