@@ -10,6 +10,7 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
+* When passing DataArray bounds to ``add_variables`` with explicit ``coords``, the ``coords`` parameter now defines the variable's coordinates. DataArray bounds are validated against these coords (raises ``ValueError`` on mismatch) and broadcast to missing dimensions. Previously, the ``coords`` parameter was silently ignored for DataArray inputs.
 * Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
 * Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
@@ -24,7 +25,6 @@ Version 0.6.5
 -------------
 
 * Expose the knitro context to allow for more flexible use of the knitro python API.
-
 
 Version 0.6.4
 --------------
