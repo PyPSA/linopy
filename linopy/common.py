@@ -139,7 +139,7 @@ def _coords_to_mapping(coords: CoordsLike, dims: DimsLike | None = None) -> Mapp
         return coords
     seq = list(coords)
     if dims is not None:
-        dim_names = [dims] if isinstance(dims, str) else list(dims)
+        dim_names: list[str] = [dims] if isinstance(dims, str) else list(dims)  # type: ignore[arg-type]
         return dict(zip(dim_names, seq))
     return {c.name: c for c in seq if hasattr(c, "name") and c.name}
 
