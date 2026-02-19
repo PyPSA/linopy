@@ -597,7 +597,9 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = as_dataarray(
+            other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+        )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -626,7 +628,9 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = as_dataarray(
+            other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+        )
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1705,7 +1709,9 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = as_dataarray(
+                other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+            )
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
