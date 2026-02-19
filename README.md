@@ -150,6 +150,7 @@ Fri    0          4
 * [MOSEK](https://www.mosek.com/)
 * [COPT](https://www.shanshu.ai/copt)
 * [cuPDLPx](https://github.com/MIT-Lu-Lab/cuPDLPx)
+* [Knitro](https://www.artelys.com/solvers/knitro/)
 
 Note that these do have to be installed by the user separately.
 

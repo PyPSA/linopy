@@ -11,6 +11,10 @@ Upcoming Version
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
 
+Version 0.6.4
+--------------
+
+* Add support for the `knitro` solver via the knitro python API
 
 Version 0.6.3
 --------------
