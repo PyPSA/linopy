@@ -590,27 +590,36 @@ class TestSubsetCoordinateAlignment:
 
     @pytest.fixture
     def expected_fill(self) -> np.ndarray:
+        """Expected values for addition: missing positions get 0."""
         arr = np.zeros(20)
         arr[1] = 10.0
         arr[3] = 30.0
         return arr
 
+    @pytest.fixture
+    def expected_mul_fill(self) -> np.ndarray:
+        """Expected values for multiplication: missing positions get 1."""
+        arr = np.ones(20)
+        arr[1] = 10.0
+        arr[3] = 30.0
+        return arr
+
     def test_var_mul_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
+        self, v: Variable, subset: xr.DataArray, expected_mul_fill: np.ndarray
     ) -> None:
         result = v * subset
         assert result.sizes["dim_2"] == v.sizes["dim_2"]
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_mul_fill)
 
     def test_expr_mul_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
+        self, v: Variable, subset: xr.DataArray, expected_mul_fill: np.ndarray
     ) -> None:
         expr = 1 * v
         result = expr * subset
         assert result.sizes["dim_2"] == v.sizes["dim_2"]
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_mul_fill)
 
     @pytest.mark.parametrize(
         "make_lhs,make_rhs",
@@ -826,24 +835,24 @@ class TestSubsetCoordinateAlignment:
         np.testing.assert_array_equal(result.const.values, -expected_fill)
 
     def test_quadexpr_mul_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
+        self, v: Variable, subset: xr.DataArray, expected_mul_fill: np.ndarray
     ) -> None:
         qexpr = v * v
         result = qexpr * subset
         assert isinstance(result, QuadraticExpression)
         assert result.sizes["dim_2"] == v.sizes["dim_2"]
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_mul_fill)
 
     def test_subset_mul_quadexpr(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
+        self, v: Variable, subset: xr.DataArray, expected_mul_fill: np.ndarray
     ) -> None:
         qexpr = v * v
         result = subset * qexpr
         assert isinstance(result, QuadraticExpression)
         assert result.sizes["dim_2"] == v.sizes["dim_2"]
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_mul_fill)
 
     def test_subset_add_quadexpr(self, v: Variable, subset: xr.DataArray) -> None:
         qexpr = v * v
@@ -865,8 +874,8 @@ class TestSubsetCoordinateAlignment:
         assert not np.isnan(result.coeffs.values).any()
         assert result.coeffs.squeeze().sel(a=1, b=0).item() == pytest.approx(2.0)
         assert result.coeffs.squeeze().sel(a=3, b=4).item() == pytest.approx(5.0)
-        assert result.coeffs.squeeze().sel(a=0, b=0).item() == pytest.approx(0.0)
-        assert result.coeffs.squeeze().sel(a=1, b=2).item() == pytest.approx(0.0)
+        assert result.coeffs.squeeze().sel(a=0, b=0).item() == pytest.approx(1.0)
+        assert result.coeffs.squeeze().sel(a=1, b=2).item() == pytest.approx(1.0)
 
     def test_multidim_subset_add(self, m: Model) -> None:
         coords_a = pd.RangeIndex(4, name="a")
@@ -898,15 +907,19 @@ class TestSubsetCoordinateAlignment:
         with pytest.raises(TypeError):
             da / v  # type: ignore[operator]
 
-    def test_disjoint_mul_produces_zeros(self, v: Variable) -> None:
-        # Variable.__mul__ pins to variable's labels (via to_linexpr(coeff))
+    def test_disjoint_mul_preserves_coeffs(self, v: Variable) -> None:
         disjoint = xr.DataArray(
             [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
         result = v * disjoint
         assert result.sizes["dim_2"] == 22  # union: 20 from v + 2 disjoint
         assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(22))
+        # v's positions get factor=1 (unchanged), disjoint positions have no vars (coeffs=0)
+        np.testing.assert_array_equal(
+            result.coeffs.squeeze().sel(dim_2=range(20)).values, np.ones(20)
+        )
+        assert result.coeffs.squeeze().sel(dim_2=50).item() == 0.0
+        assert result.coeffs.squeeze().sel(dim_2=60).item() == 0.0
 
     def test_disjoint_div_preserves_coeffs(self, v: Variable) -> None:
         disjoint = xr.DataArray(
@@ -1851,7 +1864,7 @@ class TestJoinParameter:
         const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
         result = a.to_linexpr().mul(const, join="outer")
         assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
-        assert result.coeffs.sel(i=0).item() == 0
+        assert result.coeffs.sel(i=0).item() == 1  # fill=1 (identity for mul)
         assert result.coeffs.sel(i=1).item() == 2
         assert result.coeffs.sel(i=2).item() == 3
 
@@ -1967,12 +1980,13 @@ class TestJoinParameter:
         other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
         result = expr.mul(other, join="outer")
         assert set(result.coords["i"].values) == {0, 1, 2, 3}
-        assert result.const.sel(i=0).item() == 0
-        assert result.const.sel(i=1).item() == 10
-        assert result.const.sel(i=2).item() == 0
-        assert result.const.sel(i=3).item() == 0
+        # fill=1: missing factor positions keep expression unchanged
+        assert result.const.sel(i=0).item() == 5  # 5 * 1
+        assert result.const.sel(i=1).item() == 10  # 5 * 2
+        assert result.const.sel(i=2).item() == 5  # 5 * 1
+        assert result.const.sel(i=3).item() == 0  # 0 * 3 (no expression here)
         assert result.coeffs.squeeze().sel(i=1).item() == 2
-        assert result.coeffs.squeeze().sel(i=0).item() == 0
+        assert result.coeffs.squeeze().sel(i=0).item() == 1  # 1 * 1 (fill=1)
 
     def test_div_constant_override_positional(self, a: Variable) -> None:
         expr = 1 * a + 10
@@ -2112,8 +2126,8 @@ class TestAssociativity:
         factor = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
         result = a * factor
         assert set(result.coords["i"].values) == {0, 1, 2, 5, 6, 7}
-        # a's positions get factor=0, disjoint positions have no vars
-        assert result.coeffs.squeeze().sel(i=0).item() == 0.0
+        # a's positions get factor=1 (unchanged), disjoint positions have no vars
+        assert result.coeffs.squeeze().sel(i=0).item() == 1.0
         assert result.coeffs.squeeze().sel(i=5).item() == 0.0
 
     def test_same_shape_disjoint_div(self, m3: Model) -> None:

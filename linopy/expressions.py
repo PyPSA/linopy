@@ -611,7 +611,7 @@ class BaseExpression(ABC):
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
     ) -> GenericExpression:
-        return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
+        return self._apply_constant_op(other, operator.mul, fill_value=1, join=join)
 
     def _divide_by_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
