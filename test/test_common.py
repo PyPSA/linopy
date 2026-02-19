@@ -432,6 +432,86 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
     assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
 
 
+def test_as_dataarray_with_dataarray_coord_mismatch() -> None:
+    da_in = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+    with pytest.raises(ValueError, match="do not match"):
+        as_dataarray(da_in, coords={"x": [10, 20, 40]})
+
+
+def test_as_dataarray_with_dataarray_extra_dims() -> None:
+    da_in = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+    with pytest.raises(ValueError, match="extra dimensions"):
+        as_dataarray(da_in, coords={"x": [0, 1]})
+
+
+def test_as_dataarray_with_dataarray_extra_dims_allowed() -> None:
+    da_in = DataArray(
+        [[1, 2], [3, 4]],
+        dims=["x", "y"],
+        coords={"x": [0, 1], "y": [0, 1]},
+    )
+    da_out = as_dataarray(da_in, coords={"x": [0, 1]}, allow_extra_dims=True)
+    assert da_out.dims == da_in.dims
+    assert da_out.shape == da_in.shape
+
+
+def test_as_dataarray_with_dataarray_broadcast() -> None:
+    da_in = DataArray([1, 2], dims=["x"], coords={"x": ["a", "b"]})
+    da_out = as_dataarray(
+        da_in, coords={"x": ["a", "b"], "y": [1, 2, 3]}, dims=["x", "y"]
+    )
+    assert set(da_out.dims) == {"x", "y"}
+    assert da_out.sizes["y"] == 3
+
+
+def test_as_dataarray_with_dataarray_no_coords() -> None:
+    da_in = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+    da_out = as_dataarray(da_in)
+    assert_equal(da_out, da_in)
+
+
+def test_as_dataarray_with_dataarray_sequence_coords() -> None:
+    da_in = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
+    idx = pd.RangeIndex(2, name="x")
+    da_out = as_dataarray(da_in, coords=[idx], dims=["x"])
+    assert list(da_out.coords["x"].values) == [0, 1]
+
+
+def test_as_dataarray_with_dataarray_sequence_coords_mismatch() -> None:
+    da_in = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
+    idx = pd.RangeIndex(3, name="x")
+    with pytest.raises(ValueError, match="do not match"):
+        as_dataarray(da_in, coords=[idx], dims=["x"])
+
+
+def test_add_variables_with_dataarray_bounds_and_coords() -> None:
+    model = Model()
+    time = pd.RangeIndex(5, name="time")
+    lower = DataArray([0, 0, 0, 0, 0], dims=["time"], coords={"time": range(5)})
+    var = model.add_variables(lower=lower, coords=[time], name="x")
+    assert var.shape == (5,)
+    assert list(var.data.coords["time"].values) == list(range(5))
+
+
+def test_add_variables_with_dataarray_bounds_coord_mismatch() -> None:
+    model = Model()
+    time = pd.RangeIndex(5, name="time")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match"):
+        model.add_variables(lower=lower, coords=[time], name="x")
+
+
+def test_add_variables_with_dataarray_bounds_broadcast() -> None:
+    model = Model()
+    time = pd.RangeIndex(3, name="time")
+    space = pd.Index(["a", "b"], name="space")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
+    var = model.add_variables(lower=lower, coords=[time, space], name="x")
+    assert set(var.data.dims) == {"time", "space"}
+    assert var.data.sizes["time"] == 3
+    assert var.data.sizes["space"] == 2
+
+
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])

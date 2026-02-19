@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* When passing DataArray bounds to ``add_variables`` with explicit ``coords``, the ``coords`` parameter now defines the variable's coordinates. DataArray bounds are validated against these coords (raises ``ValueError`` on mismatch) and broadcast to missing dimensions. Previously, the ``coords`` parameter was silently ignored for DataArray inputs.
+
 Version 0.6.4
 --------------
 
