@@ -128,6 +128,22 @@ def get_from_iterable(lst: DimsLike | None, index: int) -> Any | None:
     return lst[index] if 0 <= index < len(lst) else None
 
 
+def _coords_to_mapping(coords: CoordsLike, dims: DimsLike | None = None) -> Mapping:
+    """
+    Normalize coords to a Mapping.
+
+    If coords is already a Mapping, return as-is. If it's a sequence,
+    convert to a dict using dims (if provided) or Index names.
+    """
+    if isinstance(coords, Mapping):
+        return coords
+    seq = list(coords)
+    if dims is not None:
+        dim_names = [dims] if isinstance(dims, str) else list(dims)
+        return dict(zip(dim_names, seq))
+    return {c.name: c for c in seq if hasattr(c, "name") and c.name}
+
+
 def pandas_to_dataarray(
     arr: pd.DataFrame | pd.Series,
     coords: CoordsLike | None = None,
@@ -163,8 +179,7 @@ def pandas_to_dataarray(
     ]
     if coords is not None:
         pandas_coords = dict(zip(dims, arr.axes))
-        if isinstance(coords, Sequence):
-            coords = dict(zip(dims, coords))
+        coords = _coords_to_mapping(coords, dims)
         shared_dims = set(pandas_coords.keys()) & set(coords.keys())
         non_aligned = []
         for dim in shared_dims:
@@ -224,7 +239,7 @@ def numpy_to_dataarray(
         dims = [get_from_iterable(dims, i) or f"dim_{i}" for i in range(ndim)]
 
     if isinstance(coords, list) and dims is not None and len(dims):
-        coords = dict(zip(dims, coords))
+        coords = _coords_to_mapping(coords, dims)
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
@@ -270,14 +285,8 @@ def as_dataarray(
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, DataArray):
-        if coords is not None and not isinstance(coords, Mapping):
-            # Normalize sequence coords to a dict
-            seq = list(coords)
-            if dims is not None:
-                dim_names = [dims] if isinstance(dims, str) else list(dims)
-                coords = dict(zip(dim_names, seq))
-            else:
-                coords = {c.name: c for c in seq if hasattr(c, "name") and c.name}
+        if coords is not None:
+            coords = _coords_to_mapping(coords, dims)
         if coords is not None and isinstance(coords, Mapping):
             if not allow_extra_dims:
                 extra_dims = set(arr.dims) - set(coords)
