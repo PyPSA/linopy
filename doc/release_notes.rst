@@ -4,6 +4,9 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+
+
 Version 0.6.4
 --------------
 
