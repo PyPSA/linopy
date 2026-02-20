@@ -107,6 +107,39 @@ def test_variables_nvars(m: Model) -> None:
     assert m.variables.nvars == 19
 
 
+def test_variables_mask_broadcast() -> None:
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+
+    mask = pd.Series([True] * 5 + [False] * 5)
+    x = m.add_variables(lower, upper, name="x", mask=mask)
+    assert (x.labels[0:5, :] != -1).all()
+    assert (x.labels[5:10, :] == -1).all()
+
+    mask2 = xr.DataArray([True] * 5 + [False] * 5, dims=["dim_1"])
+    y = m.add_variables(lower, upper, name="y", mask=mask2)
+    assert (y.labels[:, 0:5] != -1).all()
+    assert (y.labels[:, 5:10] == -1).all()
+
+    mask3 = xr.DataArray(
+        [True, True, False, False, False],
+        dims=["dim_0"],
+        coords={"dim_0": range(5)},
+    )
+    with pytest.warns(FutureWarning, match="Missing values will be filled"):
+        z = m.add_variables(lower, upper, name="z", mask=mask3)
+    assert (z.labels[0:2, :] != -1).all()
+    assert (z.labels[2:5, :] == -1).all()
+    assert (z.labels[5:10, :] == -1).all()
+
+    # Mask with extra dimension not in data should raise
+    mask4 = xr.DataArray([True, False], dims=["extra_dim"])
+    with pytest.raises(AssertionError, match="not a subset"):
+        m.add_variables(lower, upper, name="w", mask=mask4)
+
+
 def test_variables_get_name_by_label(m: Model) -> None:
     assert m.variables.get_name_by_label(4) == "x"
     assert m.variables.get_name_by_label(12) == "y"
