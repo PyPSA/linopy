@@ -588,6 +588,14 @@ class BaseExpression(ABC):
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        extra_dims = set(da.dims) - set(self.coord_dims)
+        if extra_dims:
+            raise ValueError(
+                f"Constant has dimensions {extra_dims} not present in the "
+                f"expression. Addition/subtraction cannot introduce new "
+                f"dimensions — use multiplication to expand, or select/reindex "
+                f"the constant to match the expression's dimensions."
+            )
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join, default_join="exact"
         )
@@ -612,12 +620,9 @@ class BaseExpression(ABC):
             factor, fill_value=fill_value, join=join, default_join="inner"
         )
         if self_const.size == 0 and self.const.size > 0:
-            warn(
+            raise ValueError(
                 "Multiplication/division resulted in an empty expression because "
-                "the operands have no overlapping coordinates (inner join). "
-                "This is likely a modeling error.",
-                UserWarning,
-                stacklevel=3,
+                "the operands have no overlapping coordinates (inner join)."
             )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)

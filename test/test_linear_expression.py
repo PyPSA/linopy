@@ -681,9 +681,9 @@ class TestExactAlignmentDefault:
         disjoint = xr.DataArray(
             [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
-        # inner join: no intersection → empty
-        result = v * disjoint
-        assert result.sizes["dim_2"] == 0
+        # inner join: no intersection → error
+        with pytest.raises(ValueError, match="no overlapping coordinates"):
+            v * disjoint
 
         # explicit join="left": 20 entries, all zeros
         result = v.mul(disjoint, join="left")
@@ -694,8 +694,8 @@ class TestExactAlignmentDefault:
         disjoint = xr.DataArray(
             [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
         )
-        result = v / disjoint
-        assert result.sizes["dim_2"] == 0
+        with pytest.raises(ValueError, match="no overlapping coordinates"):
+            v / disjoint
 
     # --- Multiplication / division with subset constant ---
 
@@ -899,6 +899,18 @@ class TestExactAlignmentDefault:
         )
         with pytest.raises(ValueError, match="not present in the expression"):
             v <= rhs
+
+    def test_add_constant_extra_dims_raises(self, v: Variable) -> None:
+        da = xr.DataArray(
+            [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
+        )
+        with pytest.raises(ValueError, match="not present in the expression"):
+            v + da
+        with pytest.raises(ValueError, match="not present in the expression"):
+            v - da
+        # multiplication still allows extra dims (broadcasts)
+        result = v * da
+        assert "extra" in result.dims
 
     def test_da_truediv_var_raises(self, v: Variable) -> None:
         da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
