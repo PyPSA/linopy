@@ -4,9 +4,14 @@ Release Notes
 Upcoming Version
 ----------------
 
+<<<<<<< feat/add-piecewise-variants
 * Add ``add_piecewise_constraints()`` for piecewise linear constraints with SOS2 and incremental (pure LP) formulations.
 * Add ``add_disjunctive_piecewise_constraints()`` for disconnected piecewise linear segments (e.g. forbidden operating zones).
 * Add the `sphinx-copybutton` to the documentation
+=======
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+
+>>>>>>> master
 
 Version 0.6.4
 --------------

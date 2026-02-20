@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import to_polars
-from linopy.constants import CONCAT_DIM
+from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
@@ -371,8 +371,8 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs["sos_type"]
-        sos_dim = var.attrs["sos_dim"]
+        sos_type = var.attrs[SOS_TYPE_ATTR]
+        sos_dim = var.attrs[SOS_DIM_ATTR]
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
@@ -740,8 +740,8 @@ def to_gurobipy(
     if m.variables.sos:
         for var_name in m.variables.sos:
             var = m.variables.sos[var_name]
-            sos_type: int = var.attrs["sos_type"]  # type: ignore[assignment]
-            sos_dim: str = var.attrs["sos_dim"]  # type: ignore[assignment]
+            sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
+            sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
 
             def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                 s = s.squeeze()
