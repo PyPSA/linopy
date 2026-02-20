@@ -648,15 +648,14 @@ class TestIncrementalFormulation:
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
     def test_nan_breakpoints_monotonic(self) -> None:
-        """Test that NaN breakpoints don't break monotonicity check."""
+        """Test that trailing NaN breakpoints don't break monotonicity check."""
         m = Model()
         x = m.add_variables(name="x")
 
         breakpoints = xr.DataArray(
-            [0, 10, np.nan, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+            [0, 10, 100, np.nan], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
         )
 
-        # Should detect as monotonic despite NaN
         m.add_piecewise_constraints(x, breakpoints, dim="bp", method="auto")
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
 
@@ -1769,12 +1768,12 @@ class TestAdditionalEdgeCases:
     """Additional edge case tests identified in review."""
 
     def test_nan_breakpoints_delta_mask(self) -> None:
-        """Verify delta mask correctly masks segments adjacent to NaN breakpoints."""
+        """Verify delta mask correctly masks segments adjacent to trailing NaN breakpoints."""
         m = Model()
         x = m.add_variables(name="x")
 
         breakpoints = xr.DataArray(
-            [0, 10, np.nan, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+            [0, 10, np.nan, np.nan], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
         )
 
         m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
@@ -1899,3 +1898,50 @@ class TestAdditionalEdgeCases:
 
         assert f"pwl0{PWL_FILL_SUFFIX}" not in m.constraints
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_non_trailing_nan_incremental_raises(self) -> None:
+        """Non-trailing NaN breakpoints raise ValueError with method='incremental'."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, np.nan, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        with pytest.raises(ValueError, match="non-trailing NaN"):
+            m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+    def test_non_trailing_nan_incremental_dict_raises(self) -> None:
+        """Dict case with one variable having non-trailing NaN raises."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, np.nan, 100], [0, 10, 50, 80]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "y"], "bp": [0, 1, 2, 3]},
+        )
+
+        with pytest.raises(ValueError, match="non-trailing NaN"):
+            m.add_piecewise_constraints(
+                {"x": x, "y": y},
+                breakpoints,
+                link_dim="var",
+                dim="bp",
+                method="incremental",
+            )
+
+    def test_non_trailing_nan_falls_back_to_sos2(self) -> None:
+        """method='auto' falls back to SOS2 for non-trailing NaN."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, np.nan, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="auto")
+
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_DELTA_SUFFIX}" not in m.variables

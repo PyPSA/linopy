@@ -787,12 +787,22 @@ class Model:
 
         if method in ("incremental", "auto"):
             is_monotonic = self._check_strict_monotonicity(breakpoints, dim)
+            trailing_nan_only = self._has_trailing_nan_only(breakpoints, dim)
             if method == "auto":
-                method = "incremental" if is_monotonic else "sos2"
+                if is_monotonic and trailing_nan_only:
+                    method = "incremental"
+                else:
+                    method = "sos2"
             elif not is_monotonic:
                 raise ValueError(
                     "Incremental method requires strictly monotonic breakpoints "
                     "along the breakpoint dimension."
+                )
+            if method == "incremental" and not trailing_nan_only:
+                raise ValueError(
+                    "Incremental method does not support non-trailing NaN breakpoints. "
+                    "NaN values must only appear at the end of the breakpoint sequence. "
+                    "Use method='sos2' for breakpoints with gaps."
                 )
 
         if method == "sos2":
@@ -1032,6 +1042,14 @@ class Model:
             bp_mask = mask
             if link_dim is not None:
                 bp_mask = bp_mask.all(dim=link_dim)
+            cummin = np.minimum.accumulate(bp_mask.values, axis=bp_mask.dims.index(dim))
+            cummin_da = DataArray(cummin, coords=bp_mask.coords, dims=bp_mask.dims)
+            if bool((bp_mask & ~cummin_da).any()):
+                raise ValueError(
+                    "Incremental method does not support non-trailing NaN breakpoints. "
+                    "NaN values must only appear at the end of the breakpoint sequence. "
+                    "Use method='sos2' for breakpoints with gaps."
+                )
             mask_lo = bp_mask.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
             mask_hi = bp_mask.isel({dim: slice(1, None)}).rename({dim: seg_dim})
             mask_lo[seg_dim] = seg_index
@@ -1138,6 +1156,14 @@ class Model:
         has_non_nan = (~diffs.isnull()).any(dim)
         monotonic = (all_pos_per_slice | all_neg_per_slice) & has_non_nan
         return bool(monotonic.all())
+
+    @staticmethod
+    def _has_trailing_nan_only(breakpoints: DataArray, dim: str) -> bool:
+        """Check that NaN values in breakpoints only appear as trailing entries along dim."""
+        valid = ~breakpoints.isnull()
+        cummin = np.minimum.accumulate(valid.values, axis=valid.dims.index(dim))
+        cummin_da = DataArray(cummin, coords=valid.coords, dims=valid.dims)
+        return not bool((valid & ~cummin_da).any())
 
     def _resolve_pwl_expr(
         self,
