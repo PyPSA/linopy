@@ -250,32 +250,51 @@ def reformulate_sos_constraints(
     """
     result = SOSReformulationResult()
 
-    for var_name in list(model.variables.sos):
-        var = model.variables[var_name]
-        sos_type = var.attrs[SOS_TYPE_ATTR]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+    try:
+        for var_name in list(model.variables.sos):
+            var = model.variables[var_name]
+            sos_type = var.attrs[SOS_TYPE_ATTR]
+            sos_dim = var.attrs[SOS_DIM_ATTR]
 
-        if var.sizes[sos_dim] <= 1:
-            continue
+            if var.sizes[sos_dim] <= 1:
+                result.saved_attrs[var_name] = dict(var.attrs)
+                model.remove_sos_constraints(var)
+                result.reformulated.append(var_name)
+                continue
 
-        M = compute_big_m_values(var)
-        if (M == 0).all():
-            continue
+            M = compute_big_m_values(var)
+            if (M == 0).all():
+                result.saved_attrs[var_name] = dict(var.attrs)
+                model.remove_sos_constraints(var)
+                result.reformulated.append(var_name)
+                continue
 
-        result.saved_attrs[var_name] = dict(var.attrs)
+            result.saved_attrs[var_name] = dict(var.attrs)
 
-        if sos_type == 1:
-            added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
-        elif sos_type == 2:
-            added_vars, added_cons = reformulate_sos2(model, var, prefix, M)
-        else:
-            raise ValueError(f"Unknown sos_type={sos_type} on variable '{var_name}'")
+            sort_idx = np.argsort(var.coords[sos_dim].values)
+            if not np.all(sort_idx[:-1] <= sort_idx[1:]):
+                sorted_var = var.isel({sos_dim: sort_idx})
+                M = M.isel({sos_dim: sort_idx})
+            else:
+                sorted_var = var
 
-        result.added_variables.extend(added_vars)
-        result.added_constraints.extend(added_cons)
+            if sos_type == 1:
+                added_vars, added_cons = reformulate_sos1(model, sorted_var, prefix, M)
+            elif sos_type == 2:
+                added_vars, added_cons = reformulate_sos2(model, sorted_var, prefix, M)
+            else:
+                raise ValueError(
+                    f"Unknown sos_type={sos_type} on variable '{var_name}'"
+                )
 
-        model.remove_sos_constraints(var)
-        result.reformulated.append(var_name)
+            result.added_variables.extend(added_vars)
+            result.added_constraints.extend(added_cons)
+
+            model.remove_sos_constraints(var)
+            result.reformulated.append(var_name)
+    except Exception:
+        undo_sos_reformulation(model, result)
+        raise
 
     logger.info(f"Reformulated {len(result.reformulated)} SOS constraint(s)")
     return result

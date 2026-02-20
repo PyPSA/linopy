@@ -249,7 +249,7 @@ class TestReformulateAllSOS:
         assert set(result.reformulated) == {"x", "y"}
         assert len(list(m.variables.sos)) == 0
 
-    def test_reformulate_skips_single_element(self) -> None:
+    def test_reformulate_removes_sos_attrs_for_single_element(self) -> None:
         m = Model()
         idx = pd.Index([0], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -257,9 +257,12 @@ class TestReformulateAllSOS:
 
         result = reformulate_sos_constraints(m)
 
-        assert result.reformulated == []
+        assert result.reformulated == ["x"]
+        assert len(list(m.variables.sos)) == 0
+        assert len(result.added_variables) == 0
+        assert len(result.added_constraints) == 0
 
-    def test_reformulate_skips_zero_bounds(self) -> None:
+    def test_reformulate_removes_sos_attrs_for_zero_bounds(self) -> None:
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=0, coords=[idx], name="x")
@@ -267,7 +270,10 @@ class TestReformulateAllSOS:
 
         result = reformulate_sos_constraints(m)
 
-        assert result.reformulated == []
+        assert result.reformulated == ["x"]
+        assert len(list(m.variables.sos)) == 0
+        assert len(result.added_variables) == 0
+        assert len(result.added_constraints) == 0
 
     def test_reformulate_raises_on_infinite_bounds(self) -> None:
         m = Model()
@@ -656,8 +662,16 @@ class TestPartialFailure:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
         m.add_sos_constraints(y, sos_type=1, sos_dim="i")
 
+        vars_before = set(m.variables)
+        cons_before = set(m.constraints)
+        sos_before = list(m.variables.sos)
+
         with pytest.raises(ValueError, match="negative lower bounds"):
             reformulate_sos_constraints(m)
+
+        assert set(m.variables) == vars_before
+        assert set(m.constraints) == cons_before
+        assert list(m.variables.sos) == sos_before
 
 
 class TestMixedBounds:
@@ -733,3 +747,72 @@ class TestUndoReformulation:
 
         result2 = m.reformulate_sos_constraints()
         assert result2.reformulated == []
+
+    def test_undo_restores_skipped_single_element(self) -> None:
+        m = Model()
+        idx = pd.Index([0], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+        result = reformulate_sos_constraints(m)
+
+        assert len(list(m.variables.sos)) == 0
+
+        undo_sos_reformulation(m, result)
+
+        assert list(m.variables.sos) == ["x"]
+
+    def test_undo_restores_skipped_zero_bounds(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=0, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+        result = reformulate_sos_constraints(m)
+
+        assert len(list(m.variables.sos)) == 0
+
+        undo_sos_reformulation(m, result)
+
+        assert list(m.variables.sos) == ["x"]
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestUnsortedCoords:
+    def test_sos2_unsorted_coords_matches_sorted(self) -> None:
+        coeffs = np.array([1, 2, 3])
+
+        m_sorted = Model()
+        idx_sorted = pd.Index([1, 2, 3], name="i")
+        x_sorted = m_sorted.add_variables(
+            lower=0, upper=1, coords=[idx_sorted], name="x"
+        )
+        m_sorted.add_sos_constraints(x_sorted, sos_type=2, sos_dim="i")
+        m_sorted.add_objective(x_sorted * coeffs, sense="max")
+        m_sorted.solve(solver_name="highs", reformulate_sos=True)
+
+        m_unsorted = Model()
+        idx_unsorted = pd.Index([3, 1, 2], name="i")
+        x_unsorted = m_unsorted.add_variables(
+            lower=0, upper=1, coords=[idx_unsorted], name="x"
+        )
+        m_unsorted.add_sos_constraints(x_unsorted, sos_type=2, sos_dim="i")
+        m_unsorted.add_objective(x_unsorted * coeffs, sense="max")
+        m_unsorted.solve(solver_name="highs", reformulate_sos=True)
+
+        assert m_sorted.objective.value is not None
+        assert m_unsorted.objective.value is not None
+        assert np.isclose(
+            m_sorted.objective.value, m_unsorted.objective.value, atol=1e-5
+        )
+
+    def test_sos1_unsorted_coords(self) -> None:
+        m = Model()
+        idx = pd.Index([3, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)

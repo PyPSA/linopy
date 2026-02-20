@@ -1455,49 +1455,51 @@ class Model:
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
 
-        result.info()
+        try:
+            result.info()
 
-        self.objective._value = result.solution.objective
-        self.status = result.status.status.value
-        self.termination_condition = result.status.termination_condition.value
-        self.solver_model = result.solver_model
-        self.solver_name = solver_name
+            self.objective._value = result.solution.objective
+            self.status = result.status.status.value
+            self.termination_condition = result.status.termination_condition.value
+            self.solver_model = result.solver_model
+            self.solver_name = solver_name
 
-        if not result.status.is_ok:
+            if not result.status.is_ok:
+                return (
+                    result.status.status.value,
+                    result.status.termination_condition.value,
+                )
+
+            # map solution and dual to original shape which includes missing values
+            sol = result.solution.primal.copy()
+            sol = set_int_index(sol)
+            sol.loc[-1] = nan
+
+            for name, var in self.variables.items():
+                idx = np.ravel(var.labels)
+                try:
+                    vals = sol[idx].values.reshape(var.labels.shape)
+                except KeyError:
+                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
+                var.solution = xr.DataArray(vals, var.coords)
+
+            if not result.solution.dual.empty:
+                dual = result.solution.dual.copy()
+                dual = set_int_index(dual)
+                dual.loc[-1] = nan
+
+                for name, con in self.constraints.items():
+                    idx = np.ravel(con.labels)
+                    try:
+                        vals = dual[idx].values.reshape(con.labels.shape)
+                    except KeyError:
+                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                    con.dual = xr.DataArray(vals, con.labels.coords)
+
+            return result.status.status.value, result.status.termination_condition.value
+        finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
-            return result.status.status.value, result.status.termination_condition.value
-
-        # map solution and dual to original shape which includes missing values
-        sol = result.solution.primal.copy()
-        sol = set_int_index(sol)
-        sol.loc[-1] = nan
-
-        for name, var in self.variables.items():
-            idx = np.ravel(var.labels)
-            try:
-                vals = sol[idx].values.reshape(var.labels.shape)
-            except KeyError:
-                vals = sol.reindex(idx).values.reshape(var.labels.shape)
-            var.solution = xr.DataArray(vals, var.coords)
-
-        if not result.solution.dual.empty:
-            dual = result.solution.dual.copy()
-            dual = set_int_index(dual)
-            dual.loc[-1] = nan
-
-            for name, con in self.constraints.items():
-                idx = np.ravel(con.labels)
-                try:
-                    vals = dual[idx].values.reshape(con.labels.shape)
-                except KeyError:
-                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                con.dual = xr.DataArray(vals, con.labels.coords)
-
-        if sos_reform_result is not None:
-            undo_sos_reformulation(self, sos_reform_result)
-
-        return result.status.status.value, result.status.termination_condition.value
 
     def _mock_solve(
         self,
