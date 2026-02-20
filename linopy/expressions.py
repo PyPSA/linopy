@@ -48,7 +48,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -528,6 +527,7 @@ class BaseExpression(ABC):
         other: DataArray,
         fill_value: float = 0,
         join: str | None = None,
+        default_join: str = "exact",
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -539,7 +539,10 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses size-aware default behavior.
+            Alignment method. If None, uses default_join.
+        default_join : str, default: "exact"
+            Default join mode when join is None. Use "exact" for add/sub,
+            "inner" for mul/div.
 
         Returns
         -------
@@ -551,19 +554,32 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            if other.sizes == self.const.sizes:
-                return self.const, other.assign_coords(coords=self.coords), False
+            join = default_join
+
+        if join == "override":
+            return self.const, other.assign_coords(coords=self.coords), False
+        elif join == "left":
             return (
                 self.const,
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        elif join == "override":
-            return self.const, other.assign_coords(coords=self.coords), False
         else:
-            self_const, aligned = xr.align(
-                self.const, other, join=join, fill_value=fill_value
-            )
+            try:
+                self_const, aligned = xr.align(
+                    self.const, other, join=join, fill_value=fill_value
+                )
+            except ValueError as e:
+                if "exact" in str(e):
+                    raise ValueError(
+                        f"{e}\n"
+                        "Use .add()/.sub()/.mul()/.div() with an explicit join= parameter:\n"
+                        '  .add(other, join="inner")   # intersection of coordinates\n'
+                        '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                        '  .add(other, join="left")    # keep left operand\'s coordinates\n'
+                        '  .add(other, join="override") # positional alignment'
+                    ) from None
+                raise
             return self_const, aligned, True
 
     def _add_constant(
@@ -573,7 +589,7 @@ class BaseExpression(ABC):
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=0, join=join
+            da, fill_value=0, join=join, default_join="exact"
         )
         if needs_data_reindex:
             return self.__class__(
@@ -593,7 +609,7 @@ class BaseExpression(ABC):
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=fill_value, join=join
+            factor, fill_value=fill_value, join=join, default_join="inner"
         )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
@@ -1082,7 +1098,40 @@ class BaseExpression(ABC):
                     f"RHS DataArray has dimensions {extra_dims} not present "
                     f"in the expression. Cannot create constraint."
                 )
-            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+            effective_join = join if join is not None else "exact"
+            if effective_join == "override":
+                aligned_rhs = rhs.assign_coords(coords=self.const.coords)
+                expr_const = self.const
+                expr_data = self.data
+            elif effective_join == "left":
+                aligned_rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                expr_const = self.const
+                expr_data = self.data
+            else:
+                try:
+                    expr_const_aligned, aligned_rhs = xr.align(
+                        self.const, rhs, join=effective_join, fill_value=np.nan
+                    )
+                except ValueError as e:
+                    if "exact" in str(e):
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .le()/.ge()/.eq() with an explicit join= parameter:\n"
+                            '  .le(rhs, join="inner")   # intersection of coordinates\n'
+                            '  .le(rhs, join="left")    # keep expression coordinates (NaN fill)\n'
+                            '  .le(rhs, join="override") # positional alignment'
+                        ) from None
+                    raise
+                expr_const = expr_const_aligned.fillna(0)
+                expr_data = self.data.reindex_like(
+                    expr_const_aligned, fill_value=self._fill_value
+                )
+                aligned_rhs = aligned_rhs
+            constraint_rhs = aligned_rhs - expr_const
+            data = assign_multiindex_safe(
+                expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+            )
+            return constraints.Constraint(data, model=self.model)
         elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
             self.coord_dims
         ):
@@ -2320,16 +2369,6 @@ def merge(
 
     model = exprs[0].model
 
-    if join is not None:
-        override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
-    else:
-        override = False
-
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
@@ -2345,23 +2384,55 @@ def merge(
 
         if join is not None:
             kwargs["join"] = join
-        elif override:
-            kwargs["join"] = "override"
+        elif dim == TERM_DIM:
+            kwargs["join"] = "exact"
+        elif dim == FACTOR_DIM:
+            kwargs["join"] = "inner"
         else:
-            kwargs.setdefault("join", "outer")
+            kwargs["join"] = "outer"
 
-    if dim == TERM_DIM:
-        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-        subkwargs = {**kwargs, "fill_value": 0}
-        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
-        ds = assign_multiindex_safe(ds, const=const)
-    elif dim == FACTOR_DIM:
-        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
-        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
-    else:
-        ds = xr.concat(data, dim, **kwargs)
+    try:
+        if dim == TERM_DIM:
+            ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+            subkwargs = {**kwargs, "fill_value": 0}
+            const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
+                TERM_DIM
+            )
+            ds = assign_multiindex_safe(ds, const=const)
+        elif dim == FACTOR_DIM:
+            ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
+            coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
+                FACTOR_DIM
+            )
+            const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
+                FACTOR_DIM
+            )
+            ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
+        else:
+            # Pre-pad helper dims to same size before concat
+            fill = kwargs.get("fill_value", FILL_VALUE)
+            for helper_dim in HELPER_DIMS:
+                sizes = [d.sizes.get(helper_dim, 0) for d in data]
+                max_size = max(sizes) if sizes else 0
+                if max_size > 0 and min(sizes) < max_size:
+                    data = [
+                        d.reindex({helper_dim: range(max_size)}, fill_value=fill)
+                        if d.sizes.get(helper_dim, 0) < max_size
+                        else d
+                        for d in data
+                    ]
+            ds = xr.concat(data, dim, **kwargs)
+    except ValueError as e:
+        if "exact" in str(e):
+            raise ValueError(
+                f"{e}\n"
+                "Use .add()/.sub()/.mul()/.div() with an explicit join= parameter:\n"
+                '  .add(other, join="inner")   # intersection of coordinates\n'
+                '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                '  .add(other, join="left")    # keep left operand\'s coordinates\n'
+                '  .add(other, join="override") # positional alignment'
+            ) from None
+        raise
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)

@@ -186,8 +186,8 @@ def model_with_non_aligned_variables() -> Model:
     lower = pd.Series(0, range(8))
     y = m.add_variables(lower=lower, coords=[lower.index], name="y")
 
-    m.add_constraints(x + y, GREATER_EQUAL, 10.5)
-    m.objective = 1 * x + 0.5 * y
+    m.add_constraints(x.add(y, join="outer"), GREATER_EQUAL, 10.5)
+    m.objective = x.add(0.5 * y, join="outer")
 
     return m
 
