@@ -70,8 +70,7 @@ from linopy.solvers import (
     available_solvers,
 )
 from linopy.sos_reformulation import (
-    SOSReformulationResult,
-    reformulate_all_sos,
+    reformulate_sos_constraints,
     undo_sos_reformulation,
 )
 from linopy.types import (
@@ -931,52 +930,7 @@ class Model:
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
 
-    def reformulate_sos_constraints(
-        self, prefix: str = "_sos_reform_"
-    ) -> SOSReformulationResult:
-        """
-        Reformulate SOS constraints as binary + linear constraints.
-
-        This converts SOS1 and SOS2 constraints into equivalent binary variable
-        formulations using the Big-M method. This allows solving models with SOS
-        constraints using solvers that don't support them natively (e.g., HiGHS, GLPK).
-
-        Big-M values are determined as follows:
-        1. If custom big_m was specified in add_sos_constraints(), use that
-        2. Otherwise, use the variable bounds (tightest valid Big-M)
-
-        Note: This permanently mutates the model. To solve with automatic
-        undo, use ``model.solve(reformulate_sos=True)`` instead.
-
-        Parameters
-        ----------
-        prefix : str, optional
-            Prefix for naming auxiliary variables and constraints.
-            Default is "_sos_reform_".
-
-        Returns
-        -------
-        SOSReformulationResult
-            Result tracking what was changed; can be passed to
-            ``undo_sos_reformulation`` to restore original state.
-
-        Raises
-        ------
-        ValueError
-            If any SOS variable has infinite bounds and no custom big_m was specified.
-
-        Examples
-        --------
-        >>> m = Model()
-        >>> x = m.add_variables(
-        ...     lower=0, upper=1, coords=[pd.Index([0, 1, 2], name="i")], name="x"
-        ... )
-        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-        >>> result = m.reformulate_sos_constraints()
-        >>> result.reformulated
-        ['x']
-        """
-        return reformulate_all_sos(self, prefix=prefix)
+    reformulate_sos_constraints = reformulate_sos_constraints
 
     def remove_objective(self) -> None:
         """
@@ -1440,7 +1394,7 @@ class Model:
                 solver_name, SolverFeature.SOS_CONSTRAINTS
             ):
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
-                sos_reform_result = reformulate_all_sos(self)
+                sos_reform_result = reformulate_sos_constraints(self)
             elif reformulate_sos and solver_supports(
                 solver_name, SolverFeature.SOS_CONSTRAINTS
             ):

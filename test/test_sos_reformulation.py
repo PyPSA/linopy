@@ -10,9 +10,9 @@ from linopy import Model, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
 from linopy.sos_reformulation import (
     compute_big_m_values,
-    reformulate_all_sos,
     reformulate_sos1,
     reformulate_sos2,
+    reformulate_sos_constraints,
     undo_sos_reformulation,
 )
 
@@ -231,7 +231,7 @@ class TestReformulateAllSOS:
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        result = reformulate_all_sos(m)
+        result = reformulate_sos_constraints(m)
 
         assert result.reformulated == ["x"]
         assert len(list(m.variables.sos)) == 0
@@ -244,7 +244,7 @@ class TestReformulateAllSOS:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
         m.add_sos_constraints(y, sos_type=2, sos_dim="i")
 
-        result = reformulate_all_sos(m)
+        result = reformulate_sos_constraints(m)
 
         assert set(result.reformulated) == {"x", "y"}
         assert len(list(m.variables.sos)) == 0
@@ -255,7 +255,7 @@ class TestReformulateAllSOS:
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        result = reformulate_all_sos(m)
+        result = reformulate_sos_constraints(m)
 
         assert result.reformulated == []
 
@@ -265,7 +265,7 @@ class TestReformulateAllSOS:
         x = m.add_variables(lower=0, upper=0, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        result = reformulate_all_sos(m)
+        result = reformulate_sos_constraints(m)
 
         assert result.reformulated == []
 
@@ -276,7 +276,7 @@ class TestReformulateAllSOS:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
         with pytest.raises(ValueError, match="infinite"):
-            reformulate_all_sos(m)
+            reformulate_sos_constraints(m)
 
     def test_reformulate_raises_on_negative_lower_bounds(self) -> None:
         m = Model()
@@ -285,7 +285,7 @@ class TestReformulateAllSOS:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
         with pytest.raises(ValueError, match="negative lower bounds"):
-            reformulate_all_sos(m)
+            reformulate_sos_constraints(m)
 
 
 class TestModelReformulateSOS:
@@ -503,7 +503,7 @@ class TestEdgeCases:
         m.add_variables(lower=0, upper=2, coords=[idx], name="y")  # No SOS
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        reformulate_all_sos(m)
+        reformulate_sos_constraints(m)
 
         # y should be unchanged
         assert "y" in m.variables
@@ -516,7 +516,7 @@ class TestEdgeCases:
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        reformulate_all_sos(m, prefix="_custom_")
+        reformulate_sos_constraints(m, prefix="_custom_")
 
         assert "_custom_x_y" in m.variables
         assert "_custom_x_upper" in m.constraints
@@ -534,7 +534,7 @@ class TestEdgeCases:
         m.add_constraints(x.sum() <= y, name="linking")
 
         # Reformulate
-        reformulate_all_sos(m)
+        reformulate_sos_constraints(m)
 
         # Original constraint should still exist
         assert "linking" in m.constraints
@@ -546,7 +546,7 @@ class TestEdgeCases:
         lambdas = m.add_variables(lower=0, upper=1, coords=[breakpoints], name="lambda")
         m.add_sos_constraints(lambdas, sos_type=2, sos_dim="bp")
 
-        reformulate_all_sos(m)
+        reformulate_sos_constraints(m)
 
         # Should work with float coordinates
         assert "_sos_reform_lambda_z" in m.variables
@@ -657,7 +657,7 @@ class TestPartialFailure:
         m.add_sos_constraints(y, sos_type=1, sos_dim="i")
 
         with pytest.raises(ValueError, match="negative lower bounds"):
-            reformulate_all_sos(m)
+            reformulate_sos_constraints(m)
 
 
 class TestMixedBounds:
@@ -711,7 +711,7 @@ class TestUndoReformulation:
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        result = reformulate_all_sos(m)
+        result = reformulate_sos_constraints(m)
 
         assert len(list(m.variables.sos)) == 0
         assert "_sos_reform_x_y" in m.variables

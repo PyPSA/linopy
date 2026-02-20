@@ -219,11 +219,22 @@ def reformulate_sos2(
     return [z_name], added_constraints
 
 
-def reformulate_all_sos(
+def reformulate_sos_constraints(
     model: Model, prefix: str = "_sos_reform_"
 ) -> SOSReformulationResult:
     """
-    Reformulate all SOS constraints in the model.
+    Reformulate SOS constraints as binary + linear constraints.
+
+    This converts SOS1 and SOS2 constraints into equivalent binary variable
+    formulations using the Big-M method. This allows solving models with SOS
+    constraints using solvers that don't support them natively (e.g., HiGHS, GLPK).
+
+    Big-M values are determined as follows:
+    1. If custom big_m was specified in add_sos_constraints(), use that
+    2. Otherwise, use the variable bounds (tightest valid Big-M)
+
+    Note: This permanently mutates the model. To solve with automatic
+    undo, use ``model.solve(reformulate_sos=True)`` instead.
 
     Parameters
     ----------
