@@ -611,6 +611,14 @@ class BaseExpression(ABC):
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join, default_join="inner"
         )
+        if self_const.size == 0 and self.const.size > 0:
+            warn(
+                "Multiplication/division resulted in an empty expression because "
+                "the operands have no overlapping coordinates (inner join). "
+                "This is likely a modeling error.",
+                UserWarning,
+                stacklevel=3,
+            )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
             return self.__class__(
