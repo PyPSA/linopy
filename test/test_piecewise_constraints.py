@@ -19,6 +19,7 @@ from linopy.constants import (
     PWL_LINK_SUFFIX,
     PWL_SELECT_SUFFIX,
 )
+from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
 
 
 class TestBasicSingleVariable:
@@ -1401,12 +1402,14 @@ class TestDisjunctiveMultiBreakpointSegments:
         assert (binary_var.labels != -1).all()
 
 
-_disjunctive_solvers = [s for s in ["gurobi", "highs"] if s in available_solvers]
+_disjunctive_solvers = get_available_solvers_with_feature(
+    SolverFeature.SOS_CONSTRAINTS, available_solvers
+)
 
 
 @pytest.mark.skipif(
     len(_disjunctive_solvers) == 0,
-    reason="No supported solver (gurobi/highs) installed",
+    reason="No solver with SOS constraint support installed",
 )
 class TestDisjunctiveSolverIntegration:
     """Integration tests for disjunctive piecewise constraints."""
@@ -1426,7 +1429,7 @@ class TestDisjunctiveSolverIntegration:
                     pytest.skip(f"Gurobi environment unavailable: {exc}")
             else:
                 return m.solve(solver_name=solver_name)
-        except Exception as exc:
+        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
             pytest.skip(f"Solver {solver_name} unavailable: {exc}")
 
     def test_minimize_picks_low_segment(self, solver_name: str) -> None:
@@ -1631,3 +1634,268 @@ class TestDisjunctiveSolverIntegration:
         assert status == "ok"
         total_power = power.solution.sum().values
         assert total_power >= 100 - 1e-5
+
+
+_incremental_solvers = [s for s in ["gurobi", "highs"] if s in available_solvers]
+
+
+@pytest.mark.skipif(
+    len(_incremental_solvers) == 0,
+    reason="No supported solver (gurobi/highs) installed",
+)
+class TestIncrementalSolverIntegrationMultiSolver:
+    """Integration tests for incremental formulation across solvers."""
+
+    @pytest.fixture(params=_incremental_solvers)
+    def solver_name(self, request: pytest.FixtureRequest) -> str:
+        return request.param
+
+    def _solve(self, m: Model, solver_name: str) -> tuple[str, str]:
+        try:
+            if solver_name == "gurobi":
+                gurobipy = pytest.importorskip("gurobipy")
+                try:
+                    return m.solve(solver_name="gurobi", io_api="direct")
+                except gurobipy.GurobiError as exc:
+                    pytest.skip(f"Gurobi environment unavailable: {exc}")
+            else:
+                return m.solve(solver_name=solver_name)
+        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
+            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
+
+    def test_solve_incremental_single(self, solver_name: str) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 10, 50]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"x": x, "cost": cost},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="incremental",
+        )
+
+        m.add_constraints(x >= 50, name="x_min")
+        m.add_objective(cost)
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        assert np.isclose(x.solution.values, 50, atol=1e-5)
+        assert np.isclose(cost.solution.values, 10, atol=1e-5)
+
+
+class TestIncrementalDecreasingBreakpointsSolver:
+    """Solver test for incremental formulation with decreasing breakpoints."""
+
+    @pytest.fixture(params=_incremental_solvers)
+    def solver_name(self, request: pytest.FixtureRequest) -> str:
+        return request.param
+
+    def _solve(self, m: Model, solver_name: str) -> tuple[str, str]:
+        try:
+            if solver_name == "gurobi":
+                gurobipy = pytest.importorskip("gurobipy")
+                try:
+                    return m.solve(solver_name="gurobi", io_api="direct")
+                except gurobipy.GurobiError as exc:
+                    pytest.skip(f"Gurobi environment unavailable: {exc}")
+            else:
+                return m.solve(solver_name=solver_name)
+        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
+            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
+
+    def test_decreasing_breakpoints_solver(self, solver_name: str) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[100, 50, 0], [50, 10, 0]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"x": x, "cost": cost},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="incremental",
+        )
+
+        m.add_constraints(x >= 50, name="x_min")
+        m.add_objective(cost)
+
+        status, cond = self._solve(m, solver_name)
+
+        assert status == "ok"
+        assert np.isclose(x.solution.values, 50, atol=1e-5)
+        assert np.isclose(cost.solution.values, 10, atol=1e-5)
+
+
+class TestIncrementalNonMonotonicDictRaises:
+    """Test that non-monotonic breakpoints in a dict raise ValueError."""
+
+    def test_non_monotonic_in_dict_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 30, 10]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "y"], "bp": [0, 1, 2]},
+        )
+
+        with pytest.raises(ValueError, match="strictly monotonic"):
+            m.add_piecewise_constraints(
+                {"x": x, "y": y},
+                breakpoints,
+                link_dim="var",
+                dim="bp",
+                method="incremental",
+            )
+
+
+class TestAdditionalEdgeCases:
+    """Additional edge case tests identified in review."""
+
+    def test_nan_breakpoints_delta_mask(self) -> None:
+        """Verify delta mask correctly masks segments adjacent to NaN breakpoints."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0, 10, np.nan, 100], dims=["bp"], coords={"bp": [0, 1, 2, 3]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+        delta_var = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert delta_var.labels.sel(bp_seg=0).values != -1
+        assert delta_var.labels.sel(bp_seg=1).values == -1
+        assert delta_var.labels.sel(bp_seg=2).values == -1
+
+    def test_dict_with_linear_expressions(self) -> None:
+        """Test _build_stacked_expr with LinearExpression values (not just Variable)."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0, 10, 50]],
+            dims=["var", "bp"],
+            coords={"var": ["expr_a", "expr_b"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"expr_a": 2 * x, "expr_b": 3 * y},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+        )
+
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+    def test_pwl_counter_increments(self) -> None:
+        """Test that _pwlCounter increments and produces unique names."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp")
+        assert m._pwlCounter == 1
+
+        m.add_piecewise_constraints(y, breakpoints, dim="bp")
+        assert m._pwlCounter == 2
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl1{PWL_LAMBDA_SUFFIX}" in m.variables
+
+    def test_auto_with_mixed_monotonicity_dict(self) -> None:
+        """Test method='auto' with opposite-direction slices in dict."""
+        m = Model()
+        power = m.add_variables(name="power")
+        eff = m.add_variables(name="eff")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0.95, 0.9, 0.8]],
+            dims=["var", "bp"],
+            coords={"var": ["power", "eff"], "bp": [0, 1, 2]},
+        )
+
+        m.add_piecewise_constraints(
+            {"power": power, "eff": eff},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            method="auto",
+        )
+
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
+
+    def test_custom_segment_dim(self) -> None:
+        """Test disjunctive with custom segment_dim name."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [[0.0, 10.0], [50.0, 100.0]],
+            dims=["zone", "breakpoint"],
+            coords={"zone": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(x, breakpoints, segment_dim="zone")
+
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_SELECT_SUFFIX}" in m.constraints
+
+    def test_sos2_return_value_is_convexity_constraint(self) -> None:
+        """Test that add_piecewise_constraints (SOS2) returns the convexity constraint."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        result = m.add_piecewise_constraints(x, breakpoints, dim="bp")
+        assert result.name == f"pwl0{PWL_CONVEX_SUFFIX}"
+
+    def test_incremental_lp_no_sos2(self, tmp_path: Path) -> None:
+        """Test that incremental formulation LP file has no SOS2 section."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray(
+            [0.0, 10.0, 50.0], dims=["bp"], coords={"bp": [0, 1, 2]}
+        )
+
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+        m.add_objective(x)
+
+        fn = tmp_path / "inc.lp"
+        m.to_file(fn, io_api="lp")
+        content = fn.read_text()
+
+        assert "\nsos\n" not in content.lower()
+        assert "s2" not in content.lower()
+
+    def test_two_breakpoints_no_fill_constraint(self) -> None:
+        """Test 2-breakpoint incremental produces no fill constraint."""
+        m = Model()
+        x = m.add_variables(name="x")
+
+        breakpoints = xr.DataArray([0, 100], dims=["bp"], coords={"bp": [0, 1]})
+        m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+
+        assert f"pwl0{PWL_FILL_SUFFIX}" not in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints

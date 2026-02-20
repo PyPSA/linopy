@@ -36,7 +36,6 @@ sign_replace_dict: dict[str, str] = {
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
 
-# Piecewise linear constraint constants
 PWL_LAMBDA_SUFFIX = "_lambda"
 PWL_CONVEX_SUFFIX = "_convex"
 PWL_LINK_SUFFIX = "_link"
