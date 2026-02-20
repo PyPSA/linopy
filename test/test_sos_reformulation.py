@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 
 from linopy import Model, available_solvers
+from linopy.constants import SOS_TYPE_ATTR
 from linopy.sos_reformulation import (
     compute_big_m_values,
     reformulate_all_sos,
     reformulate_sos1,
     reformulate_sos2,
+    undo_sos_reformulation,
 )
 
 
@@ -104,13 +106,11 @@ class TestSOS1Reformulation:
     """Tests for SOS1 reformulation."""
 
     def test_basic_sos1(self) -> None:
-        """Test basic SOS1 reformulation."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        # Reformulate
         reformulate_sos1(m, x, "_test_")
         m.remove_sos_constraints(x)
 
@@ -125,7 +125,6 @@ class TestSOS1Reformulation:
         assert y.sizes == x.sizes
 
     def test_sos1_multidimensional(self) -> None:
-        """Test SOS1 reformulation with multi-dimensional variables."""
         m = Model()
         idx_i = pd.Index([0, 1, 2], name="i")
         idx_j = pd.Index([0, 1], name="j")
@@ -148,7 +147,6 @@ class TestSOS2Reformulation:
     """Tests for SOS2 reformulation."""
 
     def test_basic_sos2(self) -> None:
-        """Test basic SOS2 reformulation."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -168,19 +166,16 @@ class TestSOS2Reformulation:
         assert z.sizes["i"] == 2  # n-1 = 3-1 = 2
 
     def test_sos2_trivial_single_element(self) -> None:
-        """Test SOS2 with single element (trivially satisfied, skipped)."""
         m = Model()
         idx = pd.Index([0], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=2, sos_dim="i")
 
-        # Should not add anything for trivial case
         reformulate_sos2(m, x, "_test_")
 
         assert "_test_x_z" not in m.variables
 
     def test_sos2_two_elements(self) -> None:
-        """Test SOS2 with two elements (one segment indicator)."""
         m = Model()
         idx = pd.Index([0, 1], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -194,7 +189,6 @@ class TestSOS2Reformulation:
         assert z.sizes["i"] == 1
 
     def test_sos2_with_middle_constraints(self) -> None:
-        """Test SOS2 with 4+ elements to ensure middle constraints are created."""
         m = Model()
         idx = pd.Index([0, 1, 2, 3], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -203,14 +197,11 @@ class TestSOS2Reformulation:
         reformulate_sos2(m, x, "_test_")
         m.remove_sos_constraints(x)
 
-        # Should have first, middle, and last constraints
         assert "_test_x_upper_first" in m.constraints
-        assert "_test_x_upper_mid_1" in m.constraints  # middle element at index 1
-        assert "_test_x_upper_mid_2" in m.constraints  # middle element at index 2
+        assert "_test_x_upper_mid" in m.constraints
         assert "_test_x_upper_last" in m.constraints
 
     def test_sos2_multidimensional(self) -> None:
-        """Test SOS2 reformulation with multi-dimensional variables."""
         m = Model()
         idx_i = pd.Index([0, 1, 2], name="i")
         idx_j = pd.Index([0, 1], name="j")
@@ -235,19 +226,17 @@ class TestReformulateAllSOS:
     """Tests for reformulate_all_sos."""
 
     def test_reformulate_single_sos1(self) -> None:
-        """Test reformulating a single SOS1 variable."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        reformulated = reformulate_all_sos(m)
+        result = reformulate_all_sos(m)
 
-        assert reformulated == ["x"]
-        assert len(list(m.variables.sos)) == 0  # No more SOS variables
+        assert result.reformulated == ["x"]
+        assert len(list(m.variables.sos)) == 0
 
     def test_reformulate_multiple_sos(self) -> None:
-        """Test reformulating multiple SOS variables."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -255,37 +244,32 @@ class TestReformulateAllSOS:
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
         m.add_sos_constraints(y, sos_type=2, sos_dim="i")
 
-        reformulated = reformulate_all_sos(m)
+        result = reformulate_all_sos(m)
 
-        assert set(reformulated) == {"x", "y"}
+        assert set(result.reformulated) == {"x", "y"}
         assert len(list(m.variables.sos)) == 0
 
     def test_reformulate_skips_single_element(self) -> None:
-        """Test that single element SOS is skipped."""
         m = Model()
         idx = pd.Index([0], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        reformulated = reformulate_all_sos(m)
+        result = reformulate_all_sos(m)
 
-        # Single element SOS is skipped (trivially satisfied)
-        assert reformulated == []
+        assert result.reformulated == []
 
     def test_reformulate_skips_zero_bounds(self) -> None:
-        """Test that variables with zero bounds are skipped."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=0, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i")
 
-        reformulated = reformulate_all_sos(m)
+        result = reformulate_all_sos(m)
 
-        # Zero bounds means variable is fixed to 0, no reformulation needed
-        assert reformulated == []
+        assert result.reformulated == []
 
     def test_reformulate_raises_on_infinite_bounds(self) -> None:
-        """Test that infinite bounds raise ValueError."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
@@ -295,7 +279,6 @@ class TestReformulateAllSOS:
             reformulate_all_sos(m)
 
     def test_reformulate_raises_on_negative_lower_bounds(self) -> None:
-        """Test that negative lower bounds raise ValueError."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=-1, upper=1, coords=[idx], name="x")
@@ -309,7 +292,6 @@ class TestModelReformulateSOS:
     """Tests for Model.reformulate_sos_constraints method."""
 
     def test_reformulate_inplace(self) -> None:
-        """Test inplace reformulation."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -317,7 +299,7 @@ class TestModelReformulateSOS:
 
         result = m.reformulate_sos_constraints()
 
-        assert result == ["x"]
+        assert result.reformulated == ["x"]
         assert len(list(m.variables.sos)) == 0
         assert "_sos_reform_x_y" in m.variables
 
@@ -525,7 +507,7 @@ class TestEdgeCases:
 
         # y should be unchanged
         assert "y" in m.variables
-        assert "sos_type" not in m.variables["y"].attrs
+        assert SOS_TYPE_ATTR not in m.variables["y"].attrs
 
     def test_custom_prefix(self) -> None:
         """Test custom prefix for reformulation."""
@@ -606,16 +588,93 @@ class TestCustomBigM:
         assert np.isclose(m.objective.value, 3, atol=1e-5)
 
     def test_solve_with_infinite_bounds_and_custom_big_m(self) -> None:
-        """Test solving with infinite bounds but custom big_m."""
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
         m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=5)
         m.add_objective(x * np.array([1, 2, 3]), sense="max")
 
-        # Should work because big_m is specified
         m.solve(solver_name="highs", reformulate_sos=True)
 
         assert m.objective.value is not None
-        # Max is 15 (x[2]=5)
         assert np.isclose(m.objective.value, 15, atol=1e-5)
+
+    def test_solve_does_not_mutate_model(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        vars_before = set(m.variables)
+        cons_before = set(m.constraints)
+        sos_before = list(m.variables.sos)
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        assert set(m.variables) == vars_before
+        assert set(m.constraints) == cons_before
+        assert list(m.variables.sos) == sos_before
+
+    def test_solve_twice_with_reformulate_sos(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+        obj1 = m.objective.value
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+        obj2 = m.objective.value
+
+        assert obj1 is not None and obj2 is not None
+        assert np.isclose(obj1, obj2, atol=1e-5)
+
+
+class TestBigMValidation:
+    def test_big_m_zero_raises(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        with pytest.raises(ValueError, match="big_m must be positive"):
+            m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=0)
+
+    def test_big_m_negative_raises(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        with pytest.raises(ValueError, match="big_m must be positive"):
+            m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=-5)
+
+
+class TestUndoReformulation:
+    def test_undo_restores_sos_attrs(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+        result = reformulate_all_sos(m)
+
+        assert len(list(m.variables.sos)) == 0
+        assert "_sos_reform_x_y" in m.variables
+
+        undo_sos_reformulation(m, result)
+
+        assert list(m.variables.sos) == ["x"]
+        assert "_sos_reform_x_y" not in m.variables
+        assert "_sos_reform_x_upper" not in m.constraints
+        assert "_sos_reform_x_card" not in m.constraints
+
+    def test_double_reformulate_is_noop(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+        m.reformulate_sos_constraints()
+
+        result2 = m.reformulate_sos_constraints()
+        assert result2.reformulated == []

@@ -69,7 +69,11 @@ from linopy.solvers import (
     IO_APIS,
     available_solvers,
 )
-from linopy.sos_reformulation import reformulate_all_sos
+from linopy.sos_reformulation import (
+    SOSReformulationResult,
+    reformulate_all_sos,
+    undo_sos_reformulation,
+)
 from linopy.types import (
     ConstantLike,
     ConstraintLike,
@@ -640,9 +644,10 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        # Process and store big_m value
         attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
         if big_m is not None:
+            if big_m <= 0:
+                raise ValueError(f"big_m must be positive, got {big_m}")
             attrs_update[SOS_BIG_M_ATTR] = float(big_m)
 
         variable.attrs.update(attrs_update)
@@ -920,14 +925,15 @@ class Model:
 
         del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
 
-        # Also remove big_m attribute if present
         variable.attrs.pop(SOS_BIG_M_ATTR, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
 
-    def reformulate_sos_constraints(self, prefix: str = "_sos_reform_") -> list[str]:
+    def reformulate_sos_constraints(
+        self, prefix: str = "_sos_reform_"
+    ) -> SOSReformulationResult:
         """
         Reformulate SOS constraints as binary + linear constraints.
 
@@ -939,6 +945,9 @@ class Model:
         1. If custom big_m was specified in add_sos_constraints(), use that
         2. Otherwise, use the variable bounds (tightest valid Big-M)
 
+        Note: This permanently mutates the model. To solve with automatic
+        undo, use ``model.solve(reformulate_sos=True)`` instead.
+
         Parameters
         ----------
         prefix : str, optional
@@ -947,8 +956,9 @@ class Model:
 
         Returns
         -------
-        list[str]
-            List of variable names that were reformulated.
+        SOSReformulationResult
+            Result tracking what was changed; can be passed to
+            ``undo_sos_reformulation`` to restore original state.
 
         Raises
         ------
@@ -962,12 +972,9 @@ class Model:
         ...     lower=0, upper=1, coords=[pd.Index([0, 1, 2], name="i")], name="x"
         ... )
         >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i")
-        >>> m.reformulate_sos_constraints()  # Now solvable with HiGHS
+        >>> result = m.reformulate_sos_constraints()
+        >>> result.reformulated
         ['x']
-
-        With custom big_m for tighter relaxation:
-
-        >>> m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=0.5)
         """
         return reformulate_all_sos(self, prefix=prefix)
 
@@ -1427,13 +1434,20 @@ class Model:
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
-        # SOS constraints are not supported by all solvers
+        sos_reform_result = None
         if self.variables.sos:
             if reformulate_sos and not solver_supports(
                 solver_name, SolverFeature.SOS_CONSTRAINTS
             ):
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
-                self.reformulate_sos_constraints()
+                sos_reform_result = reformulate_all_sos(self)
+            elif reformulate_sos and solver_supports(
+                solver_name, SolverFeature.SOS_CONSTRAINTS
+            ):
+                logger.warning(
+                    f"Solver {solver_name} supports SOS natively; "
+                    "reformulate_sos=True is ignored."
+                )
             elif not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS):
                 raise ValueError(
                     f"Solver {solver_name} does not support SOS constraints. "
@@ -1496,6 +1510,8 @@ class Model:
         self.solver_name = solver_name
 
         if not result.status.is_ok:
+            if sos_reform_result is not None:
+                undo_sos_reformulation(self, sos_reform_result)
             return result.status.status.value, result.status.termination_condition.value
 
         # map solution and dual to original shape which includes missing values
@@ -1523,6 +1539,9 @@ class Model:
                 except KeyError:
                     vals = dual.reindex(idx).values.reshape(con.labels.shape)
                 con.dual = xr.DataArray(vals, con.labels.coords)
+
+        if sos_reform_result is not None:
+            undo_sos_reformulation(self, sos_reform_result)
 
         return result.status.status.value, result.status.termination_condition.value
 

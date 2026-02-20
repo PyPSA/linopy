@@ -8,19 +8,31 @@ that don't support them natively.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from xarray import DataArray
 
 from linopy.constants import SOS_BIG_M_ATTR, SOS_DIM_ATTR, SOS_TYPE_ATTR
 
 if TYPE_CHECKING:
+    from xarray import DataArray
+
     from linopy.model import Model
     from linopy.variables import Variable
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SOSReformulationResult:
+    """Tracks what was added/changed during SOS reformulation for undo."""
+
+    reformulated: list[str] = field(default_factory=list)
+    added_variables: list[str] = field(default_factory=list)
+    added_constraints: list[str] = field(default_factory=list)
+    saved_attrs: dict[str, dict] = field(default_factory=dict)
 
 
 def compute_big_m_values(var: Variable) -> DataArray:
@@ -68,7 +80,9 @@ def compute_big_m_values(var: Variable) -> DataArray:
     return M_upper
 
 
-def reformulate_sos1(model: Model, var: Variable, prefix: str) -> None:
+def reformulate_sos1(
+    model: Model, var: Variable, prefix: str, M: DataArray | None = None
+) -> tuple[list[str], list[str]]:
     """
     Reformulate SOS1 constraint as binary + linear constraints.
 
@@ -85,19 +99,35 @@ def reformulate_sos1(model: Model, var: Variable, prefix: str) -> None:
         Variable with SOS1 constraint (must have non-negative lower bounds).
     prefix : str
         Prefix for naming auxiliary variables and constraints.
+    M : DataArray, optional
+        Precomputed Big-M values. Computed from variable bounds if not provided.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Names of added variables and constraints.
     """
+    if M is None:
+        M = compute_big_m_values(var)
     sos_dim = str(var.attrs[SOS_DIM_ATTR])
     name = var.name
-    M = compute_big_m_values(var)
+
+    y_name = f"{prefix}{name}_y"
+    upper_name = f"{prefix}{name}_upper"
+    card_name = f"{prefix}{name}_card"
 
     coords = [var.coords[d] for d in var.dims]
-    y = model.add_variables(coords=coords, name=f"{prefix}{name}_y", binary=True)
+    y = model.add_variables(coords=coords, name=y_name, binary=True)
 
-    model.add_constraints(var <= M * y, name=f"{prefix}{name}_upper")
-    model.add_constraints(y.sum(dim=sos_dim) <= 1, name=f"{prefix}{name}_card")
+    model.add_constraints(var <= M * y, name=upper_name)
+    model.add_constraints(y.sum(dim=sos_dim) <= 1, name=card_name)
+
+    return [y_name], [upper_name, card_name]
 
 
-def reformulate_sos2(model: Model, var: Variable, prefix: str) -> None:
+def reformulate_sos2(
+    model: Model, var: Variable, prefix: str, M: DataArray | None = None
+) -> tuple[list[str], list[str]]:
     """
     Reformulate SOS2 constraint as binary + linear constraints.
 
@@ -116,52 +146,82 @@ def reformulate_sos2(model: Model, var: Variable, prefix: str) -> None:
         Variable with SOS2 constraint (must have non-negative lower bounds).
     prefix : str
         Prefix for naming auxiliary variables and constraints.
+    M : DataArray, optional
+        Precomputed Big-M values. Computed from variable bounds if not provided.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Names of added variables and constraints.
     """
     sos_dim = str(var.attrs[SOS_DIM_ATTR])
     name = var.name
     n = var.sizes[sos_dim]
 
     if n <= 1:
-        return
+        return [], []
 
-    M = compute_big_m_values(var)
+    if M is None:
+        M = compute_big_m_values(var)
 
-    # Create n-1 segment indicators
+    z_name = f"{prefix}{name}_z"
+    first_name = f"{prefix}{name}_upper_first"
+    last_name = f"{prefix}{name}_upper_last"
+    card_name = f"{prefix}{name}_card"
+
     z_coords = [
         pd.Index(var.coords[sos_dim].values[:-1], name=sos_dim)
         if d == sos_dim
         else var.coords[d]
         for d in var.dims
     ]
-    z = model.add_variables(coords=z_coords, name=f"{prefix}{name}_z", binary=True)
+    z = model.add_variables(coords=z_coords, name=z_name, binary=True)
 
-    # Convert to expressions to avoid SOS attr validation on isel
-    x, z_expr = 1 * var, 1 * z
+    x_expr, z_expr = 1 * var, 1 * z
 
-    # First: x[0] <= M[0] * z[0]
+    added_constraints = [first_name]
+
     model.add_constraints(
-        x.isel({sos_dim: 0}) <= M.isel({sos_dim: 0}) * z_expr.isel({sos_dim: 0}),
-        name=f"{prefix}{name}_upper_first",
+        x_expr.isel({sos_dim: 0}) <= M.isel({sos_dim: 0}) * z_expr.isel({sos_dim: 0}),
+        name=first_name,
     )
-    # Middle: x[i] <= M[i] * (z[i-1] + z[i])
-    for i in range(1, n - 1):
+
+    if n > 2:
+        mid_slice = slice(1, n - 1)
+        x_mid = x_expr.isel({sos_dim: mid_slice})
+        M_mid = M.isel({sos_dim: mid_slice})
+
+        z_left_coords = var.coords[sos_dim].values[: n - 2]
+        z_right_coords = var.coords[sos_dim].values[1 : n - 1]
+
+        z_left = z_expr.sel({sos_dim: z_left_coords})
+        z_right = z_expr.sel({sos_dim: z_right_coords})
+
+        z_left_aligned = z_left.assign_coords({sos_dim: M_mid.coords[sos_dim].values})
+        z_right_aligned = z_right.assign_coords({sos_dim: M_mid.coords[sos_dim].values})
+
+        mid_name = f"{prefix}{name}_upper_mid"
         model.add_constraints(
-            x.isel({sos_dim: i})
-            <= M.isel({sos_dim: i})
-            * (z_expr.isel({sos_dim: i - 1}) + z_expr.isel({sos_dim: i})),
-            name=f"{prefix}{name}_upper_mid_{i}",
+            x_mid <= M_mid * (z_left_aligned + z_right_aligned),
+            name=mid_name,
         )
-    # Last: x[n-1] <= M[n-1] * z[n-2]
+        added_constraints.append(mid_name)
+
     model.add_constraints(
-        x.isel({sos_dim: n - 1})
+        x_expr.isel({sos_dim: n - 1})
         <= M.isel({sos_dim: n - 1}) * z_expr.isel({sos_dim: n - 2}),
-        name=f"{prefix}{name}_upper_last",
+        name=last_name,
     )
+    added_constraints.extend([last_name, card_name])
 
-    model.add_constraints(z.sum(dim=sos_dim) <= 1, name=f"{prefix}{name}_card")
+    model.add_constraints(z.sum(dim=sos_dim) <= 1, name=card_name)
+
+    return [z_name], added_constraints
 
 
-def reformulate_all_sos(model: Model, prefix: str = "_sos_reform_") -> list[str]:
+def reformulate_all_sos(
+    model: Model, prefix: str = "_sos_reform_"
+) -> SOSReformulationResult:
     """
     Reformulate all SOS constraints in the model.
 
@@ -174,10 +234,10 @@ def reformulate_all_sos(model: Model, prefix: str = "_sos_reform_") -> list[str]
 
     Returns
     -------
-    list[str]
-        Names of variables that were reformulated.
+    SOSReformulationResult
+        Tracks what was changed, enabling undo via ``undo_sos_reformulation``.
     """
-    reformulated = []
+    result = SOSReformulationResult()
 
     for var_name in list(model.variables.sos):
         var = model.variables[var_name]
@@ -189,18 +249,52 @@ def reformulate_all_sos(model: Model, prefix: str = "_sos_reform_") -> list[str]
         if var.sizes[sos_dim] <= 1:
             continue
 
-        # Check if fixed to zero
         M = compute_big_m_values(var)
         if (M == 0).all():
             continue
 
+        result.saved_attrs[var_name] = dict(var.attrs)
+
         if sos_type == 1:
-            reformulate_sos1(model, var, prefix)
+            added_vars, added_cons = reformulate_sos1(model, var, prefix, M)
         elif sos_type == 2:
-            reformulate_sos2(model, var, prefix)
+            added_vars, added_cons = reformulate_sos2(model, var, prefix, M)
+        else:
+            raise ValueError(f"Unknown sos_type={sos_type} on variable '{var_name}'")
+
+        result.added_variables.extend(added_vars)
+        result.added_constraints.extend(added_cons)
 
         model.remove_sos_constraints(var)
-        reformulated.append(var_name)
+        result.reformulated.append(var_name)
 
-    logger.info(f"Reformulated {len(reformulated)} SOS constraint(s)")
-    return reformulated
+    logger.info(f"Reformulated {len(result.reformulated)} SOS constraint(s)")
+    return result
+
+
+def undo_sos_reformulation(model: Model, result: SOSReformulationResult) -> None:
+    """
+    Undo a previous SOS reformulation, restoring the model to its original state.
+
+    Parameters
+    ----------
+    model : Model
+        Model that was reformulated.
+    result : SOSReformulationResult
+        Result from ``reformulate_all_sos`` tracking what was added.
+    """
+    objective_value = model.objective._value
+
+    for con_name in result.added_constraints:
+        if con_name in model.constraints:
+            model.remove_constraints(con_name)
+
+    for var_name in result.added_variables:
+        if var_name in model.variables:
+            model.remove_variables(var_name)
+
+    for var_name, attrs in result.saved_attrs.items():
+        if var_name in model.variables:
+            model.variables[var_name].attrs.update(attrs)
+
+    model.objective._value = objective_value
