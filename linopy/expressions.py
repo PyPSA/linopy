@@ -550,7 +550,7 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            join = "outer"
+            join = "inner"
 
         if join == "override":
             return self.const, other.assign_coords(coords=self.coords), False
@@ -2362,7 +2362,7 @@ def merge(
         if join is not None:
             kwargs["join"] = join
         else:
-            kwargs["join"] = "outer"
+            kwargs["join"] = "inner"
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
@@ -2375,6 +2375,20 @@ def merge(
         const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
         ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
     else:
+        # When concatenating along a coordinate dimension, pre-pad helper
+        # dimensions (_term, _factor) to the same size so the join setting
+        # only affects coordinate dimensions (not the term/factor axes).
+        fill = kwargs.get("fill_value", FILL_VALUE)
+        for helper_dim in HELPER_DIMS:
+            sizes = [d.sizes.get(helper_dim, 0) for d in data]
+            max_size = max(sizes) if sizes else 0
+            if max_size > 0 and min(sizes) < max_size:
+                data = [
+                    d.reindex({helper_dim: range(max_size)}, fill_value=fill)
+                    if d.sizes.get(helper_dim, 0) < max_size
+                    else d
+                    for d in data
+                ]
         ds = xr.concat(data, dim, **kwargs)
 
     for d in set(HELPER_DIMS) & set(ds.coords):

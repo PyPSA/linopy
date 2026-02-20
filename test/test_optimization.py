@@ -586,12 +586,11 @@ def test_non_aligned_variables(
 
     tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
 
+    # With inner join default, x + y covers only the intersection (dim_0=0..7).
+    # x[8] and x[9] don't appear in any constraint or objective.
     with pytest.warns(UserWarning):
         assert np.isclose(
             model_with_non_aligned_variables.solution["x"][0], 0, rtol=tol
-        )
-        assert np.isclose(
-            model_with_non_aligned_variables.solution["x"][-1], 10.5, rtol=tol
         )
         assert np.isclose(
             model_with_non_aligned_variables.solution["y"][0], 10.5, rtol=tol
