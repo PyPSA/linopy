@@ -195,9 +195,13 @@ def _resolve_expr(
     resolved_link_dim = _resolve_link_dim(
         link_dim, breakpoints, dim, expr_keys, exclude_dims=exclude_dims
     )
-    lambda_mask = (
-        computed_mask.any(dim=resolved_link_dim) if computed_mask is not None else None
-    )
+    lambda_mask = None
+    if computed_mask is not None:
+        # Accept masks that are broadcast-compatible with breakpoints but do not
+        # explicitly include link_dim (e.g. mask over breakpoint only).
+        if resolved_link_dim not in computed_mask.dims:
+            computed_mask = computed_mask.broadcast_like(breakpoints)
+        lambda_mask = computed_mask.any(dim=resolved_link_dim)
     target_expr = _build_stacked_expr(model, expr_dict, breakpoints, resolved_link_dim)
     return target_expr, resolved_link_dim, computed_mask, lambda_mask
 

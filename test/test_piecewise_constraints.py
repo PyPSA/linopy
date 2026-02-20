@@ -234,6 +234,34 @@ class TestMasking:
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert (lambda_var.labels != -1).all()
 
+    def test_dict_mask_without_link_dim(self) -> None:
+        """Test dict case accepts broadcastable mask without link_dim."""
+        m = Model()
+        power = m.add_variables(name="power")
+        efficiency = m.add_variables(name="efficiency")
+
+        breakpoints = xr.DataArray(
+            [[0, 50, 100], [0.8, 0.95, 0.9]],
+            dims=["var", "bp"],
+            coords={"var": ["power", "efficiency"], "bp": [0, 1, 2]},
+        )
+
+        # Mask over bp only; should broadcast across var
+        mask = xr.DataArray([True, False, True], dims=["bp"], coords={"bp": [0, 1, 2]})
+
+        m.add_piecewise_constraints(
+            {"power": power, "efficiency": efficiency},
+            breakpoints,
+            link_dim="var",
+            dim="bp",
+            mask=mask,
+        )
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert (lambda_var.labels.sel(bp=0) != -1).all()
+        assert (lambda_var.labels.sel(bp=1) == -1).all()
+        assert (lambda_var.labels.sel(bp=2) != -1).all()
+
 
 class TestMultiDimensional:
     """Tests for multi-dimensional piecewise constraints."""
@@ -1094,6 +1122,40 @@ class TestDisjunctiveMasking:
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         # All labels should be valid (no masking)
         assert (lambda_var.labels != -1).all()
+
+    def test_dict_mask_without_link_dim(self) -> None:
+        """Test dict case accepts mask that omits link_dim but is broadcastable."""
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+
+        breakpoints = xr.DataArray(
+            [[[0, 50], [0, 10]], [[80, 100], [20, 30]]],
+            dims=["segment", "var", "breakpoint"],
+            coords={
+                "segment": [0, 1],
+                "var": ["power", "cost"],
+                "breakpoint": [0, 1],
+            },
+        )
+
+        # Mask over segment/breakpoint only; should broadcast across var
+        mask = xr.DataArray(
+            [[True, True], [False, False]],
+            dims=["segment", "breakpoint"],
+            coords={"segment": [0, 1], "breakpoint": [0, 1]},
+        )
+
+        m.add_disjunctive_piecewise_constraints(
+            {"power": power, "cost": cost},
+            breakpoints,
+            link_dim="var",
+            mask=mask,
+        )
+
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert (lambda_var.labels.sel(segment=0) != -1).all()
+        assert (lambda_var.labels.sel(segment=1) == -1).all()
 
 
 class TestDisjunctiveValidationErrors:
