@@ -241,11 +241,9 @@ def reformulate_all_sos(
 
     for var_name in list(model.variables.sos):
         var = model.variables[var_name]
-        sos_type = var.attrs.get(SOS_TYPE_ATTR)
-        sos_dim = var.attrs.get(SOS_DIM_ATTR)
+        sos_type = var.attrs[SOS_TYPE_ATTR]
+        sos_dim = var.attrs[SOS_DIM_ATTR]
 
-        if sos_type is None or sos_dim is None:
-            continue
         if var.sizes[sos_dim] <= 1:
             continue
 

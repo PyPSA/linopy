@@ -633,6 +633,61 @@ class TestCustomBigM:
         assert np.isclose(obj1, obj2, atol=1e-5)
 
 
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestNoSosConstraints:
+    def test_reformulate_sos_true_with_no_sos(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_objective(x.sum(), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+
+class TestPartialFailure:
+    def test_partial_failure_rolls_back(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        y = m.add_variables(lower=-1, upper=1, coords=[idx], name="y")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_sos_constraints(y, sos_type=1, sos_dim="i")
+
+        with pytest.raises(ValueError, match="negative lower bounds"):
+            reformulate_all_sos(m)
+
+
+class TestMixedBounds:
+    def test_mixed_finite_infinite_with_big_m(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(
+            lower=np.array([0, 0, 0]),
+            upper=np.array([5, np.inf, 10]),
+            coords=[idx],
+            name="x",
+        )
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=8)
+        M = compute_big_m_values(x)
+        assert np.allclose(M.values, [5, 8, 8])
+
+    def test_mixed_finite_infinite_without_big_m_raises(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(
+            lower=np.array([0, 0, 0]),
+            upper=np.array([5, np.inf, 10]),
+            coords=[idx],
+            name="x",
+        )
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        with pytest.raises(ValueError, match="infinite upper bounds"):
+            compute_big_m_values(x)
+
+
 class TestBigMValidation:
     def test_big_m_zero_raises(self) -> None:
         m = Model()
