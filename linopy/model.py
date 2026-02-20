@@ -706,7 +706,7 @@ class Model:
         -------
         Constraint
             For SOS2: the convexity constraint (sum of lambda = 1).
-            For incremental: the first filling-order constraint (or the link
+            For incremental: the filling-order constraint (or the link
             constraint if only 2 breakpoints).
 
         Raises
@@ -818,12 +818,7 @@ class Model:
             )
         )
 
-        exclude_dims = {d for d in (dim, resolved_link_dim) if d is not None}
-        extra_coords = [
-            pd.Index(breakpoints.coords[d].values, name=d)
-            for d in breakpoints.dims
-            if d not in exclude_dims
-        ]
+        extra_coords = self._extra_coords(breakpoints, dim, resolved_link_dim)
         lambda_coords = extra_coords + [
             pd.Index(breakpoints.coords[dim].values, name=dim)
         ]
@@ -948,14 +943,9 @@ class Model:
             )
         )
 
-        exclude_dims_set = {
-            d for d in (dim, segment_dim, resolved_link_dim) if d is not None
-        }
-        extra_coords = [
-            pd.Index(breakpoints.coords[d].values, name=d)
-            for d in breakpoints.dims
-            if d not in exclude_dims_set
-        ]
+        extra_coords = self._extra_coords(
+            breakpoints, dim, segment_dim, resolved_link_dim
+        )
         lambda_coords = extra_coords + [
             pd.Index(breakpoints.coords[segment_dim].values, name=segment_dim),
             pd.Index(breakpoints.coords[dim].values, name=dim),
@@ -1015,7 +1005,7 @@ class Model:
         dim: str,
         target_expr: LinearExpression,
         extra_coords: list[pd.Index],
-        mask: DataArray | None,
+        breakpoint_mask: DataArray | None,
         link_dim: str | None,
     ) -> Constraint:
         """
@@ -1038,8 +1028,8 @@ class Model:
         steps = breakpoints.diff(dim).rename({dim: seg_dim})
         steps[seg_dim] = seg_index
 
-        if mask is not None:
-            bp_mask = mask
+        if breakpoint_mask is not None:
+            bp_mask = breakpoint_mask
             if link_dim is not None:
                 bp_mask = bp_mask.all(dim=link_dim)
             cummin = np.minimum.accumulate(bp_mask.values, axis=bp_mask.dims.index(dim))
@@ -1120,6 +1110,17 @@ class Model:
         self.add_constraints(target_expr == weighted_sum, name=link_name)
 
         return select_con
+
+    @staticmethod
+    def _extra_coords(
+        breakpoints: DataArray, *exclude_dims: str | None
+    ) -> list[pd.Index]:
+        excluded = {d for d in exclude_dims if d is not None}
+        return [
+            pd.Index(breakpoints.coords[d].values, name=d)
+            for d in breakpoints.dims
+            if d not in excluded
+        ]
 
     @staticmethod
     def _validate_pwl_breakpoints(breakpoints: DataArray, dim: str) -> None:

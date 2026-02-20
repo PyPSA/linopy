@@ -187,10 +187,13 @@ class TestMasking:
 
         m.add_piecewise_constraints(x, breakpoints, dim="bp")
 
-        # Lambda for NaN breakpoint should be masked
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
-        # Check that at least some labels are valid
-        assert (lambda_var.labels != -1).any()
+        # Non-NaN breakpoints (0, 1, 3) should have valid labels
+        assert int(lambda_var.labels.sel(bp=0)) != -1
+        assert int(lambda_var.labels.sel(bp=1)) != -1
+        assert int(lambda_var.labels.sel(bp=3)) != -1
+        # NaN breakpoint (2) should be masked
+        assert int(lambda_var.labels.sel(bp=2)) == -1
 
     def test_explicit_mask(self) -> None:
         """Test user-provided mask."""
@@ -716,46 +719,6 @@ class TestIncrementalFormulation:
         delta_var = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert "generator" in delta_var.dims
         assert "bp_seg" in delta_var.dims
-
-
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
-class TestIncrementalSolverIntegration:
-    """Integration tests for incremental formulation with Gurobi."""
-
-    def test_solve_incremental_single(self) -> None:
-        """Test solving with incremental formulation."""
-        gurobipy = pytest.importorskip("gurobipy")
-
-        m = Model()
-        x = m.add_variables(lower=0, upper=100, name="x")
-        cost = m.add_variables(name="cost")
-
-        # Monotonic breakpoints for both x and cost
-        breakpoints = xr.DataArray(
-            [[0, 50, 100], [0, 10, 50]],
-            dims=["var", "bp"],
-            coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
-        )
-
-        m.add_piecewise_constraints(
-            {"x": x, "cost": cost},
-            breakpoints,
-            link_dim="var",
-            dim="bp",
-            method="incremental",
-        )
-
-        m.add_constraints(x >= 50, name="x_min")
-        m.add_objective(cost)
-
-        try:
-            status, cond = m.solve(solver_name="gurobi", io_api="direct")
-        except gurobipy.GurobiError as exc:
-            pytest.skip(f"Gurobi environment unavailable: {exc}")
-
-        assert status == "ok"
-        assert np.isclose(x.solution.values, 50, atol=1e-5)
-        assert np.isclose(cost.solution.values, 10, atol=1e-5)
 
 
 # ===== Disjunctive Piecewise Linear Constraint Tests =====
@@ -1417,20 +1380,6 @@ class TestDisjunctiveSolverIntegration:
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
 
-    def _solve(self, m: Model, solver_name: str) -> tuple:
-        """Solve model, skipping if solver environment is unavailable."""
-        try:
-            if solver_name == "gurobi":
-                gurobipy = pytest.importorskip("gurobipy")
-                try:
-                    return m.solve(solver_name="gurobi", io_api="direct")
-                except gurobipy.GurobiError as exc:
-                    pytest.skip(f"Gurobi environment unavailable: {exc}")
-            else:
-                return m.solve(solver_name=solver_name)
-        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
-            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
-
     def test_minimize_picks_low_segment(self, solver_name: str) -> None:
         """Test minimizing x picks the lower segment."""
         m = Model()
@@ -1446,7 +1395,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         m.add_objective(x)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         # Should pick x=0 (minimum of low segment)
@@ -1467,7 +1416,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         m.add_objective(x, sense="max")
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         # Should pick x=100 (maximum of high segment)
@@ -1501,7 +1450,7 @@ class TestDisjunctiveSolverIntegration:
         # Minimize cost
         m.add_objective(cost)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         # Should pick region 0, minimum cost = 0
@@ -1523,7 +1472,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(x, breakpoints)
         m.add_objective(x)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         assert np.isclose(x.solution.values, 0.0, atol=1e-5)
@@ -1546,7 +1495,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_constraints(x >= 60, name="x_lower")
         m.add_objective(x)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         # Minimum in segment 1 with x >= 60 → x = 60
@@ -1585,7 +1534,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_constraints(power <= 150, name="power_max")
         m.add_objective(cost)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         assert np.isclose(power.solution.values, 50.0, atol=1e-5)
@@ -1628,7 +1577,7 @@ class TestDisjunctiveSolverIntegration:
         m.add_constraints(power.sum() >= 100, name="demand")
         m.add_objective(cost.sum())
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         total_power = power.solution.sum().values
@@ -1648,19 +1597,6 @@ class TestIncrementalSolverIntegrationMultiSolver:
     @pytest.fixture(params=_incremental_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
-
-    def _solve(self, m: Model, solver_name: str) -> tuple[str, str]:
-        try:
-            if solver_name == "gurobi":
-                gurobipy = pytest.importorskip("gurobipy")
-                try:
-                    return m.solve(solver_name="gurobi", io_api="direct")
-                except gurobipy.GurobiError as exc:
-                    pytest.skip(f"Gurobi environment unavailable: {exc}")
-            else:
-                return m.solve(solver_name=solver_name)
-        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
-            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
 
     def test_solve_incremental_single(self, solver_name: str) -> None:
         m = Model()
@@ -1684,7 +1620,7 @@ class TestIncrementalSolverIntegrationMultiSolver:
         m.add_constraints(x >= 50, name="x_min")
         m.add_objective(cost)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         assert np.isclose(x.solution.values, 50, atol=1e-5)
@@ -1697,19 +1633,6 @@ class TestIncrementalDecreasingBreakpointsSolver:
     @pytest.fixture(params=_incremental_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
-
-    def _solve(self, m: Model, solver_name: str) -> tuple[str, str]:
-        try:
-            if solver_name == "gurobi":
-                gurobipy = pytest.importorskip("gurobipy")
-                try:
-                    return m.solve(solver_name="gurobi", io_api="direct")
-                except gurobipy.GurobiError as exc:
-                    pytest.skip(f"Gurobi environment unavailable: {exc}")
-            else:
-                return m.solve(solver_name=solver_name)
-        except (ImportError, ModuleNotFoundError, RuntimeError, OSError) as exc:
-            pytest.skip(f"Solver {solver_name} unavailable: {exc}")
 
     def test_decreasing_breakpoints_solver(self, solver_name: str) -> None:
         m = Model()
@@ -1733,7 +1656,7 @@ class TestIncrementalDecreasingBreakpointsSolver:
         m.add_constraints(x >= 50, name="x_min")
         m.add_objective(cost)
 
-        status, cond = self._solve(m, solver_name)
+        status, cond = m.solve(solver_name=solver_name)
 
         assert status == "ok"
         assert np.isclose(x.solution.values, 50, atol=1e-5)
