@@ -445,8 +445,8 @@ def test_linear_expression_sum(
     with pytest.raises(ValueError, match="exact"):
         v.loc[:9] + v.loc[10:]
 
-    # explicit outer join gives union
-    expr = v.loc[:9].add(v.loc[10:], join="override")
+    # positional alignment via assign_coords
+    expr = v.loc[:9] + v.loc[10:].assign_coords(dim_2=v.loc[:9].coords["dim_2"])
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -473,8 +473,8 @@ def test_linear_expression_sum_with_const(
     with pytest.raises(ValueError, match="exact"):
         v.loc[:9] + v.loc[10:]
 
-    # explicit outer join gives union
-    expr = v.loc[:9].add(v.loc[10:], join="override")
+    # positional alignment via assign_coords
+    expr = v.loc[:9] + v.loc[10:].assign_coords(dim_2=v.loc[:9].coords["dim_2"])
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -816,11 +816,11 @@ class TestExactAlignmentDefault:
         assert result.const.sel(dim_2=1).item() == 10.0
         assert result.const.sel(dim_2=0).item() == 0.0
 
-    def test_add_join_override(self, v: Variable) -> None:
+    def test_add_positional_assign_coords(self, v: Variable) -> None:
         disjoint = xr.DataArray(
             np.ones(20), dims=["dim_2"], coords={"dim_2": range(50, 70)}
         )
-        result = v.add(disjoint, join="override")
+        result = v + disjoint.assign_coords(dim_2=v.coords["dim_2"])
         assert result.sizes["dim_2"] == 20
         assert list(result.coords["dim_2"].values) == list(range(20))
 
@@ -1829,10 +1829,10 @@ class TestJoinParameter:
         result = a.to_linexpr().add(const, join="outer")
         assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
 
-    def test_add_constant_join_override(self, a: Variable, c: Variable) -> None:
+    def test_add_constant_positional(self, a: Variable) -> None:
         expr = a.to_linexpr()
-        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [0, 1, 2]})
-        result = expr.add(const, join="override")
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr + const.assign_coords(i=expr.coords["i"])
         assert list(result.data.indexes["i"]) == [0, 1, 2]
         assert (result.const.values == const.values).all()
 
@@ -1889,8 +1889,8 @@ class TestJoinParameter:
         result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="inner")
         assert list(result.data.indexes["i"]) == [1, 2]
 
-    def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
-        result = a.to_linexpr().add(c.to_linexpr(), join="override")
+    def test_same_shape_add_assign_coords(self, a: Variable, c: Variable) -> None:
+        result = a.to_linexpr() + c.to_linexpr().assign_coords(i=a.coords["i"])
         assert list(result.data.indexes["i"]) == [0, 1, 2]
 
     def test_add_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
@@ -1928,17 +1928,17 @@ class TestJoinParameter:
         assert list(result.coords["i"].values) == [1]
         assert result.const.sel(i=1).item() == 15
 
-    def test_add_constant_override_positional(self, a: Variable) -> None:
+    def test_add_constant_positional_different_coords(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.add(other, join="override")
+        result = expr + other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [15, 25, 35])
 
-    def test_sub_constant_override(self, a: Variable) -> None:
+    def test_sub_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.sub(other, join="override")
+        result = expr - other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [-5, -15, -25])
 
@@ -1952,10 +1952,10 @@ class TestJoinParameter:
         assert result.const.sel(i=2).item() == -5
         assert result.const.sel(i=3).item() == -10
 
-    def test_mul_constant_override_positional(self, a: Variable) -> None:
+    def test_mul_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.mul(other, join="override")
+        result = expr * other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [10, 15, 20])
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
@@ -1972,10 +1972,10 @@ class TestJoinParameter:
         assert result.coeffs.squeeze().sel(i=1).item() == 2
         assert result.coeffs.squeeze().sel(i=0).item() == 0
 
-    def test_div_constant_override_positional(self, a: Variable) -> None:
+    def test_div_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 10
         other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.div(other, join="override")
+        result = expr / other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
 
@@ -1999,16 +1999,16 @@ class TestJoinParameter:
         assert set(result.coords["i"].values) == {0, 1, 2, 3}
         assert result.nterm == 2
 
-    def test_variable_mul_override(self, a: Variable) -> None:
+    def test_variable_mul_positional(self, a: Variable) -> None:
         other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
-        result = a.mul(other, join="override")
+        result = a * other.assign_coords(i=a.coords["i"])
         assert isinstance(result, LinearExpression)
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
 
-    def test_variable_div_override(self, a: Variable) -> None:
+    def test_variable_div_positional(self, a: Variable) -> None:
         other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
-        result = a.div(other, join="override")
+        result = a / other.assign_coords(i=a.coords["i"])
         assert isinstance(result, LinearExpression)
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_almost_equal(
@@ -2022,14 +2022,18 @@ class TestJoinParameter:
     def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
         expr_a = 1 * a + 5
         const = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})
-        for join in ["override", "outer", "inner"]:
+        for join in ["outer", "inner"]:
             result = expr_a.add(const, join=join)
             assert list(result.coords["i"].values) == [0, 1, 2]
             np.testing.assert_array_equal(result.const.values, [6, 7, 8])
+        # assign_coords also works when coords already match
+        result = expr_a + const.assign_coords(i=expr_a.coords["i"])
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [6, 7, 8])
 
-    def test_add_scalar_with_explicit_join(self, a: Variable) -> None:
+    def test_add_scalar(self, a: Variable) -> None:
         expr = 1 * a + 5
-        result = expr.add(10, join="override")
+        result = expr + 10
         np.testing.assert_array_equal(result.const.values, [15, 15, 15])
         assert list(result.coords["i"].values) == [0, 1, 2]
 
