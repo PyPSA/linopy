@@ -37,9 +37,9 @@ def test_semi_continuous_requires_positive_lb() -> None:
 def test_semi_continuous_collection_property() -> None:
     """Variables.semi_continuous filters correctly."""
     m = Model()
-    x = m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
-    y = m.add_variables(lower=0, upper=5, name="y")
-    z = m.add_variables(name="z", binary=True)
+    m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    m.add_variables(lower=0, upper=5, name="y")
+    m.add_variables(name="z", binary=True)
 
     assert list(m.variables.semi_continuous) == ["x"]
     assert "x" not in m.variables.continuous
@@ -97,7 +97,8 @@ def test_semi_continuous_with_coords() -> None:
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
 def test_semi_continuous_solve_gurobi() -> None:
-    """Semi-continuous variable solves correctly with Gurobi.
+    """
+    Semi-continuous variable solves correctly with Gurobi.
 
     Maximize x subject to x <= 0.5, x semi-continuous in [1, 10].
     Since x can be 0 or in [1, 10], and x <= 0.5 prevents [1, 10],
@@ -114,7 +115,8 @@ def test_semi_continuous_solve_gurobi() -> None:
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
 def test_semi_continuous_solve_gurobi_active() -> None:
-    """Semi-continuous variable takes value in [lb, ub] when beneficial.
+    """
+    Semi-continuous variable takes value in [lb, ub] when beneficial.
 
     Maximize x subject to x <= 5, x semi-continuous in [1, 10].
     Optimal x should be 5.
@@ -137,7 +139,5 @@ def test_unsupported_solver_raises() -> None:
 
     for solver in ["glpk", "highs", "mosek", "mindopt"]:
         if solver in available_solvers:
-            with pytest.raises(
-                ValueError, match="does not support semi-continuous"
-            ):
+            with pytest.raises(ValueError, match="does not support semi-continuous"):
                 m.solve(solver_name=solver)

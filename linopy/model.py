@@ -998,7 +998,9 @@ class Model:
 
     @property
     def type(self) -> str:
-        if (len(self.binaries) or len(self.integers) or len(self.semi_continuous)) and len(self.continuous):
+        if (
+            len(self.binaries) or len(self.integers) or len(self.semi_continuous)
+        ) and len(self.continuous):
             variable_type = "MI"
         elif len(self.binaries) or len(self.integers) or len(self.semi_continuous):
             variable_type = "I"

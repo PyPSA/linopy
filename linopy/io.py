@@ -234,7 +234,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers) + list(m.variables.semi_continuous)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
