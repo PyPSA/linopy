@@ -5,7 +5,7 @@ Upcoming Version
 ----------------
 
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
-
+* Add semi-continous variables for solvers that support them
 
 Version 0.6.4
 --------------
