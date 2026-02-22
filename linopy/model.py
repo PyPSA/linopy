@@ -126,6 +126,7 @@ class Model:
         # containers
         "_variables",
         "_constraints",
+        "_indicator_constraints",
         "_objective",
         "_parameters",
         "_solution",
@@ -136,8 +137,10 @@ class Model:
         # TODO: move counters to Variables and Constraints class
         "_xCounter",
         "_cCounter",
+        "_icCounter",
         "_varnameCounter",
         "_connameCounter",
+        "_icnameCounter",
         "_blocks",
         # TODO: check if these should not be mutable
         "_chunk",
@@ -185,6 +188,7 @@ class Model:
         """
         self._variables: Variables = Variables({}, model=self)
         self._constraints: Constraints = Constraints({}, model=self)
+        self._indicator_constraints: dict[str, Dataset] = {}
         self._objective: Objective = Objective(LinearExpression(None, self), self)
         self._parameters: Dataset = Dataset()
 
@@ -192,8 +196,10 @@ class Model:
         self._termination_condition: str = ""
         self._xCounter: int = 0
         self._cCounter: int = 0
+        self._icCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
+        self._icnameCounter: int = 0
         self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
@@ -218,6 +224,16 @@ class Model:
         Constraints assigned to the model.
         """
         return self._constraints
+
+    @property
+    def indicator_constraints(self) -> dict[str, Dataset]:
+        """
+        Indicator constraints assigned to the model.
+
+        Each entry is a Dataset with fields: coeffs, vars, sign, rhs,
+        labels, binary_var, binary_val.
+        """
+        return self._indicator_constraints
 
     @property
     def objective(self) -> Objective:
@@ -814,6 +830,122 @@ class Model:
         self.constraints.add(constraint)
         return constraint
 
+    def add_indicator_constraints(
+        self,
+        binary_var: Variable,
+        binary_val: int,
+        lhs: ConstraintLike | ExpressionLike | VariableLike,
+        sign: SignLike | None = None,
+        rhs: ConstantLike | None = None,
+        name: str | None = None,
+    ) -> Dataset:
+        """
+        Add indicator constraints to the model.
+
+        An indicator constraint has the form:
+            (binary_var == binary_val) => (linear_constraint)
+
+        The linear constraint is only enforced when binary_var equals
+        binary_val. These constraints are handled natively by solvers
+        like Gurobi and CPLEX via general constraints.
+
+        Parameters
+        ----------
+        binary_var : linopy.Variable
+            Binary variable serving as the indicator. Must have binary=True.
+        binary_val : int
+            Triggering value, must be 0 or 1.
+        lhs : linopy.Constraint, linopy.LinearExpression, or linopy.Variable
+            The conditionally enforced constraint. If a LinearExpression or
+            Variable is passed, ``sign`` and ``rhs`` must also be provided.
+        sign : str, optional
+            Constraint sign ('<=', '>=', '='). Required when ``lhs`` is an
+            expression.
+        rhs : numeric, optional
+            Right-hand side. Required when ``lhs`` is an expression.
+        name : str, optional
+            Name for the indicator constraint group.
+
+        Returns
+        -------
+        xarray.Dataset
+            The stored indicator constraint data.
+        """
+        if not binary_var.attrs.get("binary", False):
+            raise ValueError(
+                "Indicator variable must be binary. "
+                f"Variable '{binary_var.name}' is not binary."
+            )
+
+        if binary_val not in (0, 1):
+            raise ValueError(f"binary_val must be 0 or 1, got {binary_val}.")
+
+        if name in self._indicator_constraints:
+            raise ValueError(
+                f"Indicator constraint '{name}' already assigned to model."
+            )
+        if name is None:
+            name = f"indcon{self._icnameCounter}"
+            self._icnameCounter += 1
+
+        # Build constraint data from lhs
+        if isinstance(lhs, Constraint):
+            if sign is not None or rhs is not None:
+                raise ValueError("sign and rhs must be None when lhs is a Constraint.")
+            data = lhs.data
+        elif isinstance(lhs, LinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError(
+                    "sign and rhs are required when lhs is a LinearExpression."
+                )
+            sign = maybe_replace_signs(as_dataarray(sign))
+            data = lhs.to_constraint(sign, rhs).data
+        elif isinstance(lhs, Variable | ScalarVariable | ScalarLinearExpression):
+            if sign is None or rhs is None:
+                raise ValueError("sign and rhs are required when lhs is a Variable.")
+            sign = maybe_replace_signs(as_dataarray(sign))
+            data = lhs.to_linexpr().to_constraint(sign, rhs).data
+        elif isinstance(lhs, AnonymousScalarConstraint):
+            if sign is not None or rhs is not None:
+                raise ValueError("sign and rhs must be None when lhs is a Constraint.")
+            data = lhs.to_constraint().data
+        else:
+            raise TypeError(
+                f"lhs must be a Constraint, LinearExpression, or Variable, "
+                f"got {type(lhs)}."
+            )
+
+        # Add binary variable labels and value
+        binary_var_labels = binary_var.labels
+        data["binary_var"] = binary_var_labels
+        data["binary_val"] = binary_val
+
+        # Broadcast all fields together
+        (data,) = xr.broadcast(data, exclude=[TERM_DIM])
+
+        # Assign unique labels with the same shape as rhs (non-term dims)
+        labels = DataArray(
+            np.full(data.rhs.shape, -1, dtype=int),
+            coords=data.rhs.coords,
+            dims=data.rhs.dims,
+        )
+        data["labels"] = labels
+        start = self._icCounter
+        end = start + data.labels.size
+        data.labels.values = np.arange(start, end).reshape(data.labels.shape)
+        self._icCounter += data.labels.size
+
+        data = data.assign_attrs(label_range=(start, end), name=name)
+
+        self._indicator_constraints[name] = data
+        return data
+
+    def remove_indicator_constraints(self, name: str) -> None:
+        """
+        Remove indicator constraint by name.
+        """
+        del self._indicator_constraints[name]
+
     def add_objective(
         self,
         expr: Variable
@@ -1406,6 +1538,13 @@ class Model:
                 raise ValueError(
                     f"Solver {solver_name} does not support SOS constraints. "
                     "Use reformulate_sos=True or a solver that supports SOS (gurobi, cplex)."
+                )
+
+        if self.indicator_constraints:
+            if not solver_supports(solver_name, SolverFeature.INDICATOR_CONSTRAINTS):
+                raise ValueError(
+                    f"Solver {solver_name} does not support indicator constraints. "
+                    "Use a solver that supports them (gurobi, cplex)."
                 )
 
         try:

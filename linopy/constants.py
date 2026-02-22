@@ -54,6 +54,10 @@ SOS_TYPE_ATTR = "sos_type"
 SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
 
+# Indicator constraint attribute keys
+INDICATOR_BINARY_VAR_ATTR = "indicator_binary_var"
+INDICATOR_BINARY_VAL_ATTR = "indicator_binary_val"
+
 
 class ModelStatus(Enum):
     """

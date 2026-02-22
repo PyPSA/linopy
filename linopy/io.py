@@ -399,6 +399,66 @@ def sos_to_file(
             _format_and_write(df, columns, f)
 
 
+def indicator_constraints_to_file(
+    m: Model,
+    f: BufferedWriter,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write indicator constraints to the s.t. section of an LP file.
+
+    Indicator constraints appear in the Subject To section with the format:
+    ``ic0: b = 1 -> +1.0 x <= 5.0``
+    """
+    if not m.indicator_constraints:
+        return
+
+    # If no regular constraints were written, we need the s.t. header
+    if not len(m.constraints):
+        f.write(b"\n\ns.t.\n\n")
+
+    print_variable_scalar, _ = get_printers_scalar(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    for ic_name, ic_data in m.indicator_constraints.items():
+        labels_flat = ic_data.labels.values.flatten()
+        binary_var_flat = ic_data.binary_var.values.flatten()
+        binary_val_flat = np.broadcast_to(
+            ic_data.binary_val.values, labels_flat.shape
+        ).flatten()
+        coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
+        vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
+        sign_flat = np.broadcast_to(ic_data.sign.values, labels_flat.shape).flatten()
+        rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
+
+        for i in range(len(labels_flat)):
+            if labels_flat[i] == -1:
+                continue
+
+            bvar_name = print_variable_scalar(int(binary_var_flat[i]))
+            bval = int(binary_val_flat[i])
+
+            # Build LHS string from coeffs and vars
+            terms = []
+            for c, v in zip(coeffs_flat[i], vars_flat[i]):
+                if v == -1:
+                    continue
+                var_name = print_variable_scalar(int(v))
+                coeff = float(c)
+                if coeff >= 0:
+                    terms.append(f"+{coeff} {var_name}")
+                else:
+                    terms.append(f"{coeff} {var_name}")
+
+            lhs_str = " ".join(terms)
+            sign_str = str(sign_flat[i])
+            rhs_val = float(rhs_flat[i])
+
+            line = f"ic{labels_flat[i]}: {bvar_name} = {bval} -> {lhs_str} {sign_str} {rhs_val}\n"
+            f.write(line.encode())
+
+
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
@@ -485,6 +545,11 @@ def to_lp_file(
             f=f,
             progress=progress,
             slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        indicator_constraints_to_file(
+            m,
+            f=f,
             explicit_coordinate_names=explicit_coordinate_names,
         )
         bounds_to_file(
@@ -757,6 +822,46 @@ def to_gurobipy(
                 for _, s in stacked.groupby("_sos_group"):
                     add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
 
+    if m.indicator_constraints:
+        import gurobipy
+
+        sense_map = {
+            "<=": gurobipy.GRB.LESS_EQUAL,
+            ">=": gurobipy.GRB.GREATER_EQUAL,
+            "=": gurobipy.GRB.EQUAL,
+        }
+
+        for ic_name, ic_data in m.indicator_constraints.items():
+            labels_flat = ic_data.labels.values.flatten()
+            binary_var_flat = ic_data.binary_var.values.flatten()
+            binary_val_flat = np.broadcast_to(
+                ic_data.binary_val.values, labels_flat.shape
+            ).flatten()
+            coeffs_flat = ic_data.coeffs.values.reshape(len(labels_flat), -1)
+            vars_flat = ic_data.vars.values.reshape(len(labels_flat), -1)
+            sign_flat = np.broadcast_to(
+                ic_data.sign.values, labels_flat.shape
+            ).flatten()
+            rhs_flat = np.broadcast_to(ic_data.rhs.values, labels_flat.shape).flatten()
+
+            x_list = x.tolist()
+            for i in range(len(labels_flat)):
+                if labels_flat[i] == -1:
+                    continue
+
+                lhs = gurobipy.LinExpr()
+                for c, v in zip(coeffs_flat[i], vars_flat[i]):
+                    if v != -1:
+                        lhs.add(x_list[v], float(c))
+
+                model.addGenConstrIndicator(
+                    x_list[int(binary_var_flat[i])],
+                    bool(binary_val_flat[i]),
+                    lhs,
+                    sense_map[str(sign_flat[i])],
+                    float(rhs_flat[i]),
+                )
+
     model.update()
     return model
 
@@ -782,6 +887,12 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         raise NotImplementedError(
             "SOS constraints are not supported by the HiGHS direct API. "
             "Use io_api='lp' instead."
+        )
+
+    if m.indicator_constraints:
+        raise NotImplementedError(
+            "Indicator constraints are not supported by the HiGHS direct API. "
+            "Use a solver that supports them (gurobi, cplex)."
         )
 
     import highspy
