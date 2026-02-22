@@ -555,7 +555,7 @@ class Model:
                 lower, upper = 0, 1
 
         if semi_continuous:
-            if not np.isscalar(lower) or lower <= 0:
+            if not np.isscalar(lower) or float(lower) <= 0:  # type: ignore[arg-type]
                 raise ValueError(
                     "Semi-continuous variables require a positive scalar lower bound."
                 )

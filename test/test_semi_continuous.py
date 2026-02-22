@@ -1,5 +1,7 @@
 """Tests for semi-continuous variable support."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -72,7 +74,7 @@ def test_semi_continuous_vtypes() -> None:
     assert "B" in vtypes
 
 
-def test_semi_continuous_lp_file(tmp_path) -> None:
+def test_semi_continuous_lp_file(tmp_path: Path) -> None:
     """LP file contains semi-continuous section."""
     m = Model()
     m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
