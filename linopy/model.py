@@ -457,6 +457,7 @@ class Model:
         mask: DataArray | ndarray | Series | None = None,
         binary: bool = False,
         integer: bool = False,
+        semi_continuous: bool = False,
         **kwargs: Any,
     ) -> Variable:
         """
@@ -495,6 +496,11 @@ class Model:
         integer : bool
             Whether the new variable is a integer variable which are used for
             Mixed-Integer problems.
+        semi_continuous : bool
+            Whether the new variable is a semi-continuous variable. A
+            semi-continuous variable can take the value 0 or any value
+            between its lower and upper bounds. Requires a positive lower
+            bound.
         **kwargs :
             Additional keyword arguments are passed to the DataArray creation.
 
@@ -537,14 +543,22 @@ class Model:
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
 
-        if binary and integer:
-            raise ValueError("Variable cannot be both binary and integer.")
+        if sum([binary, integer, semi_continuous]) > 1:
+            raise ValueError(
+                "Variable can only be one of binary, integer, or semi-continuous."
+            )
 
         if binary:
             if (lower != -inf) or (upper != inf):
                 raise ValueError("Binary variables cannot have lower or upper bounds.")
             else:
                 lower, upper = 0, 1
+
+        if semi_continuous:
+            if not np.isscalar(lower) or lower <= 0:
+                raise ValueError(
+                    "Semi-continuous variables require a positive scalar lower bound."
+                )
 
         data = Dataset(
             {
@@ -583,7 +597,11 @@ class Model:
             data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
-            label_range=(start, end), name=name, binary=binary, integer=integer
+            label_range=(start, end),
+            name=name,
+            binary=binary,
+            integer=integer,
+            semi_continuous=semi_continuous,
         )
 
         if self.chunk:
@@ -964,6 +982,13 @@ class Model:
         return self.variables.integers
 
     @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.variables.semi_continuous
+
+    @property
     def is_linear(self) -> bool:
         return self.objective.is_linear
 
@@ -973,9 +998,9 @@ class Model:
 
     @property
     def type(self) -> str:
-        if (len(self.binaries) or len(self.integers)) and len(self.continuous):
+        if (len(self.binaries) or len(self.integers) or len(self.semi_continuous)) and len(self.continuous):
             variable_type = "MI"
-        elif len(self.binaries) or len(self.integers):
+        elif len(self.binaries) or len(self.integers) or len(self.semi_continuous):
             variable_type = "I"
         else:
             variable_type = ""
@@ -1406,6 +1431,15 @@ class Model:
                 raise ValueError(
                     f"Solver {solver_name} does not support SOS constraints. "
                     "Use reformulate_sos=True or a solver that supports SOS (gurobi, cplex)."
+                )
+
+        if self.variables.semi_continuous:
+            if not solver_supports(
+                solver_name, SolverFeature.SEMI_CONTINUOUS_VARIABLES
+            ):
+                raise ValueError(
+                    f"Solver {solver_name} does not support semi-continuous variables. "
+                    "Use a solver that supports them (gurobi, cplex)."
                 )
 
         try:
