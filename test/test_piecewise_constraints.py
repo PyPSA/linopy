@@ -87,7 +87,6 @@ class TestDictOfVariables:
         m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
-            link_dim="var",
             dim="bp",
         )
 
@@ -114,7 +113,6 @@ class TestDictOfVariables:
         m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
-            link_dim="var",
             dim="bp",
         )
 
@@ -126,10 +124,10 @@ class TestDictOfVariables:
 
 
 class TestAutoDetectLinkDim:
-    """Tests for auto-detection of link_dim."""
+    """Tests for auto-detection of linking dimension."""
 
-    def test_auto_detect_link_dim(self) -> None:
-        """Test that link_dim is auto-detected from breakpoints."""
+    def test_auto_detect_linking_dim(self) -> None:
+        """Test that linking dimension is auto-detected from breakpoints."""
         m = Model()
         power = m.add_variables(name="power")
         efficiency = m.add_variables(name="efficiency")
@@ -140,7 +138,7 @@ class TestAutoDetectLinkDim:
             coords={"var": ["power", "efficiency"], "bp": [0, 1, 2]},
         )
 
-        # Should auto-detect link_dim="var"
+        # Should auto-detect linking dim="var"
         m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
@@ -162,7 +160,7 @@ class TestAutoDetectLinkDim:
             coords={"wrong": ["a", "b"], "bp": [0, 1, 2]},
         )
 
-        with pytest.raises(ValueError, match="Could not auto-detect link_dim"):
+        with pytest.raises(ValueError, match="Could not auto-detect linking dimension"):
             m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
@@ -234,8 +232,8 @@ class TestMasking:
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert (lambda_var.labels != -1).all()
 
-    def test_dict_mask_without_link_dim(self) -> None:
-        """Test dict case accepts broadcastable mask without link_dim."""
+    def test_dict_mask_without_linking_dim(self) -> None:
+        """Test dict case accepts broadcastable mask without linking dimension."""
         m = Model()
         power = m.add_variables(name="power")
         efficiency = m.add_variables(name="efficiency")
@@ -252,7 +250,6 @@ class TestMasking:
         m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
-            link_dim="var",
             dim="bp",
             mask=mask,
         )
@@ -341,24 +338,23 @@ class TestValidationErrors:
         # Check constraints were created
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
-    def test_link_dim_not_in_breakpoints(self) -> None:
-        """Test error when link_dim is not in breakpoints."""
+    def test_no_matching_linking_dim(self) -> None:
+        """Test error when no breakpoints dimension matches dict keys."""
         m = Model()
         power = m.add_variables(name="power")
         efficiency = m.add_variables(name="efficiency")
 
         breakpoints = xr.DataArray([0, 50, 100], dims=["bp"], coords={"bp": [0, 1, 2]})
 
-        with pytest.raises(ValueError, match="not found in breakpoints dimensions"):
+        with pytest.raises(ValueError, match="Could not auto-detect linking dimension"):
             m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
-                link_dim="var",
                 dim="bp",
             )
 
-    def test_link_dim_coords_mismatch(self) -> None:
-        """Test error when link_dim coords don't match dict keys."""
+    def test_linking_dim_coords_mismatch(self) -> None:
+        """Test error when breakpoint dimension coords don't match dict keys."""
         m = Model()
         power = m.add_variables(name="power")
         efficiency = m.add_variables(name="efficiency")
@@ -369,11 +365,10 @@ class TestValidationErrors:
             coords={"var": ["wrong1", "wrong2"], "bp": [0, 1, 2]},
         )
 
-        with pytest.raises(ValueError, match="don't match expression keys"):
+        with pytest.raises(ValueError, match="Could not auto-detect linking dimension"):
             m.add_piecewise_constraints(
                 {"power": power, "efficiency": efficiency},
                 breakpoints,
-                link_dim="var",
                 dim="bp",
             )
 
@@ -460,9 +455,7 @@ class TestSolverIntegration:
             coords={"var": ["x", "cost"], "bp": [0, 1, 2]},
         )
 
-        m.add_piecewise_constraints(
-            {"x": x, "cost": cost}, breakpoints, link_dim="var", dim="bp"
-        )
+        m.add_piecewise_constraints({"x": x, "cost": cost}, breakpoints, dim="bp")
 
         # Minimize cost, but need x >= 50 to make it interesting
         m.add_constraints(x >= 50, name="x_min")
@@ -498,7 +491,6 @@ class TestSolverIntegration:
         m.add_piecewise_constraints(
             {"power": power, "efficiency": efficiency},
             breakpoints,
-            link_dim="var",
             dim="bp",
         )
 
@@ -541,7 +533,7 @@ class TestSolverIntegration:
         )
 
         m.add_piecewise_constraints(
-            {"power": power, "cost": cost}, breakpoints, link_dim="var", dim="bp"
+            {"power": power, "cost": cost}, breakpoints, dim="bp"
         )
 
         # Need total power of 120
@@ -623,7 +615,6 @@ class TestIncrementalFormulation:
         m.add_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
             dim="bp",
             method="incremental",
         )
@@ -670,7 +661,6 @@ class TestIncrementalFormulation:
         m.add_piecewise_constraints(
             {"power": power, "eff": eff},
             breakpoints,
-            link_dim="var",
             dim="bp",
             method="incremental",
         )
@@ -710,7 +700,7 @@ class TestIncrementalFormulation:
         m = Model()
         x = m.add_variables(name="x")
 
-        # Non-monotonic across the full array (dict case would have link_dim)
+        # Non-monotonic across the full array (dict case would have linking dimension)
         # For single expr, breakpoints along dim are [0, 50, 30]
         breakpoints = xr.DataArray([0, 50, 30], dims=["bp"], coords={"bp": [0, 1, 2]})
 
@@ -888,14 +878,13 @@ class TestDisjunctiveDictOfVariables:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
         )
 
         assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
-    def test_auto_detect_link_dim_with_segment_dim(self) -> None:
-        """Test auto-detection of link_dim when segment_dim is also present."""
+    def test_auto_detect_linking_dim_with_segment_dim(self) -> None:
+        """Test auto-detection of linking dimension when segment_dim is also present."""
         m = Model()
         power = m.add_variables(name="power")
         cost = m.add_variables(name="cost")
@@ -910,7 +899,7 @@ class TestDisjunctiveDictOfVariables:
             },
         )
 
-        # Should auto-detect link_dim="var" (not segment)
+        # Should auto-detect linking dim="var" (not segment)
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
@@ -986,7 +975,7 @@ class TestDisjunctiveExtraDimensions:
             assert dim_name in lambda_var.dims
 
     def test_dict_with_additional_coords(self) -> None:
-        """Test dict of variables with extra generator dim, binary/lambda exclude link_dim."""
+        """Test dict of variables with extra generator dim, binary/lambda exclude linking dimension."""
         m = Model()
         generators = pd.Index(["gen1", "gen2"], name="generator")
         power = m.add_variables(coords=[generators], name="power")
@@ -1009,13 +998,12 @@ class TestDisjunctiveExtraDimensions:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
         )
 
         binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
         lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
 
-        # link_dim (var) should NOT be in binary or lambda dims
+        # linking dimension (var) should NOT be in binary or lambda dims
         assert "var" not in binary_var.dims
         assert "var" not in lambda_var.dims
 
@@ -1123,8 +1111,8 @@ class TestDisjunctiveMasking:
         # All labels should be valid (no masking)
         assert (lambda_var.labels != -1).all()
 
-    def test_dict_mask_without_link_dim(self) -> None:
-        """Test dict case accepts mask that omits link_dim but is broadcastable."""
+    def test_dict_mask_without_linking_dim(self) -> None:
+        """Test dict case accepts mask that omits linking dimension but is broadcastable."""
         m = Model()
         power = m.add_variables(name="power")
         cost = m.add_variables(name="cost")
@@ -1149,7 +1137,6 @@ class TestDisjunctiveMasking:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
             mask=mask,
         )
 
@@ -1252,8 +1239,8 @@ class TestDisjunctiveValidationErrors:
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
-    def test_link_dim_not_in_breakpoints(self) -> None:
-        """Test error when explicit link_dim not in breakpoints."""
+    def test_no_matching_linking_dim(self) -> None:
+        """Test error when no breakpoints dimension matches dict keys."""
         m = Model()
         power = m.add_variables(name="power")
         cost = m.add_variables(name="cost")
@@ -1264,15 +1251,14 @@ class TestDisjunctiveValidationErrors:
             coords={"segment": [0, 1], "breakpoint": [0, 1]},
         )
 
-        with pytest.raises(ValueError, match="not found in breakpoints dimensions"):
+        with pytest.raises(ValueError, match="Could not auto-detect linking dimension"):
             m.add_disjunctive_piecewise_constraints(
                 {"power": power, "cost": cost},
                 breakpoints,
-                link_dim="var",
             )
 
-    def test_link_dim_coords_mismatch(self) -> None:
-        """Test error when link_dim coords don't match dict keys."""
+    def test_linking_dim_coords_mismatch(self) -> None:
+        """Test error when breakpoint dimension coords don't match dict keys."""
         m = Model()
         power = m.add_variables(name="power")
         cost = m.add_variables(name="cost")
@@ -1287,11 +1273,10 @@ class TestDisjunctiveValidationErrors:
             },
         )
 
-        with pytest.raises(ValueError, match="don't match expression keys"):
+        with pytest.raises(ValueError, match="Could not auto-detect linking dimension"):
             m.add_disjunctive_piecewise_constraints(
                 {"power": power, "cost": cost},
                 breakpoints,
-                link_dim="var",
             )
 
 
@@ -1506,7 +1491,6 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
         )
 
         # Minimize cost
@@ -1588,7 +1572,6 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
         )
 
         # Constraint: power >= 50, minimize cost → picks segment 0, power=50, cost=10
@@ -1632,7 +1615,6 @@ class TestDisjunctiveSolverIntegration:
         m.add_disjunctive_piecewise_constraints(
             {"power": power, "cost": cost},
             breakpoints,
-            link_dim="var",
         )
 
         # Total power demand >= 100
@@ -1674,7 +1656,6 @@ class TestIncrementalSolverIntegrationMultiSolver:
         m.add_piecewise_constraints(
             {"x": x, "cost": cost},
             breakpoints,
-            link_dim="var",
             dim="bp",
             method="incremental",
         )
@@ -1710,7 +1691,6 @@ class TestIncrementalDecreasingBreakpointsSolver:
         m.add_piecewise_constraints(
             {"x": x, "cost": cost},
             breakpoints,
-            link_dim="var",
             dim="bp",
             method="incremental",
         )
@@ -1743,7 +1723,6 @@ class TestIncrementalNonMonotonicDictRaises:
             m.add_piecewise_constraints(
                 {"x": x, "y": y},
                 breakpoints,
-                link_dim="var",
                 dim="bp",
                 method="incremental",
             )
@@ -1783,7 +1762,6 @@ class TestAdditionalEdgeCases:
         m.add_piecewise_constraints(
             {"expr_a": 2 * x, "expr_b": 3 * y},
             breakpoints,
-            link_dim="var",
             dim="bp",
         )
 
@@ -1820,7 +1798,6 @@ class TestAdditionalEdgeCases:
         m.add_piecewise_constraints(
             {"power": power, "eff": eff},
             breakpoints,
-            link_dim="var",
             dim="bp",
             method="auto",
         )
@@ -1912,7 +1889,6 @@ class TestAdditionalEdgeCases:
             m.add_piecewise_constraints(
                 {"x": x, "y": y},
                 breakpoints,
-                link_dim="var",
                 dim="bp",
                 method="incremental",
             )

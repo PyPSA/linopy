@@ -105,41 +105,23 @@ def _compute_mask(
 
 
 def _resolve_link_dim(
-    link_dim: str | None,
     breakpoints: DataArray,
-    dim: str,
     expr_keys: set[str],
-    exclude_dims: set[str] | None = None,
+    exclude_dims: set[str],
 ) -> str:
-    if exclude_dims is None:
-        exclude_dims = {dim}
-
-    if link_dim is None:
-        for d in breakpoints.dims:
-            if d in exclude_dims:
-                continue
-            coord_set = {str(c) for c in breakpoints.coords[d].values}
-            if coord_set == expr_keys:
-                return str(d)
-        raise ValueError(
-            "Could not auto-detect link_dim. Please specify it explicitly. "
-            f"Breakpoint dimensions: {list(breakpoints.dims)}, "
-            f"expression keys: {list(expr_keys)}"
-        )
-
-    if link_dim not in breakpoints.dims:
-        raise ValueError(
-            f"link_dim '{link_dim}' not found in breakpoints dimensions "
-            f"{list(breakpoints.dims)}"
-        )
-    coord_set = {str(c) for c in breakpoints.coords[link_dim].values}
-    if coord_set != expr_keys:
-        raise ValueError(
-            f"link_dim '{link_dim}' coordinates "
-            f"{coord_set} "
-            f"don't match expression keys {expr_keys}"
-        )
-    return link_dim
+    for d in breakpoints.dims:
+        if d in exclude_dims:
+            continue
+        coord_set = {str(c) for c in breakpoints.coords[d].values}
+        if coord_set == expr_keys:
+            return str(d)
+    raise ValueError(
+        "Could not auto-detect linking dimension from breakpoints. "
+        "Ensure breakpoints have a dimension whose coordinates match "
+        f"the expression dict keys. "
+        f"Breakpoint dimensions: {list(breakpoints.dims)}, "
+        f"expression keys: {list(expr_keys)}"
+    )
 
 
 def _build_stacked_expr(
@@ -166,7 +148,6 @@ def _resolve_expr(
     model: Model,
     expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
     breakpoints: DataArray,
-    link_dim: str | None,
     dim: str,
     mask: DataArray | None,
     skip_nan_check: bool,
@@ -192,13 +173,10 @@ def _resolve_expr(
 
     expr_dict: dict[str, Variable | LinearExpression] = expr  # type: ignore[assignment]
     expr_keys = set(expr_dict.keys())
-    resolved_link_dim = _resolve_link_dim(
-        link_dim, breakpoints, dim, expr_keys, exclude_dims=exclude_dims
-    )
+    all_exclude = {dim} | (exclude_dims or set())
+    resolved_link_dim = _resolve_link_dim(breakpoints, expr_keys, all_exclude)
     lambda_mask = None
     if computed_mask is not None:
-        # Accept masks that are broadcast-compatible with breakpoints but do not
-        # explicitly include link_dim (e.g. mask over breakpoint only).
         if resolved_link_dim not in computed_mask.dims:
             computed_mask = computed_mask.broadcast_like(breakpoints)
         lambda_mask = computed_mask.any(dim=resolved_link_dim)
@@ -336,7 +314,6 @@ def add_piecewise_constraints(
     model: Model,
     expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
     breakpoints: DataArray,
-    link_dim: str | None = None,
     dim: str = DEFAULT_BREAKPOINT_DIM,
     mask: DataArray | None = None,
     name: str | None = None,
@@ -364,17 +341,12 @@ def add_piecewise_constraints(
         The variable(s) or expression(s) to be linked by the piecewise constraint.
         - If a single Variable/LinearExpression is passed, the breakpoints
           directly specify the piecewise points for that expression.
-        - If a dict is passed, the keys must match coordinates in `link_dim`
+        - If a dict is passed, the keys must match coordinates of a dimension
           of the breakpoints, allowing multiple expressions to be linked.
     breakpoints : xr.DataArray
         The breakpoint values defining the piecewise linear function.
         Must have `dim` as one of its dimensions. If `expr` is a dict,
-        must also have `link_dim` dimension with coordinates matching the
-        dict keys.
-    link_dim : str, optional
-        The dimension in breakpoints that links to different expressions.
-        Required when `expr` is a dict. If None and `expr` is a dict,
-        will attempt to auto-detect from breakpoints dimensions.
+        must also have a dimension with coordinates matching the dict keys.
     dim : str, default "breakpoint"
         The dimension in breakpoints that represents the breakpoint index.
         This dimension's coordinates must be numeric (used as SOS2 weights
@@ -409,8 +381,7 @@ def add_piecewise_constraints(
     ValueError
         If expr is not a Variable, LinearExpression, or dict of these.
         If breakpoints doesn't have the required dim dimension.
-        If link_dim cannot be auto-detected when expr is a dict.
-        If link_dim coordinates don't match dict keys.
+        If the linking dimension cannot be auto-detected when expr is a dict.
         If dim coordinates are not numeric (SOS2 method only).
         If breakpoints are not strictly monotonic (incremental method).
         If method is not one of 'sos2', 'incremental', 'auto'.
@@ -476,7 +447,7 @@ def add_piecewise_constraints(
         model._pwlCounter += 1
 
     target_expr, resolved_link_dim, computed_mask, lambda_mask = _resolve_expr(
-        model, expr, breakpoints, link_dim, dim, mask, skip_nan_check
+        model, expr, breakpoints, dim, mask, skip_nan_check
     )
 
     extra_coords = _extra_coords(breakpoints, dim, resolved_link_dim)
@@ -503,7 +474,6 @@ def add_disjunctive_piecewise_constraints(
     model: Model,
     expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
     breakpoints: DataArray,
-    link_dim: str | None = None,
     dim: str = DEFAULT_BREAKPOINT_DIM,
     segment_dim: str = DEFAULT_SEGMENT_DIM,
     mask: DataArray | None = None,
@@ -538,9 +508,6 @@ def add_disjunctive_piecewise_constraints(
         Breakpoint values with at least ``dim`` and ``segment_dim``
         dimensions. Each slice along ``segment_dim`` defines one segment.
         Use NaN to pad segments with fewer breakpoints.
-    link_dim : str, optional
-        Dimension in breakpoints linking to different expressions (dict
-        case). Auto-detected if None.
     dim : str, default "breakpoint"
         Dimension for breakpoint indices within each segment.
         Must have numeric coordinates.
@@ -600,11 +567,10 @@ def add_disjunctive_piecewise_constraints(
         model,
         expr,
         breakpoints,
-        link_dim,
         dim,
         mask,
         skip_nan_check,
-        exclude_dims={dim, segment_dim},
+        exclude_dims={segment_dim},
     )
 
     extra_coords = _extra_coords(breakpoints, dim, segment_dim, resolved_link_dim)

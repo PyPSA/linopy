@@ -159,7 +159,6 @@ factor):
     m.add_piecewise_constraints(
         {"power_in": power_in, "power_out": power_out},
         breakpoints,
-        link_dim="var",
         dim="bp",
     )
 
@@ -201,7 +200,6 @@ Method Signatures
     Model.add_piecewise_constraints(
         expr,
         breakpoints,
-        link_dim=None,
         dim="breakpoint",
         mask=None,
         name=None,
@@ -211,8 +209,8 @@ Method Signatures
 
 - ``expr`` -- ``Variable``, ``LinearExpression``, or ``dict`` of these.
 - ``breakpoints`` -- ``xr.DataArray`` with breakpoint values. Must have ``dim``
-  as a dimension. For the dict case, must also have ``link_dim``.
-- ``link_dim`` -- ``str``, optional. Dimension linking to different expressions.
+  as a dimension. For the dict case, must also have a dimension whose
+  coordinates match the dict keys.
 - ``dim`` -- ``str``, default ``"breakpoint"``. Breakpoint-index dimension.
 - ``mask`` -- ``xr.DataArray``, optional. Boolean mask for valid constraints.
 - ``name`` -- ``str``, optional. Base name for generated variables/constraints.
@@ -227,7 +225,6 @@ Method Signatures
     Model.add_disjunctive_piecewise_constraints(
         expr,
         breakpoints,
-        link_dim=None,
         dim="breakpoint",
         segment_dim="segment",
         mask=None,
