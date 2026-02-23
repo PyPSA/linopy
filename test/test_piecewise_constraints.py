@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, available_solvers
+from linopy import Model, available_solvers, breakpoints
 from linopy.constants import (
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
@@ -296,9 +296,19 @@ class TestValidationErrors:
         breakpoints = xr.DataArray([0, 10, 50], dims=["bp"], coords={"bp": [0, 1, 2]})
 
         with pytest.raises(
-            ValueError, match="must be a Variable, LinearExpression, or dict"
+            TypeError, match="must be a Variable, LinearExpression, or dict"
         ):
             m.add_piecewise_constraints("invalid", breakpoints, dim="bp")  # type: ignore
+
+    def test_invalid_dict_value_type(self) -> None:
+        m = Model()
+        bp = xr.DataArray(
+            [[0, 50], [0, 10]],
+            dims=["var", "bp"],
+            coords={"var": ["x", "y"], "bp": [0, 1]},
+        )
+        with pytest.raises(TypeError, match="dict value for key 'x'"):
+            m.add_piecewise_constraints({"x": "bad", "y": "bad"}, bp, dim="bp")  # type: ignore
 
     def test_missing_dim(self) -> None:
         """Test error when breakpoints don't have the required dim."""
@@ -1217,7 +1227,7 @@ class TestDisjunctiveValidationErrors:
         )
 
         with pytest.raises(
-            ValueError, match="must be a Variable, LinearExpression, or dict"
+            TypeError, match="must be a Variable, LinearExpression, or dict"
         ):
             m.add_disjunctive_piecewise_constraints("invalid", breakpoints)  # type: ignore
 
@@ -1906,3 +1916,212 @@ class TestAdditionalEdgeCases:
 
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_DELTA_SUFFIX}" not in m.variables
+
+
+class TestBreakpointsFactory:
+    def test_positional_list(self) -> None:
+        bp = breakpoints([0, 50, 100])
+        assert bp.dims == ("breakpoint",)
+        assert list(bp.values) == [0.0, 50.0, 100.0]
+        assert list(bp.coords["breakpoint"].values) == [0, 1, 2]
+
+    def test_positional_dict(self) -> None:
+        bp = breakpoints({"gen1": [0, 50, 100], "gen2": [0, 30]}, dim="generator")
+        assert set(bp.dims) == {"generator", "breakpoint"}
+        assert bp.sizes["generator"] == 2
+        assert bp.sizes["breakpoint"] == 3
+        assert np.isnan(bp.sel(generator="gen2", breakpoint=2))
+
+    def test_positional_dict_without_dim_raises(self) -> None:
+        with pytest.raises(ValueError, match="'dim' is required"):
+            breakpoints({"gen1": [0, 50], "gen2": [0, 30]})
+
+    def test_kwargs_uniform(self) -> None:
+        bp = breakpoints(power=[0, 50, 100], fuel=[10, 20, 30])
+        assert "var" in bp.dims
+        assert "breakpoint" in bp.dims
+        assert list(bp.coords["var"].values) == ["power", "fuel"]
+        assert bp.sizes["breakpoint"] == 3
+
+    def test_kwargs_per_entity(self) -> None:
+        bp = breakpoints(
+            power={"gen1": [0, 50, 100], "gen2": [0, 30]},
+            cost={"gen1": [0, 10, 50], "gen2": [0, 8]},
+            dim="generator",
+        )
+        assert "generator" in bp.dims
+        assert "var" in bp.dims
+        assert "breakpoint" in bp.dims
+
+    def test_kwargs_mixed_list_and_dict(self) -> None:
+        bp = breakpoints(
+            power={"gen1": [0, 50], "gen2": [0, 30]},
+            fuel=[10, 20],
+            dim="generator",
+        )
+        assert "generator" in bp.dims
+        assert "var" in bp.dims
+        assert bp.sel(var="fuel", generator="gen1", breakpoint=0) == 10
+        assert bp.sel(var="fuel", generator="gen2", breakpoint=0) == 10
+
+    def test_kwargs_dataarray_passthrough(self) -> None:
+        power_da = xr.DataArray([0, 50, 100], dims=["breakpoint"])
+        bp = breakpoints(power=power_da, fuel=[10, 20, 30])
+        assert "var" in bp.dims
+        assert bp.sel(var="power", breakpoint=0) == 0
+
+    def test_both_positional_and_kwargs_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot pass both"):
+            breakpoints([0, 50], power=[10, 20])
+
+    def test_neither_raises(self) -> None:
+        with pytest.raises(ValueError, match="Must pass either"):
+            breakpoints()
+
+    def test_invalid_values_type_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be a list or dict"):
+            breakpoints(42)  # type: ignore
+
+    def test_invalid_kwarg_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be a list, dict, or DataArray"):
+            breakpoints(power=42)  # type: ignore
+
+    def test_kwargs_dict_without_dim_raises(self) -> None:
+        with pytest.raises(ValueError, match="'dim' is required"):
+            breakpoints(power={"gen1": [0, 50]}, cost=[10, 20])
+
+    def test_factory_output_works_with_piecewise(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        bp = breakpoints([0, 10, 50])
+        m.add_piecewise_constraints(x, bp, dim="breakpoint")
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+
+    def test_factory_dict_output_works_with_piecewise(self) -> None:
+        m = Model()
+        power = m.add_variables(name="power")
+        cost = m.add_variables(name="cost")
+        bp = breakpoints(power=[0, 50, 100], cost=[0, 10, 50])
+        m.add_piecewise_constraints(
+            {"power": power, "cost": cost}, bp, dim="breakpoint"
+        )
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
+
+
+class TestBreakpointsSegments:
+    def test_list_of_tuples(self) -> None:
+        bp = breakpoints.segments([(0, 10), (50, 100)])
+        assert set(bp.dims) == {"segment", "breakpoint"}
+        assert bp.sizes["segment"] == 2
+        assert bp.sizes["breakpoint"] == 2
+
+    def test_ragged_segments(self) -> None:
+        bp = breakpoints.segments([(0, 5, 10), (50, 100)])
+        assert bp.sizes["breakpoint"] == 3
+        assert np.isnan(bp.sel(segment=1, breakpoint=2))
+
+    def test_per_entity_dict(self) -> None:
+        bp = breakpoints.segments(
+            {"gen1": [(0, 10), (50, 100)], "gen2": [(0, 20), (60, 90)]},
+            dim="generator",
+        )
+        assert "generator" in bp.dims
+        assert "segment" in bp.dims
+        assert "breakpoint" in bp.dims
+
+    def test_kwargs_multi_variable(self) -> None:
+        bp = breakpoints.segments(
+            power=[(0, 50), (80, 100)],
+            cost=[(0, 10), (20, 30)],
+        )
+        assert "segment" in bp.dims
+        assert "var" in bp.dims
+        assert "breakpoint" in bp.dims
+
+    def test_segments_invalid_values_type_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be a list or dict"):
+            breakpoints.segments(42)  # type: ignore
+
+    def test_segments_both_positional_and_kwargs_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot pass both"):
+            breakpoints.segments([(0, 10)], power=[(0, 10)])
+
+    def test_segments_neither_raises(self) -> None:
+        with pytest.raises(ValueError, match="Must pass either"):
+            breakpoints.segments()
+
+    def test_segments_invalid_kwarg_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be a list, dict, or DataArray"):
+            breakpoints.segments(power=42)  # type: ignore
+
+    def test_segments_kwargs_dict_without_dim_raises(self) -> None:
+        with pytest.raises(ValueError, match="'dim' is required"):
+            breakpoints.segments(power={"gen1": [(0, 50)]}, cost=[(10, 20)])
+
+    def test_segments_dict_without_dim_raises(self) -> None:
+        with pytest.raises(ValueError, match="'dim' is required"):
+            breakpoints.segments({"gen1": [(0, 10)], "gen2": [(50, 100)]})
+
+    def test_segments_works_with_disjunctive(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        bp = breakpoints.segments([(0, 10), (50, 100)])
+        m.add_disjunctive_piecewise_constraints(x, bp)
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+
+
+class TestAutobroadcast:
+    def test_1d_breakpoints_2d_variable(self) -> None:
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+        bp = breakpoints([0, 10, 50])
+        m.add_piecewise_constraints(x, bp, dim="breakpoint")
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "generator" in lambda_var.dims
+        assert "breakpoint" in lambda_var.dims
+
+    def test_already_matching_dims_noop(self) -> None:
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+        bp = xr.DataArray(
+            [[0, 50, 100], [0, 30, 80]],
+            dims=["generator", "bp"],
+            coords={"generator": generators, "bp": [0, 1, 2]},
+        )
+        m.add_piecewise_constraints(x, bp, dim="bp")
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "generator" in lambda_var.dims
+
+    def test_dict_expr_broadcast(self) -> None:
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        power = m.add_variables(coords=[generators], name="power")
+        cost = m.add_variables(coords=[generators], name="cost")
+        bp = breakpoints(power=[0, 50, 100], cost=[0, 10, 50])
+        m.add_piecewise_constraints(
+            {"power": power, "cost": cost}, bp, dim="breakpoint"
+        )
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "generator" in lambda_var.dims
+
+    def test_disjunctive_broadcast(self) -> None:
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        x = m.add_variables(coords=[generators], name="x")
+        bp = breakpoints.segments([(0, 10), (50, 100)])
+        m.add_disjunctive_piecewise_constraints(x, bp)
+        binary_var = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        assert "generator" in binary_var.dims
+
+    def test_broadcast_multi_dim(self) -> None:
+        m = Model()
+        generators = pd.Index(["gen1", "gen2"], name="generator")
+        timesteps = pd.Index([0, 1, 2], name="time")
+        x = m.add_variables(coords=[generators, timesteps], name="x")
+        bp = breakpoints([0, 10, 50])
+        m.add_piecewise_constraints(x, bp, dim="breakpoint")
+        lambda_var = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
+        assert "generator" in lambda_var.dims
+        assert "time" in lambda_var.dims

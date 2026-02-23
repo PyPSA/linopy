@@ -20,6 +20,7 @@ Creating a model
     model.Model.add_objective
     model.Model.add_piecewise_constraints
     model.Model.add_disjunctive_piecewise_constraints
+    piecewise.breakpoints
     model.Model.linexpr
     model.Model.remove_constraints
 

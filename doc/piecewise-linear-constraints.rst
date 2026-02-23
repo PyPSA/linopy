@@ -127,13 +127,12 @@ Single variable
 .. code-block:: python
 
     import linopy
-    import xarray as xr
 
     m = linopy.Model()
     x = m.add_variables(name="x")
 
-    breakpoints = xr.DataArray([0, 10, 50, 100], dims=["bp"])
-    m.add_piecewise_constraints(x, breakpoints, dim="bp")
+    bp = linopy.breakpoints([0, 10, 50, 100])
+    m.add_piecewise_constraints(x, bp, dim="breakpoint")
 
 Dict of variables
 ~~~~~~~~~~~~~~~~~~
@@ -149,17 +148,15 @@ factor):
     power_in = m.add_variables(name="power_in")
     power_out = m.add_variables(name="power_out")
 
-    # At 50 MW input the turbine produces 47.5 MW output (95% eff),
-    # at 100 MW input only 90 MW output (90% eff)
-    breakpoints = xr.DataArray(
-        [[0, 50, 100], [0, 47.5, 90]],
-        coords={"var": ["power_in", "power_out"], "bp": [0, 1, 2]},
+    bp = linopy.breakpoints(
+        power_in=[0, 50, 100],
+        power_out=[0, 47.5, 90],
     )
 
     m.add_piecewise_constraints(
         {"power_in": power_in, "power_out": power_out},
-        breakpoints,
-        dim="bp",
+        bp,
+        dim="breakpoint",
     )
 
 Incremental method
@@ -167,7 +164,7 @@ Incremental method
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(x, breakpoints, dim="bp", method="incremental")
+    m.add_piecewise_constraints(x, bp, dim="breakpoint", method="incremental")
 
 Pass ``method="auto"`` to automatically select incremental when breakpoints are
 strictly monotonic, falling back to SOS2 otherwise.
@@ -180,14 +177,87 @@ Disjunctive (disconnected segments)
     m = linopy.Model()
     x = m.add_variables(name="x")
 
-    # Two disconnected segments: [0, 10] and [50, 100]
-    breakpoints = xr.DataArray(
-        [[0, 10], [50, 100]],
-        dims=["segment", "breakpoint"],
-        coords={"segment": [0, 1], "breakpoint": [0, 1]},
+    bp = linopy.breakpoints.segments([(0, 10), (50, 100)])
+    m.add_disjunctive_piecewise_constraints(x, bp)
+
+Breakpoints Factory
+-------------------
+
+The ``linopy.breakpoints()`` factory simplifies creating breakpoint DataArrays
+with correct dimensions and coordinates.
+
+From a list
+~~~~~~~~~~~
+
+.. code-block:: python
+
+    # 1D breakpoints (dims: [breakpoint])
+    bp = linopy.breakpoints([0, 50, 100])
+
+From keyword arguments (multi-variable)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # 2D breakpoints (dims: [var, breakpoint])
+    bp = linopy.breakpoints(power=[0, 50, 100], fuel=[0, 60, 140])
+
+From a dict (per-entity, ragged lengths allowed)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # 2D breakpoints (dims: [generator, breakpoint]), NaN-padded
+    bp = linopy.breakpoints(
+        {"gen1": [0, 50, 100], "gen2": [0, 80]},
+        dim="generator",
     )
 
-    m.add_disjunctive_piecewise_constraints(x, breakpoints)
+Per-entity with multiple variables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # 3D breakpoints (dims: [generator, var, breakpoint])
+    bp = linopy.breakpoints(
+        power={"gen1": [0, 50, 100], "gen2": [0, 80]},
+        fuel={"gen1": [0, 60, 140], "gen2": [0, 100]},
+        dim="generator",
+    )
+
+Segments (for disjunctive constraints)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # 2D breakpoints (dims: [segment, breakpoint])
+    bp = linopy.breakpoints.segments([(0, 10), (50, 100)])
+
+    # Per-entity segments
+    bp = linopy.breakpoints.segments(
+        {"gen1": [(0, 10), (50, 100)], "gen2": [(0, 80)]},
+        dim="generator",
+    )
+
+Auto-broadcasting
+-----------------
+
+Breakpoints are automatically broadcast to match the dimensions of the
+expression or variable. This means you don't need to manually call
+``expand_dims`` when your variables have extra dimensions (e.g. ``time``):
+
+.. code-block:: python
+
+    m = linopy.Model()
+    time = pd.Index([1, 2, 3], name="time")
+    x = m.add_variables(name="x", coords=[time])
+
+    # 1D breakpoints are auto-expanded to match x's time dimension
+    bp = linopy.breakpoints([0, 50, 100])
+    m.add_piecewise_constraints(x, bp, dim="breakpoint")
+
+This also works for ``add_disjunctive_piecewise_constraints`` and dict
+expressions.
 
 Method Signatures
 -----------------

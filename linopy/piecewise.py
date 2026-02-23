@@ -16,7 +16,9 @@ from xarray import DataArray
 
 from linopy.constants import (
     DEFAULT_BREAKPOINT_DIM,
+    DEFAULT_LINK_DIM,
     DEFAULT_SEGMENT_DIM,
+    HELPER_DIMS,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
@@ -30,7 +32,289 @@ if TYPE_CHECKING:
     from linopy.constraints import Constraint
     from linopy.expressions import LinearExpression
     from linopy.model import Model
-    from linopy.variables import Variable
+    from linopy.types import LinExprLike
+
+
+def _list_to_array(values: list[float], bp_dim: str) -> DataArray:
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 1:
+        raise ValueError(f"Expected a 1D list of numeric values, got shape {arr.shape}")
+    return DataArray(arr, dims=[bp_dim], coords={bp_dim: np.arange(len(arr))})
+
+
+def _dict_to_array(d: dict[str, list[float]], dim: str, bp_dim: str) -> DataArray:
+    max_len = max(len(v) for v in d.values())
+    keys = list(d.keys())
+    data = np.full((len(keys), max_len), np.nan)
+    for i, k in enumerate(keys):
+        vals = d[k]
+        data[i, : len(vals)] = vals
+    return DataArray(
+        data,
+        dims=[dim, bp_dim],
+        coords={dim: keys, bp_dim: np.arange(max_len)},
+    )
+
+
+def _segments_list_to_array(
+    values: list[list[float]], bp_dim: str, seg_dim: str
+) -> DataArray:
+    max_len = max(len(seg) for seg in values)
+    data = np.full((len(values), max_len), np.nan)
+    for i, seg in enumerate(values):
+        data[i, : len(seg)] = seg
+    return DataArray(
+        data,
+        dims=[seg_dim, bp_dim],
+        coords={seg_dim: np.arange(len(values)), bp_dim: np.arange(max_len)},
+    )
+
+
+def _dict_segments_to_array(
+    d: dict[str, list[list[float]]], dim: str, bp_dim: str, seg_dim: str
+) -> DataArray:
+    parts = []
+    for key, seg_list in d.items():
+        arr = _segments_list_to_array(seg_list, bp_dim, seg_dim)
+        parts.append(arr.expand_dims({dim: [key]}))
+    combined = xr.concat(parts, dim=dim)
+    max_bp = max(max(len(seg) for seg in sl) for sl in d.values())
+    max_seg = max(len(sl) for sl in d.values())
+    if combined.sizes[bp_dim] < max_bp or combined.sizes[seg_dim] < max_seg:
+        combined = combined.reindex(
+            {bp_dim: np.arange(max_bp), seg_dim: np.arange(max_seg)},
+            fill_value=np.nan,
+        )
+    return combined
+
+
+def _get_entity_keys(
+    kwargs: dict[str, list[float] | dict[str, list[float]] | DataArray],
+) -> list[str]:
+    first_dict = next(v for v in kwargs.values() if isinstance(v, dict))
+    return list(first_dict.keys())
+
+
+def _validate_factory_args(
+    values: list | dict | None,
+    kwargs: dict,
+) -> None:
+    if values is not None and kwargs:
+        raise ValueError("Cannot pass both positional 'values' and keyword arguments")
+    if values is None and not kwargs:
+        raise ValueError("Must pass either positional 'values' or keyword arguments")
+
+
+def _resolve_kwargs(
+    kwargs: dict[str, list[float] | dict[str, list[float]] | DataArray],
+    dim: str | None,
+    bp_dim: str,
+    link_dim: str,
+) -> DataArray:
+    has_dict = any(isinstance(v, dict) for v in kwargs.values())
+    if has_dict and dim is None:
+        raise ValueError("'dim' is required when any kwarg value is a dict")
+
+    arrays: dict[str, DataArray] = {}
+    for name, val in kwargs.items():
+        if isinstance(val, DataArray):
+            arrays[name] = val
+        elif isinstance(val, dict):
+            arrays[name] = _dict_to_array(val, dim, bp_dim)
+        elif isinstance(val, list):
+            base = _list_to_array(val, bp_dim)
+            if has_dict:
+                base = base.expand_dims({dim: _get_entity_keys(kwargs)})
+            arrays[name] = base
+        else:
+            raise ValueError(
+                f"kwarg '{name}' must be a list, dict, or DataArray, got {type(val)}"
+            )
+
+    parts = [arr.expand_dims({link_dim: [name]}) for name, arr in arrays.items()]
+    return xr.concat(parts, dim=link_dim)
+
+
+def _resolve_segment_kwargs(
+    kwargs: dict[str, list[list[float]] | dict[str, list[list[float]]] | DataArray],
+    dim: str | None,
+    bp_dim: str,
+    seg_dim: str,
+    link_dim: str,
+) -> DataArray:
+    has_dict = any(isinstance(v, dict) for v in kwargs.values())
+    if has_dict and dim is None:
+        raise ValueError("'dim' is required when any kwarg value is a dict")
+
+    arrays: dict[str, DataArray] = {}
+    for name, val in kwargs.items():
+        if isinstance(val, DataArray):
+            arrays[name] = val
+        elif isinstance(val, dict):
+            arrays[name] = _dict_segments_to_array(val, dim, bp_dim, seg_dim)
+        elif isinstance(val, list):
+            base = _segments_list_to_array(val, bp_dim, seg_dim)
+            if has_dict:
+                base = base.expand_dims({dim: _get_entity_keys(kwargs)})
+            arrays[name] = base
+        else:
+            raise ValueError(
+                f"kwarg '{name}' must be a list, dict, or DataArray, got {type(val)}"
+            )
+
+    parts = [arr.expand_dims({link_dim: [name]}) for name, arr in arrays.items()]
+    combined = xr.concat(parts, dim=link_dim)
+    max_bp = max(a.sizes.get(bp_dim, 0) for a in arrays.values())
+    max_seg = max(a.sizes.get(seg_dim, 0) for a in arrays.values())
+    if (
+        combined.sizes.get(bp_dim, 0) < max_bp
+        or combined.sizes.get(seg_dim, 0) < max_seg
+    ):
+        combined = combined.reindex(
+            {bp_dim: np.arange(max_bp), seg_dim: np.arange(max_seg)},
+            fill_value=np.nan,
+        )
+    return combined
+
+
+class _BreakpointFactory:
+    """
+    Factory for creating breakpoint DataArrays for piecewise linear constraints.
+
+    Use ``linopy.breakpoints(...)`` for continuous breakpoints and
+    ``linopy.breakpoints.segments(...)`` for disjunctive (disconnected) segments.
+    """
+
+    def __call__(
+        self,
+        values: list[float] | dict[str, list[float]] | None = None,
+        *,
+        dim: str | None = None,
+        bp_dim: str = DEFAULT_BREAKPOINT_DIM,
+        link_dim: str = DEFAULT_LINK_DIM,
+        **kwargs: list[float] | dict[str, list[float]] | DataArray,
+    ) -> DataArray:
+        """
+        Create a breakpoint DataArray for piecewise linear constraints.
+
+        Parameters
+        ----------
+        values : list or dict, optional
+            Breakpoint values. A list creates 1D breakpoints. A dict creates
+            per-entity breakpoints (requires ``dim``). Cannot be used with kwargs.
+        dim : str, optional
+            Entity dimension name. Required when ``values`` is a dict.
+        bp_dim : str, default "breakpoint"
+            Name for the breakpoint dimension.
+        link_dim : str, default "var"
+            Name for the link dimension when using kwargs.
+        **kwargs : list, dict, or DataArray
+            Per-variable breakpoints. Each kwarg becomes a coordinate on the
+            link dimension.
+
+        Returns
+        -------
+        DataArray
+            Breakpoint array with appropriate dimensions and coordinates.
+        """
+        _validate_factory_args(values, kwargs)
+
+        if values is not None:
+            if isinstance(values, list):
+                return _list_to_array(values, bp_dim)
+            if isinstance(values, dict):
+                if dim is None:
+                    raise ValueError("'dim' is required when 'values' is a dict")
+                return _dict_to_array(values, dim, bp_dim)
+            raise TypeError(f"'values' must be a list or dict, got {type(values)}")
+
+        return _resolve_kwargs(kwargs, dim, bp_dim, link_dim)
+
+    def segments(
+        self,
+        values: list[list[float]] | dict[str, list[list[float]]] | None = None,
+        *,
+        dim: str | None = None,
+        bp_dim: str = DEFAULT_BREAKPOINT_DIM,
+        seg_dim: str = DEFAULT_SEGMENT_DIM,
+        link_dim: str = DEFAULT_LINK_DIM,
+        **kwargs: list[list[float]] | dict[str, list[list[float]]] | DataArray,
+    ) -> DataArray:
+        """
+        Create a segmented breakpoint DataArray for disjunctive piecewise constraints.
+
+        Parameters
+        ----------
+        values : list or dict, optional
+            Segment breakpoints. A list of lists creates 2D breakpoints
+            ``[segment, breakpoint]``. A dict creates per-entity segments
+            (requires ``dim``). Cannot be used with kwargs.
+        dim : str, optional
+            Entity dimension name. Required when ``values`` is a dict.
+        bp_dim : str, default "breakpoint"
+            Name for the breakpoint dimension.
+        seg_dim : str, default "segment"
+            Name for the segment dimension.
+        link_dim : str, default "var"
+            Name for the link dimension when using kwargs.
+        **kwargs : list, dict, or DataArray
+            Per-variable segment breakpoints.
+
+        Returns
+        -------
+        DataArray
+            Breakpoint array with segment and breakpoint dimensions.
+        """
+        _validate_factory_args(values, kwargs)
+
+        if values is not None:
+            if isinstance(values, list):
+                return _segments_list_to_array(values, bp_dim, seg_dim)
+            if isinstance(values, dict):
+                if dim is None:
+                    raise ValueError("'dim' is required when 'values' is a dict")
+                return _dict_segments_to_array(values, dim, bp_dim, seg_dim)
+            raise TypeError(f"'values' must be a list or dict, got {type(values)}")
+
+        return _resolve_segment_kwargs(kwargs, dim, bp_dim, seg_dim, link_dim)
+
+
+breakpoints = _BreakpointFactory()
+
+
+def _auto_broadcast_breakpoints(
+    bp: DataArray,
+    expr: LinExprLike | dict[str, LinExprLike],
+    dim: str,
+    link_dim: str | None = None,
+    exclude_dims: set[str] | None = None,
+) -> DataArray:
+    _, target_dims = _validate_piecewise_expr(expr)
+
+    skip = {dim} | set(HELPER_DIMS)
+    if link_dim is not None:
+        skip.add(link_dim)
+    if exclude_dims is not None:
+        skip.update(exclude_dims)
+
+    target_dims -= skip
+    missing = target_dims - set(bp.dims)
+
+    if not missing:
+        return bp
+
+    expand_map: dict[str, list] = {}
+    all_exprs = expr.values() if isinstance(expr, dict) else [expr]
+    for d in missing:
+        for e in all_exprs:
+            if d in e.coords:
+                expand_map[str(d)] = list(e.coords[d].values)
+                break
+
+    if expand_map:
+        bp = bp.expand_dims(expand_map)
+
+    return bp
 
 
 def _extra_coords(breakpoints: DataArray, *exclude_dims: str | None) -> list[pd.Index]:
@@ -84,12 +368,40 @@ def _has_trailing_nan_only(breakpoints: DataArray, dim: str) -> bool:
     return not bool((valid & ~cummin_da).any())
 
 
-def _to_linexpr(expr: Variable | LinearExpression) -> LinearExpression:
+def _to_linexpr(expr: LinExprLike) -> LinearExpression:
     from linopy.expressions import LinearExpression
 
     if isinstance(expr, LinearExpression):
         return expr
     return expr.to_linexpr()
+
+
+def _validate_piecewise_expr(
+    expr: LinExprLike | dict[str, LinExprLike],
+) -> tuple[bool, set[str]]:
+    from linopy.expressions import LinearExpression
+    from linopy.variables import Variable
+
+    _types = (Variable, LinearExpression)
+
+    if isinstance(expr, _types):
+        return True, set(expr.coord_dims)
+
+    if isinstance(expr, dict):
+        dims: set[str] = set()
+        for key, val in expr.items():
+            if not isinstance(val, _types):
+                raise TypeError(
+                    f"dict value for key '{key}' must be a Variable or "
+                    f"LinearExpression, got {type(val)}"
+                )
+            dims.update(val.coord_dims)
+        return False, dims
+
+    raise TypeError(
+        f"'expr' must be a Variable, LinearExpression, or dict of these, "
+        f"got {type(expr)}"
+    )
 
 
 def _compute_mask(
@@ -126,7 +438,7 @@ def _resolve_link_dim(
 
 def _build_stacked_expr(
     model: Model,
-    expr_dict: dict[str, Variable | LinearExpression],
+    expr_dict: dict[str, LinExprLike],
     breakpoints: DataArray,
     link_dim: str,
 ) -> LinearExpression:
@@ -146,24 +458,14 @@ def _build_stacked_expr(
 
 def _resolve_expr(
     model: Model,
-    expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
+    expr: LinExprLike | dict[str, LinExprLike],
     breakpoints: DataArray,
     dim: str,
     mask: DataArray | None,
     skip_nan_check: bool,
     exclude_dims: set[str] | None = None,
 ) -> tuple[LinearExpression, str | None, DataArray | None, DataArray | None]:
-    from linopy.expressions import LinearExpression
-    from linopy.variables import Variable
-
-    is_single = isinstance(expr, Variable | LinearExpression)
-    is_dict = isinstance(expr, dict)
-
-    if not is_single and not is_dict:
-        raise ValueError(
-            f"'expr' must be a Variable, LinearExpression, or dict of these, "
-            f"got {type(expr)}"
-        )
+    is_single, _ = _validate_piecewise_expr(expr)
 
     computed_mask = _compute_mask(mask, breakpoints, skip_nan_check)
 
@@ -171,7 +473,7 @@ def _resolve_expr(
         target_expr = _to_linexpr(expr)  # type: ignore[arg-type]
         return target_expr, None, computed_mask, computed_mask
 
-    expr_dict: dict[str, Variable | LinearExpression] = expr  # type: ignore[assignment]
+    expr_dict: dict[str, LinExprLike] = expr  # type: ignore[assignment]
     expr_keys = set(expr_dict.keys())
     all_exclude = {dim} | (exclude_dims or set())
     resolved_link_dim = _resolve_link_dim(breakpoints, expr_keys, all_exclude)
@@ -237,14 +539,6 @@ def _add_pwl_incremental(
         bp_mask = breakpoint_mask
         if link_dim is not None:
             bp_mask = bp_mask.all(dim=link_dim)
-        cummin = np.minimum.accumulate(bp_mask.values, axis=bp_mask.dims.index(dim))
-        cummin_da = DataArray(cummin, coords=bp_mask.coords, dims=bp_mask.dims)
-        if bool((bp_mask & ~cummin_da).any()):
-            raise ValueError(
-                "Incremental method does not support non-trailing NaN breakpoints. "
-                "NaN values must only appear at the end of the breakpoint sequence. "
-                "Use method='sos2' for breakpoints with gaps."
-            )
         mask_lo = bp_mask.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
         mask_hi = bp_mask.isel({dim: slice(1, None)}).rename({dim: seg_dim})
         mask_lo[seg_dim] = seg_index
@@ -312,7 +606,7 @@ def _add_dpwl_sos2(
 
 def add_piecewise_constraints(
     model: Model,
-    expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
+    expr: LinExprLike | dict[str, LinExprLike],
     breakpoints: DataArray,
     dim: str = DEFAULT_BREAKPOINT_DIM,
     mask: DataArray | None = None,
@@ -418,6 +712,7 @@ def add_piecewise_constraints(
         )
 
     _validate_breakpoints(breakpoints, dim)
+    breakpoints = _auto_broadcast_breakpoints(breakpoints, expr, dim)
 
     if method in ("incremental", "auto"):
         is_monotonic = _check_strict_monotonicity(breakpoints, dim)
@@ -472,7 +767,7 @@ def add_piecewise_constraints(
 
 def add_disjunctive_piecewise_constraints(
     model: Model,
-    expr: Variable | LinearExpression | dict[str, Variable | LinearExpression],
+    expr: LinExprLike | dict[str, LinExprLike],
     breakpoints: DataArray,
     dim: str = DEFAULT_BREAKPOINT_DIM,
     segment_dim: str = DEFAULT_SEGMENT_DIM,
@@ -558,6 +853,9 @@ def add_disjunctive_piecewise_constraints(
     if dim == segment_dim:
         raise ValueError(f"dim and segment_dim must be different, both are '{dim}'")
     _validate_numeric_breakpoint_coords(breakpoints, dim)
+    breakpoints = _auto_broadcast_breakpoints(
+        breakpoints, expr, dim, exclude_dims={segment_dim}
+    )
 
     if name is None:
         name = f"pwl{model._pwlCounter}"
