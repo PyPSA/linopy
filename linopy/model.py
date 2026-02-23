@@ -1227,7 +1227,7 @@ class Model:
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         mock_solve: bool = False,
-        reformulate_sos: bool = False,
+        reformulate_sos: bool | Literal["auto"] = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1297,9 +1297,12 @@ class Model:
             than 10000 variables and constraints.
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
-        reformulate_sos : bool, optional
+        reformulate_sos : bool | Literal["auto"], optional
             Whether to automatically reformulate SOS constraints as binary + linear
             constraints for solvers that don't support them natively.
+            If True, always reformulates (warns if solver supports SOS natively).
+            If "auto", silently reformulates only when the solver lacks SOS support.
+            If False, raises if solver doesn't support SOS.
             This uses the Big-M method and requires all SOS variables to have finite bounds.
             Default is False.
         **solver_options : kwargs
@@ -1399,24 +1402,27 @@ class Model:
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
+        if reformulate_sos not in (True, False, "auto"):
+            raise ValueError(
+                f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
+                "Must be True, False, or 'auto'."
+            )
+
         sos_reform_result = None
         if self.variables.sos:
-            if reformulate_sos and not solver_supports(
-                solver_name, SolverFeature.SOS_CONSTRAINTS
-            ):
+            supports_sos = solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+            if reformulate_sos in (True, "auto") and not supports_sos:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
                 sos_reform_result = reformulate_sos_constraints(self)
-            elif reformulate_sos and solver_supports(
-                solver_name, SolverFeature.SOS_CONSTRAINTS
-            ):
+            elif reformulate_sos is True and supports_sos:
                 logger.warning(
                     f"Solver {solver_name} supports SOS natively; "
                     "reformulate_sos=True is ignored."
                 )
-            elif not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS):
+            elif reformulate_sos is False and not supports_sos:
                 raise ValueError(
                     f"Solver {solver_name} does not support SOS constraints. "
-                    "Use reformulate_sos=True or a solver that supports SOS (gurobi, cplex)."
+                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
                 )
 
         try:

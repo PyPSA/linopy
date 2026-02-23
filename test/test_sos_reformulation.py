@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, Variable, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
 from linopy.sos_reformulation import (
     compute_big_m_values,
@@ -816,3 +818,116 @@ class TestUnsortedCoords:
 
         assert m.objective.value is not None
         assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestAutoReformulation:
+    """Tests for reformulate_sos='auto' functionality."""
+
+    @pytest.fixture()
+    def sos1_model(self) -> tuple[Model, Variable]:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+        return m, x
+
+    def test_auto_reformulates_when_solver_lacks_sos(
+        self, sos1_model: tuple[Model, Variable]
+    ) -> None:
+        m, x = sos1_model
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert np.isclose(x.solution.values[2], 1, atol=1e-5)
+        assert np.isclose(x.solution.values[0], 0, atol=1e-5)
+        assert np.isclose(x.solution.values[1], 0, atol=1e-5)
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+    def test_auto_with_sos2(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2, 3], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=2, sos_dim="i")
+        m.add_objective(x * np.array([10, 1, 1, 10]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert m.objective.value is not None
+        nonzero_indices = np.where(np.abs(x.solution.values) > 1e-5)[0]
+        assert len(nonzero_indices) <= 2
+        if len(nonzero_indices) == 2:
+            assert abs(nonzero_indices[1] - nonzero_indices[0]) == 1
+        assert not np.isclose(m.objective.value, 20, atol=1e-5)
+
+    def test_auto_emits_info_no_warning(
+        self, sos1_model: tuple[Model, Variable], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        m, _ = sos1_model
+
+        with caplog.at_level(logging.INFO):
+            m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert any("Reformulating SOS" in msg for msg in caplog.messages)
+        assert not any("supports SOS natively" in msg for msg in caplog.messages)
+
+    @pytest.mark.skipif(
+        "gurobi" not in available_solvers, reason="Gurobi not installed"
+    )
+    def test_auto_passes_through_native_sos_without_reformulation(self) -> None:
+        import gurobipy
+
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        try:
+            m.solve(solver_name="gurobi", reformulate_sos="auto")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+        assert np.isclose(x.solution.values[2], 1, atol=1e-5)
+        assert np.isclose(x.solution.values[0], 0, atol=1e-5)
+        assert np.isclose(x.solution.values[1], 0, atol=1e-5)
+
+    def test_auto_multidimensional_sos1(self) -> None:
+        m = Model()
+        idx_i = pd.Index([0, 1, 2], name="i")
+        idx_j = pd.Index([0, 1], name="j")
+        x = m.add_variables(lower=0, upper=1, coords=[idx_i, idx_j], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 2, atol=1e-5)
+        for j in idx_j:
+            nonzero_count = (np.abs(x.solution.sel(j=j).values) > 1e-5).sum()
+            assert nonzero_count <= 1
+
+    def test_auto_noop_without_sos(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_objective(x.sum(), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+    def test_invalid_reformulate_sos_value(self) -> None:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        with pytest.raises(ValueError, match="Invalid value for reformulate_sos"):
+            m.solve(solver_name="highs", reformulate_sos="invalid")  # type: ignore[arg-type]
