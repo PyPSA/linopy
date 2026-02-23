@@ -63,6 +63,10 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
+from linopy.piecewise import (
+    add_disjunctive_piecewise_constraints,
+    add_piecewise_constraints,
+)
 from linopy.remote import OetcHandler, RemoteHandler
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
@@ -116,6 +120,7 @@ class Model:
     _cCounter: int
     _varnameCounter: int
     _connameCounter: int
+    _pwlCounter: int
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
@@ -138,6 +143,7 @@ class Model:
         "_cCounter",
         "_varnameCounter",
         "_connameCounter",
+        "_pwlCounter",
         "_blocks",
         # TODO: check if these should not be mutable
         "_chunk",
@@ -194,6 +200,7 @@ class Model:
         self._cCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
+        self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
@@ -367,6 +374,7 @@ class Model:
             "_cCounter",
             "_varnameCounter",
             "_connameCounter",
+            "_pwlCounter",
             "force_dim_names",
             "auto_mask",
         ]
@@ -650,6 +658,9 @@ class Model:
             attrs_update[SOS_BIG_M_ATTR] = float(big_m)
 
         variable.attrs.update(attrs_update)
+
+    add_piecewise_constraints = add_piecewise_constraints
+    add_disjunctive_piecewise_constraints = add_disjunctive_piecewise_constraints
 
     def add_constraints(
         self,
