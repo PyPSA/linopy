@@ -35,6 +35,17 @@ sign_replace_dict: dict[str, str] = {
 
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
+
+PWL_LAMBDA_SUFFIX = "_lambda"
+PWL_CONVEX_SUFFIX = "_convex"
+PWL_LINK_SUFFIX = "_link"
+PWL_DELTA_SUFFIX = "_delta"
+PWL_FILL_SUFFIX = "_fill"
+PWL_BINARY_SUFFIX = "_binary"
+PWL_SELECT_SUFFIX = "_select"
+DEFAULT_BREAKPOINT_DIM = "breakpoint"
+DEFAULT_SEGMENT_DIM = "segment"
+DEFAULT_LINK_DIM = "var"
 GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
@@ -48,6 +59,11 @@ HELPER_DIMS: list[str] = [
     CONCAT_DIM,
     CV_DIM,
 ]
+
+# SOS constraint attribute keys
+SOS_TYPE_ATTR = "sos_type"
+SOS_DIM_ATTR = "sos_dim"
+SOS_BIG_M_ATTR = "big_m_upper"
 
 
 class ModelStatus(Enum):

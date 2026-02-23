@@ -39,6 +39,9 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SOS_BIG_M_ATTR,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -60,11 +63,19 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
+from linopy.piecewise import (
+    add_disjunctive_piecewise_constraints,
+    add_piecewise_constraints,
+)
 from linopy.remote import OetcHandler, RemoteHandler
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
     available_solvers,
+)
+from linopy.sos_reformulation import (
+    reformulate_sos_constraints,
+    undo_sos_reformulation,
 )
 from linopy.types import (
     ConstantLike,
@@ -109,6 +120,7 @@ class Model:
     _cCounter: int
     _varnameCounter: int
     _connameCounter: int
+    _pwlCounter: int
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
@@ -131,6 +143,7 @@ class Model:
         "_cCounter",
         "_varnameCounter",
         "_connameCounter",
+        "_pwlCounter",
         "_blocks",
         # TODO: check if these should not be mutable
         "_chunk",
@@ -187,6 +200,7 @@ class Model:
         self._cCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
+        self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
@@ -360,6 +374,7 @@ class Model:
             "_cCounter",
             "_varnameCounter",
             "_connameCounter",
+            "_pwlCounter",
             "force_dim_names",
             "auto_mask",
         ]
@@ -591,6 +606,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
+        big_m: float | None = None,
     ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
@@ -604,15 +620,26 @@ class Model:
             Type of SOS
         sos_dim : str
             Which dimension of variable to add SOS constraint to
+        big_m : float | None, optional
+            Big-M value for SOS reformulation. Only used when reformulating
+            SOS constraints for solvers that don't support them natively.
+
+            - None (default): Use variable upper bounds as Big-M
+            - float: Custom Big-M value
+
+            The reformulation uses the tighter of big_m and variable upper bound:
+            M = min(big_m, var.upper).
+
+            Tighter Big-M values improve LP relaxation quality and solve time.
         """
         if sos_type not in (1, 2):
             raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
         if sos_dim not in variable.dims:
             raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
 
-        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
-            existing_sos_type = variable.attrs.get("sos_type")
-            existing_sos_dim = variable.attrs.get("sos_dim")
+        if SOS_TYPE_ATTR in variable.attrs or SOS_DIM_ATTR in variable.attrs:
+            existing_sos_type = variable.attrs.get(SOS_TYPE_ATTR)
+            existing_sos_dim = variable.attrs.get(SOS_DIM_ATTR)
             raise ValueError(
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
@@ -624,7 +651,16 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
+        attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
+        if big_m is not None:
+            if big_m <= 0:
+                raise ValueError(f"big_m must be positive, got {big_m}")
+            attrs_update[SOS_BIG_M_ATTR] = float(big_m)
+
+        variable.attrs.update(attrs_update)
+
+    add_piecewise_constraints = add_piecewise_constraints
+    add_disjunctive_piecewise_constraints = add_disjunctive_piecewise_constraints
 
     def add_constraints(
         self,
@@ -901,17 +937,21 @@ class Model:
         -------
         None.
         """
-        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+        if SOS_TYPE_ATTR not in variable.attrs or SOS_DIM_ATTR not in variable.attrs:
             raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
 
-        sos_type = variable.attrs["sos_type"]
-        sos_dim = variable.attrs["sos_dim"]
+        sos_type = variable.attrs[SOS_TYPE_ATTR]
+        sos_dim = variable.attrs[SOS_DIM_ATTR]
 
-        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+        del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
+
+        variable.attrs.pop(SOS_BIG_M_ATTR, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
+
+    reformulate_sos_constraints = reformulate_sos_constraints
 
     def remove_objective(self) -> None:
         """
@@ -1197,6 +1237,7 @@ class Model:
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
         mock_solve: bool = False,
+        reformulate_sos: bool | Literal["auto"] = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1266,6 +1307,14 @@ class Model:
             than 10000 variables and constraints.
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
+        reformulate_sos : bool | Literal["auto"], optional
+            Whether to automatically reformulate SOS constraints as binary + linear
+            constraints for solvers that don't support them natively.
+            If True, always reformulates (warns if solver supports SOS natively).
+            If "auto", silently reformulates only when the solver lacks SOS support.
+            If False, raises if solver doesn't support SOS.
+            This uses the Big-M method and requires all SOS variables to have finite bounds.
+            Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1363,11 +1412,28 @@ class Model:
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
-        # SOS constraints are not supported by all solvers
-        if self.variables.sos and not solver_supports(
-            solver_name, SolverFeature.SOS_CONSTRAINTS
-        ):
-            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
+        if reformulate_sos not in (True, False, "auto"):
+            raise ValueError(
+                f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
+                "Must be True, False, or 'auto'."
+            )
+
+        sos_reform_result = None
+        if self.variables.sos:
+            supports_sos = solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+            if reformulate_sos in (True, "auto") and not supports_sos:
+                logger.info(f"Reformulating SOS constraints for solver {solver_name}")
+                sos_reform_result = reformulate_sos_constraints(self)
+            elif reformulate_sos is True and supports_sos:
+                logger.warning(
+                    f"Solver {solver_name} supports SOS natively; "
+                    "reformulate_sos=True is ignored."
+                )
+            elif reformulate_sos is False and not supports_sos:
+                raise ValueError(
+                    f"Solver {solver_name} does not support SOS constraints. "
+                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
+                )
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
@@ -1416,44 +1482,51 @@ class Model:
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
 
-        result.info()
+        try:
+            result.info()
 
-        self.objective._value = result.solution.objective
-        self.status = result.status.status.value
-        self.termination_condition = result.status.termination_condition.value
-        self.solver_model = result.solver_model
-        self.solver_name = solver_name
+            self.objective._value = result.solution.objective
+            self.status = result.status.status.value
+            self.termination_condition = result.status.termination_condition.value
+            self.solver_model = result.solver_model
+            self.solver_name = solver_name
 
-        if not result.status.is_ok:
-            return result.status.status.value, result.status.termination_condition.value
+            if not result.status.is_ok:
+                return (
+                    result.status.status.value,
+                    result.status.termination_condition.value,
+                )
 
-        # map solution and dual to original shape which includes missing values
-        sol = result.solution.primal.copy()
-        sol = set_int_index(sol)
-        sol.loc[-1] = nan
+            # map solution and dual to original shape which includes missing values
+            sol = result.solution.primal.copy()
+            sol = set_int_index(sol)
+            sol.loc[-1] = nan
 
-        for name, var in self.variables.items():
-            idx = np.ravel(var.labels)
-            try:
-                vals = sol[idx].values.reshape(var.labels.shape)
-            except KeyError:
-                vals = sol.reindex(idx).values.reshape(var.labels.shape)
-            var.solution = xr.DataArray(vals, var.coords)
-
-        if not result.solution.dual.empty:
-            dual = result.solution.dual.copy()
-            dual = set_int_index(dual)
-            dual.loc[-1] = nan
-
-            for name, con in self.constraints.items():
-                idx = np.ravel(con.labels)
+            for name, var in self.variables.items():
+                idx = np.ravel(var.labels)
                 try:
-                    vals = dual[idx].values.reshape(con.labels.shape)
+                    vals = sol[idx].values.reshape(var.labels.shape)
                 except KeyError:
-                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                con.dual = xr.DataArray(vals, con.labels.coords)
+                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
+                var.solution = xr.DataArray(vals, var.coords)
 
-        return result.status.status.value, result.status.termination_condition.value
+            if not result.solution.dual.empty:
+                dual = result.solution.dual.copy()
+                dual = set_int_index(dual)
+                dual.loc[-1] = nan
+
+                for name, con in self.constraints.items():
+                    idx = np.ravel(con.labels)
+                    try:
+                        vals = dual[idx].values.reshape(con.labels.shape)
+                    except KeyError:
+                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                    con.dual = xr.DataArray(vals, con.labels.coords)
+
+            return result.status.status.value, result.status.termination_condition.value
+        finally:
+            if sos_reform_result is not None:
+                undo_sos_reformulation(self, sos_reform_result)
 
     def _mock_solve(
         self,
