@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from linopy import Model, available_solvers
+from linopy import Model, Variable, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
 from linopy.sos_reformulation import (
     compute_big_m_values,
@@ -825,7 +825,7 @@ class TestAutoReformulation:
     """Tests for reformulate_sos='auto' functionality."""
 
     @pytest.fixture()
-    def sos1_model(self) -> tuple[Model, ...]:
+    def sos1_model(self) -> tuple[Model, Variable]:
         m = Model()
         idx = pd.Index([0, 1, 2], name="i")
         x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
@@ -833,7 +833,9 @@ class TestAutoReformulation:
         m.add_objective(x * np.array([1, 2, 3]), sense="max")
         return m, x
 
-    def test_auto_reformulates_when_solver_lacks_sos(self, sos1_model) -> None:
+    def test_auto_reformulates_when_solver_lacks_sos(
+        self, sos1_model: tuple[Model, Variable]
+    ) -> None:
         m, x = sos1_model
         m.solve(solver_name="highs", reformulate_sos="auto")
 
@@ -859,7 +861,9 @@ class TestAutoReformulation:
             assert abs(nonzero_indices[1] - nonzero_indices[0]) == 1
         assert not np.isclose(m.objective.value, 20, atol=1e-5)
 
-    def test_auto_emits_info_no_warning(self, sos1_model, caplog) -> None:
+    def test_auto_emits_info_no_warning(
+        self, sos1_model: tuple[Model, Variable], caplog: pytest.LogCaptureFixture
+    ) -> None:
         m, _ = sos1_model
 
         with caplog.at_level(logging.INFO):
@@ -926,4 +930,4 @@ class TestAutoReformulation:
         m.add_objective(x.sum(), sense="max")
 
         with pytest.raises(ValueError, match="Invalid value for reformulate_sos"):
-            m.solve(solver_name="highs", reformulate_sos="invalid")
+            m.solve(solver_name="highs", reformulate_sos="invalid")  # type: ignore[arg-type]

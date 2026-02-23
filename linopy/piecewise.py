@@ -7,7 +7,7 @@ methods for use with linopy.Model.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -58,7 +58,7 @@ def _dict_to_array(d: dict[str, list[float]], dim: str, bp_dim: str) -> DataArra
 
 
 def _segments_list_to_array(
-    values: list[list[float]], bp_dim: str, seg_dim: str
+    values: list[Sequence[float]], bp_dim: str, seg_dim: str
 ) -> DataArray:
     max_len = max(len(seg) for seg in values)
     data = np.full((len(values), max_len), np.nan)
@@ -72,7 +72,7 @@ def _segments_list_to_array(
 
 
 def _dict_segments_to_array(
-    d: dict[str, list[list[float]]], dim: str, bp_dim: str, seg_dim: str
+    d: dict[str, list[Sequence[float]]], dim: str, bp_dim: str, seg_dim: str
 ) -> DataArray:
     parts = []
     for key, seg_list in d.items():
@@ -138,7 +138,9 @@ def _resolve_kwargs(
 
 
 def _resolve_segment_kwargs(
-    kwargs: dict[str, list[list[float]] | dict[str, list[list[float]]] | DataArray],
+    kwargs: dict[
+        str, list[Sequence[float]] | dict[str, list[Sequence[float]]] | DataArray
+    ],
     dim: str | None,
     bp_dim: str,
     seg_dim: str,
@@ -235,13 +237,13 @@ class _BreakpointFactory:
 
     def segments(
         self,
-        values: list[list[float]] | dict[str, list[list[float]]] | None = None,
+        values: list[Sequence[float]] | dict[str, list[Sequence[float]]] | None = None,
         *,
         dim: str | None = None,
         bp_dim: str = DEFAULT_BREAKPOINT_DIM,
         seg_dim: str = DEFAULT_SEGMENT_DIM,
         link_dim: str = DEFAULT_LINK_DIM,
-        **kwargs: list[list[float]] | dict[str, list[list[float]]] | DataArray,
+        **kwargs: list[Sequence[float]] | dict[str, list[Sequence[float]]] | DataArray,
     ) -> DataArray:
         """
         Create a segmented breakpoint DataArray for disjunctive piecewise constraints.
