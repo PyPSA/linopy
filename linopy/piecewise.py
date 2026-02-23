@@ -7,6 +7,7 @@ methods for use with linopy.Model.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -89,7 +90,7 @@ def _dict_segments_to_array(
 
 
 def _get_entity_keys(
-    kwargs: dict[str, list[float] | dict[str, list[float]] | DataArray],
+    kwargs: Mapping[str, object],
 ) -> list[str]:
     first_dict = next(v for v in kwargs.values() if isinstance(v, dict))
     return list(first_dict.keys())
@@ -120,6 +121,7 @@ def _resolve_kwargs(
         if isinstance(val, DataArray):
             arrays[name] = val
         elif isinstance(val, dict):
+            assert dim is not None
             arrays[name] = _dict_to_array(val, dim, bp_dim)
         elif isinstance(val, list):
             base = _list_to_array(val, bp_dim)
@@ -151,6 +153,7 @@ def _resolve_segment_kwargs(
         if isinstance(val, DataArray):
             arrays[name] = val
         elif isinstance(val, dict):
+            assert dim is not None
             arrays[name] = _dict_segments_to_array(val, dim, bp_dim, seg_dim)
         elif isinstance(val, list):
             base = _segments_list_to_array(val, bp_dim, seg_dim)
@@ -298,7 +301,7 @@ def _auto_broadcast_breakpoints(
         skip.update(exclude_dims)
 
     target_dims -= skip
-    missing = target_dims - set(bp.dims)
+    missing = target_dims - {str(d) for d in bp.dims}
 
     if not missing:
         return bp
@@ -385,7 +388,7 @@ def _validate_piecewise_expr(
     _types = (Variable, LinearExpression)
 
     if isinstance(expr, _types):
-        return True, set(expr.coord_dims)
+        return True, {str(d) for d in expr.coord_dims}
 
     if isinstance(expr, dict):
         dims: set[str] = set()
@@ -395,7 +398,7 @@ def _validate_piecewise_expr(
                     f"dict value for key '{key}' must be a Variable or "
                     f"LinearExpression, got {type(val)}"
                 )
-            dims.update(val.coord_dims)
+            dims.update(str(d) for d in val.coord_dims)
         return False, dims
 
     raise TypeError(
