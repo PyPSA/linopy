@@ -816,3 +816,110 @@ class TestUnsortedCoords:
 
         assert m.objective.value is not None
         assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestAutoReformulation:
+    """Tests for reformulate_sos='auto' functionality."""
+
+    def test_auto_reformulates_when_solver_lacks_sos(self) -> None:
+        """Test that 'auto' silently reformulates when solver lacks SOS support."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert np.isclose(x.solution.values[2], 1, atol=1e-5)
+        assert np.isclose(x.solution.values[0], 0, atol=1e-5)
+        assert np.isclose(x.solution.values[1], 0, atol=1e-5)
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+
+    def test_auto_with_sos2(self) -> None:
+        """Test that 'auto' works with SOS2 and HiGHS."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=2, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 5, atol=1e-5)
+        # Check adjacency constraint (SOS2)
+        nonzero_indices = np.where(np.abs(x.solution.values) > 1e-5)[0]
+        assert len(nonzero_indices) <= 2
+        if len(nonzero_indices) == 2:
+            assert abs(nonzero_indices[1] - nonzero_indices[0]) == 1
+
+    def test_auto_no_warning_when_reformulating(self, caplog) -> None:
+        """Test that 'auto' does not warn when reformulating."""
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            m.solve(solver_name="highs", reformulate_sos="auto")
+
+        # Should not have warning about native SOS support
+        warning_messages = [
+            record.message
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        ]
+        assert not any("supports SOS natively" in msg for msg in warning_messages), (
+            f"Unexpected warning found: {warning_messages}"
+        )
+
+    @pytest.mark.skipif(
+        "gurobi" not in available_solvers, reason="Gurobi not installed"
+    )
+    def test_auto_passes_through_native_sos_without_reformulation(self) -> None:
+        """Test that 'auto' uses native SOS when solver supports it."""
+        gurobipy = pytest.importorskip("gurobipy")
+
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1, 2, 3]), sense="max")
+
+        try:
+            m.solve(solver_name="gurobi", reformulate_sos="auto")
+        except gurobipy.GurobiError as exc:
+            pytest.skip(f"Gurobi environment unavailable: {exc}")
+
+        # Should solve correctly
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 3, atol=1e-5)
+        # Check that x[2] is selected (SOS1 constraint satisfied)
+        assert np.isclose(x.solution.values[2], 1, atol=1e-5)
+        assert np.isclose(x.solution.values[0], 0, atol=1e-5)
+        assert np.isclose(x.solution.values[1], 0, atol=1e-5)
+
+    def test_auto_multidimensional_sos1(self) -> None:
+        """Test 'auto' with multi-dimensional SOS1."""
+        m = Model()
+        idx_i = pd.Index([0, 1, 2], name="i")
+        idx_j = pd.Index([0, 1], name="j")
+        x = m.add_variables(lower=0, upper=1, coords=[idx_i, idx_j], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        m.solve(solver_name="highs", reformulate_sos="auto")
+
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, 2, atol=1e-5)
+
+        # Check SOS1 is satisfied for each j
+        for j in idx_j:
+            nonzero_count = (np.abs(x.solution.sel(j=j).values) > 1e-5).sum()
+            assert nonzero_count <= 1
