@@ -234,7 +234,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
@@ -289,6 +293,44 @@ def binaries_to_file(
         names = tqdm(
             list(names),
             desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
+
+            columns = [
+                *print_variable(pl.col("labels")),
+            ]
+
+            _format_and_write(df, columns, f)
+
+
+def semi_continuous_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out semi-continuous variables of a model to a lp file.
+    """
+    names = m.variables.semi_continuous
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsemi-continuous\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing semi-continuous variables.",
             colour=TQDM_COLOR,
         )
 
@@ -504,6 +546,13 @@ def to_lp_file(
         integers_to_file(
             m,
             integer_label=integer_label,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        semi_continuous_to_file(
+            m,
             f=f,
             progress=progress,
             slice_size=slice_size,
@@ -782,6 +831,12 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         raise NotImplementedError(
             "SOS constraints are not supported by the HiGHS direct API. "
             "Use io_api='lp' instead."
+        )
+
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by the HiGHS direct API. "
+            "Use a solver that supports them (gurobi, cplex)."
         )
 
     import highspy
