@@ -75,7 +75,7 @@ Method Signature
 
 .. code-block:: python
 
-    Model.add_sos_constraints(variable, sos_type, sos_dim)
+    Model.add_sos_constraints(variable, sos_type, sos_dim, big_m=None)
 
 **Parameters:**
 
@@ -85,6 +85,8 @@ Method Signature
     Type of SOS constraint (1 or 2)
 - ``sos_dim`` : str
     Name of the dimension along which the SOS constraint applies
+- ``big_m`` : float | None
+    Custom Big-M value for reformulation (see :ref:`sos-reformulation`)
 
 **Requirements:**
 
@@ -254,11 +256,93 @@ SOS constraints are supported by most modern mixed-integer programming solvers t
 - MOSEK
 - MindOpt
 
+For unsupported solvers, use automatic reformulation (see below).
+
+.. _sos-reformulation:
+
+SOS Reformulation
+-----------------
+
+For solvers without native SOS support, linopy can reformulate SOS constraints
+as binary + linear constraints using the Big-M method.
+
+.. code-block:: python
+
+    # Automatic reformulation during solve
+    m.solve(solver_name="highs", reformulate_sos=True)
+
+    # Or reformulate manually
+    m.reformulate_sos_constraints()
+    m.solve(solver_name="highs")
+
+**Requirements:**
+
+- Variables must have **non-negative lower bounds** (lower >= 0)
+- Big-M values are derived from variable upper bounds
+- For infinite upper bounds, specify custom values via the ``big_m`` parameter
+
+.. code-block:: python
+
+    # Finite bounds (default)
+    x = m.add_variables(lower=0, upper=100, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+
+    # Infinite upper bounds: specify Big-M
+    x = m.add_variables(lower=0, upper=np.inf, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i", big_m=10)
+
+The reformulation uses the tighter of ``big_m`` and variable upper bound.
+
+Mathematical Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+**SOS1 Reformulation:**
+
+Original constraint: :math:`\text{SOS1}(\{x_1, x_2, \ldots, x_n\})` means at most one
+:math:`x_i` can be non-zero.
+
+Given :math:`x = (x_1, \ldots, x_n) \in \mathbb{R}^n_+`, introduce binary
+:math:`y = (y_1, \ldots, y_n) \in \{0,1\}^n`:
+
+.. math::
+
+   x_i &\leq M_i \cdot y_i \quad \forall i \in \{1, \ldots, n\} \\
+   x_i &\geq 0 \quad \forall i \in \{1, \ldots, n\} \\
+   \sum_{i=1}^{n} y_i &\leq 1 \\
+   y_i &\in \{0, 1\} \quad \forall i \in \{1, \ldots, n\}
+
+where :math:`M_i \geq \sup\{x_i\}` (upper bound on :math:`x_i`).
+
+**SOS2 Reformulation:**
+
+Original constraint: :math:`\text{SOS2}(\{x_1, x_2, \ldots, x_n\})` means at most two
+:math:`x_i` can be non-zero, and if two are non-zero, they must have consecutive indices.
+
+Given :math:`x = (x_1, \ldots, x_n) \in \mathbb{R}^n_+`, introduce binary
+:math:`y = (y_1, \ldots, y_{n-1}) \in \{0,1\}^{n-1}`:
+
+.. math::
+
+   x_1 &\leq M_1 \cdot y_1 \\
+   x_i &\leq M_i \cdot (y_{i-1} + y_i) \quad \forall i \in \{2, \ldots, n-1\} \\
+   x_n &\leq M_n \cdot y_{n-1} \\
+   x_i &\geq 0 \quad \forall i \in \{1, \ldots, n\} \\
+   \sum_{i=1}^{n-1} y_i &\leq 1 \\
+   y_i &\in \{0, 1\} \quad \forall i \in \{1, \ldots, n-1\}
+
+where :math:`M_i \geq \sup\{x_i\}`. Interpretation: :math:`y_i = 1` activates interval
+:math:`[i, i+1]`, allowing :math:`x_i` and :math:`x_{i+1}` to be non-zero.
+
 Common Patterns
 ---------------
 
 Piecewise Linear Cost Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. note::
+
+   For a higher-level API that handles all the SOS2 bookkeeping automatically,
+   see :doc:`piecewise-linear-constraints`.
 
 .. code-block:: python
 
