@@ -67,7 +67,12 @@ from linopy.piecewise import (
     add_disjunctive_piecewise_constraints,
     add_piecewise_constraints,
 )
-from linopy.remote import OetcHandler, RemoteHandler
+from linopy.remote import RemoteHandler
+
+try:
+    from linopy.remote import OetcHandler
+except ImportError:
+    OetcHandler = None  # type: ignore
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
