@@ -20,7 +20,13 @@ from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.remote import OetcHandler, RemoteHandler
+from linopy.piecewise import breakpoints
+from linopy.remote import RemoteHandler
+
+try:
+    from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
+except ImportError:
+    pass
 
 __all__ = (
     "Constraint",
@@ -37,6 +43,7 @@ __all__ = (
     "Variable",
     "Variables",
     "available_solvers",
+    "breakpoints",
     "align",
     "merge",
     "options",

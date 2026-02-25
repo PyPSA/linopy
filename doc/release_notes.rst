@@ -4,6 +4,13 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add ``add_piecewise_constraints()`` for piecewise linear constraints with SOS2 and incremental (pure LP) formulations.
+* Add ``add_disjunctive_piecewise_constraints()`` for disconnected piecewise linear segments (e.g. forbidden operating zones).
+* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, dicts, or keyword arguments. Includes ``breakpoints.segments()`` for disjunctive formulations.
+* Add the `sphinx-copybutton` to the documentation
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+
+
 Version 0.6.4
 --------------
 
