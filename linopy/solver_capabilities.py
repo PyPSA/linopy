@@ -144,6 +144,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
             {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
@@ -154,6 +155,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
             else {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.DIRECT_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,

@@ -18,6 +18,7 @@ from pandas.core.series import Series
 from scipy.sparse._csc import csc_matrix
 
 from linopy import expressions
+from linopy.constants import FACTOR_DIM
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -51,10 +52,126 @@ class MatrixAccessor:
     def clean_cached_properties(self) -> None:
         """Clear the cache for all cached properties of an object"""
 
-        for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
+        for cached_prop in [
+            "flat_vars",
+            "flat_cons",
+            "sol",
+            "dual",
+            "_variable_data",
+            "_constraint_data",
+        ]:
             # check existence of cached_prop without creating it
             if cached_prop in self.__dict__:
                 delattr(self, cached_prop)
+
+    @cached_property
+    def _variable_data(self) -> tuple[ndarray, ndarray, ndarray, ndarray, ndarray]:
+        """Dense-by-key variable vectors and label->key map."""
+        m = self._parent
+
+        label_to_key = np.full(m._xCounter, -1, dtype=np.int64)
+        labels_parts: list[np.ndarray] = []
+        lb_parts: list[np.ndarray] = []
+        ub_parts: list[np.ndarray] = []
+        vtype_parts: list[np.ndarray] = []
+        next_key = 0
+
+        for _, variable in m.variables.items():
+            labels = variable.labels.values.reshape(-1)
+            mask = labels != -1
+            labels = labels[mask]
+            n = labels.size
+            if not n:
+                continue
+
+            label_to_key[labels] = np.arange(next_key, next_key + n)
+            next_key += n
+
+            lb = np.broadcast_to(variable.lower.values, variable.labels.shape).reshape(
+                -1
+            )
+            ub = np.broadcast_to(variable.upper.values, variable.labels.shape).reshape(
+                -1
+            )
+
+            labels_parts.append(labels)
+            lb_parts.append(lb[mask])
+            ub_parts.append(ub[mask])
+
+            if variable.attrs["binary"]:
+                vtype = "B"
+            elif variable.attrs["integer"]:
+                vtype = "I"
+            else:
+                vtype = "C"
+            vtype_parts.append(np.full(n, vtype, dtype="<U1"))
+
+        if labels_parts:
+            return (
+                np.concatenate(labels_parts),
+                np.concatenate(lb_parts),
+                np.concatenate(ub_parts),
+                np.concatenate(vtype_parts),
+                label_to_key,
+            )
+        return (
+            np.array([], dtype=np.int64),
+            np.array([], dtype=float),
+            np.array([], dtype=float),
+            np.array([], dtype="<U1"),
+            label_to_key,
+        )
+
+    @cached_property
+    def _constraint_data(self) -> tuple[ndarray, ndarray, ndarray, ndarray]:
+        """Dense-by-key constraint vectors and label->key map."""
+        m = self._parent
+
+        label_to_key = np.full(m._cCounter, -1, dtype=np.int64)
+        labels_parts: list[np.ndarray] = []
+        rhs_parts: list[np.ndarray] = []
+        sense_parts: list[np.ndarray] = []
+        next_key = 0
+
+        for _, constraint in m.constraints.items():
+            labels = constraint.labels.values.reshape(-1)
+            mask = labels != -1
+            labels = labels[mask]
+            n = labels.size
+            if not n:
+                continue
+
+            label_to_key[labels] = np.arange(next_key, next_key + n)
+            next_key += n
+
+            rhs = np.broadcast_to(
+                constraint.rhs.values, constraint.labels.shape
+            ).reshape(-1)
+            sign = np.broadcast_to(
+                constraint.sign.values, constraint.labels.shape
+            ).reshape(-1)
+            sign = sign[mask]
+            sense = np.full(sign.shape, "=", dtype="<U1")
+            sense[sign == "<="] = "<"
+            sense[sign == ">="] = ">"
+
+            labels_parts.append(labels)
+            rhs_parts.append(rhs[mask])
+            sense_parts.append(sense)
+
+        if labels_parts:
+            return (
+                np.concatenate(labels_parts),
+                np.concatenate(sense_parts),
+                np.concatenate(rhs_parts),
+                label_to_key,
+            )
+        return (
+            np.array([], dtype=np.int64),
+            np.array([], dtype="<U1"),
+            np.array([], dtype=float),
+            label_to_key,
+        )
 
     @cached_property
     def flat_vars(self) -> pd.DataFrame:
@@ -69,33 +186,20 @@ class MatrixAccessor:
     @property
     def vlabels(self) -> ndarray:
         """Vector of labels of all non-missing variables."""
-        df: pd.DataFrame = self.flat_vars
-        return create_vector(df.key, df.labels, -1)
+        labels, *_ = self._variable_data
+        return labels
 
     @property
     def vtypes(self) -> ndarray:
         """Vector of types of all non-missing variables."""
-        m = self._parent
-        df: pd.DataFrame = self.flat_vars
-        specs = []
-        for name in m.variables:
-            if name in m.binaries:
-                val = "B"
-            elif name in m.integers:
-                val = "I"
-            else:
-                val = "C"
-            specs.append(pd.Series(val, index=m.variables[name].flat.labels))
-
-        ds = pd.concat(specs)
-        ds = df.set_index("key").labels.map(ds)
-        return create_vector(ds.index, ds.to_numpy(), fill_value="")
+        _, _, _, vtypes, _ = self._variable_data
+        return vtypes
 
     @property
     def lb(self) -> ndarray:
         """Vector of lower bounds of all non-missing variables."""
-        df: pd.DataFrame = self.flat_vars
-        return create_vector(df.key, df.lower)
+        _, lb, _, _, _ = self._variable_data
+        return lb
 
     @cached_property
     def sol(self) -> ndarray:
@@ -124,16 +228,14 @@ class MatrixAccessor:
     @property
     def ub(self) -> ndarray:
         """Vector of upper bounds of all non-missing variables."""
-        df: pd.DataFrame = self.flat_vars
-        return create_vector(df.key, df.upper)
+        _, _, ub, _, _ = self._variable_data
+        return ub
 
     @property
     def clabels(self) -> ndarray:
         """Vector of labels of all non-missing constraints."""
-        df: pd.DataFrame = self.flat_cons
-        if df.empty:
-            return np.array([], dtype=int)
-        return create_vector(df.key, df.labels, fill_value=-1)
+        labels, _, _, _ = self._constraint_data
+        return labels
 
     @property
     def A(self) -> csc_matrix | None:
@@ -141,33 +243,57 @@ class MatrixAccessor:
         m = self._parent
         if not len(m.constraints):
             return None
-        A: csc_matrix = m.constraints.to_matrix(filter_missings=False)
-        return A[self.clabels][:, self.vlabels]
+        return m.constraints.to_matrix(filter_missings=True)
 
     @property
     def sense(self) -> ndarray:
         """Vector of senses of all non-missing constraints."""
-        df: pd.DataFrame = self.flat_cons
-        return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
+        _, sense, _, _ = self._constraint_data
+        return sense
 
     @property
     def b(self) -> ndarray:
         """Vector of right-hand-sides of all non-missing constraints."""
-        df: pd.DataFrame = self.flat_cons
-        return create_vector(df.key, df.rhs)
+        _, _, rhs, _ = self._constraint_data
+        return rhs
 
     @property
     def c(self) -> ndarray:
         """Vector of objective coefficients of all non-missing variables."""
         m = self._parent
-        ds = m.objective.flat
-        if isinstance(m.objective.expression, expressions.QuadraticExpression):
-            ds = ds[(ds.vars1 == -1) | (ds.vars2 == -1)]
-            ds["vars"] = ds.vars1.where(ds.vars1 != -1, ds.vars2)
+        _, _, _, _, label_to_key = self._variable_data
+        nvars = len(self.vlabels)
+        if nvars == 0:
+            return np.array([], dtype=float)
 
-        vars: pd.Series = ds.vars.map(self.flat_vars.set_index("labels").key)
-        shape: int = self.flat_vars.key.max() + 1
-        return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
+        expr = m.objective.expression
+
+        if isinstance(expr, expressions.QuadraticExpression):
+            vars_arr = expr.data.vars.values
+            coeffs = expr.data.coeffs.values.reshape(-1)
+            factor_axis = expr.data.vars.get_axis_num(FACTOR_DIM)
+
+            vars1 = np.take(vars_arr, 0, axis=factor_axis).reshape(-1)
+            vars2 = np.take(vars_arr, 1, axis=factor_axis).reshape(-1)
+            mask = ((vars1 == -1) ^ (vars2 == -1)) & (coeffs != 0)
+            lin_vars = np.where(vars1 == -1, vars2, vars1)
+            labels = lin_vars[mask]
+            coeffs = coeffs[mask]
+        else:
+            vars_arr = expr.vars.values.reshape(-1)
+            coeffs = expr.coeffs.values.reshape(-1)
+            mask = (vars_arr != -1) & (coeffs != 0)
+            labels = vars_arr[mask]
+            coeffs = coeffs[mask]
+
+        keys = label_to_key[labels]
+        valid = keys != -1
+        if not np.any(valid):
+            return np.zeros(nvars, dtype=float)
+        return np.bincount(keys[valid], weights=coeffs[valid], minlength=nvars).astype(
+            float,
+            copy=False,
+        )
 
     @property
     def Q(self) -> csc_matrix | None:
