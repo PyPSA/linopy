@@ -24,7 +24,7 @@ from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import to_polars
+from linopy.common import timer, to_polars
 from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
@@ -900,6 +900,126 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
         cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
 
     return cu_model
+
+
+def to_poi(m: Model, poi_model: Any) -> None:
+    """
+    Transfer a linopy model into an existing pyoptinterface model.
+
+    Variables and constraints are added one at a time following the pyoptinterface
+    API. The function returns a mapping from linopy variable labels to POI variable
+    indices and from linopy constraint labels to POI constraint indices, written
+    back into the model's variables/constraints as ``poi_var_map`` and
+    ``poi_con_map`` attributes.
+
+    Parameters
+    ----------
+    m : linopy.Model
+    poi_model : pyoptinterface model instance
+        An already-constructed POI model (e.g. ``pyoptinterface.highs.Model()``).
+    """
+    import pyoptinterface as poi
+
+    sense_map = {
+        "<=": poi.ConstraintSense.LessEqual,
+        ">=": poi.ConstraintSense.GreaterEqual,
+        "=": poi.ConstraintSense.Equal,
+    }
+
+    # --- Variables ---
+    # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
+    with timer("variables"):
+        vars_to_poi = np.empty(m._xCounter + 1, dtype=np.int64)
+
+        for name, var in m.variables.items():
+            df = var.to_polars().with_columns(
+                pl.col("lower").fill_nan(-np.inf).cast(pl.Float64),
+                pl.col("upper").fill_nan(np.inf).cast(pl.Float64),
+            )  # columns: lower, upper, labels
+            if name in m.binaries:
+                domain = poi.VariableDomain.Binary
+            elif name in m.integers:
+                domain = poi.VariableDomain.Integer
+            else:
+                domain = poi.VariableDomain.Continuous
+            for lower, upper, label in df.iter_rows():
+                poi_var = poi_model.add_variable(domain, lower, upper, name)
+                vars_to_poi[label] = poi_var.index
+
+    with timer("constraints"):
+        # --- Constraints ---
+        for con_name, con in m.constraints.items():
+            with timer(con_name):
+                for con_slice in con.iterate_slices(1_000_000):
+                    df = (
+                        con_slice.to_polars()
+                    )  # columns: labels, coeffs, vars, sign, rhs
+                    if df.is_empty():
+                        continue
+
+                    df = df.sort("labels")
+                    poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
+                    coefs = df["coeffs"].to_list()
+                    rhs_list = df["rhs"].to_list()
+                    sign_list = df["sign"].to_list()
+
+                    # Compute group boundaries (first row index of each label group)
+                    split = (
+                        df.lazy()
+                        .with_row_index()
+                        .filter(pl.col("labels").is_first_distinct())
+                        .select("index")
+                        .collect()
+                        .to_series()
+                        .to_list()
+                    ) + [df.height]
+
+                    for s0, s1 in zip(split[:-1], split[1:]):
+                        expr = poi.ScalarAffineFunction(
+                            coefs[s0:s1], poi_vars[s0:s1], 0.0
+                        )
+                        sense = sense_map[sign_list[s0]]
+                        rhs = float(rhs_list[s0])
+                        poi_model.add_linear_constraint(expr, sense, rhs, con_name)
+
+    # --- Objective ---
+    obj_df = m.objective.to_polars().filter(pl.col("vars") != -1)
+    const = float(obj_df["const"].sum()) if "const" in obj_df.columns else 0.0
+    poi_vars_obj = vars_to_poi[obj_df["vars"].to_numpy()].tolist()
+    coeffs = obj_df["coeffs"].to_list()
+    obj_expr = poi.ScalarAffineFunction(coeffs, poi_vars_obj, const)
+    obj_sense = (
+        poi.ObjectiveSense.Minimize
+        if m.objective.sense == "min"
+        else poi.ObjectiveSense.Maximize
+    )
+    poi_model.set_objective(obj_expr, obj_sense)
+
+    # --- SOS constraints ---
+    sos_type_map = {1: poi.SOSType.SOS1, 2: poi.SOSType.SOS2}
+    for var_name in m.variables.sos:
+        var = m.variables.sos[var_name]
+        sos_type = sos_type_map[var.attrs[SOS_TYPE_ATTR]]
+        sos_dim = var.attrs[SOS_DIM_ATTR]
+        other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+
+        def add_sos(
+            labels: xr.DataArray, sos_type: Any = sos_type, sos_dim: str = sos_dim
+        ) -> None:
+            labels = labels.squeeze()
+            sos_labels = labels.values.flatten()
+            sos_weights = labels.coords[sos_dim].values.astype(float).tolist()
+            poi_vars_sos = [
+                poi.VariableIndex(idx) for idx in vars_to_poi[sos_labels].tolist()
+            ]
+            poi_model.add_sos_constraint(poi_vars_sos, sos_type, sos_weights)
+
+        if not other_dims:
+            add_sos(var.labels)
+        else:
+            stacked = var.labels.stack(_sos_group=other_dims)
+            for _, s in stacked.groupby("_sos_group"):
+                add_sos(s.unstack("_sos_group"))
 
 
 def to_block_files(m: Model, fn: Path) -> None:

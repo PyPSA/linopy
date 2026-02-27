@@ -60,6 +60,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_poi,
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
@@ -1804,3 +1805,5 @@ class Model:
     to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
+
+    to_poi = to_poi
