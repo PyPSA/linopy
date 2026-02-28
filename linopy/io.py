@@ -24,7 +24,7 @@ from scipy.sparse import tril, triu
 from tqdm import tqdm
 
 from linopy import solvers
-from linopy.common import timer, to_polars
+from linopy.common import to_polars
 from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
@@ -927,80 +927,71 @@ def to_poi(
 
     # --- Variables ---
     # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
-    with timer("variables"):
-        vars_to_poi = np.full(m._xCounter + 1, -1, dtype=np.int32)
+    vars_to_poi = np.full(m._xCounter + 1, -1, dtype=np.int32)
 
-        for name, var in m.variables.items():
-            df = var.to_polars().with_columns(
-                pl.col("lower").fill_nan(-np.inf).cast(pl.Float64),
-                pl.col("upper").fill_nan(np.inf).cast(pl.Float64),
-            )  # columns: lower, upper, labels
-            if name in m.binaries:
-                domain = poi.VariableDomain.Binary
-            elif name in m.integers:
-                domain = poi.VariableDomain.Integer
-            else:
-                domain = poi.VariableDomain.Continuous
+    for name, var in m.variables.items():
+        df = var.to_polars().with_columns(
+            pl.col("lower").fill_nan(-np.inf).cast(pl.Float64),
+            pl.col("upper").fill_nan(np.inf).cast(pl.Float64),
+        )  # columns: lower, upper, labels
+        if name in m.binaries:
+            domain = poi.VariableDomain.Binary
+        elif name in m.integers:
+            domain = poi.VariableDomain.Integer
+        else:
+            domain = poi.VariableDomain.Continuous
 
-            vars_to_poi[df["labels"].to_numpy()] = [
-                poi_model.add_variable(domain, lower, upper, f"V{label}").index
-                for lower, upper, label in df.select(
-                    "lower", "upper", "labels"
-                ).iter_rows()
+        vars_to_poi[df["labels"].to_numpy()] = [
+            poi_model.add_variable(domain, lower, upper, f"V{label}").index
+            for lower, upper, label in df.select("lower", "upper", "labels").iter_rows()
+        ]
+
+    # --- Constraints ---
+    sense_map = {
+        "<=": poi.ConstraintSense.LessEqual,
+        ">=": poi.ConstraintSense.GreaterEqual,
+        "=": poi.ConstraintSense.Equal,
+    }
+
+    cons_to_poi = np.full(m._cCounter + 1, -1, dtype=np.int32)
+
+    for con_name, con in m.constraints.items():
+        for con_slice in con.iterate_slices(slice_size):
+            df = con_slice.to_polars()  # columns: labels, coeffs, vars, sign, rhs
+            if df.is_empty():
+                continue
+
+            df = df.sort("labels")
+            poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
+            coefs = df["coeffs"].to_list()
+
+            # Compute group boundaries (first row index of each label group)
+            df_unique = (
+                df.lazy()
+                .with_row_index()
+                .filter(pl.col("labels").is_first_distinct())
+                .select("index", "labels", "rhs", "sign")
+                .with_columns(name=pl.lit("C") + pl.col("labels").cast(pl.String))
+                .collect()
+            )
+
+            split = df_unique["index"].to_list() + [df.height]
+            rhs_list = df_unique["rhs"].to_list()
+            sign_list = df_unique["sign"].to_list()
+            labels = df_unique["labels"].to_numpy()
+            names = df_unique["name"].to_list()
+
+            cons_to_poi[labels] = [
+                poi_model.add_linear_constraint(
+                    poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
+                    sense_map[sign],
+                    rhs,
+                    name,  # according to pyoframe it'd be to pass name="C" for all for gurobi
+                ).index
+                for s0, s1, rhs, sign, name in zip(
+                    split[:-1], split[1:], rhs_list, sign_list, names
+                )
             ]
-
-    with timer("constraints"):
-        # --- Constraints ---
-        sense_map = {
-            "<=": poi.ConstraintSense.LessEqual,
-            ">=": poi.ConstraintSense.GreaterEqual,
-            "=": poi.ConstraintSense.Equal,
-        }
-
-        cons_to_poi = np.full(m._cCounter + 1, -1, dtype=np.int32)
-
-        for con_name, con in m.constraints.items():
-            with timer(con_name):
-                for con_slice in con.iterate_slices(slice_size):
-                    df = (
-                        con_slice.to_polars()
-                    )  # columns: labels, coeffs, vars, sign, rhs
-                    if df.is_empty():
-                        continue
-
-                    df = df.sort("labels")
-                    poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
-                    coefs = df["coeffs"].to_list()
-
-                    # Compute group boundaries (first row index of each label group)
-                    df_unique = (
-                        df.lazy()
-                        .with_row_index()
-                        .filter(pl.col("labels").is_first_distinct())
-                        .select("index", "labels", "rhs", "sign")
-                        .with_columns(
-                            name=pl.lit("C") + pl.col("labels").cast(pl.String)
-                        )
-                        .collect()
-                    )
-
-                    split = df_unique["index"].to_list() + [df.height]
-                    rhs_list = df_unique["rhs"].to_list()
-                    sign_list = df_unique["sign"].to_list()
-                    labels = df_unique["labels"].to_numpy()
-                    names = df_unique["name"].to_list()
-
-                    cons_to_poi[labels] = [
-                        poi_model.add_linear_constraint(
-                            poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
-                            sense_map[sign],
-                            rhs,
-                            name,  # according to pyoframe it'd be to pass name="C" for all for gurobi
-                        ).index
-                        for s0, s1, rhs, sign, name in zip(
-                            split[:-1], split[1:], rhs_list, sign_list, names
-                        )
-                    ]
 
     # --- Objective ---
     obj_df = m.objective.to_polars()

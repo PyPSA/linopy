@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import operator
 import os
-import sys
-import time
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
@@ -1414,57 +1412,3 @@ def is_constant(x: SideLike) -> bool:
         "Expected a constant, variable, or expression on the constraint side, "
         f"got {type(x)}."
     )
-
-
-class timer:
-    level = 0
-    opened = False
-
-    def __init__(self, name="", verbose=True):
-        self.name = name
-        self.verbose = verbose
-
-    def __enter__(self):
-        if self.verbose:
-            if self.opened:
-                sys.stdout.write("\n")
-
-            if len(self.name) > 0:
-                sys.stdout.write((".. " * self.level) + self.name + ": ")
-            sys.stdout.flush()
-
-            self.__class__.opened = True
-
-        self.__class__.level += 1
-
-        self.start = time.time()
-        return self
-
-    def print_usec(self, usec):
-        if usec < 1000:
-            print(f"{usec:.1f} usec")
-        else:
-            msec = usec / 1000
-            if msec < 1000:
-                print(f"{msec:.1f} msec")
-            else:
-                sec = msec / 1000
-                print(f"{sec:.1f} sec")
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self.opened and self.verbose:
-            sys.stdout.write(".. " * self.level)
-
-        if exc_type is None:
-            stop = time.time()
-            self.usec = usec = (stop - self.start) * 1e6
-            if self.verbose:
-                self.print_usec(usec)
-        elif self.verbose:
-            print("failed")
-        sys.stdout.flush()
-
-        self.__class__.level -= 1
-        if self.verbose:
-            self.__class__.opened = False
-        return False
