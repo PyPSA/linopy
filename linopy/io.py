@@ -902,15 +902,20 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     return cu_model
 
 
-def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
+def to_poi(
+    m: Model, poi_model: Any, slice_size: int = 2_000_000
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Transfer a linopy model into an existing pyoptinterface model.
 
     Variables and constraints are added one at a time following the pyoptinterface
-    API. The function returns a mapping from linopy variable labels to POI variable
-    indices and from linopy constraint labels to POI constraint indices, written
-    back into the model's variables/constraints as ``poi_var_map`` and
-    ``poi_con_map`` attributes.
+    API. Returns two numpy arrays for result retrieval:
+    - ``vars_to_poi``: linopy variable label -> POI variable index
+    - ``cons_to_poi``: linopy constraint label -> POI constraint index
+
+    Notes
+    -----
+    Heavily inspired by pyoframe: https://github.com/Bravos-Power/pyoframe/blob/cf0cc39bd54e6fea0c95b0c36cd43fc0633527e1/src/pyoframe/_core.py#L1778-L1925
 
     Parameters
     ----------
@@ -919,12 +924,6 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
         An already-constructed POI model (e.g. ``pyoptinterface.highs.Model()``).
     """
     import pyoptinterface as poi
-
-    sense_map = {
-        "<=": poi.ConstraintSense.LessEqual,
-        ">=": poi.ConstraintSense.GreaterEqual,
-        "=": poi.ConstraintSense.Equal,
-    }
 
     # --- Variables ---
     # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
@@ -942,12 +941,22 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
                 domain = poi.VariableDomain.Integer
             else:
                 domain = poi.VariableDomain.Continuous
-            for lower, upper, label in df.iter_rows():
-                poi_var = poi_model.add_variable(domain, lower, upper, name)
-                vars_to_poi[label] = poi_var.index
+
+            vars_to_poi[df["labels"].to_numpy()] = [
+                poi_model.add_variable(domain, lower, upper, name).index
+                for lower, upper in df.select("lower", "upper").iter_rows()
+            ]
 
     with timer("constraints"):
         # --- Constraints ---
+        sense_map = {
+            "<=": poi.ConstraintSense.LessEqual,
+            ">=": poi.ConstraintSense.GreaterEqual,
+            "=": poi.ConstraintSense.Equal,
+        }
+
+        cons_to_poi = np.empty(m._cCounter + 1, dtype=np.int32)
+
         for con_name, con in m.constraints.items():
             with timer(con_name):
                 for con_slice in con.iterate_slices(slice_size):
@@ -966,7 +975,7 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
                         df.lazy()
                         .with_row_index()
                         .filter(pl.col("labels").is_first_distinct())
-                        .select("index", "rhs", "sign")
+                        .select("index", "labels", "rhs", "sign")
                         .collect()
                     )
 
@@ -974,20 +983,24 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
                     rhs_list = df_unique["rhs"].to_list()
                     sign_list = df_unique["sign"].to_list()
 
-                    for s0, s1, rhs, sign in zip(
-                        split[:-1], split[1:], rhs_list, sign_list
-                    ):
-                        expr = poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1])
+                    cons_to_poi[df_unique["labels"].to_numpy()] = [
                         poi_model.add_linear_constraint(
-                            expr, sense_map[sign], rhs, con_name
+                            poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
+                            sense_map[sign],
+                            rhs,
+                            con_name,
+                        ).index
+                        for s0, s1, rhs, sign in zip(
+                            split[:-1], split[1:], rhs_list, sign_list
                         )
+                    ]
 
     # --- Objective ---
     obj_df = m.objective.to_polars().filter(pl.col("vars") != -1)
     const = float(obj_df["const"].sum()) if "const" in obj_df.columns else 0.0
-    poi_vars_obj = vars_to_poi[obj_df["vars"].to_numpy()].tolist()
-    coeffs = obj_df["coeffs"].to_list()
-    obj_expr = poi.ScalarAffineFunction(coeffs, poi_vars_obj, const)
+    poi_vars_obj = vars_to_poi[obj_df["vars"].to_numpy()]
+    coeffs = obj_df["coeffs"].to_numpy()
+    obj_expr = poi.ScalarAffineFunction.from_numpy(coeffs, poi_vars_obj, const)
     obj_sense = (
         poi.ObjectiveSense.Minimize
         if m.objective.sense == "min"
@@ -1020,6 +1033,8 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
             stacked = var.labels.stack(_sos_group=other_dims)
             for _, s in stacked.groupby("_sos_group"):
                 add_sos(s.unstack("_sos_group"))
+
+    return vars_to_poi, cons_to_poi
 
 
 def to_block_files(m: Model, fn: Path) -> None:
