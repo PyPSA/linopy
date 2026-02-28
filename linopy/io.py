@@ -11,7 +11,6 @@ import time
 import warnings
 from collections.abc import Callable
 from io import BufferedWriter
-from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
@@ -961,25 +960,27 @@ def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
                     df = df.sort("labels")
                     poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
                     coefs = df["coeffs"].to_list()
-                    rhs_list = df["rhs"].to_list()
-                    sign_list = df["sign"].to_list()
 
                     # Compute group boundaries (first row index of each label group)
-                    split = (
+                    df_unique = (
                         df.lazy()
                         .with_row_index()
                         .filter(pl.col("labels").is_first_distinct())
-                        .select("index")
+                        .select("index", "rhs", "sign")
                         .collect()
-                        .to_series()
-                        .to_list()
-                    ) + [df.height]
+                    )
 
-                    for s0, s1 in pairwise(split):
+                    split = df_unique["index"].to_list() + [df.height]
+                    rhs_list = df_unique["rhs"].to_list()
+                    sign_list = df_unique["sign"].to_list()
+
+                    for s0, s1, rhs, sign in zip(
+                        split[:-1], split[1:], rhs_list, sign_list
+                    ):
                         expr = poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1])
-                        sense = sense_map[sign_list[s0]]
-                        rhs = float(rhs_list[s0])
-                        poi_model.add_linear_constraint(expr, sense, rhs, con_name)
+                        poi_model.add_linear_constraint(
+                            expr, sense_map[sign], rhs, con_name
+                        )
 
     # --- Objective ---
     obj_df = m.objective.to_polars().filter(pl.col("vars") != -1)
