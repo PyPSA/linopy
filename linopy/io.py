@@ -928,7 +928,7 @@ def to_poi(
     # --- Variables ---
     # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
     with timer("variables"):
-        vars_to_poi = np.empty(m._xCounter + 1, dtype=np.int32)
+        vars_to_poi = np.full(m._xCounter + 1, -1, dtype=np.int32)
 
         for name, var in m.variables.items():
             df = var.to_polars().with_columns(
@@ -957,7 +957,7 @@ def to_poi(
             "=": poi.ConstraintSense.Equal,
         }
 
-        cons_to_poi = np.empty(m._cCounter + 1, dtype=np.int32)
+        cons_to_poi = np.full(m._cCounter + 1, -1, dtype=np.int32)
 
         for con_name, con in m.constraints.items():
             with timer(con_name):

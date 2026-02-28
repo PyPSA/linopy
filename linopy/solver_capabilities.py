@@ -52,6 +52,7 @@ class SolverFeature(Enum):
 
     # Solver-specific
     SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
+    POI_API = auto()  # Solve via pyoptinterface (poi) without writing files
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
+                SolverFeature.POI_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
@@ -98,6 +100,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
+                SolverFeature.POI_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
@@ -204,6 +207,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.DIRECT_API,
+                SolverFeature.POI_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
@@ -217,6 +221,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
             {
                 SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
+                SolverFeature.POI_API,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,

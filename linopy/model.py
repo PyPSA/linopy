@@ -78,6 +78,7 @@ from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
     available_solvers,
+    poi_available,
 )
 from linopy.sos_reformulation import (
     reformulate_sos_constraints,
@@ -1334,6 +1335,11 @@ class Model:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
+        if io_api == "poi" and not poi_available:
+            raise ImportError(
+                "pyoptinterface is not installed. Install it to use io_api='poi'."
+            )
+
         if remote is not None:
             if isinstance(remote, OetcHandler):
                 solved = remote.solve_on_oetc(self)
@@ -1383,17 +1389,18 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
-        if problem_fn is None:
-            problem_fn = self.get_problem_file(io_api=io_api)
-        if solution_fn is None:
-            if (
-                solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED)
-                and not keep_files
-            ):
-                # these (solver, keep_files=False) combos do not need a solution file
-                solution_fn = None
-            else:
-                solution_fn = self.get_solution_file()
+        if io_api != "poi":
+            if problem_fn is None:
+                problem_fn = self.get_problem_file(io_api=io_api)
+            if solution_fn is None:
+                if (
+                    solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+                    and not keep_files
+                ):
+                    # these (solver, keep_files=False) combos do not need a solution file
+                    solution_fn = None
+                else:
+                    solution_fn = self.get_solution_file()
 
         if sanitize_zeros:
             self.constraints.sanitize_zeros()
@@ -1407,6 +1414,9 @@ class Model:
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
             )
+
+        if io_api == "poi" and not solver_supports(solver_name, SolverFeature.POI_API):
+            raise ValueError(f"Solver {solver_name} does not support io_api='poi'.")
 
         if reformulate_sos not in (True, False, "auto"):
             raise ValueError(
@@ -1437,7 +1447,14 @@ class Model:
             solver = solver_class(
                 **solver_options,
             )
-            if io_api == "direct":
+            if io_api == "poi":
+                # no problem file written; model transferred via pyoptinterface
+                result = solver.solve_problem_from_poi(
+                    model=self,
+                    log_fn=to_path(log_fn),
+                    env=env,
+                )
+            elif io_api == "direct":
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,

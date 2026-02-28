@@ -52,9 +52,10 @@ NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
 )
 
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
-IO_APIS = FILE_IO_APIS + ["direct"]
+IO_APIS = FILE_IO_APIS + ["direct", "poi"]
 
 available_solvers = []
+poi_available = False
 
 which = "where" if os.name == "nt" else "which"
 
@@ -219,6 +220,10 @@ with contextlib.suppress(ModuleNotFoundError):
     except ImportError:
         pass
 
+with contextlib.suppress(ModuleNotFoundError):
+    import pyoptinterface  # noqa: F401
+
+    poi_available = True
 
 quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
@@ -295,6 +300,117 @@ def maybe_adjust_objective_sign(
         )
         solution.objective *= -1
     return solution
+
+
+class POIMixin:
+    """
+    Mixin for solvers that support solving via pyoptinterface.
+
+    Subclasses must implement `_make_poi_model()` to return a configured
+    POI model instance (after calling autoload_library if needed).
+    """
+
+    termination_map = {
+        "OPTIMIZE_NOT_CALLED": "unknown",
+        "OPTIMAL": "optimal",
+        "INFEASIBLE": "infeasible",
+        "DUAL_INFEASIBLE": "unbounded",
+        "LOCALLY_SOLVED": "suboptimal",
+        "LOCALLY_INFEASIBLE": "infeasible",
+        "INFEASIBLE_OR_UNBOUNDED": "infeasible_or_unbounded",
+        "ALMOST_OPTIMAL": "suboptimal",
+        "SLOW_PROGRESS": "other",
+        "NUMERICAL_ERROR": "internal_solver_error",
+        "SOLUTION_LIMIT": "terminated_by_limit",
+        "ITERATION_LIMIT": "iteration_limit",
+        "TIME_LIMIT": "time_limit",
+        "NODE_LIMIT": "terminated_by_limit",
+        "OTHER_LIMIT": "terminated_by_limit",
+        "INTERRUPTED": "user_interrupt",
+        "OTHER_ERROR": "internal_solver_error",
+    }
+
+    @abstractmethod
+    def _make_poi_model(self, log_fn: Path | None = None, env: Any = None) -> Any:
+        """Create and return a solver-specific POI model instance."""
+        ...
+
+    def solve_problem_from_poi(
+        self,
+        model: Model,
+        log_fn: Path | None = None,
+        env: Any = None,
+    ) -> Result:
+        """
+        Solve a linopy model via pyoptinterface without writing any files.
+
+        Parameters
+        ----------
+        model : linopy.Model
+        log_fn : Path, optional
+            Path to the log file.
+        env : optional
+            Solver-specific environment object (e.g. pyoptinterface gurobi.Env).
+
+        Returns
+        -------
+        Result
+        """
+        import pyoptinterface as poi
+
+        poi_model = self._make_poi_model(log_fn=log_fn, env=env)
+
+        vars_to_poi, cons_to_poi = linopy.io.to_poi(model, poi_model)
+
+        poi_model.optimize()
+
+        termination_status = poi_model.get_model_attribute(
+            poi.ModelAttribute.TerminationStatus
+        )
+        termination_condition = POIMixin.termination_map.get(
+            termination_status.name, "other"
+        )
+        status = Status.from_termination_condition(termination_condition)
+        status.legacy_status = termination_status
+
+        def get_solver_solution() -> Solution:
+            objective = poi_model.get_model_attribute(poi.ModelAttribute.ObjectiveValue)
+
+            # vars_to_poi / cons_to_poi: linopy label -> POI index (int32), -1 = missing
+            var_labels = np.nonzero(vars_to_poi != -1)[0]
+            var_values = np.array(
+                [
+                    poi_model.get_variable_attribute(
+                        poi.VariableIndex(poi_var),
+                        poi.VariableAttribute.Value,
+                    )
+                    for poi_var in vars_to_poi[var_labels]
+                ],
+                dtype=float,
+            )
+            primal = pd.Series(var_values, index=var_labels)
+
+            try:
+                con_labels = np.nonzero(cons_to_poi != -1)[0]
+                con_values = np.array(
+                    [
+                        poi_model.get_constraint_attribute(
+                            poi.ConstraintIndex(poi.ConstraintType.Linear, poi_con),
+                            poi.ConstraintAttribute.Dual,
+                        )
+                        for poi_con in cons_to_poi[con_labels]
+                    ],
+                    dtype=float,
+                )
+                dual = pd.Series(con_values, index=con_labels)
+            except Exception:
+                logger.warning("Dual values couldn't be parsed")
+                dual = pd.Series(dtype=float)
+
+            return Solution(primal, dual, objective)
+
+        solution = self.safe_get_solution(status=status, func=get_solver_solution)
+        return Result(status, solution, poi_model)
 
 
 class Solver(ABC, Generic[EnvType]):
@@ -780,7 +896,7 @@ class GLPK(Solver[None]):
         return Result(status, solution)
 
 
-class Highs(Solver[None]):
+class Highs(POIMixin, Solver[None]):
     """
     Solver subclass for the HiGHS solver. HiGHS must be installed
     for usage. Find the documentation at https://highs.dev/.
@@ -805,6 +921,16 @@ class Highs(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _make_poi_model(self, log_fn: Path | None = None, env: Any = None) -> Any:
+        import pyoptinterface.highs as highs
+
+        m = highs.Model()
+        for k, v in self.solver_options.items():
+            m.set_raw_option(k, v)
+        if log_fn is not None:
+            m.set_raw_option("log_file", path_to_string(log_fn))
+        return m
 
     def solve_problem_from_model(
         self,
@@ -1031,7 +1157,7 @@ class Highs(Solver[None]):
         return Result(status, solution, h)
 
 
-class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
+class Gurobi(POIMixin, Solver["gurobipy.Env | dict[str, Any] | None"]):
     """
     Solver subclass for the gurobi solver.
 
@@ -1046,6 +1172,17 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _make_poi_model(self, log_fn: Path | None = None, env: Any = None) -> Any:
+        import pyoptinterface.gurobi as gurobi
+
+        gurobi.autoload_library()
+        m = gurobi.Model(env) if env is not None else gurobi.Model()
+        for k, v in self.solver_options.items():
+            m.set_raw_parameter(k, v)
+        if log_fn is not None:
+            m.set_raw_parameter("LogFile", path_to_string(log_fn))
+        return m
 
     def solve_problem_from_model(
         self,
@@ -1942,7 +2079,7 @@ class Knitro(Solver[None]):
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
 
 
-class Mosek(Solver[None]):
+class Mosek(POIMixin, Solver[None]):
     """
     Solver subclass for the Mosek solver.
 
@@ -1967,6 +2104,16 @@ class Mosek(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _make_poi_model(self, log_fn: Path | None = None, env: Any = None) -> Any:
+        import pyoptinterface.mosek as mosek
+
+        m = mosek.Model()
+        for k, v in self.solver_options.items():
+            m.set_raw_parameter(k, v)
+        if log_fn is not None:
+            m.set_raw_parameter("MSK_SPAR_LOG_FILE_PATH", path_to_string(log_fn))
+        return m
 
     def solve_problem_from_model(
         self,
@@ -2281,7 +2428,7 @@ class Mosek(Solver[None]):
         return Result(status, solution)
 
 
-class COPT(Solver[None]):
+class COPT(POIMixin, Solver[None]):
     """
     Solver subclass for the COPT solver.
 
@@ -2301,6 +2448,16 @@ class COPT(Solver[None]):
         **solver_options: Any,
     ) -> None:
         super().__init__(**solver_options)
+
+    def _make_poi_model(self, log_fn: Path | None = None, env: Any = None) -> Any:
+        import pyoptinterface.copt as copt
+
+        m = copt.Model()
+        for k, v in self.solver_options.items():
+            m.set_raw_parameter(k, v)
+        # COPT log file requires Model.setLogFile() on the native object,
+        # which is not accessible via the POI interface — log_fn is ignored here.
+        return m
 
     def solve_problem_from_model(
         self,
