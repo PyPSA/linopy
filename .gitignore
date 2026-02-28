@@ -32,6 +32,7 @@ ENV/
 env.bak/
 venv.bak/
 
+benchmarks/results/
 benchmark/*.pdf
 benchmark/benchmarks
 benchmark/.snakemake
