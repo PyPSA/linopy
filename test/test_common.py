@@ -370,8 +370,10 @@ def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError):
-        as_dataarray(arr, coords=target_coords, dims=target_dims)
+    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
+    assert da.dims == target_dims
+    assert list(da.coords["dim_0"].values) == ["a", "b"]
+    assert "dim_2" not in da.coords
 
 
 def test_as_dataarray_with_number() -> None:

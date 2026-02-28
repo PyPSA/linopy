@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import operator
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -92,17 +93,6 @@ if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
-
-SUPPORTED_CONSTANT_TYPES = (
-    np.number,
-    int,
-    float,
-    DataArray,
-    pd.Series,
-    pd.DataFrame,
-    np.ndarray,
-    pl.Series,
-)
 
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
@@ -533,31 +523,107 @@ class BaseExpression(ABC):
             res = res + self.reset_const() * other.const
         return res
 
-    def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike
+    def _align_constant(
+        self: GenericExpression,
+        other: DataArray,
+        fill_value: float = 0,
+        join: str | None = None,
+    ) -> tuple[DataArray, DataArray, bool]:
+        """
+        Align a constant DataArray with self.const.
+
+        Parameters
+        ----------
+        other : DataArray
+            The constant to align.
+        fill_value : float, default: 0
+            Fill value for missing coordinates.
+        join : str, optional
+            Alignment method. If None, uses size-aware default behavior.
+
+        Returns
+        -------
+        self_const : DataArray
+            The expression's const, potentially reindexed.
+        aligned : DataArray
+            The aligned constant.
+        needs_data_reindex : bool
+            Whether the expression's data needs reindexing.
+        """
+        if join is None:
+            if other.sizes == self.const.sizes:
+                return self.const, other.assign_coords(coords=self.coords), False
+            return (
+                self.const,
+                other.reindex_like(self.const, fill_value=fill_value),
+                False,
+            )
+        elif join == "override":
+            return self.const, other.assign_coords(coords=self.coords), False
+        else:
+            self_const, aligned = xr.align(
+                self.const, other, join=join, fill_value=fill_value
+            )
+            return self_const, aligned, True
+
+    def _add_constant(
+        self: GenericExpression, other: ConstantLike, join: str | None = None
     ) -> GenericExpression:
-        multiplier = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        coeffs = self.coeffs * multiplier
-        assert all(coeffs.sizes[d] == s for d, s in self.coeffs.sizes.items())
-        const = self.const * multiplier
-        return self.assign(coeffs=coeffs, const=const)
+        if np.isscalar(other) and join is None:
+            return self.assign(const=self.const + other)
+        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        self_const, da, needs_data_reindex = self._align_constant(
+            da, fill_value=0, join=join
+        )
+        if needs_data_reindex:
+            return self.__class__(
+                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
+                    const=self_const + da
+                ),
+                self.model,
+            )
+        return self.assign(const=self_const + da)
+
+    def _apply_constant_op(
+        self: GenericExpression,
+        other: ConstantLike,
+        op: Callable[[DataArray, DataArray], DataArray],
+        fill_value: float,
+        join: str | None = None,
+    ) -> GenericExpression:
+        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        self_const, factor, needs_data_reindex = self._align_constant(
+            factor, fill_value=fill_value, join=join
+        )
+        if needs_data_reindex:
+            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
+            return self.__class__(
+                assign_multiindex_safe(
+                    data, coeffs=op(data.coeffs, factor), const=op(self_const, factor)
+                ),
+                self.model,
+            )
+        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
+
+    def _multiply_by_constant(
+        self: GenericExpression, other: ConstantLike, join: str | None = None
+    ) -> GenericExpression:
+        return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
+
+    def _divide_by_constant(
+        self: GenericExpression, other: ConstantLike, join: str | None = None
+    ) -> GenericExpression:
+        return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
         try:
-            if isinstance(
-                other,
-                variables.Variable
-                | variables.ScalarVariable
-                | LinearExpression
-                | ScalarLinearExpression
-                | QuadraticExpression,
-            ):
+            if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
                     "unsupported operand type(s) for /: "
                     f"{type(self)} and {type(other)}"
                     "Non-linear expressions are not yet supported."
                 )
-            return self._multiply_by_constant(other=1 / other)
+            return self._divide_by_constant(other)
         except TypeError:
             return NotImplemented
 
@@ -584,36 +650,160 @@ class BaseExpression(ABC):
         )
 
     def add(
-        self: GenericExpression, other: SideLike
+        self: GenericExpression,
+        other: SideLike,
+        join: str | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Add an expression to others.
+
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__add__(other)
+        if join is None:
+            return self.__add__(other)
+        if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+            return self._add_constant(other, join=join)
+        other = as_expression(other, model=self.model, dims=self.coord_dims)
+        if isinstance(other, LinearExpression) and isinstance(
+            self, QuadraticExpression
+        ):
+            other = other.to_quadexpr()
+        return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
-        self: GenericExpression, other: SideLike
+        self: GenericExpression,
+        other: SideLike,
+        join: str | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
+
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__sub__(other)
+        return self.add(-other, join=join)
 
     def mul(
-        self: GenericExpression, other: SideLike
+        self: GenericExpression,
+        other: SideLike,
+        join: str | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
+
+        Parameters
+        ----------
+        other : expression-like
+            The factor to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__mul__(other)
+        if join is None:
+            return self.__mul__(other)
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
+            raise TypeError(
+                "join parameter is not supported for expression-expression multiplication"
+            )
+        return self._multiply_by_constant(other, join=join)
 
     def div(
-        self: GenericExpression, other: VariableLike | ConstantLike
+        self: GenericExpression,
+        other: VariableLike | ConstantLike,
+        join: str | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Divide the expr by a factor.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__div__(other)
+        if join is None:
+            return self.__div__(other)
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self._divide_by_constant(other, join=join)
+
+    def le(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(LESS_EQUAL, rhs, join=join)
+
+    def ge(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(GREATER_EQUAL, rhs, join=join)
+
+    def eq(
+        self: GenericExpression,
+        rhs: SideLike,
+        join: str | None = None,
+    ) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_constraint(EQUAL, rhs, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """
@@ -854,7 +1044,9 @@ class BaseExpression(ABC):
         dim_dict = {dim_name: self.data.sizes[dim_name] for dim_name in dim}
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> Constraint:
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: str | None = None
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -863,7 +1055,14 @@ class BaseExpression(ABC):
         sign : str, array-like
             Sign(s) of the constraints.
         rhs : constant, Variable, LinearExpression
-            Right-hand side of the constraint.
+            Right-hand side of the constraint. If a DataArray, it is
+            reindexed to match expression coordinates (fill_value=np.nan).
+            Extra dimensions in the RHS not present in the expression
+            raise a ValueError. NaN entries in the RHS mean "no constraint".
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
 
         Returns
         -------
@@ -876,7 +1075,23 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        all_to_lhs = (self - rhs).data
+        if isinstance(rhs, DataArray):
+            extra_dims = set(rhs.dims) - set(self.coord_dims)
+            if extra_dims:
+                raise ValueError(
+                    f"RHS DataArray has dimensions {extra_dims} not present "
+                    f"in the expression. Cannot create constraint."
+                )
+            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
+            self.coord_dims
+        ):
+            raise ValueError(
+                f"RHS has {rhs.ndim} dimensions, but the expression only "
+                f"has {len(self.coord_dims)}. Cannot create constraint."
+            )
+
+        all_to_lhs = self.sub(rhs, join=join).data
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
         )
@@ -1312,11 +1527,11 @@ class LinearExpression(BaseExpression):
             return other.__add__(self)
 
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const + other)
-
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
-            return merge([self, other], cls=self.__class__)
+            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+                return self._add_constant(other)
+            else:
+                other = as_expression(other, model=self.model, dims=self.coord_dims)
+                return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
 
@@ -1824,13 +2039,7 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        if isinstance(
-            other,
-            BaseExpression
-            | ScalarLinearExpression
-            | variables.Variable
-            | variables.ScalarVariable,
-        ):
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for *: "
                 f"{type(self)} and {type(other)}. "
@@ -1852,15 +2061,15 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const + other)
+            if isinstance(other, SUPPORTED_CONSTANT_TYPES):
+                return self._add_constant(other)
+            else:
+                other = as_expression(other, model=self.model, dims=self.coord_dims)
 
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
+                if isinstance(other, LinearExpression):
+                    other = other.to_quadexpr()
 
-            if isinstance(other, LinearExpression):
-                other = other.to_quadexpr()
-
-            return merge([self, other], cls=self.__class__)
+                return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
 
@@ -1878,13 +2087,7 @@ class QuadraticExpression(BaseExpression):
         dimension names of self will be filled in other
         """
         try:
-            if np.isscalar(other):
-                return self.assign(const=self.const - other)
-
-            other = as_expression(other, model=self.model, dims=self.coord_dims)
-            if type(other) is LinearExpression:
-                other = other.to_quadexpr()
-            return merge([self, -other], cls=self.__class__)
+            return self.__add__(-other)
         except TypeError:
             return NotImplemented
 
@@ -1906,13 +2109,7 @@ class QuadraticExpression(BaseExpression):
         """
         Matrix multiplication with other, similar to xarray dot.
         """
-        if isinstance(
-            other,
-            BaseExpression
-            | ScalarLinearExpression
-            | variables.Variable
-            | variables.ScalarVariable,
-        ):
+        if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "Higher order non-linear expressions are not yet supported."
             )
@@ -2065,6 +2262,7 @@ def merge(
     ],
     dim: str = TERM_DIM,
     cls: type[GenericExpression] = None,  # type: ignore
+    join: str | None = None,
     **kwargs: Any,
 ) -> GenericExpression:
     """
@@ -2084,6 +2282,10 @@ def merge(
         Dimension along which the expressions should be concatenated.
     cls : type
         Explicitly set the type of the resulting expression (So that the type checker will know the return type)
+    join : str, optional
+        How to align coordinates. One of "outer", "inner", "left", "right",
+        "exact", "override". When None (default), auto-detects based on
+        expression shapes.
     **kwargs
         Additional keyword arguments passed to xarray.concat. Defaults to
         {coords: "minimal", compat: "override"} or, in the special case described
@@ -2118,7 +2320,9 @@ def merge(
 
     model = exprs[0].model
 
-    if cls in linopy_types and dim in HELPER_DIMS:
+    if join is not None:
+        override = join == "override"
+    elif cls in linopy_types and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
@@ -2139,7 +2343,9 @@ def merge(
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
 
-        if override:
+        if join is not None:
+            kwargs["join"] = join
+        elif override:
             kwargs["join"] = "override"
         else:
             kwargs.setdefault("join", "outer")
@@ -2317,3 +2523,23 @@ class ScalarLinearExpression:
         vars = xr.DataArray(list(self.vars), dims=TERM_DIM)
         ds = xr.Dataset({"coeffs": coeffs, "vars": vars})
         return LinearExpression(ds, self.model)
+
+
+SUPPORTED_CONSTANT_TYPES = (
+    np.number,
+    np.bool_,
+    int,
+    float,
+    DataArray,
+    pd.Series,
+    pd.DataFrame,
+    np.ndarray,
+    pl.Series,
+)
+
+SUPPORTED_EXPRESSION_TYPES = (
+    BaseExpression,
+    ScalarLinearExpression,
+    variables.Variable,
+    variables.ScalarVariable,
+)
