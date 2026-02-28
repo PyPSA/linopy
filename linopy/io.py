@@ -943,8 +943,10 @@ def to_poi(
                 domain = poi.VariableDomain.Continuous
 
             vars_to_poi[df["labels"].to_numpy()] = [
-                poi_model.add_variable(domain, lower, upper, name).index
-                for lower, upper in df.select("lower", "upper").iter_rows()
+                poi_model.add_variable(domain, lower, upper, f"V{label}").index
+                for lower, upper, label in df.select(
+                    "lower", "upper", "labels"
+                ).iter_rows()
             ]
 
     with timer("constraints"):
@@ -976,22 +978,27 @@ def to_poi(
                         .with_row_index()
                         .filter(pl.col("labels").is_first_distinct())
                         .select("index", "labels", "rhs", "sign")
+                        .with_columns(
+                            name=pl.lit("C") + pl.col("labels").cast(pl.String)
+                        )
                         .collect()
                     )
 
                     split = df_unique["index"].to_list() + [df.height]
                     rhs_list = df_unique["rhs"].to_list()
                     sign_list = df_unique["sign"].to_list()
+                    labels = df_unique["labels"].to_numpy()
+                    names = df_unique["name"].to_list()
 
-                    cons_to_poi[df_unique["labels"].to_numpy()] = [
+                    cons_to_poi[labels] = [
                         poi_model.add_linear_constraint(
                             poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
                             sense_map[sign],
                             rhs,
-                            con_name,
+                            name,  # according to pyoframe it'd be to pass name="C" for all for gurobi
                         ).index
-                        for s0, s1, rhs, sign in zip(
-                            split[:-1], split[1:], rhs_list, sign_list
+                        for s0, s1, rhs, sign, name in zip(
+                            split[:-1], split[1:], rhs_list, sign_list, names
                         )
                     ]
 
