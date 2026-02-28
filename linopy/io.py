@@ -1003,17 +1003,31 @@ def to_poi(
                     ]
 
     # --- Objective ---
-    obj_df = m.objective.to_polars().filter(pl.col("vars") != -1)
+    obj_df = m.objective.to_polars()
     const = float(obj_df["const"].sum()) if "const" in obj_df.columns else 0.0
-    poi_vars_obj = vars_to_poi[obj_df["vars"].to_numpy()]
-    coeffs = obj_df["coeffs"].to_numpy()
-    obj_expr = poi.ScalarAffineFunction.from_numpy(coeffs, poi_vars_obj, const)
     obj_sense = (
         poi.ObjectiveSense.Minimize
         if m.objective.sense == "min"
         else poi.ObjectiveSense.Maximize
     )
-    poi_model.set_objective(obj_expr, obj_sense)
+    if m.is_quadratic:
+        quad = obj_df.filter(pl.col("vars2") != -1)
+        obj_expr = poi.ScalarQuadraticFunction(
+            quad["coeffs"].to_numpy(),
+            vars_to_poi[quad["vars1"].to_numpy()],
+            vars_to_poi[quad["vars2"].to_numpy()],
+        )
+        lin = obj_df.filter(pl.col("vars2") == -1)
+        if len(lin):
+            obj_expr = obj_expr + poi.ScalarAffineFunction.from_numpy(
+                lin["coeffs"].to_numpy(), vars_to_poi[lin["vars1"].to_numpy()], const
+            )
+        poi_model.set_objective(obj_expr, obj_sense)
+    else:
+        obj_expr = poi.ScalarAffineFunction.from_numpy(
+            obj_df["coeffs"].to_numpy(), vars_to_poi[obj_df["vars"].to_numpy()], const
+        )
+        poi_model.set_objective(obj_expr, obj_sense)
 
     # --- SOS constraints ---
     sos_type_map = {1: poi.SOSType.SOS1, 2: poi.SOSType.SOS2}
