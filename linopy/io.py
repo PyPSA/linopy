@@ -11,6 +11,7 @@ import time
 import warnings
 from collections.abc import Callable
 from io import BufferedWriter
+from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
@@ -902,7 +903,7 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     return cu_model
 
 
-def to_poi(m: Model, poi_model: Any) -> None:
+def to_poi(m: Model, poi_model: Any, slice_size: int = 2_000_000) -> None:
     """
     Transfer a linopy model into an existing pyoptinterface model.
 
@@ -929,7 +930,7 @@ def to_poi(m: Model, poi_model: Any) -> None:
     # --- Variables ---
     # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
     with timer("variables"):
-        vars_to_poi = np.empty(m._xCounter + 1, dtype=np.int64)
+        vars_to_poi = np.empty(m._xCounter + 1, dtype=np.int32)
 
         for name, var in m.variables.items():
             df = var.to_polars().with_columns(
@@ -950,7 +951,7 @@ def to_poi(m: Model, poi_model: Any) -> None:
         # --- Constraints ---
         for con_name, con in m.constraints.items():
             with timer(con_name):
-                for con_slice in con.iterate_slices(1_000_000):
+                for con_slice in con.iterate_slices(slice_size):
                     df = (
                         con_slice.to_polars()
                     )  # columns: labels, coeffs, vars, sign, rhs
@@ -974,10 +975,8 @@ def to_poi(m: Model, poi_model: Any) -> None:
                         .to_list()
                     ) + [df.height]
 
-                    for s0, s1 in zip(split[:-1], split[1:]):
-                        expr = poi.ScalarAffineFunction(
-                            coefs[s0:s1], poi_vars[s0:s1], 0.0
-                        )
+                    for s0, s1 in pairwise(split):
+                        expr = poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1])
                         sense = sense_map[sign_list[s0]]
                         rhs = float(rhs_list[s0])
                         poi_model.add_linear_constraint(expr, sense, rhs, con_name)
