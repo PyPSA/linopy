@@ -135,7 +135,16 @@ class MatrixAccessor:
 
         for _, constraint in m.constraints.items():
             labels = constraint.labels.values.reshape(-1)
-            mask = labels != -1
+            vars_arr = constraint.vars.values
+            coeffs_arr = constraint.coeffs.values
+
+            term_axis = constraint.vars.get_axis_num(constraint.term_dim)
+            if term_axis != vars_arr.ndim - 1:
+                vars_arr = np.moveaxis(vars_arr, term_axis, -1)
+                coeffs_arr = np.moveaxis(coeffs_arr, term_axis, -1)
+
+            active = ((vars_arr != -1) & (coeffs_arr != 0)).any(axis=-1).reshape(-1)
+            mask = (labels != -1) & active
             labels = labels[mask]
             n = labels.size
             if not n:

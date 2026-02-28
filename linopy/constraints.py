@@ -1136,6 +1136,10 @@ class Constraints:
             next_key = 0
             for labels in arrays:
                 labels = labels[labels != -1]
+                if labels.size:
+                    # Keep first-seen order while de-duplicating labels.
+                    first_idx = np.unique(labels, return_index=True)[1]
+                    labels = labels[np.sort(first_idx)]
                 n = labels.size
                 if n:
                     mapping[labels] = np.arange(next_key, next_key + n)
@@ -1146,11 +1150,9 @@ class Constraints:
         row_parts: list[np.ndarray] = []
         col_parts: list[np.ndarray] = []
         data_parts: list[np.ndarray] = []
-        constraint_labels: list[np.ndarray] = []
 
         for _, constraint in self.items():
             labels = constraint.labels.values.reshape(-1)
-            constraint_labels.append(labels)
             vars_arr = constraint.vars.values
             coeffs_arr = constraint.coeffs.values
 
@@ -1180,9 +1182,10 @@ class Constraints:
             data = np.array([], dtype=float)
 
         if filter_missings:
-            cons_map, next_con_key = _build_dense_key_map(
-                constraint_labels, self.model._cCounter
-            )
+            # Keep the filtered matrix row space aligned with ``self.flat``:
+            # only constraints that still have at least one active coefficient
+            # get a key when ``filter_missings=True``.
+            cons_map, next_con_key = _build_dense_key_map([row], self.model._cCounter)
             vars_map, next_var_key = _build_dense_key_map(
                 [
                     var.labels.values.reshape(-1)
