@@ -221,7 +221,7 @@ with contextlib.suppress(ModuleNotFoundError):
         pass
 
 with contextlib.suppress(ModuleNotFoundError):
-    import pyoptinterface  # noqa: F401
+    import pyoptinterface as poi
 
     poi_available = True
 
@@ -335,6 +335,16 @@ class POIMixin:
         """Create and return a solver-specific POI model instance."""
         ...
 
+    def safe_get_solution(
+        self, status: Status, func: Callable[[], Solution]
+    ) -> Solution:
+        """
+        Get solution from function call, handling unknown status.
+
+        Provided by Solver base class; declared here for type checking.
+        """
+        ...
+
     def solve_problem_from_poi(
         self,
         model: Model,
@@ -356,7 +366,10 @@ class POIMixin:
         -------
         Result
         """
-        import pyoptinterface as poi
+        if not poi_available:
+            raise ModuleNotFoundError(
+                "pyoptinterface is not installed. Please install it to use POI-based solvers."
+            )
 
         poi_model = self._make_poi_model(log_fn=log_fn, env=env)
 

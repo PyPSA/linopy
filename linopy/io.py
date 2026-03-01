@@ -1024,8 +1024,8 @@ def to_poi(
     sos_type_map = {1: poi.SOSType.SOS1, 2: poi.SOSType.SOS2}
     for var_name in m.variables.sos:
         var = m.variables.sos[var_name]
-        sos_type = sos_type_map[var.attrs[SOS_TYPE_ATTR]]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+        sos_type = sos_type_map[var.attrs[SOS_TYPE_ATTR]]  # type: ignore[index]
+        sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
 
         def add_sos(
