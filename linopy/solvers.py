@@ -335,6 +335,7 @@ class POIMixin:
         """Create and return a solver-specific POI model instance."""
         ...
 
+    @abstractmethod
     def safe_get_solution(
         self, status: Status, func: Callable[[], Solution]
     ) -> Solution:
@@ -909,7 +910,7 @@ class GLPK(Solver[None]):
         return Result(status, solution)
 
 
-class Highs(POIMixin, Solver[None]):
+class Highs(Solver[None], POIMixin):
     """
     Solver subclass for the HiGHS solver. HiGHS must be installed
     for usage. Find the documentation at https://highs.dev/.
@@ -1170,7 +1171,7 @@ class Highs(POIMixin, Solver[None]):
         return Result(status, solution, h)
 
 
-class Gurobi(POIMixin, Solver["gurobipy.Env | dict[str, Any] | None"]):
+class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"], POIMixin):
     """
     Solver subclass for the gurobi solver.
 
@@ -2092,7 +2093,7 @@ class Knitro(Solver[None]):
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
 
 
-class Mosek(POIMixin, Solver[None]):
+class Mosek(Solver[None], POIMixin):
     """
     Solver subclass for the Mosek solver.
 
@@ -2441,7 +2442,7 @@ class Mosek(POIMixin, Solver[None]):
         return Result(status, solution)
 
 
-class COPT(POIMixin, Solver[None]):
+class COPT(Solver[None], POIMixin):
     """
     Solver subclass for the COPT solver.
 
