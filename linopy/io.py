@@ -902,6 +902,153 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     return cu_model
 
 
+def to_poi(
+    m: Model, poi_model: Any, slice_size: int = 2_000_000
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Transfer a linopy model into an existing pyoptinterface model.
+
+    Variables and constraints are added one at a time following the pyoptinterface
+    API. Returns two numpy arrays for result retrieval:
+    - ``vars_to_poi``: linopy variable label -> POI variable index
+    - ``cons_to_poi``: linopy constraint label -> POI constraint index
+
+    Notes
+    -----
+    Heavily inspired by pyoframe: https://github.com/Bravos-Power/pyoframe/blob/cf0cc39bd54e6fea0c95b0c36cd43fc0633527e1/src/pyoframe/_core.py#L1778-L1925
+
+    Parameters
+    ----------
+    m : linopy.Model
+    poi_model : pyoptinterface model instance
+        An already-constructed POI model (e.g. ``pyoptinterface.highs.Model()``).
+    """
+    import pyoptinterface as poi
+
+    # --- Variables ---
+    # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
+    vars_to_poi = np.full(m._xCounter + 1, -1, dtype=np.int32)
+
+    for name, var in m.variables.items():
+        df = var.to_polars().with_columns(
+            pl.col("lower").fill_nan(-np.inf).cast(pl.Float64),
+            pl.col("upper").fill_nan(np.inf).cast(pl.Float64),
+        )  # columns: lower, upper, labels
+        if name in m.binaries:
+            domain = poi.VariableDomain.Binary
+        elif name in m.integers:
+            domain = poi.VariableDomain.Integer
+        else:
+            domain = poi.VariableDomain.Continuous
+
+        vars_to_poi[df["labels"].to_numpy()] = [
+            poi_model.add_variable(domain, lower, upper, f"V{label}").index
+            for lower, upper, label in df.select("lower", "upper", "labels").iter_rows()
+        ]
+
+    # --- Constraints ---
+    sense_map = {
+        "<=": poi.ConstraintSense.LessEqual,
+        ">=": poi.ConstraintSense.GreaterEqual,
+        "=": poi.ConstraintSense.Equal,
+    }
+
+    cons_to_poi = np.full(m._cCounter + 1, -1, dtype=np.int32)
+
+    for con_name, con in m.constraints.items():
+        for con_slice in con.iterate_slices(slice_size):
+            df = con_slice.to_polars()  # columns: labels, coeffs, vars, sign, rhs
+            if df.is_empty():
+                continue
+
+            df = df.sort("labels")
+            poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
+            coefs = df["coeffs"].to_list()
+
+            # Compute group boundaries (first row index of each label group)
+            df_unique = (
+                df.lazy()
+                .with_row_index()
+                .filter(pl.col("labels").is_first_distinct())
+                .select("index", "labels", "rhs", "sign")
+                .with_columns(name=pl.lit("C") + pl.col("labels").cast(pl.String))
+                .collect()
+            )
+
+            split = df_unique["index"].to_list() + [df.height]
+            rhs_list = df_unique["rhs"].to_list()
+            sign_list = df_unique["sign"].to_list()
+            labels = df_unique["labels"].to_numpy()
+            names = df_unique["name"].to_list()
+
+            cons_to_poi[labels] = [
+                poi_model.add_linear_constraint(
+                    poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
+                    sense_map[sign],
+                    rhs,
+                    name,  # according to pyoframe it'd be to pass name="C" for all for gurobi
+                ).index
+                for s0, s1, rhs, sign, name in zip(
+                    split[:-1], split[1:], rhs_list, sign_list, names
+                )
+            ]
+
+    # --- Objective ---
+    obj_df = m.objective.to_polars()
+    const = float(obj_df["const"].sum()) if "const" in obj_df.columns else 0.0
+    obj_sense = (
+        poi.ObjectiveSense.Minimize
+        if m.objective.sense == "min"
+        else poi.ObjectiveSense.Maximize
+    )
+    if m.is_quadratic:
+        quad = obj_df.filter(pl.col("vars2") != -1)
+        obj_expr = poi.ScalarQuadraticFunction(
+            quad["coeffs"].to_numpy(),
+            vars_to_poi[quad["vars1"].to_numpy()],
+            vars_to_poi[quad["vars2"].to_numpy()],
+        )
+        lin = obj_df.filter(pl.col("vars2") == -1)
+        if len(lin):
+            obj_expr = obj_expr + poi.ScalarAffineFunction.from_numpy(
+                lin["coeffs"].to_numpy(), vars_to_poi[lin["vars1"].to_numpy()], const
+            )
+        poi_model.set_objective(obj_expr, obj_sense)
+    else:
+        obj_expr = poi.ScalarAffineFunction.from_numpy(
+            obj_df["coeffs"].to_numpy(), vars_to_poi[obj_df["vars"].to_numpy()], const
+        )
+        poi_model.set_objective(obj_expr, obj_sense)
+
+    # --- SOS constraints ---
+    sos_type_map = {1: poi.SOSType.SOS1, 2: poi.SOSType.SOS2}
+    for var_name in m.variables.sos:
+        var = m.variables.sos[var_name]
+        sos_type = sos_type_map[var.attrs[SOS_TYPE_ATTR]]  # type: ignore[index]
+        sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
+        other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
+
+        def add_sos(
+            labels: xr.DataArray, sos_type: Any = sos_type, sos_dim: str = sos_dim
+        ) -> None:
+            labels = labels.squeeze()
+            sos_labels = labels.values.flatten()
+            sos_weights = labels.coords[sos_dim].values.astype(float).tolist()
+            poi_vars_sos = [
+                poi.VariableIndex(idx) for idx in vars_to_poi[sos_labels].tolist()
+            ]
+            poi_model.add_sos_constraint(poi_vars_sos, sos_type, sos_weights)
+
+        if not other_dims:
+            add_sos(var.labels)
+        else:
+            stacked = var.labels.stack(_sos_group=other_dims)
+            for _, s in stacked.groupby("_sos_group"):
+                add_sos(s.unstack("_sos_group"))
+
+    return vars_to_poi, cons_to_poi
+
+
 def to_block_files(m: Model, fn: Path) -> None:
     """
     Write out the linopy model to a block structured output.
