@@ -941,9 +941,16 @@ class Highs(Solver[None], POIMixin):
 
         m = highs.Model()
         for k, v in self.solver_options.items():
-            m.set_raw_option(k, v)
+            if isinstance(v, bool):
+                m.set_raw_option_bool(k, v)
+            elif isinstance(v, int):
+                m.set_raw_option_int(k, v)
+            elif isinstance(v, float):
+                m.set_raw_option_double(k, v)
+            else:
+                m.set_raw_option_string(k, v)
         if log_fn is not None:
-            m.set_raw_option("log_file", path_to_string(log_fn))
+            m.set_raw_option_string("log_file", path_to_string(log_fn))
         return m
 
     def solve_problem_from_model(
