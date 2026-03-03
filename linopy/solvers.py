@@ -1937,7 +1937,9 @@ class Knitro(Solver[None]):
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
             return Result(
-                status, solution, KnitroResult(knitro_context= kc, reported_runtime=reported_runtime)
+                status,
+                solution,
+                KnitroResult(knitro_context=kc, reported_runtime=reported_runtime),
             )
 
         finally:
