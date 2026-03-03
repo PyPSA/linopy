@@ -1745,7 +1745,7 @@ class Xpress(Solver[None]):
         return Result(status, solution, m)
 
 
-KnitroResult = namedtuple("KnitroResult", "reported_runtime")
+KnitroResult = namedtuple("KnitroResult", "knitro_context reported_runtime")
 
 
 class Knitro(Solver[None]):
@@ -1808,7 +1808,13 @@ class Knitro(Solver[None]):
         if n == 0:
             return pd.Series(dtype=float)
 
-        values = get_values_fn(kc, n - 1)
+        try:
+            # Compatible with KNITRO >= 15
+            values = get_values_fn(kc)
+        except TypeError:
+            # Fallback for older wrappers requiring explicit indices
+            values = get_values_fn(kc, list(range(n)))
+
         names = list(get_names_fn(kc))
         return pd.Series(values, index=names, dtype=float)
 
@@ -1931,12 +1937,12 @@ class Knitro(Solver[None]):
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
             return Result(
-                status, solution, KnitroResult(reported_runtime=reported_runtime)
+                status, solution, KnitroResult(knitro_context= kc, reported_runtime=reported_runtime)
             )
 
         finally:
-            with contextlib.suppress(Exception):
-                knitro.KN_free(kc)
+            # Intentionally keep the Knitro context alive; do not free `kc` here.
+            pass
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
