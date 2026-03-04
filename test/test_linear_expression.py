@@ -7,8 +7,6 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -443,8 +441,12 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
-    expr = v.loc[:9] + v.loc[10:]
+    # disjoint coords now raise with exact default
+    with pytest.raises(ValueError, match="exact"):
+        v.loc[:9] + v.loc[10:]
+
+    # positional alignment via assign_coords
+    expr = v.loc[:9] + v.loc[10:].assign_coords(dim_2=v.loc[:9].coords["dim_2"])
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -467,8 +469,12 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
-    expr = v.loc[:9] + v.loc[10:]
+    # disjoint coords now raise with exact default
+    with pytest.raises(ValueError, match="exact"):
+        v.loc[:9] + v.loc[10:]
+
+    # positional alignment via assign_coords
+    expr = v.loc[:9] + v.loc[10:].assign_coords(dim_2=v.loc[:9].coords["dim_2"])
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -577,7 +583,18 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
-class TestSubsetCoordinateAlignment:
+class TestExactAlignmentDefault:
+    """
+    Test the new alignment convention: exact for +/-, inner for *//.
+
+    v has dim_2=[0..19] (20 entries).
+    subset has dim_2=[1, 3] (2 entries, subset of v's coords).
+    superset has dim_2=[0..24] (25 entries, superset of v's coords).
+
+    Each test shows the operation, verifies the new behavior (raises or
+    intersection), then shows the explicit join= that recovers the old result.
+    """
+
     @pytest.fixture
     def subset(self) -> xr.DataArray:
         return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
@@ -589,297 +606,292 @@ class TestSubsetCoordinateAlignment:
         )
 
     @pytest.fixture
+    def matching(self) -> xr.DataArray:
+        return xr.DataArray(
+            np.arange(20, dtype=float),
+            dims=["dim_2"],
+            coords={"dim_2": range(20)},
+        )
+
+    @pytest.fixture
     def expected_fill(self) -> np.ndarray:
+        """Old expected result: 20-entry array with values at positions 1,3."""
         arr = np.zeros(20)
         arr[1] = 10.0
         arr[3] = 30.0
         return arr
 
-    def test_var_mul_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
-    ) -> None:
-        result = v * subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
-
-    def test_expr_mul_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
-    ) -> None:
-        expr = 1 * v
-        result = expr * subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
-
-    @pytest.mark.parametrize(
-        "make_lhs,make_rhs",
-        [
-            (lambda v, s: s * v, lambda v, s: v * s),
-            (lambda v, s: s * (1 * v), lambda v, s: (1 * v) * s),
-            (lambda v, s: s + v, lambda v, s: v + s),
-            (lambda v, s: s + (v + 5), lambda v, s: (v + 5) + s),
-        ],
-        ids=["subset*var", "subset*expr", "subset+var", "subset+expr"],
-    )
-    def test_commutativity(
-        self, v: Variable, subset: xr.DataArray, make_lhs: Any, make_rhs: Any
-    ) -> None:
-        assert_linequal(make_lhs(v, subset), make_rhs(v, subset))
+    # --- Addition / subtraction with subset constant ---
 
     def test_var_add_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
-        result = v + subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
+        # now raises
+        with pytest.raises(ValueError, match="exact"):
+            v + subset
+
+        # explicit join="left" recovers old behavior: 20 entries, fill 0
+        result = v.add(subset, join="left")
+        assert result.sizes["dim_2"] == 20
         np.testing.assert_array_equal(result.const.values, expected_fill)
 
     def test_var_sub_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
-        result = v - subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, -expected_fill)
+        with pytest.raises(ValueError, match="exact"):
+            v - subset
 
-    def test_subset_sub_var(self, v: Variable, subset: xr.DataArray) -> None:
-        assert_linequal(subset - v, -v + subset)
+        result = v.sub(subset, join="left")
+        assert result.sizes["dim_2"] == 20
+        np.testing.assert_array_equal(result.const.values, -expected_fill)
 
     def test_expr_add_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
-        expr = v + 5
-        result = expr + subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
+        with pytest.raises(ValueError, match="exact"):
+            (v + 5) + subset
+
+        result = (v + 5).add(subset, join="left")
+        assert result.sizes["dim_2"] == 20
         np.testing.assert_array_equal(result.const.values, expected_fill + 5)
 
-    def test_expr_sub_subset(
+    # --- Addition with superset constant ---
+
+    def test_var_add_superset(self, v: Variable, superset: xr.DataArray) -> None:
+        with pytest.raises(ValueError, match="exact"):
+            v + superset
+
+        result = v.add(superset, join="left")
+        assert result.sizes["dim_2"] == 20
+        assert not np.isnan(result.const.values).any()
+
+    # --- Addition / multiplication with disjoint coords ---
+
+    def test_disjoint_add(self, v: Variable) -> None:
+        disjoint = xr.DataArray(
+            [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+        )
+        with pytest.raises(ValueError, match="exact"):
+            v + disjoint
+
+        result = v.add(disjoint, join="outer")
+        assert result.sizes["dim_2"] == 22  # union of [0..19] and [50, 60]
+
+    def test_disjoint_mul(self, v: Variable) -> None:
+        disjoint = xr.DataArray(
+            [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+        )
+        # inner join: no intersection → error
+        with pytest.raises(ValueError, match="no overlapping coordinates"):
+            v * disjoint
+
+        # explicit join="left": 20 entries, all zeros
+        result = v.mul(disjoint, join="left")
+        assert result.sizes["dim_2"] == 20
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(20))
+
+    def test_disjoint_div(self, v: Variable) -> None:
+        disjoint = xr.DataArray(
+            [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+        )
+        with pytest.raises(ValueError, match="no overlapping coordinates"):
+            v / disjoint
+
+    # --- Multiplication / division with subset constant ---
+
+    def test_var_mul_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
-        expr = v + 5
-        result = expr - subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, 5 - expected_fill)
+        # inner join: 2 entries (intersection)
+        result = v * subset
+        assert result.sizes["dim_2"] == 2
+        assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(10.0)
+        assert result.coeffs.squeeze().sel(dim_2=3).item() == pytest.approx(30.0)
 
-    def test_subset_sub_expr(self, v: Variable, subset: xr.DataArray) -> None:
-        expr = v + 5
-        assert_linequal(subset - expr, -(expr - subset))
+        # explicit join="left" recovers old behavior: 20 entries, fill 0
+        result = v.mul(subset, join="left")
+        assert result.sizes["dim_2"] == 20
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+
+    def test_expr_mul_subset(self, v: Variable, subset: xr.DataArray) -> None:
+        result = (1 * v) * subset
+        assert result.sizes["dim_2"] == 2
+        assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(10.0)
+
+    def test_var_mul_superset(self, v: Variable, superset: xr.DataArray) -> None:
+        # inner join: intersection = v's 20 coords
+        result = v * superset
+        assert result.sizes["dim_2"] == 20
+        assert not np.isnan(result.coeffs.values).any()
 
     def test_var_div_subset(self, v: Variable, subset: xr.DataArray) -> None:
+        # inner join: 2 entries
         result = v / subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
+        assert result.sizes["dim_2"] == 2
+        assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(0.1)
+        assert result.coeffs.squeeze().sel(dim_2=3).item() == pytest.approx(1.0 / 30)
+
+        # explicit join="left": 20 entries, fill 1
+        result = v.div(subset, join="left")
+        assert result.sizes["dim_2"] == 20
         assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(0.1)
         assert result.coeffs.squeeze().sel(dim_2=0).item() == pytest.approx(1.0)
 
+    # --- Constraints with subset RHS ---
+
     def test_var_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
-        con = v <= subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        with pytest.raises(ValueError, match="exact"):
+            v <= subset
+
+        # explicit join="left": 20 entries, NaN where RHS missing
+        con = v.to_linexpr().le(subset, join="left")
+        assert con.sizes["dim_2"] == 20
         assert con.rhs.sel(dim_2=1).item() == 10.0
         assert con.rhs.sel(dim_2=3).item() == 30.0
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    def test_expr_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
+        expr = v + 5
+        with pytest.raises(ValueError, match="exact"):
+            expr <= subset
+
+        con = expr.le(subset, join="left")
+        assert con.sizes["dim_2"] == 20
+        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
+        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
         assert np.isnan(con.rhs.sel(dim_2=0).item())
 
     @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
     def test_var_comparison_subset(
         self, v: Variable, subset: xr.DataArray, sign: str
     ) -> None:
-        if sign == "<=":
-            con = v <= subset
-        elif sign == ">=":
-            con = v >= subset
-        else:
-            con = v == subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        with pytest.raises(ValueError, match="exact"):
+            if sign == "<=":
+                v <= subset
+            elif sign == ">=":
+                v >= subset
+            else:
+                v == subset
+
+    def test_constraint_le_join_inner(self, v: Variable, subset: xr.DataArray) -> None:
+        con = v.to_linexpr().le(subset, join="inner")
+        assert con.sizes["dim_2"] == 2
         assert con.rhs.sel(dim_2=1).item() == 10.0
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
+        assert con.rhs.sel(dim_2=3).item() == 30.0
 
-    def test_expr_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
-        expr = v + 5
-        con = expr <= subset
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
-        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
+    # --- Matching coordinates: unchanged behavior ---
 
-    def test_add_commutativity_full_coords(self, v: Variable) -> None:
-        full = xr.DataArray(
-            np.arange(20, dtype=float),
-            dims=["dim_2"],
-            coords={"dim_2": range(20)},
-        )
-        assert_linequal(v + full, full + v)
-
-    def test_superset_addition_pins_to_lhs(
-        self, v: Variable, superset: xr.DataArray
-    ) -> None:
-        result = v + superset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
+    def test_add_matching_unchanged(self, v: Variable, matching: xr.DataArray) -> None:
+        result = v + matching
+        assert result.sizes["dim_2"] == 20
         assert not np.isnan(result.const.values).any()
 
-    def test_superset_add_var(self, v: Variable, superset: xr.DataArray) -> None:
-        assert_linequal(superset + v, v + superset)
+    def test_mul_matching_unchanged(self, v: Variable, matching: xr.DataArray) -> None:
+        result = v * matching
+        assert result.sizes["dim_2"] == 20
 
-    def test_superset_sub_var(self, v: Variable, superset: xr.DataArray) -> None:
-        assert_linequal(superset - v, -v + superset)
+    def test_le_matching_unchanged(self, v: Variable, matching: xr.DataArray) -> None:
+        con = v <= matching
+        assert con.sizes["dim_2"] == 20
 
-    def test_superset_mul_var(self, v: Variable, superset: xr.DataArray) -> None:
-        assert_linequal(superset * v, v * superset)
-
-    @pytest.mark.parametrize("sign", ["<=", ">="])
-    def test_superset_comparison_var(
-        self, v: Variable, superset: xr.DataArray, sign: str
+    def test_add_commutativity_matching(
+        self, v: Variable, matching: xr.DataArray
     ) -> None:
-        if sign == "<=":
-            con = superset <= v
-        else:
-            con = superset >= v
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(con.lhs.coeffs.values).any()
-        assert not np.isnan(con.rhs.values).any()
+        assert_linequal(v + matching, matching + v)
 
-    def test_disjoint_addition_pins_to_lhs(self, v: Variable) -> None:
+    def test_mul_commutativity(self, v: Variable, subset: xr.DataArray) -> None:
+        assert_linequal(v * subset, subset * v)
+
+    # --- Explicit join modes ---
+
+    def test_add_join_inner(self, v: Variable, subset: xr.DataArray) -> None:
+        result = v.add(subset, join="inner")
+        assert result.sizes["dim_2"] == 2
+        assert result.const.sel(dim_2=1).item() == 10.0
+        assert result.const.sel(dim_2=3).item() == 30.0
+
+    def test_add_join_outer(self, v: Variable, subset: xr.DataArray) -> None:
+        result = v.add(subset, join="outer")
+        assert result.sizes["dim_2"] == 20
+        assert result.const.sel(dim_2=1).item() == 10.0
+        assert result.const.sel(dim_2=0).item() == 0.0
+
+    def test_add_positional_assign_coords(self, v: Variable) -> None:
         disjoint = xr.DataArray(
-            [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            np.ones(20), dims=["dim_2"], coords={"dim_2": range(50, 70)}
         )
-        result = v + disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, np.zeros(20))
+        result = v + disjoint.assign_coords(dim_2=v.coords["dim_2"])
+        assert result.sizes["dim_2"] == 20
+        assert list(result.coords["dim_2"].values) == list(range(20))
 
-    def test_expr_div_subset(self, v: Variable, subset: xr.DataArray) -> None:
-        expr = 1 * v
-        result = expr / subset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(0.1)
-        assert result.coeffs.squeeze().sel(dim_2=0).item() == pytest.approx(1.0)
-
-    def test_subset_add_var_coefficients(
-        self, v: Variable, subset: xr.DataArray
-    ) -> None:
-        result = subset + v
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
-
-    def test_subset_sub_var_coefficients(
-        self, v: Variable, subset: xr.DataArray
-    ) -> None:
-        result = subset - v
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, -np.ones(20))
-
-    @pytest.mark.parametrize("sign", ["<=", ">=", "=="])
-    def test_subset_comparison_var(
-        self, v: Variable, subset: xr.DataArray, sign: str
-    ) -> None:
-        if sign == "<=":
-            con = subset <= v
-        elif sign == ">=":
-            con = subset >= v
-        else:
-            con = subset == v
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-        assert con.rhs.sel(dim_2=1).item() == pytest.approx(10.0)
-
-    def test_superset_mul_pins_to_lhs(
-        self, v: Variable, superset: xr.DataArray
-    ) -> None:
-        result = v * superset
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-
-    def test_superset_div_pins_to_lhs(self, v: Variable) -> None:
-        superset_nonzero = xr.DataArray(
-            np.arange(1, 26, dtype=float),
-            dims=["dim_2"],
-            coords={"dim_2": range(25)},
-        )
-        result = v / superset_nonzero
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
+    # --- Quadratic expressions ---
 
     def test_quadexpr_add_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
         qexpr = v * v
-        result = qexpr + subset
-        assert isinstance(result, QuadraticExpression)
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, expected_fill)
+        with pytest.raises(ValueError, match="exact"):
+            qexpr + subset
 
-    def test_quadexpr_sub_subset(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
-    ) -> None:
-        qexpr = v * v
-        result = qexpr - subset
+        result = qexpr.add(subset, join="left")
         assert isinstance(result, QuadraticExpression)
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.const.values).any()
-        np.testing.assert_array_equal(result.const.values, -expected_fill)
+        assert result.sizes["dim_2"] == 20
+        np.testing.assert_array_equal(result.const.values, expected_fill)
 
     def test_quadexpr_mul_subset(
         self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
     ) -> None:
         qexpr = v * v
+        # inner join: 2 entries
         result = qexpr * subset
         assert isinstance(result, QuadraticExpression)
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+        assert result.sizes["dim_2"] == 2
 
-    def test_subset_mul_quadexpr(
-        self, v: Variable, subset: xr.DataArray, expected_fill: np.ndarray
-    ) -> None:
-        qexpr = v * v
-        result = subset * qexpr
+        # explicit join="left": 20 entries
+        result = qexpr.mul(subset, join="left")
         assert isinstance(result, QuadraticExpression)
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
+        assert result.sizes["dim_2"] == 20
         np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
 
-    def test_subset_add_quadexpr(self, v: Variable, subset: xr.DataArray) -> None:
-        qexpr = v * v
-        assert_quadequal(subset + qexpr, qexpr + subset)
+    # --- Multi-dimensional ---
 
     def test_multidim_subset_mul(self, m: Model) -> None:
         coords_a = pd.RangeIndex(4, name="a")
         coords_b = pd.RangeIndex(5, name="b")
         w = m.add_variables(coords=[coords_a, coords_b], name="w")
-
         subset_2d = xr.DataArray(
             [[2.0, 3.0], [4.0, 5.0]],
             dims=["a", "b"],
             coords={"a": [1, 3], "b": [0, 4]},
         )
+
+        # inner join: 2x2
         result = w * subset_2d
+        assert result.sizes["a"] == 2
+        assert result.sizes["b"] == 2
+
+        # explicit join="left": 4x5, zeros at non-subset positions
+        result = w.mul(subset_2d, join="left")
         assert result.sizes["a"] == 4
         assert result.sizes["b"] == 5
-        assert not np.isnan(result.coeffs.values).any()
         assert result.coeffs.squeeze().sel(a=1, b=0).item() == pytest.approx(2.0)
         assert result.coeffs.squeeze().sel(a=3, b=4).item() == pytest.approx(5.0)
         assert result.coeffs.squeeze().sel(a=0, b=0).item() == pytest.approx(0.0)
-        assert result.coeffs.squeeze().sel(a=1, b=2).item() == pytest.approx(0.0)
 
     def test_multidim_subset_add(self, m: Model) -> None:
         coords_a = pd.RangeIndex(4, name="a")
         coords_b = pd.RangeIndex(5, name="b")
         w = m.add_variables(coords=[coords_a, coords_b], name="w")
-
         subset_2d = xr.DataArray(
             [[2.0, 3.0], [4.0, 5.0]],
             dims=["a", "b"],
             coords={"a": [1, 3], "b": [0, 4]},
         )
-        result = w + subset_2d
-        assert result.sizes["a"] == 4
-        assert result.sizes["b"] == 5
-        assert not np.isnan(result.const.values).any()
-        assert result.const.sel(a=1, b=0).item() == pytest.approx(2.0)
-        assert result.const.sel(a=3, b=4).item() == pytest.approx(5.0)
-        assert result.const.sel(a=0, b=0).item() == pytest.approx(0.0)
+
+        with pytest.raises(ValueError, match="exact"):
+            w + subset_2d
+
+    # --- Edge cases ---
 
     def test_constraint_rhs_extra_dims_raises(self, v: Variable) -> None:
         rhs = xr.DataArray(
@@ -888,28 +900,22 @@ class TestSubsetCoordinateAlignment:
         with pytest.raises(ValueError, match="not present in the expression"):
             v <= rhs
 
+    def test_add_constant_extra_dims_raises(self, v: Variable) -> None:
+        da = xr.DataArray(
+            [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
+        )
+        with pytest.raises(ValueError, match="not present in the expression"):
+            v + da
+        with pytest.raises(ValueError, match="not present in the expression"):
+            v - da
+        # multiplication still allows extra dims (broadcasts)
+        result = v * da
+        assert "extra" in result.dims
+
     def test_da_truediv_var_raises(self, v: Variable) -> None:
         da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
         with pytest.raises(TypeError):
             da / v  # type: ignore[operator]
-
-    def test_disjoint_mul_produces_zeros(self, v: Variable) -> None:
-        disjoint = xr.DataArray(
-            [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
-        )
-        result = v * disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(20))
-
-    def test_disjoint_div_preserves_coeffs(self, v: Variable) -> None:
-        disjoint = xr.DataArray(
-            [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
-        )
-        result = v / disjoint
-        assert result.sizes["dim_2"] == v.sizes["dim_2"]
-        assert not np.isnan(result.coeffs.values).any()
-        np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
 
     def test_da_eq_da_still_works(self) -> None:
         da1 = xr.DataArray([1, 2, 3])
@@ -931,7 +937,8 @@ class TestSubsetCoordinateAlignment:
         coords = pd.RangeIndex(5, name="i")
         x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
         subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
-        m.add_constraints(x <= subset_ub, name="subset_ub")
+        # exact default raises — use explicit join="left" (NaN = no constraint)
+        m.add_constraints(x.to_linexpr().le(subset_ub, join="left"), name="subset_ub")
         m.add_objective(x.sum(), sense="max")
         m.solve(solver_name=available_solvers[0])
         sol = m.solution["x"]
@@ -1789,10 +1796,12 @@ class TestJoinParameter:
     def c(self, m2: Model) -> Variable:
         return m2.variables["c"]
 
-    def test_add_join_none_preserves_default(self, a: Variable, b: Variable) -> None:
-        result_default = a.to_linexpr() + b.to_linexpr()
-        result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
-        assert_linequal(result_default, result_none)
+    def test_add_join_none_raises_on_mismatch(self, a: Variable, b: Variable) -> None:
+        # a has i=[0,1,2], b has i=[1,2,3] — exact default raises
+        with pytest.raises(ValueError, match="exact"):
+            a.to_linexpr() + b.to_linexpr()
+        with pytest.raises(ValueError, match="exact"):
+            a.to_linexpr().add(b.to_linexpr(), join=None)
 
     def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
         result = a.to_linexpr().add(b.to_linexpr(), join="inner")
@@ -1820,10 +1829,10 @@ class TestJoinParameter:
         result = a.to_linexpr().add(const, join="outer")
         assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
 
-    def test_add_constant_join_override(self, a: Variable, c: Variable) -> None:
+    def test_add_constant_positional(self, a: Variable) -> None:
         expr = a.to_linexpr()
-        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [0, 1, 2]})
-        result = expr.add(const, join="override")
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
+        result = expr + const.assign_coords(i=expr.coords["i"])
         assert list(result.data.indexes["i"]) == [0, 1, 2]
         assert (result.const.values == const.values).all()
 
@@ -1880,8 +1889,8 @@ class TestJoinParameter:
         result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="inner")
         assert list(result.data.indexes["i"]) == [1, 2]
 
-    def test_same_shape_add_join_override(self, a: Variable, c: Variable) -> None:
-        result = a.to_linexpr().add(c.to_linexpr(), join="override")
+    def test_same_shape_add_assign_coords(self, a: Variable, c: Variable) -> None:
+        result = a.to_linexpr() + c.to_linexpr().assign_coords(i=a.coords["i"])
         assert list(result.data.indexes["i"]) == [0, 1, 2]
 
     def test_add_expr_outer_const_values(self, a: Variable, b: Variable) -> None:
@@ -1919,17 +1928,17 @@ class TestJoinParameter:
         assert list(result.coords["i"].values) == [1]
         assert result.const.sel(i=1).item() == 15
 
-    def test_add_constant_override_positional(self, a: Variable) -> None:
+    def test_add_constant_positional_different_coords(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.add(other, join="override")
+        result = expr + other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [15, 25, 35])
 
-    def test_sub_constant_override(self, a: Variable) -> None:
+    def test_sub_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.sub(other, join="override")
+        result = expr - other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [-5, -15, -25])
 
@@ -1943,10 +1952,10 @@ class TestJoinParameter:
         assert result.const.sel(i=2).item() == -5
         assert result.const.sel(i=3).item() == -10
 
-    def test_mul_constant_override_positional(self, a: Variable) -> None:
+    def test_mul_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 5
         other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.mul(other, join="override")
+        result = expr * other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [10, 15, 20])
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
@@ -1963,10 +1972,10 @@ class TestJoinParameter:
         assert result.coeffs.squeeze().sel(i=1).item() == 2
         assert result.coeffs.squeeze().sel(i=0).item() == 0
 
-    def test_div_constant_override_positional(self, a: Variable) -> None:
+    def test_div_constant_positional(self, a: Variable) -> None:
         expr = 1 * a + 10
         other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
-        result = expr.div(other, join="override")
+        result = expr / other.assign_coords(i=expr.coords["i"])
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
 
@@ -1990,16 +1999,16 @@ class TestJoinParameter:
         assert set(result.coords["i"].values) == {0, 1, 2, 3}
         assert result.nterm == 2
 
-    def test_variable_mul_override(self, a: Variable) -> None:
+    def test_variable_mul_positional(self, a: Variable) -> None:
         other = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [5, 6, 7]})
-        result = a.mul(other, join="override")
+        result = a * other.assign_coords(i=a.coords["i"])
         assert isinstance(result, LinearExpression)
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
 
-    def test_variable_div_override(self, a: Variable) -> None:
+    def test_variable_div_positional(self, a: Variable) -> None:
         other = xr.DataArray([2.0, 5.0, 10.0], dims=["i"], coords={"i": [5, 6, 7]})
-        result = a.div(other, join="override")
+        result = a / other.assign_coords(i=a.coords["i"])
         assert isinstance(result, LinearExpression)
         assert list(result.coords["i"].values) == [0, 1, 2]
         np.testing.assert_array_almost_equal(
@@ -2013,14 +2022,18 @@ class TestJoinParameter:
     def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
         expr_a = 1 * a + 5
         const = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})
-        for join in ["override", "outer", "inner"]:
+        for join in ["outer", "inner"]:
             result = expr_a.add(const, join=join)
             assert list(result.coords["i"].values) == [0, 1, 2]
             np.testing.assert_array_equal(result.const.values, [6, 7, 8])
+        # assign_coords also works when coords already match
+        result = expr_a + const.assign_coords(i=expr_a.coords["i"])
+        assert list(result.coords["i"].values) == [0, 1, 2]
+        np.testing.assert_array_equal(result.const.values, [6, 7, 8])
 
-    def test_add_scalar_with_explicit_join(self, a: Variable) -> None:
+    def test_add_scalar(self, a: Variable) -> None:
         expr = 1 * a + 5
-        result = expr.add(10, join="override")
+        result = expr + 10
         np.testing.assert_array_equal(result.const.values, [15, 15, 15])
         assert list(result.coords["i"].values) == [0, 1, 2]
 
@@ -2028,10 +2041,10 @@ class TestJoinParameter:
         quad = a.to_linexpr() * b.to_linexpr()
         const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
         result = quad.add(const, join="inner")
-        assert list(result.data.indexes["i"]) == [1, 2, 3]
+        assert list(result.data.indexes["i"]) == [1, 2]
 
-    def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
-        quad = a.to_linexpr() * a.to_linexpr()
+    def test_quadratic_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
+        quad = a.to_linexpr() * b.to_linexpr()
         const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
         result = quad.add(const, join="inner")
         assert list(result.data.indexes["i"]) == [0, 1]
@@ -2040,7 +2053,7 @@ class TestJoinParameter:
         quad = a.to_linexpr() * b.to_linexpr()
         const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
         result = quad.mul(const, join="inner")
-        assert list(result.data.indexes["i"]) == [1, 2, 3]
+        assert list(result.data.indexes["i"]) == [1, 2]
 
     def test_merge_join_left(self, a: Variable, b: Variable) -> None:
         result: LinearExpression = merge([a.to_linexpr(), b.to_linexpr()], join="left")
