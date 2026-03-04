@@ -12,6 +12,12 @@ Upcoming Version
 * Enable quadratic problems with SCIP on windows.
 
 
+Version 0.6.5
+-------------
+
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
+
 Version 0.6.4
 --------------
 
