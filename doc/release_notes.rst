@@ -4,6 +4,9 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
+
 Version 0.6.4
 --------------
 
