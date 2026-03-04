@@ -5,6 +5,8 @@ Created on Wed Mar 10 11:23:13 2021.
 @author: fabulous
 """
 
+from typing import Any
+
 import dask
 import dask.array.core
 import numpy as np
@@ -155,7 +157,7 @@ def test_constraint_assignment_with_reindex() -> None:
         ),
     ],
 )
-def test_constraint_rhs_lower_dim(rhs_factory) -> None:
+def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     m = Model()
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
@@ -177,7 +179,7 @@ def test_constraint_rhs_lower_dim(rhs_factory) -> None:
         pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
     ],
 )
-def test_constraint_rhs_higher_dim_constant_raises(rhs_factory) -> None:
+def test_constraint_rhs_higher_dim_constant_raises(rhs_factory: Any) -> None:
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
@@ -198,7 +200,7 @@ def test_constraint_rhs_higher_dim_constant_raises(rhs_factory) -> None:
         ),
     ],
 )
-def test_constraint_rhs_higher_dim_expression(rhs_factory) -> None:
+def test_constraint_rhs_higher_dim_expression(rhs_factory: Any) -> None:
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 

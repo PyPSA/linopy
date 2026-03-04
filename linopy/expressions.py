@@ -562,7 +562,10 @@ class BaseExpression(ABC):
             return self.const, other.assign_coords(coords=self.coords), False
         else:
             self_const, aligned = xr.align(
-                self.const, other, join=join, fill_value=fill_value
+                self.const,
+                other,
+                join=join,
+                fill_value=fill_value,  # type: ignore[call-overload]
             )
             return self_const, aligned, True
 
@@ -675,7 +678,7 @@ class BaseExpression(ABC):
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)
+        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
 
     def sub(
         self: GenericExpression,
@@ -2130,7 +2133,9 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: str | None = None
+    ) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
         )
