@@ -9,7 +9,7 @@ Upcoming Version
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, dicts, or keyword arguments. Includes ``breakpoints.segments()`` for disjunctive formulations.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
-
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 
 Version 0.6.5
 -------------
