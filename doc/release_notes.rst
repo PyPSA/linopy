@@ -17,6 +17,12 @@ Upcoming Version
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 
 
+Version 0.6.5
+-------------
+
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
+
 Version 0.6.4
 --------------
 
