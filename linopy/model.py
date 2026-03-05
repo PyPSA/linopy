@@ -785,7 +785,7 @@ class Model:
 
         rhs_nan = data.rhs.isnull()
         if rhs_nan.any():
-            data["rhs"] = data.rhs.fillna(0)
+            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask

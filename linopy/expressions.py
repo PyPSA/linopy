@@ -687,6 +687,7 @@ class BaseExpression(ABC):
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
+        >
 
         Parameters
         ----------
@@ -1081,9 +1082,10 @@ class BaseExpression(ABC):
         if isinstance(rhs, DataArray):
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
-                raise ValueError(
-                    f"RHS DataArray has dimensions {extra_dims} not present "
-                    f"in the expression. Cannot create constraint."
+                logger.warning(
+                    f"Constant RHS contains dimensions {extra_dims} not present "
+                    f"in the expression, which might lead to inefficiencies. "
+                    f"Consider collapsing the dimensions by taking min/max."
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
         elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(

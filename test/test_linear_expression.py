@@ -881,12 +881,13 @@ class TestSubsetCoordinateAlignment:
         assert result.const.sel(a=3, b=4).item() == pytest.approx(5.0)
         assert result.const.sel(a=0, b=0).item() == pytest.approx(0.0)
 
-    def test_constraint_rhs_extra_dims_raises(self, v: Variable) -> None:
+    def test_constraint_rhs_extra_dims_broadcasts(self, v: Variable) -> None:
+        """DataArray RHS with extra dims logs a warning and broadcasts."""
         rhs = xr.DataArray(
             [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
         )
-        with pytest.raises(ValueError, match="not present in the expression"):
-            v <= rhs
+        c = v <= rhs
+        assert "extra" in c.dims
 
     def test_da_truediv_var_raises(self, v: Variable) -> None:
         da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
@@ -927,13 +928,14 @@ class TestSubsetCoordinateAlignment:
 
         if not available_solvers:
             pytest.skip("No solver available")
+        solver = "highs" if "highs" in available_solvers else available_solvers[0]
         m = Model()
         coords = pd.RangeIndex(5, name="i")
         x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
         subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
         m.add_constraints(x <= subset_ub, name="subset_ub")
         m.add_objective(x.sum(), sense="max")
-        m.solve(solver_name=available_solvers[0])
+        m.solve(solver_name=solver)
         sol = m.solution["x"]
         assert sol.sel(i=1).item() == pytest.approx(10.0)
         assert sol.sel(i=3).item() == pytest.approx(20.0)

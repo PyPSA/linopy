@@ -172,10 +172,6 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     "rhs_factory",
     [
         pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
-        pytest.param(
-            lambda m: xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"]),
-            id="dataarray",
-        ),
         pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
     ],
 )
@@ -185,6 +181,16 @@ def test_constraint_rhs_higher_dim_constant_raises(rhs_factory: Any) -> None:
 
     with pytest.raises(ValueError, match="dimensions"):
         m.add_constraints(x >= rhs_factory(m))
+
+
+def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:
+    """DataArray RHS with extra dims reindexes to expression coords (no raise)."""
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+    rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
+
+    c = m.add_constraints(x >= rhs)
+    assert c.shape == (5, 3)
 
 
 @pytest.mark.parametrize(
