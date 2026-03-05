@@ -563,6 +563,16 @@ class TestCoordinateAlignment:
         arr[3] = 30.0
         return arr
 
+    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
+    def nan_constant(self, request: Any) -> xr.DataArray | pd.Series:
+        vals = np.arange(20, dtype=float)
+        vals[0] = np.nan
+        vals[5] = np.nan
+        vals[19] = np.nan
+        if request.param == "xarray":
+            return xr.DataArray(vals, dims=["dim_2"], coords={"dim_2": range(20)})
+        return pd.Series(vals, index=pd.Index(range(20), name="dim_2"))
+
     class TestSubset:
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_mul_subset_fills_zeros(
@@ -794,6 +804,115 @@ class TestCoordinateAlignment:
         def test_subset_add_quadexpr(self, v: Variable, subset: xr.DataArray) -> None:
             qexpr = v * v
             assert_quadequal(subset + qexpr, qexpr + subset)
+
+    class TestMissingValues:
+        """Same shape as variable but with NaN entries in the constant."""
+
+        EXPECTED_NAN_MASK = np.zeros(20, dtype=bool)
+        EXPECTED_NAN_MASK[[0, 5, 19]] = True
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_nan_propagates(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            result = target + nan_constant
+            assert result.sizes["dim_2"] == 20
+            np.testing.assert_array_equal(
+                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
+            )
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_sub_nan_propagates(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            result = target - nan_constant
+            assert result.sizes["dim_2"] == 20
+            np.testing.assert_array_equal(
+                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
+            )
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_nan_propagates(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target * nan_constant
+            assert result.sizes["dim_2"] == 20
+            np.testing.assert_array_equal(
+                np.isnan(result.coeffs.squeeze().values), self.EXPECTED_NAN_MASK
+            )
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_div_nan_propagates(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target / nan_constant
+            assert result.sizes["dim_2"] == 20
+            np.testing.assert_array_equal(
+                np.isnan(result.coeffs.squeeze().values), self.EXPECTED_NAN_MASK
+            )
+
+        def test_add_commutativity(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            result_a = v + nan_constant
+            result_b = nan_constant + v
+            # Compare non-NaN values are equal and NaN positions match
+            nan_mask_a = np.isnan(result_a.const.values)
+            nan_mask_b = np.isnan(result_b.const.values)
+            np.testing.assert_array_equal(nan_mask_a, nan_mask_b)
+            np.testing.assert_array_equal(
+                result_a.const.values[~nan_mask_a],
+                result_b.const.values[~nan_mask_b],
+            )
+            np.testing.assert_array_equal(
+                result_a.coeffs.values, result_b.coeffs.values
+            )
+
+        def test_mul_commutativity(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            result_a = v * nan_constant
+            result_b = nan_constant * v
+            nan_mask_a = np.isnan(result_a.coeffs.values)
+            nan_mask_b = np.isnan(result_b.coeffs.values)
+            np.testing.assert_array_equal(nan_mask_a, nan_mask_b)
+            np.testing.assert_array_equal(
+                result_a.coeffs.values[~nan_mask_a],
+                result_b.coeffs.values[~nan_mask_b],
+            )
+
+        def test_quadexpr_add_nan(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            qexpr = v * v
+            result = qexpr + nan_constant
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == 20
+            np.testing.assert_array_equal(
+                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
+            )
 
     class TestMultiDim:
         def test_multidim_subset_mul(self, m: Model) -> None:
