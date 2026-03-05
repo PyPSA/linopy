@@ -175,12 +175,15 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
         pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
     ],
 )
-def test_constraint_rhs_higher_dim_constant_raises(rhs_factory: Any) -> None:
+def test_constraint_rhs_higher_dim_constant_warns(
+    rhs_factory: Any, caplog: Any
+) -> None:
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
-    with pytest.raises(ValueError, match="dimensions"):
+    with caplog.at_level("WARNING", logger="linopy.expressions"):
         m.add_constraints(x >= rhs_factory(m))
+    assert "dimensions" in caplog.text
 
 
 def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:

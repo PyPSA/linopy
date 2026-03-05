@@ -735,7 +735,6 @@ class BaseExpression(ABC):
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
-        >
 
         Parameters
         ----------
