@@ -315,6 +315,7 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -443,7 +444,7 @@ class Variable:
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: float | int | LinearExpression | Variable
+        self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -454,10 +455,10 @@ class Variable:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self.to_linexpr(1 / other)
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
-        self, coefficient: float | int | LinearExpression | Variable
+        self, coefficient: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -544,29 +545,118 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: Variable) -> LinearExpression:
+    def add(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
-        """
-        return self.__add__(other)
 
-    def sub(self, other: Variable) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().add(other, join=join)
+
+    def sub(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
-        """
-        return self.__sub__(other)
 
-    def mul(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().sub(other, join=join)
+
+    def mul(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
-        """
-        return self.__mul__(other)
 
-    def div(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : constant-like
+            The coefficient to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().mul(other, join=join)
+
+    def div(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__div__(other)
+        return self.to_linexpr().div(other, join=join)
+
+    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().le(rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().ge(rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().eq(rhs, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """

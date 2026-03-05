@@ -4,6 +4,12 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Harmonize coordinate alignment for operations with subset/superset objects:
+  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
+  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
+  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
+  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
+  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
 * Add ``add_piecewise_constraints()`` for piecewise linear constraints with SOS2 and incremental (pure LP) formulations.
 * Add ``add_disjunctive_piecewise_constraints()`` for disconnected piecewise linear segments (e.g. forbidden operating zones).
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, dicts, or keyword arguments. Includes ``breakpoints.segments()`` for disjunctive formulations.
