@@ -1079,7 +1079,9 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, DataArray):
+        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
                 logger.warning(
@@ -1088,13 +1090,6 @@ class BaseExpression(ABC):
                     f"Consider collapsing the dimensions by taking min/max."
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
-            self.coord_dims
-        ):
-            raise ValueError(
-                f"RHS has {rhs.ndim} dimensions, but the expression only "
-                f"has {len(self.coord_dims)}. Cannot create constraint."
-            )
 
         all_to_lhs = self.sub(rhs, join=join).data
         data = assign_multiindex_safe(

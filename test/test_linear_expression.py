@@ -538,14 +538,22 @@ def test_linear_expression_multiplication_invalid(
 
 
 class TestCoordinateAlignment:
-    @pytest.fixture
-    def subset(self) -> xr.DataArray:
-        return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+    @pytest.fixture(params=["da", "series"])
+    def subset(self, request: Any) -> xr.DataArray | pd.Series:
+        if request.param == "da":
+            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
 
-    @pytest.fixture
-    def superset(self) -> xr.DataArray:
-        return xr.DataArray(
-            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
+    @pytest.fixture(params=["da", "series"])
+    def superset(self, request: Any) -> xr.DataArray | pd.Series:
+        if request.param == "da":
+            return xr.DataArray(
+                np.arange(25, dtype=float),
+                dims=["dim_2"],
+                coords={"dim_2": range(25)},
+            )
+        return pd.Series(
+            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
         )
 
     @pytest.fixture
