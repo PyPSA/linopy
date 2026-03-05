@@ -60,6 +60,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_xpress,
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
@@ -1800,6 +1801,8 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_xpress = to_xpress
 
     to_cupdlpx = to_cupdlpx
 

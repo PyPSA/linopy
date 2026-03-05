@@ -77,3 +77,18 @@ def test_matrices_float_c() -> None:
 
     c = m.matrices.c
     assert np.all(c == np.array([1.5, 1.5]))
+
+
+def test_matrices_A_with_sparse_constraint_labels() -> None:
+    m = Model()
+
+    x = m.add_variables(0, 1, coords=[range(6)], name="x")
+    mask = xr.DataArray([True, False, True, False, True, False], dims=["dim_0"])
+    m.add_constraints(x, GREATER_EQUAL, 0, mask=mask)
+    m.add_objective(x.sum())
+
+    A_full = m.constraints.to_matrix(filter_missings=False)
+    expected = A_full[m.matrices.clabels][:, m.matrices.vlabels]
+
+    assert m.matrices.A is not None
+    assert (m.matrices.A != expected).nnz == 0

@@ -6,6 +6,8 @@ Created on Thu Mar 18 09:03:35 2021.
 """
 
 import pickle
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +17,7 @@ import pytest
 import xarray as xr
 
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
-from linopy.io import signed_number
+from linopy.io import signed_number, to_xpress
 from linopy.testing import assert_model_equal
 
 
@@ -202,6 +204,114 @@ def test_to_gurobipy(model: Model) -> None:
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
     model.to_highspy()
+
+
+class _FakeXpressProblem:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def loadLP(self, **kwargs: object) -> None:
+        self.calls.append(("loadLP", kwargs))
+
+    def loadQP(self, **kwargs: object) -> None:
+        self.calls.append(("loadQP", kwargs))
+
+    def loadMIQP(self, **kwargs: object) -> None:
+        self.calls.append(("loadMIQP", kwargs))
+
+    def chgObjSense(self, objsense: object) -> None:
+        self.calls.append(("chgObjSense", {"objsense": objsense}))
+
+    def addNames(
+        self, namespace_type: int, names: list[str], first: int, last: int
+    ) -> None:
+        self.calls.append(
+            (
+                "addNames",
+                {
+                    "type": namespace_type,
+                    "names": names,
+                    "first": first,
+                    "last": last,
+                },
+            )
+        )
+
+
+def _install_fake_xpress(monkeypatch: pytest.MonkeyPatch) -> _FakeXpressProblem:
+    problem = _FakeXpressProblem()
+    fake_xpress = types.ModuleType("xpress")
+    fake_xpress.infinity = 1.0e20
+    fake_xpress.ObjSense = types.SimpleNamespace(MAXIMIZE="MAX", MINIMIZE="MIN")
+    fake_xpress.Namespaces = types.SimpleNamespace(ROW=1, COLUMN=2)
+    fake_xpress.problem = lambda: problem  # type: ignore[assignment]
+    monkeypatch.setitem(sys.modules, "xpress", fake_xpress)
+    return problem
+
+
+def test_to_xpress_loadlp_and_maxsense(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_problem = _install_fake_xpress(monkeypatch)
+
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    y = m.add_variables(lower=0, upper=5, name="y")
+    m.add_constraints(2 * x + y, LESS_EQUAL, 12, name="c")
+    m.add_objective(3 * x + y, sense="max")
+
+    solver_model = to_xpress(m, explicit_coordinate_names=True)
+
+    assert solver_model is fake_problem
+    method_names = [name for name, _ in fake_problem.calls]
+    assert "loadLP" in method_names
+    assert "chgObjSense" in method_names
+    assert method_names.count("addNames") == 2
+
+    call_map = {name: kwargs for name, kwargs in fake_problem.calls}
+    lp_kwargs = call_map["loadLP"]
+    assert lp_kwargs["start"].dtype == np.int32
+    assert lp_kwargs["rowind"].dtype == np.int32
+
+
+def test_to_xpress_loadmiqp(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_problem = _install_fake_xpress(monkeypatch)
+
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    y = m.add_variables(binary=True, name="y")
+    m.add_constraints(x + y, LESS_EQUAL, 3, name="c")
+    m.add_objective(x * x + 2 * y)
+
+    to_xpress(m)
+
+    call_map = {name: kwargs for name, kwargs in fake_problem.calls}
+    assert "loadMIQP" in call_map
+    miqp_kwargs = call_map["loadMIQP"]
+    assert miqp_kwargs["entind"] is not None
+    assert miqp_kwargs["objqcoef"] is not None
+    assert miqp_kwargs["entind"].dtype == np.int32
+    assert miqp_kwargs["objqcol1"].dtype == np.int32
+    assert miqp_kwargs["objqcol2"].dtype == np.int32
+    assert "addNames" not in call_map
+
+
+def test_to_xpress_progress_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_xpress(monkeypatch)
+    messages: list[str] = []
+
+    def _log_info(msg: str, *args: object, **kwargs: object) -> None:
+        messages.append(msg % args if args else msg)
+
+    monkeypatch.setattr("linopy.io.logger.info", _log_info)
+
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(3)], name="x")
+    m.add_constraints(x.sum(), LESS_EQUAL, 10, name="c")
+    m.add_objective((2 * x).sum())
+
+    to_xpress(m, progress=True)
+
+    assert any("prepared linear constraint matrix" in msg for msg in messages)
+    assert any("finished direct model build" in msg for msg in messages)
 
 
 def test_to_blocks(tmp_path: Path) -> None:

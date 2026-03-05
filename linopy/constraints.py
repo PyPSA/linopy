@@ -1091,6 +1091,34 @@ class Constraints:
         df["key"] = df.labels.map(map_labels)
         return df
 
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Convert all constraints to a single polars DataFrame.
+
+        The resulting dataframe is a long format with columns
+        `labels`, `coeffs`, `vars`, `rhs`, `sign`, `key`.
+        """
+        dfs = [self[k].to_polars() for k in self]
+        if not dfs:
+            return pl.DataFrame(
+                {
+                    "labels": pl.Series([], dtype=pl.Int64),
+                    "coeffs": pl.Series([], dtype=pl.Float64),
+                    "vars": pl.Series([], dtype=pl.Int64),
+                    "sign": pl.Series([], dtype=pl.String),
+                    "rhs": pl.Series([], dtype=pl.Float64),
+                    "key": pl.Series([], dtype=pl.Int64),
+                }
+            )
+
+        df = pl.concat(dfs, how="vertical_relaxed")
+        labels = (
+            df.select("labels")
+            .unique(maintain_order=True)
+            .with_row_index(name="key", offset=0)
+        )
+        return df.join(labels, on="labels", how="left")
+
     def to_matrix(self, filter_missings: bool = True) -> scipy.sparse.csc_matrix:
         """
         Construct a constraint matrix in sparse format.
@@ -1098,24 +1126,87 @@ class Constraints:
         Missing values, i.e. -1 in labels and vars, are ignored filtered
         out.
         """
-        # TODO: rename "filter_missings" to "~labels_as_coordinates"
-        cons = self.flat
-
         if not len(self):
             raise ValueError("No constraints available to convert to matrix.")
 
-        if filter_missings:
-            vars = self.model.variables.flat
-            shape = (cons.key.max() + 1, vars.key.max() + 1)
-            cons["vars"] = cons.vars.map(vars.set_index("labels").key)
-            return scipy.sparse.csc_matrix(
-                (cons.coeffs, (cons.key, cons.vars)), shape=shape
-            )
+        def _build_dense_key_map(
+            arrays: list[np.ndarray], total_size: int
+        ) -> tuple[np.ndarray, int]:
+            mapping = np.full(total_size, -1, dtype=np.int64)
+            next_key = 0
+            for labels in arrays:
+                labels = labels[labels != -1]
+                if labels.size:
+                    # Keep first-seen order while de-duplicating labels.
+                    first_idx = np.unique(labels, return_index=True)[1]
+                    labels = labels[np.sort(first_idx)]
+                n = labels.size
+                if n:
+                    mapping[labels] = np.arange(next_key, next_key + n)
+                    next_key += n
+            return mapping, next_key
+
+        # Build sparse triplets directly from NumPy arrays to avoid dataframe overhead.
+        row_parts: list[np.ndarray] = []
+        col_parts: list[np.ndarray] = []
+        data_parts: list[np.ndarray] = []
+
+        for _, constraint in self.items():
+            labels = constraint.labels.values.reshape(-1)
+            vars_arr = constraint.vars.values
+            coeffs_arr = constraint.coeffs.values
+
+            term_axis = constraint.vars.get_axis_num(constraint.term_dim)
+            if term_axis != vars_arr.ndim - 1:
+                vars_arr = np.moveaxis(vars_arr, term_axis, -1)
+                coeffs_arr = np.moveaxis(coeffs_arr, term_axis, -1)
+
+            nterm = vars_arr.shape[-1]
+            row = np.repeat(labels, nterm)
+            col = vars_arr.reshape(-1)
+            data = coeffs_arr.reshape(-1)
+
+            mask = (row != -1) & (col != -1) & (data != 0)
+            if mask.any():
+                row_parts.append(row[mask])
+                col_parts.append(col[mask])
+                data_parts.append(data[mask])
+
+        if row_parts:
+            row = np.concatenate(row_parts)
+            col = np.concatenate(col_parts)
+            data = np.concatenate(data_parts)
         else:
-            shape = self.model.shape
-            return scipy.sparse.csc_matrix(
-                (cons.coeffs, (cons.labels, cons.vars)), shape=shape
+            row = np.array([], dtype=np.int64)
+            col = np.array([], dtype=np.int64)
+            data = np.array([], dtype=float)
+
+        if filter_missings:
+            # Keep the filtered matrix row space aligned with ``self.flat``:
+            # only constraints that still have at least one active coefficient
+            # get a key when ``filter_missings=True``.
+            cons_map, next_con_key = _build_dense_key_map([row], self.model._cCounter)
+            vars_map, next_var_key = _build_dense_key_map(
+                [
+                    var.labels.values.reshape(-1)
+                    for _, var in self.model.variables.items()
+                ],
+                self.model._xCounter,
             )
+
+            shape = (next_con_key, next_var_key)
+
+            row = cons_map[row]
+            col = vars_map[col]
+            keep = (row != -1) & (col != -1)
+            if not keep.all():
+                row = row[keep]
+                col = col[keep]
+                data = data[keep]
+            return scipy.sparse.csc_matrix((data, (row, col)), shape=shape)
+
+        shape = self.model.shape
+        return scipy.sparse.csc_matrix((data, (row, col)), shape=shape)
 
     def reset_dual(self) -> None:
         """
