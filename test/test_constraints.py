@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, Variable, available_solvers
 from linopy.testing import assert_conequal
 
 # Test model functions
@@ -341,3 +341,97 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
+
+
+class TestConstraintCoordinateAlignment:
+    @pytest.fixture
+    def subset(self) -> xr.DataArray:
+        return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+
+    @pytest.fixture
+    def superset(self) -> xr.DataArray:
+        return xr.DataArray(
+            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
+        )
+
+    def test_var_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
+        con = v <= subset
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == 10.0
+        assert con.rhs.sel(dim_2=3).item() == 30.0
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
+    def test_var_comparison_subset(
+        self, v: Variable, subset: xr.DataArray, sign: str
+    ) -> None:
+        if sign == LESS_EQUAL:
+            con = v <= subset
+        elif sign == GREATER_EQUAL:
+            con = v >= subset
+        else:
+            con = v == subset
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == 10.0
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    def test_expr_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
+        expr = v + 5
+        con = expr <= subset
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
+        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
+    def test_subset_comparison_var(
+        self, v: Variable, subset: xr.DataArray, sign: str
+    ) -> None:
+        if sign == LESS_EQUAL:
+            con = subset <= v
+        elif sign == GREATER_EQUAL:
+            con = subset >= v
+        else:
+            con = subset == v
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+        assert con.rhs.sel(dim_2=1).item() == pytest.approx(10.0)
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL])
+    def test_superset_comparison_var(
+        self, v: Variable, superset: xr.DataArray, sign: str
+    ) -> None:
+        if sign == LESS_EQUAL:
+            con = superset <= v
+        else:
+            con = superset >= v
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert not np.isnan(con.lhs.coeffs.values).any()
+        assert not np.isnan(con.rhs.values).any()
+
+    def test_constraint_rhs_extra_dims_broadcasts(self, v: Variable) -> None:
+        rhs = xr.DataArray(
+            [[1.0, 2.0]],
+            dims=["extra", "dim_2"],
+            coords={"dim_2": [0, 1]},
+        )
+        c = v <= rhs
+        assert "extra" in c.dims
+
+    def test_subset_constraint_solve_integration(self) -> None:
+        if not available_solvers:
+            pytest.skip("No solver available")
+        solver = "highs" if "highs" in available_solvers else available_solvers[0]
+        m = Model()
+        coords = pd.RangeIndex(5, name="i")
+        x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
+        subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
+        m.add_constraints(x <= subset_ub, name="subset_ub")
+        m.add_objective(x.sum(), sense="max")
+        m.solve(solver_name=solver)
+        sol = m.solution["x"]
+        assert sol.sel(i=1).item() == pytest.approx(10.0)
+        assert sol.sel(i=3).item() == pytest.approx(20.0)
+        assert sol.sel(i=0).item() == pytest.approx(100.0)
+        assert sol.sel(i=2).item() == pytest.approx(100.0)
+        assert sol.sel(i=4).item() == pytest.approx(100.0)
