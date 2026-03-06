@@ -596,6 +596,11 @@ def _compute_combined_mask(
     skip_nan_check: bool,
 ) -> DataArray | None:
     if skip_nan_check:
+        if bool(x_points.isnull().any()) or bool(y_points.isnull().any()):
+            raise ValueError(
+                "skip_nan_check=True but breakpoints contain NaN. "
+                "Either remove NaN values or set skip_nan_check=False."
+            )
         return None
     return ~(x_points.isnull() | y_points.isnull())
 
@@ -1033,6 +1038,11 @@ def _add_continuous(
 
     if method == "sos2":
         _validate_numeric_breakpoint_coords(x_points)
+        if not _has_trailing_nan_only(x_points):
+            raise ValueError(
+                "SOS2 method does not support non-trailing NaN breakpoints. "
+                "NaN values must only appear at the end of the breakpoint sequence."
+            )
 
     # LP formulation
     if method == "lp":
@@ -1095,6 +1105,11 @@ def _add_disjunctive(
         )
 
     _validate_numeric_breakpoint_coords(x_points)
+    if not _has_trailing_nan_only(x_points):
+        raise ValueError(
+            "Disjunctive SOS2 does not support non-trailing NaN breakpoints. "
+            "NaN values must only appear at the end of the breakpoint sequence."
+        )
 
     if sign == "==":
         return _add_dpwl_sos2_core(
