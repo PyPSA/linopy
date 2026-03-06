@@ -1251,6 +1251,8 @@ class Variables:
                 sos_dim := ds.attrs.get(SOS_DIM_ATTR)
             ):
                 coords += f" - sos{sos_type} on {sos_dim}"
+            if ds.attrs.get("semi_continuous", False):
+                coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1390,7 +1392,23 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+                if not self[name].attrs["integer"]
+                and not self[name].attrs["binary"]
+                and not self[name].attrs.get("semi_continuous", False)
+            },
+            self.model,
+        )
+
+    @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("semi_continuous", False)
             },
             self.model,
         )

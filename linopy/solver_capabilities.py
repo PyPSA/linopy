@@ -50,6 +50,9 @@ class SolverFeature(Enum):
     # Special constraint types
     SOS_CONSTRAINTS = auto()  # Special Ordered Sets (SOS1/SOS2) constraints
 
+    # Special variable types
+    SEMI_CONTINUOUS_VARIABLES = auto()  # Semi-continuous variable support
+
     # Solver-specific
     SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
 
@@ -86,6 +89,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
                 SolverFeature.IIS_COMPUTATION,
                 SolverFeature.SOS_CONSTRAINTS,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
                 SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
             }
         ),
@@ -134,6 +138,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOS_CONSTRAINTS,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             }
         ),
     ),
