@@ -29,6 +29,7 @@ from linopy.constants import (
     PWL_INC_LINK_SUFFIX,
     PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LP_DOMAIN_SUFFIX,
     PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
@@ -970,3 +971,37 @@ class TestSolverLP:
         np.testing.assert_allclose(
             float(y1.solution.values), float(y2.solution.values), atol=1e-4
         )
+
+
+class TestLPDomainConstraints:
+    """Tests for LP domain bound constraints."""
+
+    def test_lp_domain_constraints_created(self) -> None:
+        """LP method creates domain bound constraints."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        # Concave: slopes decreasing → y <= pw uses LP
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 100], [0, 40, 60]) >= y,
+        )
+        assert f"pwl0{PWL_LP_DOMAIN_SUFFIX}_lo" in m.constraints
+        assert f"pwl0{PWL_LP_DOMAIN_SUFFIX}_hi" in m.constraints
+
+    def test_lp_domain_constraints_multidim(self) -> None:
+        """Domain constraints have entity dimension for per-entity breakpoints."""
+        m = Model()
+        x = m.add_variables(coords=[pd.Index(["a", "b"], name="entity")], name="x")
+        y = m.add_variables(coords=[pd.Index(["a", "b"], name="entity")], name="y")
+        x_pts = breakpoints({"a": [0, 50, 100], "b": [10, 60, 110]}, dim="entity")
+        y_pts = breakpoints({"a": [0, 40, 60], "b": [5, 35, 55]}, dim="entity")
+        m.add_piecewise_constraints(
+            piecewise(x, x_pts, y_pts) >= y,
+        )
+        lo_name = f"pwl0{PWL_LP_DOMAIN_SUFFIX}_lo"
+        hi_name = f"pwl0{PWL_LP_DOMAIN_SUFFIX}_hi"
+        assert lo_name in m.constraints
+        assert hi_name in m.constraints
+        # Domain constraints should have the entity dimension
+        assert "entity" in m.constraints[lo_name].labels.dims
+        assert "entity" in m.constraints[hi_name].labels.dims

@@ -29,6 +29,7 @@ from linopy.constants import (
     PWL_INC_LINK_SUFFIX,
     PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LP_DOMAIN_SUFFIX,
     PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
@@ -568,9 +569,17 @@ def _add_pwl_lp(
     lhs = y_expr - slopes * x_expr
 
     if sign == "<=":
-        return model.add_constraints(lhs <= rhs, name=f"{name}{PWL_LP_SUFFIX}")
+        con = model.add_constraints(lhs <= rhs, name=f"{name}{PWL_LP_SUFFIX}")
     else:
-        return model.add_constraints(lhs >= rhs, name=f"{name}{PWL_LP_SUFFIX}")
+        con = model.add_constraints(lhs >= rhs, name=f"{name}{PWL_LP_SUFFIX}")
+
+    # Domain bound constraints to keep x within [x_min, x_max]
+    x_lo = x_points.min(dim=BREAKPOINT_DIM)
+    x_hi = x_points.max(dim=BREAKPOINT_DIM)
+    model.add_constraints(x_expr >= x_lo, name=f"{name}{PWL_LP_DOMAIN_SUFFIX}_lo")
+    model.add_constraints(x_expr <= x_hi, name=f"{name}{PWL_LP_DOMAIN_SUFFIX}_hi")
+
+    return con
 
 
 def _add_pwl_sos2_core(
