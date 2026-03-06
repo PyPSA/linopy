@@ -145,6 +145,75 @@ class TestBreakpointsFactory:
         with pytest.raises(ValueError, match="forbidden"):
             breakpoints([0, 1], y0=5)
 
+    # --- pandas and xarray inputs ---
+
+    def test_series(self) -> None:
+        bp = breakpoints(pd.Series([0, 50, 100]))
+        assert bp.dims == (BREAKPOINT_DIM,)
+        assert list(bp.values) == [0.0, 50.0, 100.0]
+
+    def test_dataframe(self) -> None:
+        df = pd.DataFrame(
+            {"gen1": [0, 50, 100], "gen2": [0, 30, np.nan]}
+        ).T  # rows=entities, cols=breakpoints
+        bp = breakpoints(df, dim="generator")
+        assert set(bp.dims) == {"generator", BREAKPOINT_DIM}
+        assert bp.sizes[BREAKPOINT_DIM] == 3
+        np.testing.assert_allclose(bp.sel(generator="gen1").values, [0, 50, 100])
+        assert np.isnan(bp.sel(generator="gen2").values[2])
+
+    def test_dataframe_without_dim_raises(self) -> None:
+        df = pd.DataFrame({"a": [0, 50], "b": [0, 30]}).T
+        with pytest.raises(ValueError, match="'dim' is required"):
+            breakpoints(df)
+
+    def test_dataarray_passthrough(self) -> None:
+        da = xr.DataArray(
+            [0, 50, 100],
+            dims=[BREAKPOINT_DIM],
+            coords={BREAKPOINT_DIM: np.arange(3)},
+        )
+        bp = breakpoints(da)
+        xr.testing.assert_equal(bp, da)
+
+    def test_dataarray_missing_dim_raises(self) -> None:
+        da = xr.DataArray([0, 50, 100], dims=["foo"])
+        with pytest.raises(ValueError, match="must have a"):
+            breakpoints(da)
+
+    def test_slopes_series(self) -> None:
+        bp = breakpoints(
+            slopes=pd.Series([1, 2]),
+            x_points=pd.Series([0, 1, 2]),
+            y0=0,
+        )
+        expected = breakpoints([0, 1, 3])
+        xr.testing.assert_equal(bp, expected)
+
+    def test_slopes_dataarray(self) -> None:
+        slopes_da = xr.DataArray(
+            [[1, 2], [3, 4]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1]},
+        )
+        xp_da = xr.DataArray(
+            [[0, 1, 2], [0, 1, 2]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
+        )
+        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
+        bp = breakpoints(slopes=slopes_da, x_points=xp_da, y0=y0_da, dim="gen")
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
+        np.testing.assert_allclose(bp.sel(gen="b").values, [5, 8, 12])
+
+    def test_slopes_dataframe(self) -> None:
+        slopes_df = pd.DataFrame({"a": [1, 0.5], "b": [2, 1]}).T
+        xp_df = pd.DataFrame({"a": [0, 10, 50], "b": [0, 20, 80]}).T
+        y0_series = pd.Series({"a": 0, "b": 10})
+        bp = breakpoints(slopes=slopes_df, x_points=xp_df, y0=y0_series, dim="gen")
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
+        np.testing.assert_allclose(bp.sel(gen="b").values, [10, 50, 110])
+
 
 # ===========================================================================
 # segments() factory
@@ -176,6 +245,39 @@ class TestSegmentsFactory:
         with pytest.raises(ValueError, match="'dim' is required"):
             segments({"a": [[0, 10]], "b": [[50, 100]]})
 
+    def test_dataframe(self) -> None:
+        df = pd.DataFrame([[0, 10], [50, 100]])  # rows=segments, cols=breakpoints
+        bp = segments(df)
+        assert set(bp.dims) == {SEGMENT_DIM, BREAKPOINT_DIM}
+        assert bp.sizes[SEGMENT_DIM] == 2
+        assert bp.sizes[BREAKPOINT_DIM] == 2
+        np.testing.assert_allclose(bp.sel({SEGMENT_DIM: 0}).values, [0, 10])
+        np.testing.assert_allclose(bp.sel({SEGMENT_DIM: 1}).values, [50, 100])
+
+    def test_dataarray_passthrough(self) -> None:
+        da = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=[SEGMENT_DIM, BREAKPOINT_DIM],
+            coords={SEGMENT_DIM: [0, 1], BREAKPOINT_DIM: [0, 1]},
+        )
+        bp = segments(da)
+        xr.testing.assert_equal(bp, da)
+
+    def test_dataarray_missing_dim_raises(self) -> None:
+        da_no_seg = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=["foo", BREAKPOINT_DIM],
+        )
+        with pytest.raises(ValueError, match="must have both"):
+            segments(da_no_seg)
+
+        da_no_bp = xr.DataArray(
+            [[0, 10], [50, 100]],
+            dims=[SEGMENT_DIM, "bar"],
+        )
+        with pytest.raises(ValueError, match="must have both"):
+            segments(da_no_bp)
+
 
 # ===========================================================================
 # piecewise() and operator overloading
@@ -187,6 +289,18 @@ class TestPiecewiseFunction:
         m = Model()
         x = m.add_variables(name="x")
         pw = piecewise(x, x_points=[0, 10, 50], y_points=[5, 2, 20])
+        assert isinstance(pw, PiecewiseExpression)
+
+    def test_series_inputs(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        pw = piecewise(x, pd.Series([0, 10, 50]), pd.Series([5, 2, 20]))
+        assert isinstance(pw, PiecewiseExpression)
+
+    def test_tuple_inputs(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        pw = piecewise(x, (0, 10, 50), (5, 2, 20))
         assert isinstance(pw, PiecewiseExpression)
 
     def test_eq_returns_descriptor(self) -> None:
@@ -301,7 +415,7 @@ class TestContinuousEquality:
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
 
-    def test_auto_selects_sos2_for_nonmonotonic(self) -> None:
+    def test_auto_nonmonotonic_falls_back_to_sos2(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
@@ -426,6 +540,25 @@ class TestContinuousInequality:
                 method="lp",
             )
 
+    def test_method_lp_decreasing_breakpoints_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="strictly increasing x_points"):
+            m.add_piecewise_constraints(
+                piecewise(x, [100, 50, 0], [60, 10, 0]) <= y,
+                method="lp",
+            )
+
+    def test_auto_inequality_decreasing_breakpoints_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="strictly increasing x_points"):
+            m.add_piecewise_constraints(
+                piecewise(x, [100, 50, 0], [60, 10, 0]) <= y,
+            )
+
     def test_method_lp_equality_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
@@ -466,6 +599,17 @@ class TestIncremental:
                 piecewise(x, [0, 50, 30, 100], [5, 20, 15, 80]) == y,
                 method="incremental",
             )
+
+    def test_sos2_nonmonotonic_succeeds(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 30, 100], [5, 20, 15, 80]) == y,
+            method="sos2",
+        )
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_DELTA_SUFFIX}" not in m.variables
 
     def test_two_breakpoints_no_fill(self) -> None:
         m = Model()

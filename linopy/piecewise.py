@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from numbers import Real
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -43,22 +44,38 @@ if TYPE_CHECKING:
     from linopy.model import Model
     from linopy.types import LinExprLike
 
+# Accepted input types for breakpoint-like data
+BreaksLike: TypeAlias = (
+    Sequence[float] | DataArray | pd.Series | pd.DataFrame | dict[str, Sequence[float]]
+)
+
+# Accepted input types for segment-like data (2D: segments × breakpoints)
+SegmentsLike: TypeAlias = (
+    Sequence[Sequence[float]]
+    | DataArray
+    | pd.DataFrame
+    | dict[str, Sequence[Sequence[float]]]
+)
+
 
 # ---------------------------------------------------------------------------
 # DataArray construction helpers
 # ---------------------------------------------------------------------------
 
 
-def _list_to_array(values: list[float]) -> DataArray:
+def _sequence_to_array(values: Sequence[float]) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
-        raise ValueError(f"Expected a 1D list of numeric values, got shape {arr.shape}")
+        raise ValueError(
+            f"Expected a 1D sequence of numeric values, got shape {arr.shape}"
+        )
     return DataArray(
         arr, dims=[BREAKPOINT_DIM], coords={BREAKPOINT_DIM: np.arange(len(arr))}
     )
 
 
-def _dict_to_array(d: dict[str, list[float]], dim: str) -> DataArray:
+def _dict_to_array(d: dict[str, Sequence[float]], dim: str) -> DataArray:
+    """Convert a dict of ragged sequences to a NaN-padded 2D DataArray."""
     max_len = max(len(v) for v in d.values())
     keys = list(d.keys())
     data = np.full((len(keys), max_len), np.nan)
@@ -70,6 +87,39 @@ def _dict_to_array(d: dict[str, list[float]], dim: str) -> DataArray:
         dims=[dim, BREAKPOINT_DIM],
         coords={dim: keys, BREAKPOINT_DIM: np.arange(max_len)},
     )
+
+
+def _dataframe_to_array(df: pd.DataFrame, dim: str) -> DataArray:
+    # rows = entities (index), columns = breakpoints
+    data = np.asarray(df.values, dtype=float)
+    return DataArray(
+        data,
+        dims=[dim, BREAKPOINT_DIM],
+        coords={dim: list(df.index), BREAKPOINT_DIM: np.arange(df.shape[1])},
+    )
+
+
+def _coerce_breaks(values: BreaksLike, dim: str | None = None) -> DataArray:
+    """Convert any BreaksLike input to a DataArray with BREAKPOINT_DIM."""
+    if isinstance(values, DataArray):
+        if BREAKPOINT_DIM not in values.dims:
+            raise ValueError(
+                f"DataArray must have a '{BREAKPOINT_DIM}' dimension, "
+                f"got dims {list(values.dims)}"
+            )
+        return values
+    if isinstance(values, pd.DataFrame):
+        if dim is None:
+            raise ValueError("'dim' is required when input is a DataFrame")
+        return _dataframe_to_array(values, dim)
+    if isinstance(values, pd.Series):
+        return _sequence_to_array(values)
+    if isinstance(values, dict):
+        if dim is None:
+            raise ValueError("'dim' is required when input is a dict")
+        return _dict_to_array(values, dim)
+    # Sequence (list, tuple, etc.)
+    return _sequence_to_array(values)
 
 
 def _segments_list_to_array(values: list[Sequence[float]]) -> DataArray:
@@ -145,11 +195,11 @@ def slopes_to_points(
 
 
 def breakpoints(
-    values: list[float] | dict[str, list[float]] | None = None,
+    values: BreaksLike | None = None,
     *,
-    slopes: list[float] | dict[str, list[float]] | None = None,
-    x_points: list[float] | dict[str, list[float]] | None = None,
-    y0: float | dict[str, float] | None = None,
+    slopes: BreaksLike | None = None,
+    x_points: BreaksLike | None = None,
+    y0: float | dict[str, float] | pd.Series | DataArray | None = None,
     dim: str | None = None,
 ) -> DataArray:
     """
@@ -163,17 +213,22 @@ def breakpoints(
 
     Parameters
     ----------
-    values : list or dict, optional
-        Breakpoint values. A list creates 1D breakpoints. A dict creates
-        per-entity breakpoints (requires ``dim``).
-    slopes : list or dict, optional
+    values : BreaksLike, optional
+        Breakpoint values. Accepted types: ``Sequence[float]``,
+        ``pd.Series``, ``pd.DataFrame``, or ``xr.DataArray``.
+        A 1D input (list, Series) creates 1D breakpoints.
+        A 2D input (DataFrame, multi-dim DataArray) creates per-entity
+        breakpoints (``dim`` is required for DataFrame).
+    slopes : BreaksLike, optional
         Segment slopes. Mutually exclusive with ``values``.
-    x_points : list or dict, optional
+    x_points : BreaksLike, optional
         Breakpoint x-coordinates. Required with ``slopes``.
-    y0 : float or dict, optional
-        Initial y-value. Required with ``slopes``.
+    y0 : float, dict, pd.Series, or DataArray, optional
+        Initial y-value. Required with ``slopes``. A scalar broadcasts to
+        all entities. A dict/Series/DataArray provides per-entity values.
     dim : str, optional
-        Entity dimension name. Required when ``values`` or ``slopes`` is a dict.
+        Entity dimension name. Required when ``values`` or ``slopes`` is a
+        ``pd.DataFrame`` or ``dict``.
 
     Returns
     -------
@@ -188,54 +243,100 @@ def breakpoints(
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
 
-    # Slopes mode: convert to points
+    # Slopes mode: convert to points, then fall through to coerce
     if slopes is not None:
-        assert x_points is not None and y0 is not None
-        if isinstance(slopes, list):
-            if not isinstance(x_points, list):
-                raise TypeError(
-                    "When 'slopes' is a list, 'x_points' must also be a list"
-                )
-            if not isinstance(y0, int | float):
-                raise TypeError("When 'slopes' is a list, 'y0' must be a float")
-            values = slopes_to_points(x_points, slopes, float(y0))
-        elif isinstance(slopes, dict):
-            computed: dict[str, list[float]] = {}
-            for key in slopes:
-                # Resolve x_points per entity
-                if isinstance(x_points, dict):
-                    xp = x_points[key]
-                elif isinstance(x_points, list):
-                    xp = x_points
-                else:
-                    raise TypeError("'x_points' must be a list or dict")
-                # Resolve y0 per entity
-                if isinstance(y0, dict):
-                    y0_val = float(y0[key])
-                elif isinstance(y0, int | float):
-                    y0_val = float(y0)
-                else:
-                    raise TypeError("'y0' must be a float or dict")
-                computed[key] = slopes_to_points(xp, slopes[key], y0_val)
-            values = computed  # type: ignore[assignment]
+        if x_points is None or y0 is None:
+            raise ValueError("'slopes' requires both 'x_points' and 'y0'")
+        slopes_arr = _coerce_breaks(slopes, dim)
+        xp_arr = _coerce_breaks(x_points, dim)
+
+        # 1D case: single set of breakpoints
+        if slopes_arr.ndim == 1:
+            if not isinstance(y0, Real):
+                raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
+            pts = slopes_to_points(
+                list(xp_arr.values), list(slopes_arr.values), float(y0)
+            )
+            return _sequence_to_array(pts)
+
+        # Multi-dim case: per-entity slopes
+        # Identify the entity dimension (not BREAKPOINT_DIM)
+        entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
+        if len(entity_dims) != 1:
+            raise ValueError(
+                f"Expected exactly one entity dimension in slopes, got {entity_dims}"
+            )
+        entity_dim = str(entity_dims[0])
+        entity_keys = slopes_arr.coords[entity_dim].values
+
+        # Resolve y0 per entity
+        if isinstance(y0, Real):
+            y0_map: dict[str, float] = {str(k): float(y0) for k in entity_keys}
+        elif isinstance(y0, dict):
+            y0_map = {str(k): float(y0[k]) for k in entity_keys}
+        elif isinstance(y0, pd.Series):
+            y0_map = {str(k): float(y0[k]) for k in entity_keys}
+        elif isinstance(y0, DataArray):
+            y0_map = {
+                str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys
+            }
         else:
-            raise TypeError(f"'slopes' must be a list or dict, got {type(slopes)}")
+            raise TypeError(
+                f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
+            )
+
+        # Compute points per entity
+        computed: dict[str, list[float]] = {}
+        for key in entity_keys:
+            sk = str(key)
+            sl = list(slopes_arr.sel({entity_dim: key}).values)
+            # Remove trailing NaN from slopes
+            sl = [v for v in sl if not np.isnan(v)]
+            if entity_dim in xp_arr.dims:
+                xp = list(xp_arr.sel({entity_dim: key}).values)
+                xp = [v for v in xp if not np.isnan(v)]
+            else:
+                xp = [v for v in xp_arr.values if not np.isnan(v)]
+            computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
+
+        return _dict_to_array(computed, entity_dim)
 
     # Points mode
     if values is None:
         raise ValueError("Must pass either 'values' or 'slopes'")
 
-    if isinstance(values, list):
-        return _list_to_array(values)
+    return _coerce_breaks(values, dim)
+
+
+def _coerce_segments(values: SegmentsLike, dim: str | None = None) -> DataArray:
+    """Convert any SegmentsLike input to a DataArray with SEGMENT_DIM and BREAKPOINT_DIM."""
+    if isinstance(values, DataArray):
+        if SEGMENT_DIM not in values.dims or BREAKPOINT_DIM not in values.dims:
+            raise ValueError(
+                f"DataArray must have both '{SEGMENT_DIM}' and '{BREAKPOINT_DIM}' "
+                f"dimensions, got dims {list(values.dims)}"
+            )
+        return values
+    if isinstance(values, pd.DataFrame):
+        data = np.asarray(values.values, dtype=float)
+        return DataArray(
+            data,
+            dims=[SEGMENT_DIM, BREAKPOINT_DIM],
+            coords={
+                SEGMENT_DIM: np.arange(data.shape[0]),
+                BREAKPOINT_DIM: np.arange(data.shape[1]),
+            },
+        )
     if isinstance(values, dict):
         if dim is None:
             raise ValueError("'dim' is required when 'values' is a dict")
-        return _dict_to_array(values, dim)
-    raise TypeError(f"'values' must be a list or dict, got {type(values)}")
+        return _dict_segments_to_array(values, dim)
+    # Sequence[Sequence[float]]
+    return _segments_list_to_array(list(values))
 
 
 def segments(
-    values: list[Sequence[float]] | dict[str, list[Sequence[float]]],
+    values: SegmentsLike,
     *,
     dim: str | None = None,
 ) -> DataArray:
@@ -244,10 +345,11 @@ def segments(
 
     Parameters
     ----------
-    values : list of sequences, or dict of these
-        Segment breakpoints. A list of lists creates 2D breakpoints
-        ``[segment, breakpoint]``. A dict creates per-entity segments
-        (requires ``dim``).
+    values : SegmentsLike
+        Segment breakpoints. Accepted types: ``Sequence[Sequence[float]]``,
+        ``pd.DataFrame`` (rows=segments, columns=breakpoints),
+        ``xr.DataArray`` (must have ``SEGMENT_DIM`` and ``BREAKPOINT_DIM``),
+        or ``dict[str, Sequence[Sequence[float]]]`` (requires ``dim``).
     dim : str, optional
         Entity dimension name. Required when ``values`` is a dict.
 
@@ -255,13 +357,7 @@ def segments(
     -------
     DataArray
     """
-    if isinstance(values, list):
-        return _segments_list_to_array(values)
-    if isinstance(values, dict):
-        if dim is None:
-            raise ValueError("'dim' is required when 'values' is a dict")
-        return _dict_segments_to_array(values, dim)
-    raise TypeError(f"'values' must be a list or dict, got {type(values)}")
+    return _coerce_segments(values, dim)
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +454,8 @@ def _detect_disjunctive(x_points: DataArray, y_points: DataArray) -> bool:
 
 def piecewise(
     expr: LinExprLike,
-    x_points: list[float] | DataArray,
-    y_points: list[float] | DataArray,
+    x_points: BreaksLike,
+    y_points: BreaksLike,
 ) -> PiecewiseExpression:
     """
     Create a piecewise linear function descriptor.
@@ -368,19 +464,19 @@ def piecewise(
     ----------
     expr : Variable or LinearExpression
         The "x" side expression.
-    x_points : list[float] or DataArray
+    x_points : BreaksLike
         Breakpoint x-coordinates.
-    y_points : list[float] or DataArray
+    y_points : BreaksLike
         Breakpoint y-coordinates.
 
     Returns
     -------
     PiecewiseExpression
     """
-    if isinstance(x_points, list):
-        x_points = _list_to_array(x_points)
-    if isinstance(y_points, list):
-        y_points = _list_to_array(y_points)
+    if not isinstance(x_points, DataArray):
+        x_points = _coerce_breaks(x_points)
+    if not isinstance(y_points, DataArray):
+        y_points = _coerce_breaks(y_points)
 
     disjunctive = _detect_disjunctive(x_points, y_points)
 
@@ -425,6 +521,15 @@ def _check_strict_monotonicity(bp: DataArray) -> bool:
     has_non_nan = (~diffs.isnull()).any(BREAKPOINT_DIM)
     monotonic = (all_pos_per_slice | all_neg_per_slice) & has_non_nan
     return bool(monotonic.all())
+
+
+def _check_strict_increasing(bp: DataArray) -> bool:
+    """Check if breakpoints are strictly increasing along BREAKPOINT_DIM."""
+    diffs = bp.diff(BREAKPOINT_DIM)
+    pos = (diffs > 0) | diffs.isnull()
+    has_non_nan = (~diffs.isnull()).any(BREAKPOINT_DIM)
+    increasing = pos.all(BREAKPOINT_DIM) & has_non_nan
+    return bool(increasing.all())
 
 
 def _has_trailing_nan_only(bp: DataArray) -> bool:
@@ -501,8 +606,15 @@ def _detect_convexity(
     """
     Detect convexity of the piecewise function.
 
-    Computes slopes and checks second differences.
+    Requires strictly increasing x breakpoints and computes slopes and
+    second differences in the given order.
     """
+    if not _check_strict_increasing(x_points):
+        raise ValueError(
+            "Convexity detection requires strictly increasing x_points. "
+            "Pass breakpoints in increasing x-order or use method='sos2'."
+        )
+
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
 
@@ -867,28 +979,37 @@ def _add_continuous(
     skip_nan_check: bool,
 ) -> Constraint:
     """Handle continuous (non-disjunctive) piecewise constraints."""
-    convexity = _detect_convexity(x_points, y_points)
+    convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
 
     # Determine actual method
     if method == "auto":
         if sign == "==":
-            is_mono = _check_strict_monotonicity(x_points)
-            trailing_nan = _has_trailing_nan_only(x_points)
-            if is_mono and trailing_nan:
+            if _check_strict_monotonicity(x_points) and _has_trailing_nan_only(
+                x_points
+            ):
                 method = "incremental"
             else:
                 method = "sos2"
-        elif convexity == "linear":
-            method = "lp"
-        elif (sign == "<=" and convexity == "concave") or (
-            sign == ">=" and convexity == "convex"
-        ):
-            method = "lp"
         else:
-            method = "sos2"
+            if not _check_strict_increasing(x_points):
+                raise ValueError(
+                    "Automatic method selection for piecewise inequalities requires "
+                    "strictly increasing x_points. Pass breakpoints in increasing "
+                    "x-order or use method='sos2'."
+                )
+            convexity = _detect_convexity(x_points, y_points)
+            if convexity == "linear":
+                method = "lp"
+            elif (sign == "<=" and convexity == "concave") or (
+                sign == ">=" and convexity == "convex"
+            ):
+                method = "lp"
+            else:
+                method = "sos2"
     elif method == "lp":
         if sign == "==":
             raise ValueError("Pure LP method is not supported for equality constraints")
+        convexity = _detect_convexity(x_points, y_points)
         if convexity != "linear":
             if sign == "<=" and convexity != "concave":
                 raise ValueError(
