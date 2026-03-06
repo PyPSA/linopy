@@ -370,7 +370,8 @@ class PiecewiseExpression:
     Lazy descriptor representing a piecewise linear function of an expression.
 
     Created by :func:`piecewise`. Supports comparison operators so that
-    ``y <= piecewise(x, ...)`` produces a :class:`PiecewiseConstraintDescriptor`.
+    ``piecewise(x, ...) >= y`` produces a
+    :class:`PiecewiseConstraintDescriptor`.
     """
 
     __slots__ = ("expr", "x_points", "y_points", "disjunctive")
@@ -893,7 +894,7 @@ def add_piecewise_constraints(
 
     Typically called as::
 
-        m.add_piecewise_constraints(y <= piecewise(x, x_points, y_points))
+        m.add_piecewise_constraints(piecewise(x, x_points, y_points) >= y)
 
     Parameters
     ----------
@@ -915,7 +916,7 @@ def add_piecewise_constraints(
     if not isinstance(descriptor, PiecewiseConstraintDescriptor):
         raise TypeError(
             f"Expected PiecewiseConstraintDescriptor, got {type(descriptor)}. "
-            f"Use: m.add_piecewise_constraints(y <= piecewise(x, x_points, y_points))"
+            f"Use: m.add_piecewise_constraints(piecewise(x, x_points, y_points) >= y)"
         )
 
     if method not in ("sos2", "incremental", "auto", "lp"):
