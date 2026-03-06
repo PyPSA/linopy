@@ -17,19 +17,23 @@ import xarray as xr
 from xarray import DataArray
 
 from linopy.constants import (
-    DEFAULT_BREAKPOINT_DIM,
-    DEFAULT_SEGMENT_DIM,
+    BREAKPOINT_DIM,
     HELPER_DIMS,
+    LP_SEG_DIM,
     PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_FILL_SUFFIX,
+    PWL_INC_BINARY_SUFFIX,
+    PWL_INC_LINK_SUFFIX,
+    PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
     PWL_Y_LINK_SUFFIX,
+    SEGMENT_DIM,
 )
 
 if TYPE_CHECKING:
@@ -40,18 +44,20 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# DataArray construction helpers (kept from previous implementation)
+# DataArray construction helpers
 # ---------------------------------------------------------------------------
 
 
-def _list_to_array(values: list[float], bp_dim: str) -> DataArray:
+def _list_to_array(values: list[float]) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
         raise ValueError(f"Expected a 1D list of numeric values, got shape {arr.shape}")
-    return DataArray(arr, dims=[bp_dim], coords={bp_dim: np.arange(len(arr))})
+    return DataArray(
+        arr, dims=[BREAKPOINT_DIM], coords={BREAKPOINT_DIM: np.arange(len(arr))}
+    )
 
 
-def _dict_to_array(d: dict[str, list[float]], dim: str, bp_dim: str) -> DataArray:
+def _dict_to_array(d: dict[str, list[float]], dim: str) -> DataArray:
     max_len = max(len(v) for v in d.values())
     keys = list(d.keys())
     data = np.full((len(keys), max_len), np.nan)
@@ -60,51 +66,40 @@ def _dict_to_array(d: dict[str, list[float]], dim: str, bp_dim: str) -> DataArra
         data[i, : len(vals)] = vals
     return DataArray(
         data,
-        dims=[dim, bp_dim],
-        coords={dim: keys, bp_dim: np.arange(max_len)},
+        dims=[dim, BREAKPOINT_DIM],
+        coords={dim: keys, BREAKPOINT_DIM: np.arange(max_len)},
     )
 
 
-def _segments_list_to_array(
-    values: list[Sequence[float]], bp_dim: str, seg_dim: str
-) -> DataArray:
+def _segments_list_to_array(values: list[Sequence[float]]) -> DataArray:
     max_len = max(len(seg) for seg in values)
     data = np.full((len(values), max_len), np.nan)
     for i, seg in enumerate(values):
         data[i, : len(seg)] = seg
     return DataArray(
         data,
-        dims=[seg_dim, bp_dim],
-        coords={seg_dim: np.arange(len(values)), bp_dim: np.arange(max_len)},
+        dims=[SEGMENT_DIM, BREAKPOINT_DIM],
+        coords={
+            SEGMENT_DIM: np.arange(len(values)),
+            BREAKPOINT_DIM: np.arange(max_len),
+        },
     )
 
 
-def _dict_segments_to_array(
-    d: dict[str, list[Sequence[float]]], dim: str, bp_dim: str, seg_dim: str
-) -> DataArray:
+def _dict_segments_to_array(d: dict[str, list[Sequence[float]]], dim: str) -> DataArray:
     parts = []
     for key, seg_list in d.items():
-        arr = _segments_list_to_array(seg_list, bp_dim, seg_dim)
+        arr = _segments_list_to_array(seg_list)
         parts.append(arr.expand_dims({dim: [key]}))
     combined = xr.concat(parts, dim=dim)
     max_bp = max(max(len(seg) for seg in sl) for sl in d.values())
     max_seg = max(len(sl) for sl in d.values())
-    if combined.sizes[bp_dim] < max_bp or combined.sizes[seg_dim] < max_seg:
+    if combined.sizes[BREAKPOINT_DIM] < max_bp or combined.sizes[SEGMENT_DIM] < max_seg:
         combined = combined.reindex(
-            {bp_dim: np.arange(max_bp), seg_dim: np.arange(max_seg)},
+            {BREAKPOINT_DIM: np.arange(max_bp), SEGMENT_DIM: np.arange(max_seg)},
             fill_value=np.nan,
         )
     return combined
-
-
-def _validate_factory_args(
-    values: list | dict | None,
-    has_other: bool,
-) -> None:
-    if values is not None and has_other:
-        raise ValueError("Cannot pass both positional 'values' and keyword arguments")
-    if values is None and not has_other:
-        raise ValueError("Must pass either positional 'values' or keyword arguments")
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +150,6 @@ def breakpoints(
     x_points: list[float] | dict[str, list[float]] | None = None,
     y0: float | dict[str, float] | None = None,
     dim: str | None = None,
-    bp_dim: str = DEFAULT_BREAKPOINT_DIM,
 ) -> DataArray:
     """
     Create a breakpoint DataArray for piecewise linear constraints.
@@ -179,8 +173,6 @@ def breakpoints(
         Initial y-value. Required with ``slopes``.
     dim : str, optional
         Entity dimension name. Required when ``values`` or ``slopes`` is a dict.
-    bp_dim : str, default "breakpoint"
-        Name for the breakpoint dimension.
 
     Returns
     -------
@@ -233,11 +225,11 @@ def breakpoints(
         raise ValueError("Must pass either 'values' or 'slopes'")
 
     if isinstance(values, list):
-        return _list_to_array(values, bp_dim)
+        return _list_to_array(values)
     if isinstance(values, dict):
         if dim is None:
             raise ValueError("'dim' is required when 'values' is a dict")
-        return _dict_to_array(values, dim, bp_dim)
+        return _dict_to_array(values, dim)
     raise TypeError(f"'values' must be a list or dict, got {type(values)}")
 
 
@@ -245,8 +237,6 @@ def segments(
     values: list[Sequence[float]] | dict[str, list[Sequence[float]]],
     *,
     dim: str | None = None,
-    bp_dim: str = DEFAULT_BREAKPOINT_DIM,
-    seg_dim: str = DEFAULT_SEGMENT_DIM,
 ) -> DataArray:
     """
     Create a segmented breakpoint DataArray for disjunctive piecewise constraints.
@@ -259,21 +249,17 @@ def segments(
         (requires ``dim``).
     dim : str, optional
         Entity dimension name. Required when ``values`` is a dict.
-    bp_dim : str, default "breakpoint"
-        Name for the breakpoint dimension.
-    seg_dim : str, default "segment"
-        Name for the segment dimension.
 
     Returns
     -------
     DataArray
     """
     if isinstance(values, list):
-        return _segments_list_to_array(values, bp_dim, seg_dim)
+        return _segments_list_to_array(values)
     if isinstance(values, dict):
         if dim is None:
             raise ValueError("'dim' is required when 'values' is a dict")
-        return _dict_segments_to_array(values, dim, bp_dim, seg_dim)
+        return _dict_segments_to_array(values, dim)
     raise TypeError(f"'values' must be a list or dict, got {type(values)}")
 
 
@@ -326,6 +312,49 @@ class PiecewiseConstraintDescriptor:
     piecewise_func: PiecewiseExpression
 
 
+def _detect_disjunctive(x_points: DataArray, y_points: DataArray) -> bool:
+    """
+    Detect whether point arrays represent a disjunctive formulation.
+
+    Both ``x_points`` and ``y_points`` **must** use the well-known dimension
+    names ``BREAKPOINT_DIM`` and, for disjunctive formulations,
+    ``SEGMENT_DIM``.  Use the :func:`breakpoints` / :func:`segments` factory
+    helpers to build arrays with the correct dimension names.
+    """
+    x_has_bp = BREAKPOINT_DIM in x_points.dims
+    y_has_bp = BREAKPOINT_DIM in y_points.dims
+    if not x_has_bp and not y_has_bp:
+        raise ValueError(
+            "x_points and y_points must have a breakpoint dimension. "
+            f"Got x_points dims {list(x_points.dims)} and y_points dims "
+            f"{list(y_points.dims)}. Use the breakpoints() or segments() "
+            f"factory to create correctly-dimensioned arrays."
+        )
+    if not x_has_bp:
+        raise ValueError(
+            "x_points is missing the breakpoint dimension, "
+            f"got dims {list(x_points.dims)}. "
+            "Use the breakpoints() or segments() factory."
+        )
+    if not y_has_bp:
+        raise ValueError(
+            "y_points is missing the breakpoint dimension, "
+            f"got dims {list(y_points.dims)}. "
+            "Use the breakpoints() or segments() factory."
+        )
+
+    x_has_seg = SEGMENT_DIM in x_points.dims
+    y_has_seg = SEGMENT_DIM in y_points.dims
+    if x_has_seg != y_has_seg:
+        raise ValueError(
+            "If one of x_points/y_points has a segment dimension, "
+            f"both must. x_points dims: {list(x_points.dims)}, "
+            f"y_points dims: {list(y_points.dims)}."
+        )
+
+    return x_has_seg
+
+
 def piecewise(
     expr: LinExprLike,
     x_points: list[float] | DataArray,
@@ -347,35 +376,27 @@ def piecewise(
     -------
     PiecewiseExpression
     """
-    bp_dim = DEFAULT_BREAKPOINT_DIM
-
     if isinstance(x_points, list):
-        x_points = _list_to_array(x_points, bp_dim)
+        x_points = _list_to_array(x_points)
     if isinstance(y_points, list):
-        y_points = _list_to_array(y_points, bp_dim)
+        y_points = _list_to_array(y_points)
 
-    # Validate compatible shapes
-    if bp_dim not in x_points.dims:
-        raise ValueError(f"x_points must have dimension '{bp_dim}'")
-    if bp_dim not in y_points.dims:
-        raise ValueError(f"y_points must have dimension '{bp_dim}'")
-    if x_points.sizes[bp_dim] != y_points.sizes[bp_dim]:
+    disjunctive = _detect_disjunctive(x_points, y_points)
+
+    # Validate compatible shapes along breakpoint dimension
+    if x_points.sizes[BREAKPOINT_DIM] != y_points.sizes[BREAKPOINT_DIM]:
         raise ValueError(
-            f"x_points and y_points must have same size along '{bp_dim}', "
-            f"got {x_points.sizes[bp_dim]} and {y_points.sizes[bp_dim]}"
+            f"x_points and y_points must have same size along '{BREAKPOINT_DIM}', "
+            f"got {x_points.sizes[BREAKPOINT_DIM]} and "
+            f"{y_points.sizes[BREAKPOINT_DIM]}"
         )
 
-    seg_dim = DEFAULT_SEGMENT_DIM
-    x_has_seg = seg_dim in x_points.dims
-    y_has_seg = seg_dim in y_points.dims
-    if x_has_seg != y_has_seg:
-        raise ValueError(
-            f"If one of x_points/y_points has '{seg_dim}' dimension, both must"
-        )
-    disjunctive = x_has_seg
-
-    if disjunctive and x_points.sizes[seg_dim] != y_points.sizes[seg_dim]:
-        raise ValueError(f"x_points and y_points must have same size along '{seg_dim}'")
+    # Validate compatible shapes along segment dimension
+    if disjunctive:
+        if x_points.sizes[SEGMENT_DIM] != y_points.sizes[SEGMENT_DIM]:
+            raise ValueError(
+                f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
+            )
 
     return PiecewiseExpression(expr, x_points, y_points, disjunctive)
 
@@ -385,38 +406,30 @@ def piecewise(
 # ---------------------------------------------------------------------------
 
 
-def _validate_breakpoints(bp: DataArray, dim: str) -> None:
-    if dim not in bp.dims:
+def _validate_numeric_breakpoint_coords(bp: DataArray) -> None:
+    if not pd.api.types.is_numeric_dtype(bp.coords[BREAKPOINT_DIM]):
         raise ValueError(
-            f"breakpoints must have dimension '{dim}', "
-            f"but only has dimensions {list(bp.dims)}"
+            f"Breakpoint dimension '{BREAKPOINT_DIM}' must have numeric coordinates "
+            f"for SOS2 weights, but got {bp.coords[BREAKPOINT_DIM].dtype}"
         )
 
 
-def _validate_numeric_breakpoint_coords(bp: DataArray, dim: str) -> None:
-    if not pd.api.types.is_numeric_dtype(bp.coords[dim]):
-        raise ValueError(
-            f"Breakpoint dimension '{dim}' must have numeric coordinates "
-            f"for SOS2 weights, but got {bp.coords[dim].dtype}"
-        )
-
-
-def _check_strict_monotonicity(bp: DataArray, dim: str) -> bool:
-    """Check if breakpoints are strictly monotonic along dim (ignoring NaN)."""
-    diffs = bp.diff(dim)
+def _check_strict_monotonicity(bp: DataArray) -> bool:
+    """Check if breakpoints are strictly monotonic along BREAKPOINT_DIM (ignoring NaN)."""
+    diffs = bp.diff(BREAKPOINT_DIM)
     pos = (diffs > 0) | diffs.isnull()
     neg = (diffs < 0) | diffs.isnull()
-    all_pos_per_slice = pos.all(dim)
-    all_neg_per_slice = neg.all(dim)
-    has_non_nan = (~diffs.isnull()).any(dim)
+    all_pos_per_slice = pos.all(BREAKPOINT_DIM)
+    all_neg_per_slice = neg.all(BREAKPOINT_DIM)
+    has_non_nan = (~diffs.isnull()).any(BREAKPOINT_DIM)
     monotonic = (all_pos_per_slice | all_neg_per_slice) & has_non_nan
     return bool(monotonic.all())
 
 
-def _has_trailing_nan_only(bp: DataArray, dim: str) -> bool:
-    """Check that NaN values only appear as trailing entries along dim."""
+def _has_trailing_nan_only(bp: DataArray) -> bool:
+    """Check that NaN values only appear as trailing entries along BREAKPOINT_DIM."""
     valid = ~bp.isnull()
-    cummin = np.minimum.accumulate(valid.values, axis=valid.dims.index(dim))
+    cummin = np.minimum.accumulate(valid.values, axis=valid.dims.index(BREAKPOINT_DIM))
     cummin_da = DataArray(cummin, coords=valid.coords, dims=valid.dims)
     return not bool((valid & ~cummin_da).any())
 
@@ -441,13 +454,12 @@ def _extra_coords(points: DataArray, *exclude_dims: str | None) -> list[pd.Index
 def _broadcast_points(
     points: DataArray,
     *exprs: LinExprLike,
-    bp_dim: str,
-    seg_dim: str | None = None,
+    disjunctive: bool = False,
 ) -> DataArray:
     """Broadcast points to cover all dimensions from exprs."""
-    skip = {bp_dim} | set(HELPER_DIMS)
-    if seg_dim is not None:
-        skip.add(seg_dim)
+    skip: set[str] = {BREAKPOINT_DIM} | set(HELPER_DIMS)
+    if disjunctive:
+        skip.add(SEGMENT_DIM)
 
     target_dims: set[str] = set()
     for e in exprs:
@@ -484,35 +496,28 @@ def _compute_combined_mask(
 def _detect_convexity(
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
 ) -> Literal["convex", "concave", "linear", "mixed"]:
     """
     Detect convexity of the piecewise function.
 
     Computes slopes and checks second differences.
     """
-    dx = x_points.diff(bp_dim)
-    dy = y_points.diff(bp_dim)
+    dx = x_points.diff(BREAKPOINT_DIM)
+    dy = y_points.diff(BREAKPOINT_DIM)
 
-    # Handle NaN: mask out invalid segments
     valid = ~(dx.isnull() | dy.isnull() | (dx == 0))
     slopes = dy / dx
 
-    # Second differences of slopes
-    if slopes.sizes[bp_dim] < 2:
-        # Single segment: linear (both convex and concave)
+    if slopes.sizes[BREAKPOINT_DIM] < 2:
         return "linear"
 
-    slope_diffs = slopes.diff(bp_dim)
+    slope_diffs = slopes.diff(BREAKPOINT_DIM)
 
-    # Mask out diffs involving NaN slopes
-    valid_diffs = valid.isel({bp_dim: slice(None, -1)})
-    valid_diffs_hi = valid.isel({bp_dim: slice(1, None)})
-    # Align coords
+    valid_diffs = valid.isel({BREAKPOINT_DIM: slice(None, -1)})
+    valid_diffs_hi = valid.isel({BREAKPOINT_DIM: slice(1, None)})
     valid_diffs_combined = valid_diffs.values & valid_diffs_hi.values
 
     sd_values = slope_diffs.values
-    # Only check valid entries
     if valid_diffs_combined.size == 0 or not valid_diffs_combined.any():
         return "linear"
 
@@ -542,24 +547,22 @@ def _add_pwl_lp(
     sign: str,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
 ) -> Constraint:
     """Add pure LP tangent-line constraints."""
-    dx = x_points.diff(bp_dim)
-    dy = y_points.diff(bp_dim)
+    dx = x_points.diff(BREAKPOINT_DIM)
+    dy = y_points.diff(BREAKPOINT_DIM)
     slopes = dy / dx
 
-    seg_dim = f"{bp_dim}_seg"
-    slopes = slopes.rename({bp_dim: seg_dim})
-    n_seg = slopes.sizes[seg_dim]
-    slopes[seg_dim] = np.arange(n_seg)
+    slopes = slopes.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    n_seg = slopes.sizes[LP_SEG_DIM]
+    slopes[LP_SEG_DIM] = np.arange(n_seg)
 
-    x_base = x_points.isel({bp_dim: slice(None, -1)})
-    y_base = y_points.isel({bp_dim: slice(None, -1)})
-    x_base = x_base.rename({bp_dim: seg_dim})
-    y_base = y_base.rename({bp_dim: seg_dim})
-    x_base[seg_dim] = np.arange(n_seg)
-    y_base[seg_dim] = np.arange(n_seg)
+    x_base = x_points.isel({BREAKPOINT_DIM: slice(None, -1)})
+    y_base = y_points.isel({BREAKPOINT_DIM: slice(None, -1)})
+    x_base = x_base.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    y_base = y_base.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    x_base[LP_SEG_DIM] = np.arange(n_seg)
+    y_base[LP_SEG_DIM] = np.arange(n_seg)
 
     rhs = y_base - slopes * x_base
     lhs = y_expr - slopes * x_expr
@@ -577,7 +580,6 @@ def _add_pwl_sos2_core(
     target_expr: LinearExpression,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
     lambda_mask: DataArray | None,
 ) -> Constraint:
     """
@@ -586,8 +588,10 @@ def _add_pwl_sos2_core(
     Creates lambda variables, SOS2 constraint, convexity constraint,
     and linking constraints for both x and target.
     """
-    extra = _extra_coords(x_points, bp_dim)
-    lambda_coords = extra + [pd.Index(x_points.coords[bp_dim].values, name=bp_dim)]
+    extra = _extra_coords(x_points, BREAKPOINT_DIM)
+    lambda_coords = extra + [
+        pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM)
+    ]
 
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
@@ -598,16 +602,16 @@ def _add_pwl_sos2_core(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
     )
 
-    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=bp_dim)
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
 
     convex_con = model.add_constraints(
-        lambda_var.sum(dim=bp_dim) == 1, name=convex_name
+        lambda_var.sum(dim=BREAKPOINT_DIM) == 1, name=convex_name
     )
 
-    x_weighted = (lambda_var * x_points).sum(dim=bp_dim)
+    x_weighted = (lambda_var * x_points).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (lambda_var * y_points).sum(dim=bp_dim)
+    y_weighted = (lambda_var * y_points).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return convex_con
@@ -620,7 +624,6 @@ def _add_pwl_incremental_core(
     target_expr: LinearExpression,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
     bp_mask: DataArray | None,
 ) -> Constraint:
     """
@@ -633,22 +636,25 @@ def _add_pwl_incremental_core(
     x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
     y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
 
-    n_segments = x_points.sizes[bp_dim] - 1
-    seg_dim = f"{bp_dim}_seg"
-    seg_index = pd.Index(range(n_segments), name=seg_dim)
-    extra = _extra_coords(x_points, bp_dim)
+    n_segments = x_points.sizes[BREAKPOINT_DIM] - 1
+    seg_index = pd.Index(range(n_segments), name=LP_SEG_DIM)
+    extra = _extra_coords(x_points, BREAKPOINT_DIM)
     delta_coords = extra + [seg_index]
 
-    x_steps = x_points.diff(bp_dim).rename({bp_dim: seg_dim})
-    x_steps[seg_dim] = seg_index
-    y_steps = y_points.diff(bp_dim).rename({bp_dim: seg_dim})
-    y_steps[seg_dim] = seg_index
+    x_steps = x_points.diff(BREAKPOINT_DIM).rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    x_steps[LP_SEG_DIM] = seg_index
+    y_steps = y_points.diff(BREAKPOINT_DIM).rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    y_steps[LP_SEG_DIM] = seg_index
 
     if bp_mask is not None:
-        mask_lo = bp_mask.isel({bp_dim: slice(None, -1)}).rename({bp_dim: seg_dim})
-        mask_hi = bp_mask.isel({bp_dim: slice(1, None)}).rename({bp_dim: seg_dim})
-        mask_lo[seg_dim] = seg_index
-        mask_hi[seg_dim] = seg_index
+        mask_lo = bp_mask.isel({BREAKPOINT_DIM: slice(None, -1)}).rename(
+            {BREAKPOINT_DIM: LP_SEG_DIM}
+        )
+        mask_hi = bp_mask.isel({BREAKPOINT_DIM: slice(1, None)}).rename(
+            {BREAKPOINT_DIM: LP_SEG_DIM}
+        )
+        mask_lo[LP_SEG_DIM] = seg_index
+        mask_hi[LP_SEG_DIM] = seg_index
         delta_mask: DataArray | None = mask_lo & mask_hi
     else:
         delta_mask = None
@@ -657,19 +663,36 @@ def _add_pwl_incremental_core(
         lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
     )
 
+    # Binary indicator variables: y_i for each segment
+    inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
+    inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
+    inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
+
+    binary_var = model.add_variables(
+        binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
+    )
+
+    # Link constraints: δ_i ≤ y_i for all segments
+    model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+
+    # Order constraints: y_{i+1} ≤ δ_i for i = 0..n-2
     fill_con: Constraint | None = None
     if n_segments >= 2:
-        delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
-        delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+        delta_lo = delta_var.isel({LP_SEG_DIM: slice(None, -1)}, drop=True)
+        delta_hi = delta_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
+        # Keep existing fill constraint as LP relaxation tightener
         fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
-    x0 = x_points.isel({bp_dim: 0})
-    y0 = y_points.isel({bp_dim: 0})
+        binary_hi = binary_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
+        model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
 
-    x_weighted = (delta_var * x_steps).sum(dim=seg_dim) + x0
+    x0 = x_points.isel({BREAKPOINT_DIM: 0})
+    y0 = y_points.isel({BREAKPOINT_DIM: 0})
+
+    x_weighted = (delta_var * x_steps).sum(dim=LP_SEG_DIM) + x0
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (delta_var * y_steps).sum(dim=seg_dim) + y0
+    y_weighted = (delta_var * y_steps).sum(dim=LP_SEG_DIM) + y0
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return fill_con if fill_con is not None else model.constraints[y_link_name]
@@ -682,8 +705,6 @@ def _add_dpwl_sos2_core(
     target_expr: LinearExpression,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
-    seg_dim: str,
     lambda_mask: DataArray | None,
 ) -> Constraint:
     """Core disjunctive SOS2 formulation with separate x/y points."""
@@ -694,37 +715,41 @@ def _add_dpwl_sos2_core(
     x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
     y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
 
-    extra = _extra_coords(x_points, bp_dim, seg_dim)
+    extra = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
     lambda_coords = extra + [
-        pd.Index(x_points.coords[seg_dim].values, name=seg_dim),
-        pd.Index(x_points.coords[bp_dim].values, name=bp_dim),
+        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
+        pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
     ]
     binary_coords = extra + [
-        pd.Index(x_points.coords[seg_dim].values, name=seg_dim),
+        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
     ]
 
-    binary_mask = lambda_mask.any(dim=bp_dim) if lambda_mask is not None else None
+    binary_mask = (
+        lambda_mask.any(dim=BREAKPOINT_DIM) if lambda_mask is not None else None
+    )
 
     binary_var = model.add_variables(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
     )
 
     select_con = model.add_constraints(
-        binary_var.sum(dim=seg_dim) == 1, name=select_name
+        binary_var.sum(dim=SEGMENT_DIM) == 1, name=select_name
     )
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
     )
 
-    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=bp_dim)
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
 
-    model.add_constraints(lambda_var.sum(dim=bp_dim) == binary_var, name=convex_name)
+    model.add_constraints(
+        lambda_var.sum(dim=BREAKPOINT_DIM) == binary_var, name=convex_name
+    )
 
-    x_weighted = (lambda_var * x_points).sum(dim=[seg_dim, bp_dim])
+    x_weighted = (lambda_var * x_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (lambda_var * y_points).sum(dim=[seg_dim, bp_dim])
+    y_weighted = (lambda_var * y_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return select_con
@@ -785,28 +810,9 @@ def add_piecewise_constraints(
     y_points = pw.y_points
     disjunctive = pw.disjunctive
 
-    bp_dim = DEFAULT_BREAKPOINT_DIM
-    seg_dim = DEFAULT_SEGMENT_DIM
-
-    # Validate
-    _validate_breakpoints(x_points, bp_dim)
-    _validate_breakpoints(y_points, bp_dim)
-
     # Broadcast points to match expression dimensions
-    x_points = _broadcast_points(
-        x_points,
-        x_expr_raw,
-        y_lhs,
-        bp_dim=bp_dim,
-        seg_dim=seg_dim if disjunctive else None,
-    )
-    y_points = _broadcast_points(
-        y_points,
-        x_expr_raw,
-        y_lhs,
-        bp_dim=bp_dim,
-        seg_dim=seg_dim if disjunctive else None,
-    )
+    x_points = _broadcast_points(x_points, x_expr_raw, y_lhs, disjunctive=disjunctive)
+    y_points = _broadcast_points(y_points, x_expr_raw, y_lhs, disjunctive=disjunctive)
 
     # Compute mask
     mask = _compute_combined_mask(x_points, y_points, skip_nan_check)
@@ -822,17 +828,7 @@ def add_piecewise_constraints(
 
     if disjunctive:
         return _add_disjunctive(
-            model,
-            name,
-            x_expr,
-            y_expr,
-            sign,
-            x_points,
-            y_points,
-            bp_dim,
-            seg_dim,
-            mask,
-            method,
+            model, name, x_expr, y_expr, sign, x_points, y_points, mask, method
         )
     else:
         return _add_continuous(
@@ -843,7 +839,6 @@ def add_piecewise_constraints(
             sign,
             x_points,
             y_points,
-            bp_dim,
             mask,
             method,
             skip_nan_check,
@@ -858,19 +853,18 @@ def _add_continuous(
     sign: str,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
     mask: DataArray | None,
     method: str,
     skip_nan_check: bool,
 ) -> Constraint:
     """Handle continuous (non-disjunctive) piecewise constraints."""
-    convexity = _detect_convexity(x_points, y_points, bp_dim)
+    convexity = _detect_convexity(x_points, y_points)
 
     # Determine actual method
     if method == "auto":
         if sign == "==":
-            is_mono = _check_strict_monotonicity(x_points, bp_dim)
-            trailing_nan = _has_trailing_nan_only(x_points, bp_dim)
+            is_mono = _check_strict_monotonicity(x_points)
+            trailing_nan = _has_trailing_nan_only(x_points)
             if is_mono and trailing_nan:
                 method = "incremental"
             else:
@@ -898,76 +892,46 @@ def _add_continuous(
                     f"got {convexity}"
                 )
     elif method == "incremental":
-        if not _check_strict_monotonicity(x_points, bp_dim):
+        if not _check_strict_monotonicity(x_points):
             raise ValueError("Incremental method requires strictly monotonic x_points")
-        if not _has_trailing_nan_only(x_points, bp_dim):
+        if not _has_trailing_nan_only(x_points):
             raise ValueError(
                 "Incremental method does not support non-trailing NaN breakpoints. "
                 "NaN values must only appear at the end of the breakpoint sequence."
             )
 
     if method == "sos2":
-        _validate_numeric_breakpoint_coords(x_points, bp_dim)
+        _validate_numeric_breakpoint_coords(x_points)
 
     # LP formulation
     if method == "lp":
-        return _add_pwl_lp(
-            model, name, x_expr, y_expr, sign, x_points, y_points, bp_dim
-        )
+        return _add_pwl_lp(model, name, x_expr, y_expr, sign, x_points, y_points)
 
     # SOS2 or incremental formulation
     if sign == "==":
         # Direct linking: y = f(x)
         if method == "sos2":
             return _add_pwl_sos2_core(
-                model,
-                name,
-                x_expr,
-                y_expr,
-                x_points,
-                y_points,
-                bp_dim,
-                mask,
+                model, name, x_expr, y_expr, x_points, y_points, mask
             )
         else:  # incremental
             return _add_pwl_incremental_core(
-                model,
-                name,
-                x_expr,
-                y_expr,
-                x_points,
-                y_points,
-                bp_dim,
-                mask,
+                model, name, x_expr, y_expr, x_points, y_points, mask
             )
     else:
         # Inequality: create aux variable z, enforce z = f(x), then y <= z or y >= z
         aux_name = f"{name}{PWL_AUX_SUFFIX}"
-        aux_coords = _extra_coords(x_points, bp_dim)
+        aux_coords = _extra_coords(x_points, BREAKPOINT_DIM)
         z = model.add_variables(coords=aux_coords, name=aux_name)
         z_expr = _to_linexpr(z)
 
         if method == "sos2":
             result = _add_pwl_sos2_core(
-                model,
-                name,
-                x_expr,
-                z_expr,
-                x_points,
-                y_points,
-                bp_dim,
-                mask,
+                model, name, x_expr, z_expr, x_points, y_points, mask
             )
         else:  # incremental
             result = _add_pwl_incremental_core(
-                model,
-                name,
-                x_expr,
-                z_expr,
-                x_points,
-                y_points,
-                bp_dim,
-                mask,
+                model, name, x_expr, z_expr, x_points, y_points, mask
             )
 
         # Add inequality
@@ -988,8 +952,6 @@ def _add_disjunctive(
     sign: str,
     x_points: DataArray,
     y_points: DataArray,
-    bp_dim: str,
-    seg_dim: str,
     mask: DataArray | None,
     method: str,
 ) -> Constraint:
@@ -1001,37 +963,21 @@ def _add_disjunctive(
             "Incremental method is not supported for disjunctive constraints"
         )
 
-    _validate_numeric_breakpoint_coords(x_points, bp_dim)
+    _validate_numeric_breakpoint_coords(x_points)
 
     if sign == "==":
         return _add_dpwl_sos2_core(
-            model,
-            name,
-            x_expr,
-            y_expr,
-            x_points,
-            y_points,
-            bp_dim,
-            seg_dim,
-            mask,
+            model, name, x_expr, y_expr, x_points, y_points, mask
         )
     else:
         # Create aux variable z, disjunctive SOS2 for z = f(x), then y <= z or y >= z
         aux_name = f"{name}{PWL_AUX_SUFFIX}"
-        aux_coords = _extra_coords(x_points, bp_dim, seg_dim)
+        aux_coords = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
         z = model.add_variables(coords=aux_coords, name=aux_name)
         z_expr = _to_linexpr(z)
 
         result = _add_dpwl_sos2_core(
-            model,
-            name,
-            x_expr,
-            z_expr,
-            x_points,
-            y_points,
-            bp_dim,
-            seg_dim,
-            mask,
+            model, name, x_expr, z_expr, x_points, y_points, mask
         )
 
         ineq_name = f"{name}_ineq"

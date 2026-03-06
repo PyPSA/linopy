@@ -18,18 +18,27 @@ from linopy import (
     slopes_to_points,
 )
 from linopy.constants import (
+    BREAKPOINT_DIM,
+    LP_SEG_DIM,
     PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_FILL_SUFFIX,
+    PWL_INC_BINARY_SUFFIX,
+    PWL_INC_LINK_SUFFIX,
+    PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
     PWL_Y_LINK_SUFFIX,
+    SEGMENT_DIM,
 )
-from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
+from linopy.piecewise import (
+    PiecewiseConstraintDescriptor,
+    PiecewiseExpression,
+)
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
 
 _sos2_solvers = get_available_solvers_with_feature(
@@ -66,14 +75,14 @@ class TestSlopesToPoints:
 class TestBreakpointsFactory:
     def test_list(self) -> None:
         bp = breakpoints([0, 50, 100])
-        assert bp.dims == ("breakpoint",)
+        assert bp.dims == (BREAKPOINT_DIM,)
         assert list(bp.values) == [0.0, 50.0, 100.0]
 
     def test_dict(self) -> None:
         bp = breakpoints({"gen1": [0, 50, 100], "gen2": [0, 30]}, dim="generator")
-        assert set(bp.dims) == {"generator", "breakpoint"}
-        assert bp.sizes["breakpoint"] == 3
-        assert np.isnan(bp.sel(generator="gen2", breakpoint=2))
+        assert set(bp.dims) == {"generator", BREAKPOINT_DIM}
+        assert bp.sizes[BREAKPOINT_DIM] == 3
+        assert np.isnan(bp.sel(generator="gen2").sel({BREAKPOINT_DIM: 2}))
 
     def test_dict_without_dim_raises(self) -> None:
         with pytest.raises(ValueError, match="'dim' is required"):
@@ -91,7 +100,7 @@ class TestBreakpointsFactory:
             y0={"a": 0, "b": 10},
             dim="gen",
         )
-        assert set(bp.dims) == {"gen", "breakpoint"}
+        assert set(bp.dims) == {"gen", BREAKPOINT_DIM}
         # a: [0, 10, 30], b: [10, 50, 110]
         np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
         np.testing.assert_allclose(bp.sel(gen="b").values, [10, 50, 110])
@@ -144,9 +153,9 @@ class TestBreakpointsFactory:
 class TestSegmentsFactory:
     def test_list(self) -> None:
         bp = segments([[0, 10], [50, 100]])
-        assert set(bp.dims) == {"segment", "breakpoint"}
-        assert bp.sizes["segment"] == 2
-        assert bp.sizes["breakpoint"] == 2
+        assert set(bp.dims) == {SEGMENT_DIM, BREAKPOINT_DIM}
+        assert bp.sizes[SEGMENT_DIM] == 2
+        assert bp.sizes[BREAKPOINT_DIM] == 2
 
     def test_dict(self) -> None:
         bp = segments(
@@ -154,13 +163,13 @@ class TestSegmentsFactory:
             dim="gen",
         )
         assert "gen" in bp.dims
-        assert "segment" in bp.dims
-        assert "breakpoint" in bp.dims
+        assert SEGMENT_DIM in bp.dims
+        assert BREAKPOINT_DIM in bp.dims
 
     def test_ragged(self) -> None:
         bp = segments([[0, 5, 10], [50, 100]])
-        assert bp.sizes["breakpoint"] == 3
-        assert np.isnan(bp.sel(segment=1, breakpoint=2))
+        assert bp.sizes[BREAKPOINT_DIM] == 3
+        assert np.isnan(bp.sel({SEGMENT_DIM: 1, BREAKPOINT_DIM: 2}))
 
     def test_dict_without_dim_raises(self) -> None:
         with pytest.raises(ValueError, match="'dim' is required"):
@@ -211,19 +220,39 @@ class TestPiecewiseFunction:
         with pytest.raises(ValueError, match="same size"):
             piecewise(x, [0, 10, 50, 100], [5, 2, 20])
 
-    def test_wrong_dim_raises(self) -> None:
+    def test_missing_breakpoint_dim_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
-        xp = xr.DataArray([0, 10, 50], dims=["wrong"])
-        yp = xr.DataArray([5, 2, 20], dims=["wrong"])
-        with pytest.raises(ValueError, match="must have dimension.*breakpoint"):
+        xp = xr.DataArray([0, 10, 50], dims=["knot"])
+        yp = xr.DataArray([5, 2, 20], dims=["knot"])
+        with pytest.raises(ValueError, match="must have a breakpoint dimension"):
+            piecewise(x, xp, yp)
+
+    def test_missing_breakpoint_dim_x_only_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        xp = xr.DataArray([0, 10, 50], dims=["knot"])
+        yp = xr.DataArray([5, 2, 20], dims=[BREAKPOINT_DIM])
+        with pytest.raises(
+            ValueError, match="x_points is missing the breakpoint dimension"
+        ):
+            piecewise(x, xp, yp)
+
+    def test_missing_breakpoint_dim_y_only_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        xp = xr.DataArray([0, 10, 50], dims=[BREAKPOINT_DIM])
+        yp = xr.DataArray([5, 2, 20], dims=["knot"])
+        with pytest.raises(
+            ValueError, match="y_points is missing the breakpoint dimension"
+        ):
             piecewise(x, xp, yp)
 
     def test_segment_dim_mismatch_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
         xp = segments([[0, 10], [50, 100]])
-        yp = xr.DataArray([0, 5], dims=["breakpoint"])
+        yp = xr.DataArray([0, 5], dims=[BREAKPOINT_DIM])
         with pytest.raises(ValueError, match="segment.*dimension.*both must"):
             piecewise(x, xp, yp)
 
@@ -423,7 +452,7 @@ class TestIncremental:
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
-        assert delta.labels.sizes["breakpoint_seg"] == 3
+        assert delta.labels.sizes[LP_SEG_DIM] == 3
         assert f"pwl0{PWL_FILL_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
 
@@ -446,9 +475,45 @@ class TestIncremental:
             method="incremental",
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
-        assert delta.labels.sizes["breakpoint_seg"] == 1
+        assert delta.labels.sizes[LP_SEG_DIM] == 1
         assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_Y_LINK_SUFFIX}" in m.constraints
+
+    def test_creates_binary_indicator_vars(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 10, 50, 100], [5, 2, 20, 80]) == y,
+            method="incremental",
+        )
+        assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
+        binary = m.variables[f"pwl0{PWL_INC_BINARY_SUFFIX}"]
+        assert binary.labels.sizes[LP_SEG_DIM] == 3
+        assert f"pwl0{PWL_INC_LINK_SUFFIX}" in m.constraints
+
+    def test_creates_order_constraints(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 10, 50, 100], [5, 2, 20, 80]) == y,
+            method="incremental",
+        )
+        assert f"pwl0{PWL_INC_ORDER_SUFFIX}" in m.constraints
+
+    def test_two_breakpoints_no_order_constraint(self) -> None:
+        """With only one segment, there's no order constraint needed."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 100], [5, 80]) == y,
+            method="incremental",
+        )
+        assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_INC_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_INC_ORDER_SUFFIX}" not in m.constraints
 
     def test_decreasing_monotonic(self) -> None:
         m = Model()
@@ -638,24 +703,24 @@ class TestNaNMasking:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=["breakpoint"])
-        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=["breakpoint"])
+        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=[BREAKPOINT_DIM])
+        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
         m.add_piecewise_constraints(
             piecewise(x, x_pts, y_pts) == y,
             method="sos2",
         )
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         # First 3 should be valid, last masked
-        assert (lam.labels.isel(breakpoint=slice(None, 3)) != -1).all()
-        assert int(lam.labels.isel(breakpoint=3)) == -1
+        assert (lam.labels.isel({BREAKPOINT_DIM: slice(None, 3)}) != -1).all()
+        assert int(lam.labels.isel({BREAKPOINT_DIM: 3})) == -1
 
     def test_skip_nan_check_no_masking(self) -> None:
         """skip_nan_check=True treats all breakpoints as valid."""
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=["breakpoint"])
-        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=["breakpoint"])
+        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=[BREAKPOINT_DIM])
+        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
         m.add_piecewise_constraints(
             piecewise(x, x_pts, y_pts) == y,
             method="sos2",
