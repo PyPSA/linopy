@@ -91,7 +91,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor
+    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
     from linopy.variables import ScalarVariable, Variable
 
 SUPPORTED_CONSTANT_TYPES = (
@@ -585,11 +585,23 @@ class BaseExpression(ABC):
     def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
         return self.__div__(other)
 
+    @overload
+    def __le__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __le__(self, rhs: SideLike) -> Constraint: ...
+
     def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
         if descriptor is not None:
             return descriptor
         return self.to_constraint(LESS_EQUAL, rhs)
+
+    @overload
+    def __ge__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __ge__(self, rhs: SideLike) -> Constraint: ...
 
     def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
@@ -597,7 +609,13 @@ class BaseExpression(ABC):
             return descriptor
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:  # type: ignore
+    @overload  # type: ignore[override]
+    def __eq__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __eq__(self, rhs: SideLike) -> Constraint: ...
+
+    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
         if descriptor is not None:
             return descriptor
@@ -2308,12 +2326,10 @@ class ScalarLinearExpression:
     def __truediv__(self, other: float | int) -> ScalarLinearExpression:
         return self.__div__(other)
 
-    def __le__(
-        self, other: int | float
-    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: int | float) -> AnonymousScalarConstraint:
         descriptor = _to_piecewise_constraint_descriptor(self, other, "<=")
         if descriptor is not None:
-            return descriptor
+            return descriptor  # type: ignore[return-value]
 
         if not isinstance(other, int | float | np.number):
             raise TypeError(
@@ -2322,12 +2338,10 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
-    def __ge__(
-        self, other: int | float
-    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
         descriptor = _to_piecewise_constraint_descriptor(self, other, ">=")
         if descriptor is not None:
-            return descriptor
+            return descriptor  # type: ignore[return-value]
 
         if not isinstance(other, int | float | np.number):
             raise TypeError(
@@ -2336,12 +2350,12 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(
+    def __eq__(  # type: ignore[override]
         self, other: int | float
-    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:  # type: ignore
+    ) -> AnonymousScalarConstraint:
         descriptor = _to_piecewise_constraint_descriptor(self, other, "==")
         if descriptor is not None:
-            return descriptor
+            return descriptor  # type: ignore[return-value]
 
         if not isinstance(other, int | float | np.number):
             raise TypeError(

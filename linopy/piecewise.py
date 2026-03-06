@@ -122,7 +122,7 @@ def _coerce_breaks(values: BreaksLike, dim: str | None = None) -> DataArray:
     return _sequence_to_array(values)
 
 
-def _segments_list_to_array(values: list[Sequence[float]]) -> DataArray:
+def _segments_list_to_array(values: Sequence[Sequence[float]]) -> DataArray:
     max_len = max(len(seg) for seg in values)
     data = np.full((len(values), max_len), np.nan)
     for i, seg in enumerate(values):
@@ -137,7 +137,9 @@ def _segments_list_to_array(values: list[Sequence[float]]) -> DataArray:
     )
 
 
-def _dict_segments_to_array(d: dict[str, list[Sequence[float]]], dim: str) -> DataArray:
+def _dict_segments_to_array(
+    d: dict[str, Sequence[Sequence[float]]], dim: str
+) -> DataArray:
     parts = []
     for key, seg_list in d.items():
         arr = _segments_list_to_array(seg_list)
@@ -286,7 +288,7 @@ def breakpoints(
             )
 
         # Compute points per entity
-        computed: dict[str, list[float]] = {}
+        computed: dict[str, Sequence[float]] = {}
         for key in entity_keys:
             sk = str(key)
             sl = list(slopes_arr.sel({entity_dim: key}).values)
@@ -389,15 +391,20 @@ class PiecewiseExpression:
         self.disjunctive = disjunctive
 
     # y <= pw  →  Python tries y.__le__(pw) → NotImplemented → pw.__ge__(y)
-    def __ge__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:  # type: ignore[override]
+    def __ge__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:
         return PiecewiseConstraintDescriptor(lhs=other, sign="<=", piecewise_func=self)
 
     # y >= pw  →  Python tries y.__ge__(pw) → NotImplemented → pw.__le__(y)
-    def __le__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:  # type: ignore[override]
+    def __le__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:
         return PiecewiseConstraintDescriptor(lhs=other, sign=">=", piecewise_func=self)
 
     # y == pw  →  Python tries y.__eq__(pw) → NotImplemented → pw.__eq__(y)
     def __eq__(self, other: object) -> PiecewiseConstraintDescriptor:  # type: ignore[override]
+        from linopy.expressions import LinearExpression
+        from linopy.variables import Variable
+
+        if not isinstance(other, Variable | LinearExpression):
+            return NotImplemented
         return PiecewiseConstraintDescriptor(lhs=other, sign="==", piecewise_func=self)
 
 
@@ -405,7 +412,7 @@ class PiecewiseExpression:
 class PiecewiseConstraintDescriptor:
     """Holds all information needed to add a piecewise constraint to a model."""
 
-    lhs: object  # LinExprLike at runtime, object from __eq__ reflection
+    lhs: LinExprLike
     sign: str  # "<=", ">=", "=="
     piecewise_func: PiecewiseExpression
 
@@ -889,7 +896,7 @@ def _add_dpwl_sos2_core(
 
 def add_piecewise_constraints(
     model: Model,
-    descriptor: PiecewiseConstraintDescriptor,
+    descriptor: PiecewiseConstraintDescriptor | Constraint,
     method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
     name: str | None = None,
     skip_nan_check: bool = False,

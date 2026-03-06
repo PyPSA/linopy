@@ -1069,7 +1069,7 @@ class TestLPFileOutput:
 class TestSolverSOS2:
     @pytest.fixture(params=_sos2_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
-        return request.param  # type: ignore
+        return request.param
 
     def test_equality_minimize_cost(self, solver_name: str) -> None:
         m = Model()
@@ -1128,7 +1128,7 @@ class TestSolverSOS2:
 class TestSolverLP:
     @pytest.fixture(params=_any_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
-        return request.param  # type: ignore
+        return request.param
 
     def test_concave_le(self, solver_name: str) -> None:
         """Y <= concave f(x), maximize y"""
