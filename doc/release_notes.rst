@@ -4,8 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations. Use ``linopy.piecewise(x, x_pts, y_pts) == y`` syntax with the ``piecewise(...)`` expression on the left-hand side of the comparison.
-* Add ``linopy.piecewise()`` to create piecewise linear function descriptors from separate x/y breakpoint arrays.
+* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
+* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
 * Add the `sphinx-copybutton` to the documentation

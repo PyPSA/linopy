@@ -329,6 +329,62 @@ class TestPiecewiseFunction:
         assert isinstance(desc, PiecewiseConstraintDescriptor)
         assert desc.sign == ">="
 
+    @pytest.mark.parametrize(
+        ("operator", "expected_sign"),
+        [("==", "=="), ("<=", "<="), (">=", ">=")],
+    )
+    def test_rhs_piecewise_returns_descriptor(
+        self, operator: str, expected_sign: str
+    ) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        pw = piecewise(x, [0, 10, 50], [5, 2, 20])
+
+        if operator == "==":
+            desc = y == pw
+        elif operator == "<=":
+            desc = y <= pw
+        else:
+            desc = y >= pw
+
+        assert isinstance(desc, PiecewiseConstraintDescriptor)
+        assert desc.sign == expected_sign
+        assert desc.piecewise_func is pw
+
+    @pytest.mark.parametrize(
+        ("operator", "expected_sign"),
+        [("==", "=="), ("<=", "<="), (">=", ">=")],
+    )
+    def test_rhs_piecewise_linear_expression_returns_descriptor(
+        self, operator: str, expected_sign: str
+    ) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        lhs = 2 * y + z
+        pw = piecewise(x, [0, 10, 50], [5, 2, 20])
+
+        if operator == "==":
+            desc = lhs == pw
+        elif operator == "<=":
+            desc = lhs <= pw
+        else:
+            desc = lhs >= pw
+
+        assert isinstance(desc, PiecewiseConstraintDescriptor)
+        assert desc.sign == expected_sign
+        assert desc.lhs is lhs
+        assert desc.piecewise_func is pw
+
+    def test_rhs_piecewise_add_constraint(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(y == piecewise(x, [0, 10, 50], [5, 2, 20]))
+        assert len(m.constraints) > 0
+
     def test_mismatched_sizes_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")

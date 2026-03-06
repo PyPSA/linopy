@@ -38,10 +38,11 @@ variable (``==``, ``<=``, ``>=``) produces a
 
 .. note::
 
-   The ``piecewise(...)`` expression must appear on the **left** side of the
-   comparison operator. Writing ``y == piecewise(...)`` will not work because
-   the variable's ``__eq__`` method takes precedence over Python's reflected
-   operator lookup.
+   The ``piecewise(...)`` expression can appear on either side of the
+   comparison operator. These forms are equivalent::
+
+      piecewise(x, x_pts, y_pts) == y
+      y == piecewise(x, x_pts, y_pts)
 
 
 Formulations

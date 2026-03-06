@@ -91,6 +91,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
+    from linopy.piecewise import PiecewiseConstraintDescriptor
     from linopy.variables import ScalarVariable, Variable
 
 SUPPORTED_CONSTANT_TYPES = (
@@ -106,6 +107,26 @@ SUPPORTED_CONSTANT_TYPES = (
 
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+
+
+def _to_piecewise_constraint_descriptor(
+    lhs: Any, rhs: Any, operator: str
+) -> PiecewiseConstraintDescriptor | None:
+    """Build a piecewise descriptor for reversed RHS syntax if applicable."""
+    from linopy.piecewise import PiecewiseExpression
+
+    if not isinstance(rhs, PiecewiseExpression):
+        return None
+
+    if operator == "<=":
+        return rhs.__ge__(lhs)
+    if operator == ">=":
+        return rhs.__le__(lhs)
+    if operator == "==":
+        return rhs.__eq__(lhs)
+
+    msg = f"Unsupported operator '{operator}' for piecewise dispatch."
+    raise ValueError(msg)
 
 
 def exprwrap(
@@ -564,13 +585,22 @@ class BaseExpression(ABC):
     def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
         return self.__div__(other)
 
-    def __le__(self, rhs: SideLike) -> Constraint:
+    def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> Constraint:
+    def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore
+    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:  # type: ignore
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -2278,7 +2308,13 @@ class ScalarLinearExpression:
     def __truediv__(self, other: float | int) -> ScalarLinearExpression:
         return self.__div__(other)
 
-    def __le__(self, other: int | float) -> AnonymousScalarConstraint:
+    def __le__(
+        self, other: int | float
+    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, other, "<=")
+        if descriptor is not None:
+            return descriptor
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
@@ -2286,7 +2322,13 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
-    def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
+    def __ge__(
+        self, other: int | float
+    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, other, ">=")
+        if descriptor is not None:
+            return descriptor
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
@@ -2294,7 +2336,13 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
+    def __eq__(
+        self, other: int | float
+    ) -> AnonymousScalarConstraint | PiecewiseConstraintDescriptor:  # type: ignore
+        descriptor = _to_piecewise_constraint_descriptor(self, other, "==")
+        if descriptor is not None:
+            return descriptor
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
