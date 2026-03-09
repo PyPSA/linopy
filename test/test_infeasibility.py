@@ -3,6 +3,8 @@
 Test infeasibility detection for different solvers.
 """
 
+from typing import cast
+
 import pandas as pd
 import pytest
 
@@ -280,7 +282,10 @@ class TestInfeasibility:
         labels = m.compute_infeasibilities()
         assert labels
 
-        positions = [m.constraints.get_label_position(label) for label in labels]
+        positions = [
+            cast(tuple[str, dict[str, int]], m.constraints.get_label_position(label))
+            for label in labels
+        ]
         grouped_coords: dict[str, set[int]] = {"sum_lower": set(), "x_upper": set()}
         for name, coord in positions:
             assert name in grouped_coords
@@ -291,6 +296,6 @@ class TestInfeasibility:
 
         m.print_infeasibilities()
         output = capsys.readouterr().out
-        for coord in grouped_coords["sum_lower"]:
-            assert f"sum_lower[{coord}]" in output
-            assert f"x_upper[{coord}]" in output
+        for time_coord in grouped_coords["sum_lower"]:
+            assert f"sum_lower[{time_coord}]" in output
+            assert f"x_upper[{time_coord}]" in output
