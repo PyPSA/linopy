@@ -1,9 +1,40 @@
 """
-Tests for algebraic properties of the arithmetic convention.
+Algebraic properties of linopy arithmetic.
 
-Properties that hold are tested normally.
-Properties that break (by design) are marked with xfail to document
-the known limitation and detect if a future change fixes them.
+All standard algebraic laws should hold for linopy expressions.
+This file serves as both specification and test suite.
+
+Notation:
+    x[A], y[A], z[A]  — linopy variables with dimension A
+    g[A,B]             — linopy variable with dimensions A and B
+    c[B]               — constant (DataArray) with dimension B
+    s                  — scalar (int/float)
+
+SPECIFICATION
+=============
+
+1. Commutativity
+   a + b == b + a                     for any linopy operands a, b
+   a * c == c * a                     for variable/expression a, constant c
+
+2. Associativity
+   (a + b) + c == a + (b + c)         for any linopy operands a, b, c
+   Including mixed: (x[A] + c[B]) + g[A,B] == x[A] + (c[B] + g[A,B])
+
+3. Distributivity
+   c * (a + b) == c*a + c*b           for constant c, linopy operands a, b
+   s * (a + b) == s*a + s*b           for scalar s
+
+4. Identity
+   a + 0 == a                         additive identity
+   a * 1 == a                         multiplicative identity
+
+5. Negation
+   a - b == a + (-b)                  subtraction is addition of negation
+   -(-a) == a                         double negation
+
+6. Zero
+   a * 0 == 0                         multiplication by zero
 """
 
 import numpy as np
@@ -32,33 +63,37 @@ def tech():
 
 @pytest.fixture
 def x(m, time):
+    """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="x")
 
 
 @pytest.fixture
 def y(m, time):
+    """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="y")
 
 
 @pytest.fixture
 def z(m, time):
+    """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="z")
 
 
 @pytest.fixture
 def g(m, time, tech):
+    """Variable with dims [time, tech]."""
     return m.add_variables(lower=0, coords=[time, tech], name="g")
 
 
 @pytest.fixture
 def c(tech):
-    """Constant DataArray with dims not in x but in g."""
+    """Constant (DataArray) with dims [tech]."""
     return xr.DataArray([2.0, 3.0], dims=["tech"], coords={"tech": tech})
 
 
 def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
-    """Assert two linear expressions are equivalent (same terms, same const)."""
-    assert set(a.dims) == set(b.dims)
+    """Assert two linear expressions are algebraically equivalent."""
+    assert set(a.dims) == set(b.dims), f"dims differ: {a.dims} vs {b.dims}"
     for dim in a.dims:
         if dim.startswith("_"):
             continue
@@ -69,56 +104,117 @@ def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
 
 
 # ============================================================
-# Properties that hold
+# 1. Commutativity
 # ============================================================
 
 
-class TestPropertiesThatHold:
-    def test_commutativity_addition(self, x, y):
+class TestCommutativity:
+    def test_add_expr_expr(self, x, y):
         """X + y == y + x"""
         assert_linequal(x + y, y + x)
 
-    def test_commutativity_multiplication(self, g, c):
+    def test_mul_expr_constant(self, g, c):
         """G * c == c * g"""
         assert_linequal(g * c, c * g)
 
-    def test_associativity_addition_same_dims(self, x, y, z):
+    def test_add_expr_constant(self, g, c):
+        """G + c == c + g"""
+        assert_linequal(g + c, c + g)
+
+
+# ============================================================
+# 2. Associativity
+# ============================================================
+
+
+class TestAssociativity:
+    def test_add_same_dims(self, x, y, z):
         """(x + y) + z == x + (y + z)"""
         assert_linequal((x + y) + z, x + (y + z))
 
-    def test_additive_identity(self, x):
+    @pytest.mark.xfail(
+        reason="Rule 2: (x[A] + c[B]) raises because c introduces dim B",
+        strict=True,
+    )
+    def test_add_with_constant(self, x, g, c):
+        """(x[A] + c[B]) + g[A,B] == x[A] + (c[B] + g[A,B])"""
+        lhs = (x + c) + g
+        rhs = x + (c + g)
+        assert_linequal(lhs, rhs)
+
+    def test_add_with_constant_right_grouping(self, x, g, c):
+        """x[A] + (c[B] + g[A,B]) works with right grouping."""
+        result = x + (c + g)
+        assert isinstance(result, LinearExpression)
+        assert "time" in result.dims
+        assert "tech" in result.dims
+
+
+# ============================================================
+# 3. Distributivity
+# ============================================================
+
+
+class TestDistributivity:
+    def test_scalar(self, x, y):
+        """S * (x + y) == s*x + s*y"""
+        assert_linequal(3 * (x + y), 3 * x + 3 * y)
+
+    def test_constant_subset_dims(self, g, c):
+        """c[B] * (g[A,B] + g[A,B]) == c*g + c*g"""
+        assert_linequal(c * (g + g), c * g + c * g)
+
+    @pytest.mark.xfail(
+        reason="Rule 2: c[B]*x[A] raises because c introduces dim B",
+        strict=True,
+    )
+    def test_constant_mixed_dims(self, x, g, c):
+        """c[B] * (x[A] + g[A,B]) == c*x + c*g"""
+        lhs = c * (x + g)
+        rhs = c * x + c * g
+        assert_linequal(lhs, rhs)
+
+    def test_constant_mixed_dims_undistributed(self, x, g, c):
+        """c[B] * (x[A] + g[A,B]) works undistributed."""
+        result = c * (x + g)
+        assert isinstance(result, LinearExpression)
+        assert "time" in result.dims
+        assert "tech" in result.dims
+
+
+# ============================================================
+# 4. Identity
+# ============================================================
+
+
+class TestIdentity:
+    def test_additive(self, x):
         """X + 0 == x"""
         result = x + 0
         assert isinstance(result, LinearExpression)
         assert (result.const == 0).all()
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [1, 1, 1])
 
-    def test_multiplicative_identity(self, x):
+    def test_multiplicative(self, x):
         """X * 1 == x"""
         result = x * 1
         assert isinstance(result, LinearExpression)
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [1, 1, 1])
 
-    def test_negation(self, x, y):
+
+# ============================================================
+# 5. Negation
+# ============================================================
+
+
+class TestNegation:
+    def test_subtraction_is_add_negation(self, x, y):
         """X - y == x + (-y)"""
         assert_linequal(x - y, x + (-y))
 
-    def test_scalar_distributivity(self, x, y):
-        """S * (x + y) == s*x + s*y"""
-        assert_linequal(3 * (x + y), 3 * x + 3 * y)
-
-    def test_constant_distributivity_subset_dims(self, g, c):
-        """c[B] * (g + g) == c*g + c*g  (c has subset dims of g)"""
-        assert_linequal(c * (g + g), c * g + c * g)
-
     def test_subtraction_definition(self, x, y):
-        """X - y == x + (-1 * y)"""
+        """X - y == x + (-1) * y"""
         assert_linequal(x - y, x + (-1) * y)
-
-    def test_multiplication_by_zero(self, x):
-        """X * 0 has zero coefficients"""
-        result = x * 0
-        assert (result.coeffs == 0).all()
 
     def test_double_negation(self, x):
         """-(-x) has same coefficients as x"""
@@ -130,49 +226,12 @@ class TestPropertiesThatHold:
 
 
 # ============================================================
-# Properties that break (by design)
+# 6. Zero
 # ============================================================
 
 
-class TestPropertiesThatBreak:
-    @pytest.mark.xfail(
-        reason="Rule 2: (x[A] + c[B]) raises because c introduces dim B into x",
-        strict=True,
-    )
-    def test_associativity_with_constant(self, x, g, c):
-        """
-        (x[A] + c[B]) + g[A,B] should equal x[A] + (c[B] + g[A,B])
-
-        Currently: left grouping raises, right grouping works.
-        """
-        lhs = (x + c) + g
-        rhs = x + (c + g)
-        assert_linequal(lhs, rhs)
-
-    @pytest.mark.xfail(
-        reason="Rule 2: c[B]*x[A] raises because c introduces dim B into x",
-        strict=True,
-    )
-    def test_distributivity_with_constant(self, x, g, c):
-        """
-        c[B] * (x[A] + g[A,B]) should equal c[B]*x[A] + c[B]*g[A,B]
-
-        Currently: undistributed form works, distributed form raises.
-        """
-        lhs = c * (x + g)
-        rhs = c * x + c * g
-        assert_linequal(lhs, rhs)
-
-    def test_associativity_right_grouping_works(self, x, g, c):
-        """x[A] + (c[B] + g[A,B]) works — the valid grouping."""
-        result = x + (c + g)
-        assert isinstance(result, LinearExpression)
-        assert "time" in result.dims
-        assert "tech" in result.dims
-
-    def test_distributivity_undistributed_works(self, x, g, c):
-        """c[B] * (x[A] + g[A,B]) works — apply constant to combined expr."""
-        result = c * (x + g)
-        assert isinstance(result, LinearExpression)
-        assert "time" in result.dims
-        assert "tech" in result.dims
+class TestZero:
+    def test_multiplication_by_zero(self, x):
+        """X * 0 has zero coefficients"""
+        result = x * 0
+        assert (result.coeffs == 0).all()
