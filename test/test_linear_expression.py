@@ -1425,6 +1425,14 @@ def test_variable_names() -> None:
     assert expr.nterm == 0
     assert expr.variable_names == set()
 
+    # Single variable expression
+    expr = 1 * a
+    assert expr.variable_names == {"a"}
+
+    # Repeated variable across terms (a + a)
+    expr = a + a
+    assert expr.variable_names == {"a"}
+
 
 def test_nterm() -> None:
     m = Model()
