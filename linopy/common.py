@@ -45,6 +45,55 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
+class FillWrapper:
+    """
+    Wraps a linopy object with a fill value for use in arithmetic.
+
+    Created via the ``|`` operator on linopy types: ``expr | 0`` means
+    "fill missing coordinates of *expr* with 0 during alignment".
+
+    The wrapper is consumed immediately by the arithmetic dunder methods
+    and never stored or propagated.
+    """
+
+    __slots__ = ("wrapped", "fill_value")
+
+    def __init__(self, wrapped: Any, fill_value: float) -> None:
+        self.wrapped = wrapped
+        self.fill_value = fill_value
+
+    def __repr__(self) -> str:
+        return f"FillWrapper({self.wrapped!r}, fill_value={self.fill_value})"
+
+    def __neg__(self) -> FillWrapper:
+        return FillWrapper(wrapped=-self.wrapped, fill_value=self.fill_value)
+
+
+def check_constant_dim_subset(
+    expr_dims: tuple[str, ...] | set[str],
+    constant_dims: tuple[str, ...] | set[str],
+) -> None:
+    """
+    Validate that a constant's dims are a subset of the expression's dims.
+
+    A constant (DataArray, numpy, pandas) cannot introduce dimensions that
+    the expression does not have — that would silently duplicate variables.
+
+    Raises
+    ------
+    ValueError
+        If the constant has dimensions not present in the expression.
+    """
+    extra = set(constant_dims) - set(expr_dims)
+    if extra:
+        raise ValueError(
+            f"Constant has dimensions {extra} not present in the "
+            f"expression. Arithmetic with constants cannot introduce new "
+            f"dimensions — use multiplication to expand, or select/reindex "
+            f"the constant to match the expression's dimensions."
+        )
+
+
 def set_int_index(series: pd.Series) -> pd.Series:
     """
     Convert string index to int index.
@@ -1225,7 +1274,7 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
 
 def align(
     *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
-    join: JoinOptions = "inner",
+    join: JoinOptions = "exact",
     copy: bool = True,
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),

@@ -45,9 +45,11 @@ from types import EllipsisType, NotImplementedType
 from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
+    FillWrapper,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
+    check_constant_dim_subset,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -94,7 +96,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 
-FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": 0}
 
 
 def exprwrap(
@@ -126,6 +128,26 @@ def _expr_unwrap(
         return maybe_expr.data
 
     return maybe_expr
+
+
+def _resolve_fill_wrapper(self_obj: Any, other: Any) -> tuple[Any, str | None]:
+    """
+    Unwrap a FillWrapper operand by reindexing to match self_obj.
+
+    Returns the resolved other and the join mode to use (None = default exact).
+    """
+    if not isinstance(other, FillWrapper):
+        return other, None
+    fill_value = other.fill_value
+    other = other.wrapped
+    # Reindex other to self's coords on shared dims, filling with fill_value
+    shared_dims = set(self_obj.dims) & set(other.dims)
+    if shared_dims:
+        target_coords = {
+            dim: self_obj.coords[dim] for dim in shared_dims if dim in self_obj.coords
+        }
+        other = other.reindex(target_coords, fill_value=fill_value)
+    return other, None
 
 
 logger = logging.getLogger(__name__)
@@ -495,6 +517,16 @@ class BaseExpression(ABC):
         """
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
 
+    def __or__(self, fill_value: int | float) -> FillWrapper:
+        """
+        Create a FillWrapper for explicit fill during alignment.
+
+        Usage: ``expr | 0`` means "fill missing coords of expr with 0".
+        """
+        if not isinstance(fill_value, int | float):
+            return NotImplemented
+        return FillWrapper(wrapped=self, fill_value=fill_value)
+
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
     ) -> LinearExpression | QuadraticExpression:
@@ -588,14 +620,7 @@ class BaseExpression(ABC):
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        extra_dims = set(da.dims) - set(self.coord_dims)
-        if extra_dims:
-            raise ValueError(
-                f"Constant has dimensions {extra_dims} not present in the "
-                f"expression. Addition/subtraction cannot introduce new "
-                f"dimensions — use multiplication to expand, or select/reindex "
-                f"the constant to match the expression's dimensions."
-            )
+        check_constant_dim_subset(self.coord_dims, da.dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join, default_join="exact"
         )
@@ -616,14 +641,10 @@ class BaseExpression(ABC):
         join: str | None = None,
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        check_constant_dim_subset(self.coord_dims, factor.dims)
         self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=fill_value, join=join, default_join="inner"
+            factor, fill_value=fill_value, join=join, default_join="exact"
         )
-        if self_const.size == 0 and self.const.size > 0:
-            raise ValueError(
-                "Multiplication/division resulted in an empty expression because "
-                "the operands have no overlapping coordinates (inner join)."
-            )
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
             return self.__class__(
@@ -1585,6 +1606,8 @@ class LinearExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        other, _join = _resolve_fill_wrapper(self, other)
+
         if isinstance(other, QuadraticExpression):
             return other.__add__(self)
 
@@ -1598,6 +1621,7 @@ class LinearExpression(BaseExpression):
             return NotImplemented
 
     def __radd__(self, other: ConstantLike) -> LinearExpression:
+        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return self + other
         except TypeError:
@@ -1620,12 +1644,14 @@ class LinearExpression(BaseExpression):
         | LinearExpression
         | QuadraticExpression,
     ) -> LinearExpression | QuadraticExpression:
+        # FillWrapper.__neg__ is defined, so -other works for FillWrapper
         try:
             return self.__add__(-other)
         except TypeError:
             return NotImplemented
 
     def __rsub__(self, other: ConstantLike | Variable) -> LinearExpression:
+        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return (self * -1) + other
         except TypeError:
@@ -1644,6 +1670,8 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        other, _join = _resolve_fill_wrapper(self, other)
+
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
 
@@ -1670,6 +1698,7 @@ class LinearExpression(BaseExpression):
         """
         Right-multiply the expr by a factor.
         """
+        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return self * other
         except TypeError:
@@ -2069,7 +2098,7 @@ class QuadraticExpression(BaseExpression):
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         super().__init__(data, model)
@@ -2101,6 +2130,8 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
+        other, _join = _resolve_fill_wrapper(self, other)
+
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for *: "
@@ -2113,6 +2144,7 @@ class QuadraticExpression(BaseExpression):
             return NotImplemented
 
     def __rmul__(self, other: SideLike) -> QuadraticExpression:
+        other, _join = _resolve_fill_wrapper(self, other)
         return self * other
 
     def __add__(self, other: SideLike) -> QuadraticExpression:
@@ -2122,6 +2154,8 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        other, _join = _resolve_fill_wrapper(self, other)
+
         try:
             if isinstance(other, SUPPORTED_CONSTANT_TYPES):
                 return self._add_constant(other)
@@ -2139,6 +2173,7 @@ class QuadraticExpression(BaseExpression):
         """
         Add others to expression.
         """
+        other, _join = _resolve_fill_wrapper(self, other)
         return self.__add__(other)
 
     def __sub__(self, other: SideLike) -> QuadraticExpression:
@@ -2148,6 +2183,7 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
+        # FillWrapper.__neg__ is defined, so -other works for FillWrapper
         try:
             return self.__add__(-other)
         except TypeError:
@@ -2157,6 +2193,7 @@ class QuadraticExpression(BaseExpression):
         """
         Subtract expression from others.
         """
+        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return (self * -1) + other
         except TypeError:
@@ -2397,12 +2434,8 @@ def merge(
 
         if join is not None:
             kwargs["join"] = join
-        elif dim == TERM_DIM:
-            kwargs["join"] = "exact"
-        elif dim == FACTOR_DIM:
-            kwargs["join"] = "inner"
         else:
-            kwargs["join"] = "outer"
+            kwargs["join"] = "exact"
 
     try:
         if dim == TERM_DIM:

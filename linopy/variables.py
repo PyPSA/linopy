@@ -64,6 +64,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from linopy.common import FillWrapper
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         GenericExpression,
@@ -387,6 +388,18 @@ class Variable:
         """
         return self.to_linexpr(-1)
 
+    def __or__(self, fill_value: int | float) -> FillWrapper:
+        """
+        Create a FillWrapper for explicit fill during alignment.
+
+        Usage: ``x | 0`` means "fill missing coords of x with 0".
+        """
+        if not isinstance(fill_value, int | float):
+            return NotImplemented
+        from linopy.common import FillWrapper
+
+        return FillWrapper(wrapped=self, fill_value=fill_value)
+
     @overload
     def __mul__(self, other: ConstantLike) -> LinearExpression: ...
 
@@ -398,11 +411,7 @@ class Variable:
         Multiply variables with a coefficient, variable, or expression.
         """
         try:
-            if isinstance(other, Variable | ScalarVariable):
-                return self.to_linexpr() * other
-            if isinstance(other, expressions.LinearExpression):
-                return self.to_linexpr() * other
-            return self.to_linexpr()._multiply_by_constant(other)
+            return self.to_linexpr() * other
         except TypeError:
             return NotImplemented
 
@@ -450,13 +459,7 @@ class Variable:
         """
         Divide variables with a coefficient.
         """
-        if isinstance(other, expressions.LinearExpression | Variable):
-            raise TypeError(
-                "unsupported operand type(s) for /: "
-                f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
-            )
-        return self.to_linexpr()._divide_by_constant(other)
+        return self.to_linexpr() / other
 
     def __truediv__(
         self, coefficient: ConstantLike | LinearExpression | Variable
@@ -1230,6 +1233,10 @@ class Variable:
     isel = varwrap(Dataset.isel)
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
+
+    reindex = varwrap(Dataset.reindex, fill_value=_fill_value)
+
+    reindex_like = varwrap(Dataset.reindex_like, fill_value=_fill_value)
 
     swap_dims = varwrap(Dataset.swap_dims)
 
