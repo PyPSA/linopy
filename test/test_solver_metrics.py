@@ -25,6 +25,7 @@ def test_solver_metrics_defaults() -> None:
     assert m.objective_value is None
     assert m.dual_bound is None
     assert m.mip_gap is None
+    assert m.peak_memory is None
 
 
 def test_solver_metrics_partial() -> None:
@@ -210,3 +211,23 @@ def test_solver_metrics_mip(solver: str) -> None:
     assert metrics.mip_gap >= 0
     assert metrics.dual_bound is not None
     assert isinstance(metrics.dual_bound, float)
+
+
+# Solvers that populate peak_memory in _extract_metrics
+_solvers_with_peak_memory = {"gurobi", "xpress"}
+
+peak_memory_solvers = [s for s in available_solvers if s in _solvers_with_peak_memory]
+
+
+@pytest.mark.parametrize("solver", peak_memory_solvers)
+def test_solver_metrics_peak_memory(solver: str) -> None:  # pragma: no cover
+    """Verify peak_memory is populated for solvers that support it."""
+    m = _make_simple_lp()
+    if solver in direct_solvers:
+        m.solve(solver_name=solver, io_api="direct")
+    else:
+        m.solve(solver_name=solver, io_api="lp")
+    metrics = m.solver_metrics
+    assert metrics is not None
+    assert metrics.peak_memory is not None
+    assert metrics.peak_memory > 0

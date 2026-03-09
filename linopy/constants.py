@@ -259,6 +259,9 @@ class SolverMetrics:
     mip_gap : float or None
         Relative gap between the objective value and the dual bound.
         Only populated for integer programs.
+    peak_memory : float or None
+        Peak memory usage during solving (MB). Only populated for solvers
+        that expose this information (e.g. Gurobi, Xpress).
     """
 
     solver_name: str | None = None
@@ -266,6 +269,7 @@ class SolverMetrics:
     objective_value: float | None = None
     dual_bound: float | None = None
     mip_gap: float | None = None
+    peak_memory: float | None = None
 
     def __repr__(self) -> str:
         fields = []

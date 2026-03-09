@@ -1232,11 +1232,14 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         m = solver_model
         metrics = super()._extract_metrics(solver_model, solution)
         is_mip = _safe_get(lambda: m.IsMIP) == 1
+        mem_gb = _safe_get(lambda: m.MaxMemUsed)
+        peak_memory = mem_gb * 1024 if mem_gb is not None else None
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.Runtime),
             dual_bound=_safe_get(lambda: m.ObjBound) if is_mip else None,
             mip_gap=_safe_get(lambda: m.MIPGap) if is_mip else None,
+            peak_memory=peak_memory,
         )
 
     def _solve(
@@ -1724,6 +1727,7 @@ class Xpress(Solver[None]):
             solve_time=_safe_get(lambda: m.attributes.time),
             dual_bound=_safe_get(lambda: m.attributes.bestbound) if is_mip else None,
             mip_gap=_safe_get(_xpress_mip_gap) if is_mip else None,
+            peak_memory=_safe_get(lambda: m.attributes.peakmemory),
         )
 
     def solve_problem_from_model(
