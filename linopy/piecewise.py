@@ -21,6 +21,7 @@ from linopy.constants import (
     BREAKPOINT_DIM,
     HELPER_DIMS,
     LP_SEG_DIM,
+    PWL_ACTIVE_BOUND_SUFFIX,
     PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
@@ -376,7 +377,7 @@ class PiecewiseExpression:
     :class:`PiecewiseConstraintDescriptor`.
     """
 
-    __slots__ = ("expr", "x_points", "y_points", "disjunctive")
+    __slots__ = ("active", "disjunctive", "expr", "x_points", "y_points")
 
     def __init__(
         self,
@@ -384,11 +385,13 @@ class PiecewiseExpression:
         x_points: DataArray,
         y_points: DataArray,
         disjunctive: bool,
+        active: LinExprLike | None = None,
     ) -> None:
         self.expr = expr
         self.x_points = x_points
         self.y_points = y_points
         self.disjunctive = disjunctive
+        self.active = active
 
     # y <= pw  →  Python tries y.__le__(pw) → NotImplemented → pw.__ge__(y)
     def __ge__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:
@@ -464,6 +467,7 @@ def piecewise(
     expr: LinExprLike,
     x_points: BreaksLike,
     y_points: BreaksLike,
+    active: LinExprLike | None = None,
 ) -> PiecewiseExpression:
     """
     Create a piecewise linear function descriptor.
@@ -476,6 +480,15 @@ def piecewise(
         Breakpoint x-coordinates.
     y_points : BreaksLike
         Breakpoint y-coordinates.
+    active : Variable or LinearExpression, optional
+        Binary variable that scales the piecewise function. When
+        ``active=0``, all auxiliary variables are forced to zero, which
+        in turn forces the reconstructed x and y to zero. When
+        ``active=1``, the normal piecewise domain ``[x₀, xₙ]`` is
+        active. This is the only behavior the linear formulation
+        supports — selectively *relaxing* the constraint (letting x and
+        y float freely when off) would require big-M or indicator
+        constraints.
 
     Returns
     -------
@@ -503,7 +516,7 @@ def piecewise(
                 f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
             )
 
-    return PiecewiseExpression(expr, x_points, y_points, disjunctive)
+    return PiecewiseExpression(expr, x_points, y_points, disjunctive, active)
 
 
 # ---------------------------------------------------------------------------
@@ -715,12 +728,17 @@ def _add_pwl_sos2_core(
     x_points: DataArray,
     y_points: DataArray,
     lambda_mask: DataArray | None,
+    active: LinearExpression | None = None,
 ) -> Constraint:
     """
     Core SOS2 formulation linking x_expr and target_expr via breakpoints.
 
     Creates lambda variables, SOS2 constraint, convexity constraint,
     and linking constraints for both x and target.
+
+    When ``active`` is provided, the convexity constraint becomes
+    ``sum(lambda) == active`` instead of ``== 1``, forcing all lambda
+    (and thus x, y) to zero when ``active=0``.
     """
     extra = _extra_coords(x_points, BREAKPOINT_DIM)
     lambda_coords = extra + [
@@ -738,8 +756,10 @@ def _add_pwl_sos2_core(
 
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
 
+    # Convexity constraint: sum(lambda) == 1 or sum(lambda) == active
+    rhs = active if active is not None else 1
     convex_con = model.add_constraints(
-        lambda_var.sum(dim=BREAKPOINT_DIM) == 1, name=convex_name
+        lambda_var.sum(dim=BREAKPOINT_DIM) == rhs, name=convex_name
     )
 
     x_weighted = (lambda_var * x_points).sum(dim=BREAKPOINT_DIM)
@@ -759,11 +779,16 @@ def _add_pwl_incremental_core(
     x_points: DataArray,
     y_points: DataArray,
     bp_mask: DataArray | None,
+    active: LinearExpression | None = None,
 ) -> Constraint:
     """
     Core incremental formulation linking x_expr and target_expr.
 
     Creates delta variables, fill-order constraints, and x/target link constraints.
+
+    When ``active`` is provided, delta bounds are tightened to
+    ``δ_i ≤ active`` and base terms become ``x₀ * active``,
+    ``y₀ * active``, forcing x and y to zero when ``active=0``.
     """
     delta_name = f"{name}{PWL_DELTA_SUFFIX}"
     fill_name = f"{name}{PWL_FILL_SUFFIX}"
@@ -793,9 +818,20 @@ def _add_pwl_incremental_core(
     else:
         delta_mask = None
 
+    # When active is provided, upper bound is active (binary) instead of 1
+    delta_upper = 1
     delta_var = model.add_variables(
-        lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+        lower=0,
+        upper=delta_upper,
+        coords=delta_coords,
+        name=delta_name,
+        mask=delta_mask,
     )
+
+    if active is not None:
+        # Tighten delta bounds: δ_i ≤ active
+        active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
+        model.add_constraints(delta_var <= active, name=active_bound_name)
 
     # Binary indicator variables: y_i for each segment
     inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
@@ -823,10 +859,17 @@ def _add_pwl_incremental_core(
     x0 = x_points.isel({BREAKPOINT_DIM: 0})
     y0 = y_points.isel({BREAKPOINT_DIM: 0})
 
-    x_weighted = (delta_var * x_steps).sum(dim=LP_SEG_DIM) + x0
+    # When active is provided, multiply base terms by active
+    x_base: DataArray | LinearExpression = x0
+    y_base: DataArray | LinearExpression = y0
+    if active is not None:
+        x_base = x0 * active
+        y_base = y0 * active
+
+    x_weighted = (delta_var * x_steps).sum(dim=LP_SEG_DIM) + x_base
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (delta_var * y_steps).sum(dim=LP_SEG_DIM) + y0
+    y_weighted = (delta_var * y_steps).sum(dim=LP_SEG_DIM) + y_base
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return fill_con if fill_con is not None else model.constraints[y_link_name]
@@ -840,8 +883,15 @@ def _add_dpwl_sos2_core(
     x_points: DataArray,
     y_points: DataArray,
     lambda_mask: DataArray | None,
+    active: LinearExpression | None = None,
 ) -> Constraint:
-    """Core disjunctive SOS2 formulation with separate x/y points."""
+    """
+    Core disjunctive SOS2 formulation with separate x/y points.
+
+    When ``active`` is provided, the segment selection becomes
+    ``sum(z_k) == active`` instead of ``== 1``, forcing all segment
+    binaries, lambdas, and thus x and y to zero when ``active=0``.
+    """
     binary_name = f"{name}{PWL_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
@@ -866,8 +916,10 @@ def _add_dpwl_sos2_core(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
     )
 
+    # Segment selection: sum(z_k) == 1 or sum(z_k) == active
+    rhs = active if active is not None else 1
     select_con = model.add_constraints(
-        binary_var.sum(dim=SEGMENT_DIM) == 1, name=select_name
+        binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name
     )
 
     lambda_var = model.add_variables(
@@ -943,6 +995,7 @@ def add_piecewise_constraints(
     x_points = pw.x_points
     y_points = pw.y_points
     disjunctive = pw.disjunctive
+    active = pw.active
 
     # Broadcast points to match expression dimensions
     x_points = _broadcast_points(x_points, x_expr_raw, y_lhs, disjunctive=disjunctive)
@@ -960,9 +1013,28 @@ def add_piecewise_constraints(
     x_expr = _to_linexpr(x_expr_raw)
     y_expr = _to_linexpr(y_lhs)
 
+    # Convert active to LinearExpression if provided
+    active_expr = _to_linexpr(active) if active is not None else None
+
+    # Validate: active is not supported with LP method
+    if active_expr is not None and method == "lp":
+        raise ValueError(
+            "The 'active' parameter is not supported with method='lp'. "
+            "Use method='incremental' or method='sos2'."
+        )
+
     if disjunctive:
         return _add_disjunctive(
-            model, name, x_expr, y_expr, sign, x_points, y_points, mask, method
+            model,
+            name,
+            x_expr,
+            y_expr,
+            sign,
+            x_points,
+            y_points,
+            mask,
+            method,
+            active_expr,
         )
     else:
         return _add_continuous(
@@ -976,6 +1048,7 @@ def add_piecewise_constraints(
             mask,
             method,
             skip_nan_check,
+            active_expr,
         )
 
 
@@ -990,6 +1063,7 @@ def _add_continuous(
     mask: DataArray | None,
     method: str,
     skip_nan_check: bool,
+    active: LinearExpression | None = None,
 ) -> Constraint:
     """Handle continuous (non-disjunctive) piecewise constraints."""
     convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
@@ -1053,6 +1127,11 @@ def _add_continuous(
 
     # LP formulation
     if method == "lp":
+        if active is not None:
+            raise ValueError(
+                "The 'active' parameter is not supported with method='lp'. "
+                "Use method='incremental' or method='sos2'."
+            )
         return _add_pwl_lp(model, name, x_expr, y_expr, sign, x_points, y_points)
 
     # SOS2 or incremental formulation
@@ -1060,11 +1139,11 @@ def _add_continuous(
         # Direct linking: y = f(x)
         if method == "sos2":
             return _add_pwl_sos2_core(
-                model, name, x_expr, y_expr, x_points, y_points, mask
+                model, name, x_expr, y_expr, x_points, y_points, mask, active
             )
         else:  # incremental
             return _add_pwl_incremental_core(
-                model, name, x_expr, y_expr, x_points, y_points, mask
+                model, name, x_expr, y_expr, x_points, y_points, mask, active
             )
     else:
         # Inequality: create aux variable z, enforce z = f(x), then y <= z or y >= z
@@ -1075,11 +1154,11 @@ def _add_continuous(
 
         if method == "sos2":
             result = _add_pwl_sos2_core(
-                model, name, x_expr, z_expr, x_points, y_points, mask
+                model, name, x_expr, z_expr, x_points, y_points, mask, active
             )
         else:  # incremental
             result = _add_pwl_incremental_core(
-                model, name, x_expr, z_expr, x_points, y_points, mask
+                model, name, x_expr, z_expr, x_points, y_points, mask, active
             )
 
         # Add inequality
@@ -1102,6 +1181,7 @@ def _add_disjunctive(
     y_points: DataArray,
     mask: DataArray | None,
     method: str,
+    active: LinearExpression | None = None,
 ) -> Constraint:
     """Handle disjunctive piecewise constraints."""
     if method == "lp":
@@ -1120,7 +1200,7 @@ def _add_disjunctive(
 
     if sign == "==":
         return _add_dpwl_sos2_core(
-            model, name, x_expr, y_expr, x_points, y_points, mask
+            model, name, x_expr, y_expr, x_points, y_points, mask, active
         )
     else:
         # Create aux variable z, disjunctive SOS2 for z = f(x), then y <= z or y >= z
@@ -1130,7 +1210,7 @@ def _add_disjunctive(
         z_expr = _to_linexpr(z)
 
         result = _add_dpwl_sos2_core(
-            model, name, x_expr, z_expr, x_points, y_points, mask
+            model, name, x_expr, z_expr, x_points, y_points, mask, active
         )
 
         ineq_name = f"{name}_ineq"
