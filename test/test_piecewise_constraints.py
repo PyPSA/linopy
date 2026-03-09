@@ -1232,3 +1232,285 @@ class TestLPDomainConstraints:
         # Domain constraints should have the entity dimension
         assert "entity" in m.constraints[lo_name].labels.dims
         assert "entity" in m.constraints[hi_name].labels.dims
+
+
+# ===========================================================================
+# Active parameter (commitment binary)
+# ===========================================================================
+
+
+class TestActiveParameter:
+    """Tests for the ``active`` parameter in piecewise constraints."""
+
+    def test_incremental_creates_active_bound(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 10, 50, 100], [5, 2, 20, 80], active=u) == y,
+            method="incremental",
+        )
+        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_Y_LINK_SUFFIX}" in m.constraints
+
+    def test_sos2_with_active(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 10, 50, 100], [5, 2, 20, 80], active=u) == y,
+            method="sos2",
+        )
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
+
+    def test_active_none_is_default(self) -> None:
+        """Without active, formulation is identical to before."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 10, 50], [0, 5, 30]) == y,
+            method="incremental",
+        )
+        assert "pwl0_active_bound" not in m.constraints
+
+    def test_active_with_lp_method_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        with pytest.raises(ValueError, match="not supported with method='lp'"):
+            m.add_piecewise_constraints(
+                piecewise(x, [0, 50, 100], [0, 40, 60], active=u) >= y,
+                method="lp",
+            )
+
+    def test_incremental_multi_dimensional(self) -> None:
+        m = Model()
+        gens = pd.Index(["gen_a", "gen_b"], name="generator")
+        x = m.add_variables(coords=[gens], name="x")
+        y = m.add_variables(coords=[gens], name="y")
+        u = m.add_variables(binary=True, coords=[gens], name="u")
+        m.add_piecewise_constraints(
+            piecewise(
+                x,
+                breakpoints(
+                    {"gen_a": [0, 10, 50], "gen_b": [0, 20, 80]}, dim="generator"
+                ),
+                breakpoints(
+                    {"gen_a": [0, 5, 30], "gen_b": [0, 8, 50]}, dim="generator"
+                ),
+                active=u,
+            )
+            == y,
+            method="incremental",
+        )
+        assert "pwl0_active_bound" in m.constraints
+        delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert "generator" in delta.dims
+
+    def test_disjunctive_with_active(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(
+                x,
+                segments([[0.0, 10.0], [50.0, 100.0]]),
+                segments([[0.0, 5.0], [20.0, 80.0]]),
+                active=u,
+            )
+            == y,
+        )
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_SELECT_SUFFIX}" in m.constraints
+
+
+# ===========================================================================
+# Solver integration – active parameter
+# ===========================================================================
+
+
+@pytest.mark.skipif(len(_any_solvers) == 0, reason="No solver available")
+class TestSolverActive:
+    @pytest.fixture(params=_any_solvers)
+    def solver_name(self, request: pytest.FixtureRequest) -> str:
+        return request.param
+
+    def test_incremental_active_on(self, solver_name: str) -> None:
+        """When u=1 (forced on), normal PWL domain is active."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 100], [0, 10, 50], active=u) == y,
+            method="incremental",
+        )
+        m.add_constraints(u >= 1, name="force_on")
+        m.add_constraints(x >= 50, name="x_min")
+        m.add_objective(y)
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 50, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 10, atol=1e-4)
+
+    def test_incremental_active_off(self, solver_name: str) -> None:
+        """When u=0 (forced off), x and y must be zero."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 100], [0, 10, 50], active=u) == y,
+            method="incremental",
+        )
+        m.add_constraints(u <= 0, name="force_off")
+        m.add_objective(y, sense="max")
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 0, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
+
+    def test_incremental_nonzero_base_active_off(self, solver_name: str) -> None:
+        """With non-zero base point and u=0, x and y must still be zero."""
+        m = Model()
+        # PWL: x in [20, 100], y in [5, 50] when active
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [20, 60, 100], [5, 20, 50], active=u) == y,
+            method="incremental",
+        )
+        m.add_constraints(u <= 0, name="force_off")
+        m.add_objective(y, sense="max")
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 0, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
+
+    def test_incremental_nonzero_base_active_on(self, solver_name: str) -> None:
+        """With non-zero base point and u=1, PWL operates normally."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [20, 60, 100], [5, 20, 50], active=u) == y,
+            method="incremental",
+        )
+        m.add_constraints(u >= 1, name="force_on")
+        m.add_constraints(x >= 20, name="x_min")
+        m.add_objective(y)
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 20, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 5, atol=1e-4)
+
+    def test_unit_commitment_pattern(self, solver_name: str) -> None:
+        """
+        Classic unit commitment: solver decides whether to commit a unit.
+
+        When on, the unit operates at min load with associated fuel cost.
+        When off, output and fuel are zero.
+        """
+        m = Model()
+        # Unit parameters
+        p_min, p_max = 20.0, 100.0
+        fuel_at_pmin, fuel_at_pmax = 10.0, 60.0
+        startup_cost = 5.0
+
+        power = m.add_variables(lower=0, upper=p_max, name="power")
+        fuel = m.add_variables(name="fuel")
+        u = m.add_variables(binary=True, name="commit")
+
+        m.add_piecewise_constraints(
+            piecewise(
+                power,
+                [p_min, p_max],
+                [fuel_at_pmin, fuel_at_pmax],
+                active=u,
+            )
+            == fuel,
+            method="incremental",
+        )
+
+        # Must meet demand of 50 MW
+        m.add_constraints(power >= 50, name="demand")
+        m.add_objective(fuel + startup_cost * u)
+
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        # Unit must be on to meet demand
+        np.testing.assert_allclose(float(u.solution.values), 1, atol=1e-4)
+        np.testing.assert_allclose(float(power.solution.values), 50, atol=1e-4)
+        # fuel = 10 + (60-10)/(100-20) * (50-20) = 10 + 18.75 = 28.75
+        np.testing.assert_allclose(float(fuel.solution.values), 28.75, atol=1e-4)
+
+
+@pytest.mark.skipif(len(_sos2_solvers) == 0, reason="No SOS2-capable solver")
+class TestSolverActiveSOS2:
+    @pytest.fixture(params=_sos2_solvers)
+    def solver_name(self, request: pytest.FixtureRequest) -> str:
+        return request.param
+
+    def test_sos2_active_on(self, solver_name: str) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 100], [0, 10, 50], active=u) == y,
+            method="sos2",
+        )
+        m.add_constraints(u >= 1, name="force_on")
+        m.add_constraints(x >= 50, name="x_min")
+        m.add_objective(y)
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 50, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 10, atol=1e-4)
+
+    def test_sos2_active_off(self, solver_name: str) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(x, [0, 50, 100], [0, 10, 50], active=u) == y,
+            method="sos2",
+        )
+        m.add_constraints(u <= 0, name="force_off")
+        m.add_objective(y, sense="max")
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 0, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
+
+    def test_disjunctive_active_off(self, solver_name: str) -> None:
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        m.add_piecewise_constraints(
+            piecewise(
+                x,
+                segments([[0.0, 10.0], [50.0, 100.0]]),
+                segments([[0.0, 5.0], [20.0, 80.0]]),
+                active=u,
+            )
+            == y,
+        )
+        m.add_constraints(u <= 0, name="force_off")
+        m.add_objective(y, sense="max")
+        status, _ = m.solve(solver_name=solver_name)
+        assert status == "ok"
+        np.testing.assert_allclose(float(x.solution.values), 0, atol=1e-4)
+        np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
