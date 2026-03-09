@@ -775,7 +775,11 @@ def to_gurobipy(
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels) + len(list(m.variables.semi_continuous)):
+    if (
+        len(m.binaries.labels)
+        + len(m.integers.labels)
+        + len(list(m.variables.semi_continuous))
+    ):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
