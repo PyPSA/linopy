@@ -1727,7 +1727,7 @@ class Xpress(Solver[None]):
             solve_time=_safe_get(lambda: m.attributes.time),
             dual_bound=_safe_get(lambda: m.attributes.bestbound) if is_mip else None,
             mip_gap=_safe_get(_xpress_mip_gap) if is_mip else None,
-            peak_memory=_safe_get(lambda: m.attributes.peakmemory),
+            peak_memory=_safe_get(lambda: m.attributes.peakmemory / (1024 * 1024)),
         )
 
     def solve_problem_from_model(
