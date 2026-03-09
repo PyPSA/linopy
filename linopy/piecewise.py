@@ -1126,6 +1126,11 @@ def _add_continuous(
 
     # LP formulation
     if method == "lp":
+        if active is not None:
+            raise ValueError(
+                "The 'active' parameter is not supported with method='lp'. "
+                "Use method='incremental' or method='sos2'."
+            )
         return _add_pwl_lp(model, name, x_expr, y_expr, sign, x_points, y_points)
 
     # SOS2 or incremental formulation
