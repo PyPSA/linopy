@@ -64,7 +64,6 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.piecewise import (
-    add_disjunctive_piecewise_constraints,
     add_piecewise_constraints,
 )
 from linopy.remote import RemoteHandler
@@ -683,7 +682,6 @@ class Model:
         variable.attrs.update(attrs_update)
 
     add_piecewise_constraints = add_piecewise_constraints
-    add_disjunctive_piecewise_constraints = add_disjunctive_piecewise_constraints
 
     def add_constraints(
         self,
