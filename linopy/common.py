@@ -10,7 +10,7 @@ from __future__ import annotations
 import operator
 import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
-from functools import partial, reduce, wraps
+from functools import reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
@@ -1337,36 +1337,35 @@ def align(
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
-    finisher: list[partial[Any] | Callable[[Any], Any]] = []
+    # Extract underlying Datasets for index computation.
     das: list[Any] = []
     for obj in objects:
-        if isinstance(obj, LinearExpression | QuadraticExpression):
-            finisher.append(partial(obj.__class__, model=obj.model))
-            das.append(obj.data)
-        elif isinstance(obj, Variable):
-            finisher.append(
-                partial(
-                    obj.__class__,
-                    model=obj.model,
-                    name=obj.data.attrs["name"],
-                    skip_broadcast=True,
-                )
-            )
+        if isinstance(obj, LinearExpression | QuadraticExpression | Variable):
             das.append(obj.data)
         else:
-            finisher.append(lambda x: x)
             das.append(obj)
 
     exclude = frozenset(exclude).union(HELPER_DIMS)
-    aligned = xr_align(
-        *das,
-        join=join,
-        copy=copy,
-        indexes=indexes,
-        exclude=exclude,
-        fill_value=fill_value,
+
+    # Compute target indexes.
+    target_aligned = xr_align(
+        *das, join=join, copy=False, indexes=indexes, exclude=exclude
     )
-    return tuple([f(da) for f, da in zip(finisher, aligned)])
+
+    # Reindex each object to target indexes. Linopy types use their own
+    # type-aware .reindex() which defaults to correct sentinel fill values.
+    reindex_kwargs: dict[str, Any] = {}
+    if fill_value is not dtypes.NA:
+        reindex_kwargs["fill_value"] = fill_value
+    results: list[Any] = []
+    for obj, target in zip(objects, target_aligned):
+        indexers = {
+            dim: target.indexes[dim]
+            for dim in target.dims
+            if dim not in exclude and dim in target.indexes
+        }
+        results.append(obj.reindex(indexers, **reindex_kwargs))
+    return tuple(results)
 
 
 LocT = TypeVar(
