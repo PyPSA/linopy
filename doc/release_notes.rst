@@ -4,9 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add ``add_piecewise_constraints()`` for piecewise linear constraints with SOS2 and incremental (pure LP) formulations.
-* Add ``add_disjunctive_piecewise_constraints()`` for disconnected piecewise linear segments (e.g. forbidden operating zones).
-* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, dicts, or keyword arguments. Includes ``breakpoints.segments()`` for disjunctive formulations.
+* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
+* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
+* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
+* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
+* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Enable quadratic problems with SCIP on windows.
