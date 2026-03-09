@@ -9,10 +9,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
-import requests
-from google.cloud import storage
-from google.oauth2 import service_account
-from requests import RequestException
+try:
+    import requests
+    from google.cloud import storage
+    from google.oauth2 import service_account
+    from requests import RequestException
+
+    _oetc_deps_available = True
+except ImportError:
+    _oetc_deps_available = False
 
 import linopy
 
@@ -85,6 +90,11 @@ class JobResult:
 
 class OetcHandler:
     def __init__(self, settings: OetcSettings) -> None:
+        if not _oetc_deps_available:
+            raise ImportError(
+                "The 'google-cloud-storage' and 'requests' packages are required "
+                "for OetcHandler. Install them with: pip install linopy[oetc]"
+            )
         self.settings = settings
         self.jwt = self.__sign_in()
         self.cloud_provider_credentials = self.__get_cloud_provider_credentials()

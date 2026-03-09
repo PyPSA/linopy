@@ -37,8 +37,6 @@ dependencies = [
     "tqdm",
     "deprecation",
     "packaging",
-    "google-cloud-storage",
-    "requests",
 ]
 
 [project.urls]
@@ -46,6 +44,10 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
+oetc = [
+    "google-cloud-storage",
+    "requests",
+]
 docs = [
     "ipython==8.26.0",
     "numpydoc==1.7.0",
