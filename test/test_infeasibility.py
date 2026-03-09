@@ -242,3 +242,55 @@ class TestInfeasibility:
 
         # Check that it contains constraint labels
         assert len(subset) > 0
+
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
+    def test_masked_constraint_infeasibility(
+        self, solver: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """
+        Test infeasibility detection with masked constraints.
+
+        This test verifies that the solver correctly maps constraint positions
+        to constraint labels when constraints are masked (some rows skipped).
+        The enumeration creates positions [0, 1, 2, ...] that should correspond
+        to the actual constraint labels which may have gaps like [0, 2, 4, 6].
+        """
+        if solver not in available_solvers:
+            pytest.skip(f"{solver} not available")
+
+        m = Model()
+
+        time = pd.RangeIndex(8, name="time")
+        x = m.add_variables(lower=0, upper=5, coords=[time], name="x")
+        y = m.add_variables(lower=0, upper=5, coords=[time], name="y")
+
+        # Create a mask that keeps only even time indices (0, 2, 4, 6)
+        mask = pd.Series([i % 2 == 0 for i in range(len(time))])
+        m.add_constraints(x + y >= 10, name="sum_lower", mask=mask)
+
+        mask = pd.Series([False] * (len(time) // 2) + [True] * (len(time) // 2))
+        m.add_constraints(x <= 4, name="x_upper", mask=mask)
+
+        m.add_objective(x.sum() + y.sum())
+        status, condition = m.solve(solver_name=solver)
+
+        assert status == "warning"
+        assert "infeasible" in condition
+
+        labels = m.compute_infeasibilities()
+        assert labels
+
+        positions = [m.constraints.get_label_position(label) for label in labels]
+        grouped_coords: dict[str, set[int]] = {"sum_lower": set(), "x_upper": set()}
+        for name, coord in positions:
+            assert name in grouped_coords
+            grouped_coords[name].add(coord["time"])
+
+        assert grouped_coords["sum_lower"]
+        assert grouped_coords["sum_lower"] == grouped_coords["x_upper"]
+
+        m.print_infeasibilities()
+        output = capsys.readouterr().out
+        for coord in grouped_coords["sum_lower"]:
+            assert f"sum_lower[{coord}]" in output
+            assert f"x_upper[{coord}]" in output
