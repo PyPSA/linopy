@@ -480,11 +480,14 @@ def piecewise(
     y_points : BreaksLike
         Breakpoint y-coordinates.
     active : Variable or LinearExpression, optional
-        Binary variable controlling whether the piecewise function is active.
-        When ``active=0``, the reconstructed x and y values are forced to zero.
-        When ``active=1``, the normal piecewise domain is active.
-        Typical use case: unit commitment where a binary on/off variable
-        gates the operating range of a unit.
+        Binary variable that scales the piecewise function. When
+        ``active=0``, all auxiliary variables are forced to zero, which
+        in turn forces the reconstructed x and y to zero. When
+        ``active=1``, the normal piecewise domain ``[x₀, xₙ]`` is
+        active. This is the only behavior the linear formulation
+        supports — selectively *relaxing* the constraint (letting x and
+        y float freely when off) would require big-M or indicator
+        constraints.
 
     Returns
     -------
@@ -732,9 +735,9 @@ def _add_pwl_sos2_core(
     Creates lambda variables, SOS2 constraint, convexity constraint,
     and linking constraints for both x and target.
 
-    When ``active`` is provided (a binary variable/expression), the convexity
-    constraint changes from ``sum(lambda) == 1`` to ``sum(lambda) == active``.
-    This forces all lambda to zero when ``active=0``, collapsing x and y to zero.
+    When ``active`` is provided, the convexity constraint becomes
+    ``sum(lambda) == active`` instead of ``== 1``, forcing all lambda
+    (and thus x, y) to zero when ``active=0``.
     """
     extra = _extra_coords(x_points, BREAKPOINT_DIM)
     lambda_coords = extra + [
@@ -782,10 +785,9 @@ def _add_pwl_incremental_core(
 
     Creates delta variables, fill-order constraints, and x/target link constraints.
 
-    When ``active`` is provided (a binary variable/expression), the delta upper
-    bounds change from 1 to ``active``, and the base terms are multiplied by
-    ``active``. This forces all deltas to zero when ``active=0``, collapsing
-    x and y to zero.
+    When ``active`` is provided, delta bounds are tightened to
+    ``δ_i ≤ active`` and base terms become ``x₀ * active``,
+    ``y₀ * active``, forcing x and y to zero when ``active=0``.
     """
     delta_name = f"{name}{PWL_DELTA_SUFFIX}"
     fill_name = f"{name}{PWL_FILL_SUFFIX}"
@@ -886,9 +888,9 @@ def _add_dpwl_sos2_core(
     """
     Core disjunctive SOS2 formulation with separate x/y points.
 
-    When ``active`` is provided, the segment selection constraint changes from
-    ``sum(z_k) == 1`` to ``sum(z_k) == active``, allowing the entire piecewise
-    function to be deactivated when ``active=0``.
+    When ``active`` is provided, the segment selection becomes
+    ``sum(z_k) == active`` instead of ``== 1``, forcing all segment
+    binaries, lambdas, and thus x and y to zero when ``active=0``.
     """
     binary_name = f"{name}{PWL_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
