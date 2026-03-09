@@ -643,6 +643,12 @@ def to_mosek(
     if m.variables.sos:
         raise NotImplementedError("SOS constraints are not supported by MOSEK.")
 
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by MOSEK. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
+
     import mosek
 
     print_variable, print_constraint = get_printers_scalar(
@@ -769,7 +775,7 @@ def to_gurobipy(
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if len(m.binaries.labels) + len(m.integers.labels) + len(list(m.variables.semi_continuous)):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
@@ -833,12 +839,6 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
             "Use io_api='lp' instead."
         )
 
-    if m.variables.semi_continuous:
-        raise NotImplementedError(
-            "Semi-continuous variables are not supported by the HiGHS direct API. "
-            "Use a solver that supports them (gurobi, cplex)."
-        )
-
     import highspy
 
     print_variable, print_constraint = get_printers_scalar(
@@ -848,11 +848,17 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers):
+    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
         vtypes = M.vtypes
-        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
-        n = len(labels)
-        h.changeColsIntegrality(n, labels, ones_like(labels))
+        # Map linopy vtypes to HiGHS integrality values:
+        # 0 = continuous, 1 = integer, 2 = semi-continuous
+        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+        labels = np.arange(len(vtypes))[int_mask]
+        integrality = np.array(
+            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+        )
+        h.changeColsIntegrality(len(labels), labels, integrality)
         if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)

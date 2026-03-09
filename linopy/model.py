@@ -1461,7 +1461,7 @@ class Model:
             ):
                 raise ValueError(
                     f"Solver {solver_name} does not support semi-continuous variables. "
-                    "Use a solver that supports them (gurobi, cplex)."
+                    "Use a solver that supports them (gurobi, cplex, highs)."
                 )
 
         try:

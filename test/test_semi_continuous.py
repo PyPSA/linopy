@@ -139,7 +139,42 @@ def test_unsupported_solver_raises() -> None:
     m.add_constraints(m.variables["x"] <= 5, name="ub")
     m.add_objective(m.variables["x"])
 
-    for solver in ["glpk", "highs", "mosek", "mindopt"]:
+    for solver in ["glpk", "mosek", "mindopt"]:
         if solver in available_solvers:
             with pytest.raises(ValueError, match="does not support semi-continuous"):
                 m.solve(solver_name=solver)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+def test_semi_continuous_solve_highs() -> None:
+    """
+    Semi-continuous variable solves correctly with HiGHS.
+
+    Maximize x subject to x <= 0.5, x semi-continuous in [1, 10].
+    Since x can be 0 or in [1, 10], and x <= 0.5 prevents [1, 10],
+    the optimal x should be 0.
+    """
+    m = Model()
+    x = m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    m.add_constraints(x <= 0.5, name="ub")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="highs")
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 0, atol=1e-6)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+def test_semi_continuous_solve_highs_active() -> None:
+    """
+    Semi-continuous variable takes value in [lb, ub] when beneficial with HiGHS.
+
+    Maximize x subject to x <= 5, x semi-continuous in [1, 10].
+    Optimal x should be 5.
+    """
+    m = Model()
+    x = m.add_variables(lower=1, upper=10, name="x", semi_continuous=True)
+    m.add_constraints(x <= 5, name="ub")
+    m.add_objective(x, sense="max")
+    m.solve(solver_name="highs")
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 5, atol=1e-6)

@@ -104,6 +104,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             }
         ),
     ),
