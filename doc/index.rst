@@ -42,7 +42,7 @@ flexible data-handling features:
 -  Support of various solvers
    - `Cbc <https://projects.coin-or.org/Cbc>`__
    - `GLPK <https://www.gnu.org/software/glpk/>`__
-   - `HiGHS <https://www.maths.ed.ac.uk/hall/HiGHS/>`__
+   - `HiGHS <https://highs.dev/>`__
    - `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__
    - `Gurobi <https://www.gurobi.com/>`__
    - `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__
@@ -112,6 +112,8 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    sos-constraints
+   piecewise-linear-constraints
+   piecewise-linear-constraints-tutorial
    manipulating-models
    testing-framework
    transport-tutorial

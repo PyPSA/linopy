@@ -4,7 +4,27 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
+* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
+* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
+* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
+* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add the `sphinx-copybutton` to the documentation
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Enable quadratic problems with SCIP on windows.
 * Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``best_bound``, and ``mip_gap`` in a solver-independent way. All solvers populate solver-specific fields where available.
+
+
+Version 0.6.5
+-------------
+
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
+
+Version 0.6.4
+--------------
+
+* Add support for the `knitro` solver via the knitro python API
 
 Version 0.6.3
 --------------
@@ -680,7 +700,7 @@ Version 0.0.5
 * The `Variable` class now has a `lower` and `upper` accessor, which allows to inspect and modify the lower and upper bounds of a assigned variable.
 * The `Constraint` class now has a `lhs`, `vars`, `coeffs`, `rhs` and `sign` accessor, which allows to inspect and modify the left-hand-side, the signs and right-hand-side of a assigned constraint.
 * Constraints can now be build combining linear expressions with right-hand-side via a `>=`, `<=` or a `==` operator. This creates an `AnonymousConstraint` which can be passed to `Model.add_constraints`.
-* Add support of the HiGHS open source solver https://www.maths.ed.ac.uk/hall/HiGHS/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
+* Add support of the HiGHS open source solver https://highs.dev/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
 
 
 **Breaking changes**
