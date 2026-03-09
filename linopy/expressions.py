@@ -1094,12 +1094,6 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, DataArray):
-            extra_dims = set(rhs.dims) - set(self.coord_dims)
-            if extra_dims:
-                raise ValueError(
-                    f"RHS DataArray has dimensions {extra_dims} not present "
-                    f"in the expression. Cannot create constraint."
-                )
             effective_join = join if join is not None else "exact"
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)

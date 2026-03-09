@@ -913,11 +913,12 @@ class TestExactAlignmentDefault:
 
     # --- Edge cases ---
 
-    def test_constraint_rhs_extra_dims_raises(self, v: Variable) -> None:
+    def test_constraint_rhs_mismatched_coords_raises(self, v: Variable) -> None:
         rhs = xr.DataArray(
             [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
         )
-        with pytest.raises(ValueError, match="not present in the expression"):
+        # Raises because dim_2 coords [0,1] don't match v's [0..19] (exact join)
+        with pytest.raises(ValueError, match="exact"):
             v <= rhs
 
     def test_add_constant_extra_dims_broadcasts(self, v: Variable) -> None:

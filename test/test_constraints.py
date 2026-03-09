@@ -166,23 +166,14 @@ def test_constraint_rhs_lower_dim(rhs_factory) -> None:
     assert c.shape == (10, 10)
 
 
-@pytest.mark.parametrize(
-    "rhs_factory",
-    [
-        pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
-        pytest.param(
-            lambda m: xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"]),
-            id="dataarray",
-        ),
-        pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
-    ],
-)
-def test_constraint_rhs_higher_dim_constant_raises(rhs_factory) -> None:
+def test_constraint_rhs_higher_dim_constant_broadcasts() -> None:
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
-    with pytest.raises(ValueError, match="dimensions"):
-        m.add_constraints(x >= rhs_factory(m))
+    # DataArray RHS with extra dims broadcasts (creates redundant constraints)
+    rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
+    c = m.add_constraints(x >= rhs, name="broadcast_con")
+    assert "extra" in c.dims
 
 
 @pytest.mark.parametrize(
