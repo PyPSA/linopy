@@ -45,30 +45,6 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
-class FillWrapper:
-    """
-    Wraps a linopy object with a fill value for use in arithmetic.
-
-    Created via the ``|`` operator on linopy types: ``expr | 0`` means
-    "fill missing coordinates of *expr* with 0 during alignment".
-
-    The wrapper is consumed immediately by the arithmetic dunder methods
-    and never stored or propagated.
-    """
-
-    __slots__ = ("wrapped", "fill_value")
-
-    def __init__(self, wrapped: Any, fill_value: float) -> None:
-        self.wrapped = wrapped
-        self.fill_value = fill_value
-
-    def __repr__(self) -> str:
-        return f"FillWrapper({self.wrapped!r}, fill_value={self.fill_value})"
-
-    def __neg__(self) -> FillWrapper:
-        return FillWrapper(wrapped=-self.wrapped, fill_value=self.fill_value)
-
-
 def check_constant_dim_subset(
     expr_dims: tuple[str, ...] | set[str],
     constant_dims: tuple[str, ...] | set[str],
@@ -1352,8 +1328,7 @@ def align(
         *das, join=join, copy=False, indexes=indexes, exclude=exclude
     )
 
-    # Reindex each object to target indexes. Linopy types use their own
-    # type-aware .reindex() which defaults to correct sentinel fill values.
+    # Reindex each object to target indexes.
     reindex_kwargs: dict[str, Any] = {}
     if fill_value is not dtypes.NA:
         reindex_kwargs["fill_value"] = fill_value
@@ -1364,7 +1339,11 @@ def align(
             for dim in target.dims
             if dim not in exclude and dim in target.indexes
         }
-        results.append(obj.reindex(indexers, **reindex_kwargs))
+        # Variable.reindex has no fill_value — it always uses sentinels
+        if isinstance(obj, Variable):
+            results.append(obj.reindex(indexers))
+        else:
+            results.append(obj.reindex(indexers, **reindex_kwargs))
     return tuple(results)
 
 

@@ -64,7 +64,6 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.common import FillWrapper
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         GenericExpression,
@@ -387,18 +386,6 @@ class Variable:
         Calculate the negative of the variables (converts coefficients only).
         """
         return self.to_linexpr(-1)
-
-    def __or__(self, fill_value: int | float) -> FillWrapper:
-        """
-        Create a FillWrapper for explicit fill during alignment.
-
-        Usage: ``x | 0`` means "fill missing coords of x with 0".
-        """
-        if not isinstance(fill_value, int | float):
-            return NotImplemented
-        from linopy.common import FillWrapper
-
-        return FillWrapper(wrapped=self, fill_value=fill_value)
 
     @overload
     def __mul__(self, other: ConstantLike) -> LinearExpression: ...
@@ -1234,9 +1221,38 @@ class Variable:
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
 
-    reindex = varwrap(Dataset.reindex, fill_value=_fill_value)
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        **indexers_kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable, filling with sentinel values.
 
-    reindex_like = varwrap(Dataset.reindex_like, fill_value=_fill_value)
+        Always fills with labels=-1, lower=NaN, upper=NaN to preserve
+        valid label references.
+        """
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=self._fill_value, **indexers_kwargs),
+            self.model,
+            self.name,
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        **kwargs: Any,
+    ) -> Variable:
+        """Reindex like another object, filling with sentinel values."""
+        return self.__class__(
+            self.data.reindex_like(
+                other if isinstance(other, Dataset) else other.data,
+                fill_value=self._fill_value,
+                **kwargs,
+            ),
+            self.model,
+            self.name,
+        )
 
     swap_dims = varwrap(Dataset.swap_dims)
 

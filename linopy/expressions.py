@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Self, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -45,7 +45,6 @@ from types import EllipsisType, NotImplementedType
 from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
-    FillWrapper,
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
@@ -128,26 +127,6 @@ def _expr_unwrap(
         return maybe_expr.data
 
     return maybe_expr
-
-
-def _resolve_fill_wrapper(self_obj: Any, other: Any) -> tuple[Any, str | None]:
-    """
-    Unwrap a FillWrapper operand by reindexing to match self_obj.
-
-    Returns the resolved other and the join mode to use (None = default exact).
-    """
-    if not isinstance(other, FillWrapper):
-        return other, None
-    fill_value = other.fill_value
-    other = other.wrapped
-    # Reindex other to self's coords on shared dims, filling with fill_value
-    shared_dims = set(self_obj.dims) & set(other.dims)
-    if shared_dims:
-        target_coords = {
-            dim: self_obj.coords[dim] for dim in shared_dims if dim in self_obj.coords
-        }
-        other = other.reindex(target_coords, fill_value=fill_value)
-    return other, None
 
 
 logger = logging.getLogger(__name__)
@@ -516,16 +495,6 @@ class BaseExpression(ABC):
         Get the negative of the expression.
         """
         return self.assign_multiindex_safe(coeffs=-self.coeffs, const=-self.const)
-
-    def __or__(self, fill_value: int | float) -> FillWrapper:
-        """
-        Create a FillWrapper for explicit fill during alignment.
-
-        Usage: ``expr | 0`` means "fill missing coords of expr with 0".
-        """
-        if not isinstance(fill_value, int | float):
-            return NotImplemented
-        return FillWrapper(wrapped=self, fill_value=fill_value)
 
     def _multiply_by_linear_expression(
         self, other: LinearExpression | ScalarLinearExpression
@@ -1523,9 +1492,51 @@ class BaseExpression(ABC):
 
     set_index = exprwrap(Dataset.set_index)
 
-    reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        fill_value: Any = None,
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """
+        Reindex the expression, preserving sentinel fill values.
 
-    reindex_like = exprwrap(Dataset.reindex_like, fill_value=_fill_value)
+        If ``fill_value`` is a scalar, it is applied to ``const`` only;
+        ``vars`` and ``coeffs`` always use their sentinel values (-1 and NaN).
+        If ``fill_value`` is a dict it is passed through as-is.
+        If ``fill_value`` is None the type-default sentinels are used.
+        """
+        if fill_value is None:
+            fv = self._fill_value
+        elif isinstance(fill_value, Mapping):
+            fv = fill_value
+        else:
+            fv = {**self._fill_value, "const": fill_value}
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=fv, **indexers_kwargs), self.model
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        fill_value: Any = None,
+        **kwargs: Any,
+    ) -> Self:
+        """Reindex like another object, preserving sentinel fill values."""
+        if fill_value is None:
+            fv = self._fill_value
+        elif isinstance(fill_value, Mapping):
+            fv = fill_value
+        else:
+            fv = {**self._fill_value, "const": fill_value}
+        return self.__class__(
+            self.data.reindex_like(
+                other if isinstance(other, Dataset) else other.data,
+                fill_value=fv,
+                **kwargs,
+            ),
+            self.model,
+        )
 
     rename = exprwrap(Dataset.rename)
 
@@ -1606,8 +1617,6 @@ class LinearExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        other, _join = _resolve_fill_wrapper(self, other)
-
         if isinstance(other, QuadraticExpression):
             return other.__add__(self)
 
@@ -1621,7 +1630,6 @@ class LinearExpression(BaseExpression):
             return NotImplemented
 
     def __radd__(self, other: ConstantLike) -> LinearExpression:
-        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return self + other
         except TypeError:
@@ -1644,14 +1652,12 @@ class LinearExpression(BaseExpression):
         | LinearExpression
         | QuadraticExpression,
     ) -> LinearExpression | QuadraticExpression:
-        # FillWrapper.__neg__ is defined, so -other works for FillWrapper
         try:
             return self.__add__(-other)
         except TypeError:
             return NotImplemented
 
     def __rsub__(self, other: ConstantLike | Variable) -> LinearExpression:
-        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return (self * -1) + other
         except TypeError:
@@ -1670,8 +1676,6 @@ class LinearExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        other, _join = _resolve_fill_wrapper(self, other)
-
         if isinstance(other, QuadraticExpression):
             return other.__rmul__(self)
 
@@ -1698,7 +1702,6 @@ class LinearExpression(BaseExpression):
         """
         Right-multiply the expr by a factor.
         """
-        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return self * other
         except TypeError:
@@ -2130,8 +2133,6 @@ class QuadraticExpression(BaseExpression):
         """
         Multiply the expr by a factor.
         """
-        other, _join = _resolve_fill_wrapper(self, other)
-
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for *: "
@@ -2144,7 +2145,6 @@ class QuadraticExpression(BaseExpression):
             return NotImplemented
 
     def __rmul__(self, other: SideLike) -> QuadraticExpression:
-        other, _join = _resolve_fill_wrapper(self, other)
         return self * other
 
     def __add__(self, other: SideLike) -> QuadraticExpression:
@@ -2154,8 +2154,6 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        other, _join = _resolve_fill_wrapper(self, other)
-
         try:
             if isinstance(other, SUPPORTED_CONSTANT_TYPES):
                 return self._add_constant(other)
@@ -2173,7 +2171,6 @@ class QuadraticExpression(BaseExpression):
         """
         Add others to expression.
         """
-        other, _join = _resolve_fill_wrapper(self, other)
         return self.__add__(other)
 
     def __sub__(self, other: SideLike) -> QuadraticExpression:
@@ -2183,7 +2180,6 @@ class QuadraticExpression(BaseExpression):
         Note: If other is a numpy array or pandas object without axes names,
         dimension names of self will be filled in other
         """
-        # FillWrapper.__neg__ is defined, so -other works for FillWrapper
         try:
             return self.__add__(-other)
         except TypeError:
@@ -2193,7 +2189,6 @@ class QuadraticExpression(BaseExpression):
         """
         Subtract expression from others.
         """
-        other, _join = _resolve_fill_wrapper(self, other)
         try:
             return (self * -1) + other
         except TypeError:
