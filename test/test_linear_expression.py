@@ -220,8 +220,9 @@ def test_linear_expression_with_multiplication(x: Variable) -> None:
     expr = np.array(1) * x
     assert isinstance(expr, LinearExpression)
 
-    with pytest.raises(ValueError, match="not present"):
-        xr.DataArray(np.array([[1, 2], [2, 3]])) * x
+    # Constants with extra dims broadcast freely
+    expr = xr.DataArray(np.array([[1, 2], [2, 3]])) * x
+    assert isinstance(expr, LinearExpression)
 
     expr = pd.Series([1, 2], index=pd.RangeIndex(2, name="dim_0")) * x
     assert isinstance(expr, LinearExpression)
@@ -315,8 +316,9 @@ def test_linear_expression_with_constant_multiplication(
     assert isinstance(obs, LinearExpression)
     assert (obs.const == 10).all()
 
-    with pytest.raises(ValueError, match="not present"):
-        expr * pd.Series([1, 2, 3], index=pd.RangeIndex(3, name="new_dim"))
+    # Constants with extra dims broadcast freely
+    obs = expr * pd.Series([1, 2, 3], index=pd.RangeIndex(3, name="new_dim"))
+    assert isinstance(obs, LinearExpression)
 
 
 def test_linear_expression_multi_indexed(u: Variable) -> None:
@@ -918,16 +920,15 @@ class TestExactAlignmentDefault:
         with pytest.raises(ValueError, match="not present in the expression"):
             v <= rhs
 
-    def test_add_constant_extra_dims_raises(self, v: Variable) -> None:
-        da = xr.DataArray(
-            [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
-        )
-        with pytest.raises(ValueError, match="not present in the expression"):
-            v + da
-        with pytest.raises(ValueError, match="not present"):
-            v - da
-        with pytest.raises(ValueError, match="not present"):
-            v * da
+    def test_add_constant_extra_dims_broadcasts(self, v: Variable) -> None:
+        # Constant with only new dims (no shared dim overlap) broadcasts freely
+        da = xr.DataArray([1.0, 2.0, 3.0], dims=["extra"])
+        result = v + da
+        assert "extra" in result.dims
+        result = v - da
+        assert "extra" in result.dims
+        result = v * da
+        assert "extra" in result.dims
 
     def test_da_truediv_var_raises(self, v: Variable) -> None:
         da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
@@ -1020,7 +1021,8 @@ def test_linear_expression_isnull(v: Variable) -> None:
     expr = np.arange(20) * v
     filter = (expr.coeffs >= 10).any(TERM_DIM)
     expr = expr.where(filter)
-    assert expr.isnull().sum() == 0
+    # Entries where filter is False are null (coeffs=NaN, const=NaN)
+    assert expr.isnull().sum() == 10  # first 10 entries (coeff 0..9) are null
 
 
 def test_linear_expression_flat(v: Variable) -> None:
@@ -1066,7 +1068,7 @@ def test_linear_expression_where_with_const(v: Variable) -> None:
     expr = expr.where(filter)
     assert isinstance(expr, LinearExpression)
     assert expr.nterm == 1
-    assert (expr.const[:10] == 0).all()
+    assert expr.const[:10].isnull().all()
     assert (expr.const[10:] == 10).all()
 
     expr = np.arange(20) * v + 10
@@ -1150,7 +1152,8 @@ def test_linear_expression_fillna(v: Variable) -> None:
 
     filled = filtered.fillna(10)
     assert isinstance(filled, LinearExpression)
-    assert filled.const.sum() == 100
+    # fillna replaces NaN const values (10 entries × 10) + kept values (10 × 10)
+    assert filled.const.sum() == 200
     assert filled.coeffs.isnull().sum() == 10
 
 

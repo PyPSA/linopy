@@ -1,4 +1,3 @@
-import pytest
 import xarray as xr
 
 import linopy
@@ -26,7 +25,7 @@ def test_operations_with_data_arrays_are_typed_correctly() -> None:
     _ = q + s
 
 
-def test_constant_with_extra_dims_raises() -> None:
+def test_constant_with_extra_dims_broadcasts() -> None:
     m = linopy.Model()
 
     a: xr.DataArray = xr.DataArray([1, 2, 3])
@@ -35,9 +34,13 @@ def test_constant_with_extra_dims_raises() -> None:
     e: linopy.LinearExpression = v * 1.0
     q = v * v
 
-    with pytest.raises(ValueError, match="not present"):
-        a * v
-    with pytest.raises(ValueError, match="not present"):
-        a * e
-    with pytest.raises(ValueError, match="not present"):
-        a * q
+    # Constants can introduce new dimensions (broadcasting)
+    result_v = a * v
+    assert "dim_0" in result_v.dims
+
+    result_e = a * e
+    assert "dim_0" in result_e.dims
+
+    # QuadraticExpression also allows constant broadcasting
+    result_q = a * q
+    assert isinstance(result_q, linopy.expressions.QuadraticExpression)

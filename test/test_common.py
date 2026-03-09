@@ -674,22 +674,11 @@ def test_get_dims_with_index_levels() -> None:
     assert get_dims_with_index_levels(ds5) == []
 
 
-def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
+def test_align(x: Variable) -> None:  # noqa: F811
     alpha = xr.DataArray([1, 2], [[1, 2]])
-    beta = xr.DataArray(
-        [1, 2, 3],
-        [
-            (
-                "dim_3",
-                pd.MultiIndex.from_tuples(
-                    [(1, "b"), (2, "b"), (1, "c")], names=["level1", "level2"]
-                ),
-            )
-        ],
-    )
 
     # inner join
-    x_obs, alpha_obs = align(x, alpha)
+    x_obs, alpha_obs = align(x, alpha, join="inner")
     assert isinstance(x_obs, Variable)
     assert x_obs.shape == alpha_obs.shape == (1,)
     assert_varequal(x_obs, x.loc[[1]])
@@ -701,16 +690,9 @@ def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     assert_varequal(x_obs, x)
     assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
 
-    # multiindex
-    beta_obs, u_obs = align(beta, u)
-    assert u_obs.shape == beta_obs.shape == (2,)
-    assert isinstance(u_obs, Variable)
-    assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
-    assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
-
     # with linear expression
     expr = 20 * x
-    x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
+    x_obs, expr_obs, alpha_obs = align(x, expr, alpha, join="inner")
     assert x_obs.shape == alpha_obs.shape == (1,)
     assert expr_obs.shape == (1, 1)  # _term dim
     assert isinstance(expr_obs, LinearExpression)

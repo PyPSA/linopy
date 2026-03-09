@@ -560,6 +560,8 @@ def _add_pwl_incremental(
     if n_segments >= 2:
         delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+        # Align coords for positional comparison (lo=[0..n-2], hi=[1..n-1])
+        delta_hi = delta_hi.assign_coords({seg_dim: delta_lo.coords[seg_dim].values})
         fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
     bp0 = breakpoints.isel({dim: 0})

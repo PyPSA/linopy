@@ -132,22 +132,9 @@ class TestAssociativity:
         """(x + y) + z == x + (y + z)"""
         assert_linequal((x + y) + z, x + (y + z))
 
-    @pytest.mark.xfail(
-        reason="Rule 2: (x[A] + c[B]) raises because c introduces dim B",
-        strict=True,
-    )
     def test_add_with_constant(self, x, g, c):
         """(x[A] + c[B]) + g[A,B] == x[A] + (c[B] + g[A,B])"""
-        lhs = (x + c) + g
-        rhs = x + (c + g)
-        assert_linequal(lhs, rhs)
-
-    def test_add_with_constant_right_grouping(self, x, g, c):
-        """x[A] + (c[B] + g[A,B]) works with right grouping."""
-        result = x + (c + g)
-        assert isinstance(result, LinearExpression)
-        assert "time" in result.dims
-        assert "tech" in result.dims
+        assert_linequal((x + c) + g, x + (c + g))
 
 
 # ============================================================
@@ -164,22 +151,9 @@ class TestDistributivity:
         """c[B] * (g[A,B] + g[A,B]) == c*g + c*g"""
         assert_linequal(c * (g + g), c * g + c * g)
 
-    @pytest.mark.xfail(
-        reason="Rule 2: c[B]*x[A] raises because c introduces dim B",
-        strict=True,
-    )
     def test_constant_mixed_dims(self, x, g, c):
         """c[B] * (x[A] + g[A,B]) == c*x + c*g"""
-        lhs = c * (x + g)
-        rhs = c * x + c * g
-        assert_linequal(lhs, rhs)
-
-    def test_constant_mixed_dims_undistributed(self, x, g, c):
-        """c[B] * (x[A] + g[A,B]) works undistributed."""
-        result = c * (x + g)
-        assert isinstance(result, LinearExpression)
-        assert "time" in result.dims
-        assert "tech" in result.dims
+        assert_linequal(c * (x + g), c * x + c * g)
 
 
 # ============================================================

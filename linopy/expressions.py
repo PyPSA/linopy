@@ -48,7 +48,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_constant_dim_subset,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -95,7 +94,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 
-FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": 0}
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
 
 def exprwrap(
@@ -589,13 +588,13 @@ class BaseExpression(ABC):
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        check_constant_dim_subset(self.coord_dims, da.dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join, default_join="exact"
         )
         if needs_data_reindex:
+            fv = {**self._fill_value, "const": 0}
             return self.__class__(
-                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
+                self.data.reindex_like(self_const, fill_value=fv).assign(
                     const=self_const + da
                 ),
                 self.model,
@@ -610,12 +609,12 @@ class BaseExpression(ABC):
         join: str | None = None,
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        check_constant_dim_subset(self.coord_dims, factor.dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join, default_join="exact"
         )
         if needs_data_reindex:
-            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
+            fv = {**self._fill_value, "const": 0}
+            data = self.data.reindex_like(self_const, fill_value=fv)
             return self.__class__(
                 assign_multiindex_safe(
                     data, coeffs=op(data.coeffs, factor), const=op(self_const, factor)
@@ -1495,13 +1494,13 @@ class BaseExpression(ABC):
     def reindex(
         self,
         indexers: Mapping[Any, Any] | None = None,
-        fill_value: float = 0,
+        fill_value: float = np.nan,
         **indexers_kwargs: Any,
     ) -> Self:
         """
         Reindex the expression.
 
-        ``fill_value`` sets the constant for missing coordinates.
+        ``fill_value`` sets the constant for missing coordinates (default NaN).
         Variable labels and coefficients always use sentinel values
         (vars=-1, coeffs=NaN).
         """
@@ -1513,13 +1512,13 @@ class BaseExpression(ABC):
     def reindex_like(
         self,
         other: Any,
-        fill_value: float = 0,
+        fill_value: float = np.nan,
         **kwargs: Any,
     ) -> Self:
         """
         Reindex like another object.
 
-        ``fill_value`` sets the constant for missing coordinates.
+        ``fill_value`` sets the constant for missing coordinates (default NaN).
         Variable labels and coefficients always use sentinel values.
         """
         fv = {**self._fill_value, "const": fill_value}
@@ -2095,7 +2094,7 @@ class QuadraticExpression(BaseExpression):
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": 0}
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         super().__init__(data, model)

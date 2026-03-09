@@ -45,31 +45,6 @@ if TYPE_CHECKING:
     from linopy.variables import Variable
 
 
-def check_constant_dim_subset(
-    expr_dims: tuple[str, ...] | set[str],
-    constant_dims: tuple[str, ...] | set[str],
-) -> None:
-    """
-    Validate that a constant's dims are a subset of the expression's dims.
-
-    A constant (DataArray, numpy, pandas) cannot introduce dimensions that
-    the expression does not have — that would silently duplicate variables.
-
-    Raises
-    ------
-    ValueError
-        If the constant has dimensions not present in the expression.
-    """
-    extra = set(constant_dims) - set(expr_dims)
-    if extra:
-        raise ValueError(
-            f"Constant has dimensions {extra} not present in the "
-            f"expression. Arithmetic with constants cannot introduce new "
-            f"dimensions — use multiplication to expand, or select/reindex "
-            f"the constant to match the expression's dimensions."
-        )
-
-
 def set_int_index(series: pd.Series) -> pd.Series:
     """
     Convert string index to int index.
