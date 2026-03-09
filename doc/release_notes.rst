@@ -9,6 +9,7 @@ Upcoming Version
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, dicts, or keyword arguments. Includes ``breakpoints.segments()`` for disjunctive formulations.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 
 
 Version 0.6.5
