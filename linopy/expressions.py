@@ -1495,23 +1495,17 @@ class BaseExpression(ABC):
     def reindex(
         self,
         indexers: Mapping[Any, Any] | None = None,
-        fill_value: Any = None,
+        fill_value: float = 0,
         **indexers_kwargs: Any,
     ) -> Self:
         """
-        Reindex the expression, preserving sentinel fill values.
+        Reindex the expression.
 
-        If ``fill_value`` is a scalar, it is applied to ``const`` only;
-        ``vars`` and ``coeffs`` always use their sentinel values (-1 and NaN).
-        If ``fill_value`` is a dict it is passed through as-is.
-        If ``fill_value`` is None the type-default sentinels are used.
+        ``fill_value`` sets the constant for missing coordinates.
+        Variable labels and coefficients always use sentinel values
+        (vars=-1, coeffs=NaN).
         """
-        if fill_value is None:
-            fv = self._fill_value
-        elif isinstance(fill_value, Mapping):
-            fv = fill_value
-        else:
-            fv = {**self._fill_value, "const": fill_value}
+        fv = {**self._fill_value, "const": fill_value}
         return self.__class__(
             self.data.reindex(indexers, fill_value=fv, **indexers_kwargs), self.model
         )
@@ -1519,16 +1513,16 @@ class BaseExpression(ABC):
     def reindex_like(
         self,
         other: Any,
-        fill_value: Any = None,
+        fill_value: float = 0,
         **kwargs: Any,
     ) -> Self:
-        """Reindex like another object, preserving sentinel fill values."""
-        if fill_value is None:
-            fv = self._fill_value
-        elif isinstance(fill_value, Mapping):
-            fv = fill_value
-        else:
-            fv = {**self._fill_value, "const": fill_value}
+        """
+        Reindex like another object.
+
+        ``fill_value`` sets the constant for missing coordinates.
+        Variable labels and coefficients always use sentinel values.
+        """
+        fv = {**self._fill_value, "const": fill_value}
         return self.__class__(
             self.data.reindex_like(
                 other if isinstance(other, Dataset) else other.data,
