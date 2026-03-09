@@ -859,12 +859,11 @@ def _add_pwl_incremental_core(
     y0 = y_points.isel({BREAKPOINT_DIM: 0})
 
     # When active is provided, multiply base terms by active
+    x_base: DataArray | LinearExpression = x0
+    y_base: DataArray | LinearExpression = y0
     if active is not None:
         x_base = x0 * active
         y_base = y0 * active
-    else:
-        x_base = x0
-        y_base = y0
 
     x_weighted = (delta_var * x_steps).sum(dim=LP_SEG_DIM) + x_base
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
