@@ -9,6 +9,7 @@ Upcoming Version
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
 * Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Enable quadratic problems with SCIP on windows.
