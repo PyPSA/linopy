@@ -20,6 +20,7 @@ from linopy import (
 from linopy.constants import (
     BREAKPOINT_DIM,
     LP_SEG_DIM,
+    PWL_ACTIVE_BOUND_SUFFIX,
     PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
@@ -1251,7 +1252,7 @@ class TestActiveParameter:
             piecewise(x, [0, 10, 50, 100], [5, 2, 20, 80], active=u) == y,
             method="incremental",
         )
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_Y_LINK_SUFFIX}" in m.constraints
@@ -1277,7 +1278,7 @@ class TestActiveParameter:
             piecewise(x, [0, 10, 50], [0, 5, 30]) == y,
             method="incremental",
         )
-        assert "pwl0_active_bound" not in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" not in m.constraints
 
     def test_active_with_lp_method_raises(self) -> None:
         m = Model()
@@ -1322,7 +1323,7 @@ class TestActiveParameter:
             == y,
             method="incremental",
         )
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert "generator" in delta.dims
 
@@ -1355,7 +1356,7 @@ class TestActiveParameter:
             method="incremental",
         )
         assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
         assert "pwl0_ineq" in m.constraints
 
     def test_sos2_inequality_with_active(self) -> None:
@@ -1383,7 +1384,7 @@ class TestActiveParameter:
             piecewise(x, [0, 50, 100], [0, 10, 50], active=u) == y,
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
 
     def test_active_with_linear_expression(self) -> None:
         """Active can be a LinearExpression, not just a Variable."""
@@ -1396,7 +1397,7 @@ class TestActiveParameter:
             piecewise(x, [0, 50, 100], [0, 10, 50], active=1 * u) == y,
             method="incremental",
         )
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
 
     def test_active_with_nan_masking(self) -> None:
         """Active works correctly with NaN-masked breakpoints."""
@@ -1416,7 +1417,7 @@ class TestActiveParameter:
             == y,
             method="incremental",
         )
-        assert "pwl0_active_bound" in m.constraints
+        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
 
     def test_lp_file_incremental_active(self, tmp_path: Path) -> None:
         """LP file for incremental + active has more constraints than without."""

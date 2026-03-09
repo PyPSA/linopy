@@ -21,6 +21,7 @@ from linopy.constants import (
     BREAKPOINT_DIM,
     HELPER_DIMS,
     LP_SEG_DIM,
+    PWL_ACTIVE_BOUND_SUFFIX,
     PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
@@ -829,7 +830,7 @@ def _add_pwl_incremental_core(
 
     if active is not None:
         # Tighten delta bounds: δ_i ≤ active
-        active_bound_name = f"{name}_active_bound"
+        active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
         model.add_constraints(delta_var <= active, name=active_bound_name)
 
     # Binary indicator variables: y_i for each segment
