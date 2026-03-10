@@ -57,7 +57,7 @@ def pytest_collection_modifyitems(
 @pytest.fixture
 def exact_join():
     """Set arithmetic_join to 'exact' for the duration of a test."""
-    linopy.options["arithmetic_join"] = "exact"
+    linopy.options["arithmetic_join"] = "v1"
     yield
     linopy.options["arithmetic_join"] = "legacy"
 

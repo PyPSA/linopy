@@ -1275,14 +1275,17 @@ def align(
         join = options["arithmetic_join"]
 
     if join == "legacy":
+        from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning
+
         warn(
-            "The 'legacy' arithmetic join is deprecated and will be removed "
-            "in a future version. Set linopy.options['arithmetic_join'] = "
-            "'exact' to opt in to the new behavior.",
-            FutureWarning,
+            LEGACY_DEPRECATION_MESSAGE,
+            LinopyDeprecationWarning,
             stacklevel=2,
         )
         join = "inner"
+
+    elif join == "v1":
+        join = "exact"
 
     # Extract underlying Datasets for index computation.
     das: list[Any] = []

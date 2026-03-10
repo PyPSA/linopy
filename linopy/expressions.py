@@ -66,7 +66,7 @@ from linopy.common import (
     to_dataframe,
     to_polars,
 )
-from linopy.config import options
+from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning, options
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -554,10 +554,8 @@ class BaseExpression(ABC):
 
         if join == "legacy":
             warn(
-                "The 'legacy' arithmetic join is deprecated and will be removed in a "
-                "future version. Set linopy.options['arithmetic_join'] = 'exact' to "
-                "opt in to the new behavior.",
-                FutureWarning,
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
                 stacklevel=4,
             )
             # Old behavior: override when same sizes, left join otherwise
@@ -568,6 +566,9 @@ class BaseExpression(ABC):
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
+
+        elif join == "v1":
+            join = "exact"
 
         if join == "override":
             return self.const, other.assign_coords(coords=self.coords), False
@@ -1110,10 +1111,8 @@ class BaseExpression(ABC):
 
         if effective_join == "legacy":
             warn(
-                "The 'legacy' arithmetic join is deprecated and will be removed "
-                "in a future version. Set linopy.options['arithmetic_join'] = "
-                "'exact' to opt in to the new behavior.",
-                FutureWarning,
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
                 stacklevel=3,
             )
             # Old behavior: convert to DataArray, warn about extra dims,
@@ -1133,6 +1132,9 @@ class BaseExpression(ABC):
                 all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
             )
             return constraints.Constraint(data, model=self.model)
+
+        if effective_join == "v1":
+            effective_join = "exact"
 
         if isinstance(rhs, DataArray):
             if effective_join == "override":
@@ -2450,10 +2452,8 @@ def merge(
 
         if effective_join == "legacy":
             warn(
-                "The 'legacy' arithmetic join is deprecated and will be removed "
-                "in a future version. Set linopy.options['arithmetic_join'] = "
-                "'exact' to opt in to the new behavior.",
-                FutureWarning,
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
                 stacklevel=2,
             )
             # Reproduce old behavior: override when all shared dims have
@@ -2471,6 +2471,8 @@ def merge(
                 override = False
 
             kwargs["join"] = "override" if override else "outer"
+        elif effective_join == "v1":
+            kwargs["join"] = "exact"
         else:
             kwargs["join"] = effective_join
 

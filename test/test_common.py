@@ -31,7 +31,7 @@ from linopy.testing import assert_linequal, assert_varequal
 @pytest.fixture(autouse=True)
 def _use_exact_join():
     """Use exact arithmetic join for all tests in this module."""
-    linopy.options["arithmetic_join"] = "exact"
+    linopy.options["arithmetic_join"] = "v1"
     yield
     linopy.options["arithmetic_join"] = "legacy"
 

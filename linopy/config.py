@@ -9,15 +9,18 @@ from __future__ import annotations
 
 from typing import Any
 
-VALID_ARITHMETIC_JOINS = {
-    "exact",
-    "inner",
-    "outer",
-    "left",
-    "right",
-    "override",
-    "legacy",
-}
+VALID_ARITHMETIC_JOINS = {"legacy", "v1"}
+
+LEGACY_DEPRECATION_MESSAGE = (
+    "The 'legacy' arithmetic join is deprecated and will be removed in a "
+    "future version. Set linopy.options['arithmetic_join'] = 'v1' to opt in "
+    "to the new behavior, or filter this warning with:\n"
+    "  import warnings; warnings.filterwarnings('ignore', category=LinopyDeprecationWarning)"
+)
+
+
+class LinopyDeprecationWarning(FutureWarning):
+    """Warning for deprecated linopy features scheduled for removal."""
 
 
 class OptionSettings:
