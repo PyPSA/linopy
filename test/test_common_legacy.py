@@ -649,7 +649,6 @@ def test_get_dims_with_index_levels() -> None:
     assert get_dims_with_index_levels(ds5) == []
 
 
-@pytest.mark.xfail(reason="xarray MultiIndex alignment incompatibility")
 def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     alpha = xr.DataArray([1, 2], [[1, 2]])
     beta = xr.DataArray(

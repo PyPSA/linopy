@@ -1,4 +1,3 @@
-# ruff: noqa: D106
 #!/usr/bin/env python3
 """
 Created on Wed Mar 17 17:06:36 2021.
@@ -807,41 +806,51 @@ class TestCoordinateAlignment:
             assert_quadequal(subset + qexpr, qexpr + subset)
 
     class TestMissingValues:
-        """Same shape as variable but with NaN entries in the constant."""
+        """
+        Same shape as variable but with NaN entries in the constant.
 
-        EXPECTED_NAN_MASK = np.zeros(20, dtype=bool)
-        EXPECTED_NAN_MASK[[0, 5, 19]] = True
+        NaN values are filled with operation-specific neutral elements:
+        - Addition/subtraction: NaN -> 0 (additive identity)
+        - Multiplication: NaN -> 0 (zeroes out the variable)
+        - Division: NaN -> 1 (multiplicative identity, no scaling)
+        """
+
+        NAN_POSITIONS = [0, 5, 19]
 
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_add_nan_propagates(
+        def test_add_nan_filled(
             self,
             v: Variable,
             nan_constant: xr.DataArray | pd.Series,
             operand: str,
         ) -> None:
+            base_const = 0.0 if operand == "var" else 5.0
             target = v if operand == "var" else v + 5
             result = target + nan_constant
             assert result.sizes["dim_2"] == 20
-            np.testing.assert_array_equal(
-                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
-            )
+            assert not np.isnan(result.const.values).any()
+            # At NaN positions, const should be unchanged (added 0)
+            for i in self.NAN_POSITIONS:
+                assert result.const.values[i] == base_const
 
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_sub_nan_propagates(
+        def test_sub_nan_filled(
             self,
             v: Variable,
             nan_constant: xr.DataArray | pd.Series,
             operand: str,
         ) -> None:
+            base_const = 0.0 if operand == "var" else 5.0
             target = v if operand == "var" else v + 5
             result = target - nan_constant
             assert result.sizes["dim_2"] == 20
-            np.testing.assert_array_equal(
-                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
-            )
+            assert not np.isnan(result.const.values).any()
+            # At NaN positions, const should be unchanged (subtracted 0)
+            for i in self.NAN_POSITIONS:
+                assert result.const.values[i] == base_const
 
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_nan_propagates(
+        def test_mul_nan_filled(
             self,
             v: Variable,
             nan_constant: xr.DataArray | pd.Series,
@@ -850,12 +859,13 @@ class TestCoordinateAlignment:
             target = v if operand == "var" else 1 * v
             result = target * nan_constant
             assert result.sizes["dim_2"] == 20
-            np.testing.assert_array_equal(
-                np.isnan(result.coeffs.squeeze().values), self.EXPECTED_NAN_MASK
-            )
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            # At NaN positions, coeffs should be 0 (variable zeroed out)
+            for i in self.NAN_POSITIONS:
+                assert result.coeffs.squeeze().values[i] == 0.0
 
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_div_nan_propagates(
+        def test_div_nan_filled(
             self,
             v: Variable,
             nan_constant: xr.DataArray | pd.Series,
@@ -864,9 +874,11 @@ class TestCoordinateAlignment:
             target = v if operand == "var" else 1 * v
             result = target / nan_constant
             assert result.sizes["dim_2"] == 20
-            np.testing.assert_array_equal(
-                np.isnan(result.coeffs.squeeze().values), self.EXPECTED_NAN_MASK
-            )
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            # At NaN positions, coeffs should be unchanged (divided by 1)
+            original_coeffs = (1 * v).coeffs.squeeze().values
+            for i in self.NAN_POSITIONS:
+                assert result.coeffs.squeeze().values[i] == original_coeffs[i]
 
         def test_add_commutativity(
             self,
@@ -875,14 +887,9 @@ class TestCoordinateAlignment:
         ) -> None:
             result_a = v + nan_constant
             result_b = nan_constant + v
-            # Compare non-NaN values are equal and NaN positions match
-            nan_mask_a = np.isnan(result_a.const.values)
-            nan_mask_b = np.isnan(result_b.const.values)
-            np.testing.assert_array_equal(nan_mask_a, nan_mask_b)
-            np.testing.assert_array_equal(
-                result_a.const.values[~nan_mask_a],
-                result_b.const.values[~nan_mask_b],
-            )
+            assert not np.isnan(result_a.const.values).any()
+            assert not np.isnan(result_b.const.values).any()
+            np.testing.assert_array_equal(result_a.const.values, result_b.const.values)
             np.testing.assert_array_equal(
                 result_a.coeffs.values, result_b.coeffs.values
             )
@@ -894,12 +901,10 @@ class TestCoordinateAlignment:
         ) -> None:
             result_a = v * nan_constant
             result_b = nan_constant * v
-            nan_mask_a = np.isnan(result_a.coeffs.values)
-            nan_mask_b = np.isnan(result_b.coeffs.values)
-            np.testing.assert_array_equal(nan_mask_a, nan_mask_b)
+            assert not np.isnan(result_a.coeffs.values).any()
+            assert not np.isnan(result_b.coeffs.values).any()
             np.testing.assert_array_equal(
-                result_a.coeffs.values[~nan_mask_a],
-                result_b.coeffs.values[~nan_mask_b],
+                result_a.coeffs.values, result_b.coeffs.values
             )
 
         def test_quadexpr_add_nan(
@@ -911,9 +916,62 @@ class TestCoordinateAlignment:
             result = qexpr + nan_constant
             assert isinstance(result, QuadraticExpression)
             assert result.sizes["dim_2"] == 20
-            np.testing.assert_array_equal(
-                np.isnan(result.const.values), self.EXPECTED_NAN_MASK
-            )
+            assert not np.isnan(result.const.values).any()
+
+    class TestExpressionWithNaN:
+        """Test that NaN in expression's own const/coeffs doesn't propagate."""
+
+        def test_shifted_expr_add_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + 5
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == 5.0
+
+        def test_shifted_expr_mul_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * 2
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_add_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float)
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + arr
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == 0.0
+
+        def test_shifted_expr_mul_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * arr
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_div_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr / 2
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_sub_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr - 3
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == -3.0
+
+        def test_shifted_expr_div_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
+            expr = (1 * v).shift(dim_2=1)
+            result = expr / arr
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_variable_to_linexpr_nan_coefficient(self, v: Variable) -> None:
+            nan_coeff = np.ones(v.sizes["dim_2"])
+            nan_coeff[0] = np.nan
+            result = v.to_linexpr(nan_coeff)
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
 
     class TestMultiDim:
         def test_multidim_subset_mul(self, m: Model) -> None:
