@@ -921,6 +921,12 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     -------
     model : cupdlpx.Model
     """
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by cuPDLPx. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
+
     import cupdlpx
 
     if explicit_coordinate_names:
