@@ -32,6 +32,7 @@ from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
+from xarray.structure.alignment import AlignmentError
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -1241,8 +1242,10 @@ class BaseExpression(ABC):
             return constraints.Constraint(data, model=self.model)
 
         all_to_lhs = self.sub(rhs, join=join).data
+        computed_rhs = -all_to_lhs.const
+
         data = assign_multiindex_safe(
-            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
 
@@ -1716,6 +1719,18 @@ class LinearExpression(BaseExpression):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
+                if options["arithmetic_convention"] == "v1":
+                    # Enforce exact coordinate alignment before merge
+                    try:
+                        xr.align(self.const, other.const, join="exact")
+                    except (ValueError, AlignmentError) as e:
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection\n'
+                            '  .add(other, join="outer")   # union with fill\n'
+                            '  .add(other, join="left")    # keep left coordinates'
+                        ) from None
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2254,6 +2269,18 @@ class QuadraticExpression(BaseExpression):
                 if isinstance(other, LinearExpression):
                     other = other.to_quadexpr()
 
+                if options["arithmetic_convention"] == "v1":
+                    try:
+                        xr.align(self.const, other.const, join="exact")
+                    except (ValueError, AlignmentError) as e:
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection\n'
+                            '  .add(other, join="outer")   # union with fill\n'
+                            '  .add(other, join="left")    # keep left coordinates'
+                        ) from None
+
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2544,52 +2571,27 @@ def merge(
 
             kwargs["join"] = "override" if override else "outer"
         elif effective_join == "v1":
-            kwargs["join"] = "exact"
+            # Merge uses outer join for xr.concat since helper dims
+            # (_term, _factor) commonly have different sizes and
+            # expressions may have different user dimensions.
+            # Coordinate enforcement for v1 is done at the operator
+            # level (__add__, __sub__, etc.) before calling merge.
+            kwargs["join"] = "outer"
         else:
             kwargs["join"] = effective_join
 
-    try:
-        if dim == TERM_DIM:
-            ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
-            subkwargs = {**kwargs, "fill_value": 0}
-            const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(
-                TERM_DIM
-            )
-            ds = assign_multiindex_safe(ds, const=const)
-        elif dim == FACTOR_DIM:
-            ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
-            coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(
-                FACTOR_DIM
-            )
-            const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(
-                FACTOR_DIM
-            )
-            ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
-        else:
-            # Pre-pad helper dims to same size before concat
-            fill = kwargs.get("fill_value", FILL_VALUE)
-            for helper_dim in HELPER_DIMS:
-                sizes = [d.sizes.get(helper_dim, 0) for d in data]
-                max_size = max(sizes) if sizes else 0
-                if max_size > 0 and min(sizes) < max_size:
-                    data = [
-                        d.reindex({helper_dim: range(max_size)}, fill_value=fill)
-                        if d.sizes.get(helper_dim, 0) < max_size
-                        else d
-                        for d in data
-                    ]
-            ds = xr.concat(data, dim, **kwargs)
-    except ValueError as e:
-        if "exact" in str(e):
-            raise ValueError(
-                f"{e}\n"
-                "Use .add()/.sub()/.mul()/.div() with an explicit join= parameter:\n"
-                '  .add(other, join="inner")   # intersection of coordinates\n'
-                '  .add(other, join="outer")   # union of coordinates (with fill)\n'
-                '  .add(other, join="left")    # keep left operand\'s coordinates\n'
-                '  .add(other, join="override") # positional alignment'
-            ) from None
-        raise
+    if dim == TERM_DIM:
+        ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+        subkwargs = {**kwargs, "fill_value": 0}
+        const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
+        ds = assign_multiindex_safe(ds, const=const)
+    elif dim == FACTOR_DIM:
+        ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
+        coeffs = xr.concat([d["coeffs"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
+        const = xr.concat([d["const"] for d in data], dim, **kwargs).prod(FACTOR_DIM)
+        ds = assign_multiindex_safe(ds, coeffs=coeffs, const=const)
+    else:
+        ds = xr.concat(data, dim, **kwargs)
 
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)

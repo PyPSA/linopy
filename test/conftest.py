@@ -1,12 +1,17 @@
 """Pytest configuration and fixtures."""
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
 
 import linopy
-from linopy import Model, Variable
+
+if TYPE_CHECKING:
+    from linopy import Model, Variable
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -64,6 +69,8 @@ def v1_convention():
 
 @pytest.fixture
 def m() -> Model:
+    from linopy import Model
+
     m = Model()
     m.add_variables(pd.Series([0, 0]), 1, name="x")
     m.add_variables(4, pd.Series([8, 10]), name="y")
