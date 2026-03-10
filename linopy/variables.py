@@ -27,6 +27,7 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
@@ -537,7 +538,7 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -554,7 +555,7 @@ class Variable:
         return self.to_linexpr().add(other, join=join)
 
     def sub(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -571,7 +572,7 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -588,7 +589,7 @@ class Variable:
         return self.to_linexpr().mul(other, join=join)
 
     def div(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -604,7 +605,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
-    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -619,7 +620,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -634,7 +635,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 

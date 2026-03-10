@@ -1300,7 +1300,7 @@ def align(
         if isinstance(obj, Variable):
             results.append(obj.reindex(indexers))
         else:
-            results.append(obj.reindex(indexers, **reindex_kwargs))
+            results.append(obj.reindex(indexers, **reindex_kwargs))  # type: ignore[union-attr]
     return tuple(results)
 
 

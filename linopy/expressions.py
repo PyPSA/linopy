@@ -30,6 +30,7 @@ from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 try:
@@ -528,8 +529,8 @@ class BaseExpression(ABC):
         self: GenericExpression,
         other: DataArray,
         fill_value: float = 0,
-        join: str | None = None,
-        default_join: str = "exact",
+        join: JoinOptions | None = None,
+        default_join: JoinOptions = "exact",
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -585,7 +586,7 @@ class BaseExpression(ABC):
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
@@ -608,7 +609,7 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -626,12 +627,12 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
@@ -672,7 +673,7 @@ class BaseExpression(ABC):
     def add(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Add an expression to others.
@@ -695,12 +696,12 @@ class BaseExpression(ABC):
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)
+        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
 
     def sub(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
@@ -719,7 +720,7 @@ class BaseExpression(ABC):
     def mul(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -744,7 +745,7 @@ class BaseExpression(ABC):
     def div(
         self: GenericExpression,
         other: VariableLike | ConstantLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -771,7 +772,7 @@ class BaseExpression(ABC):
     def le(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Less than or equal constraint.
@@ -790,7 +791,7 @@ class BaseExpression(ABC):
     def ge(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Greater than or equal constraint.
@@ -809,7 +810,7 @@ class BaseExpression(ABC):
     def eq(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Equality constraint.
@@ -1065,7 +1066,7 @@ class BaseExpression(ABC):
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         """
         Convert a linear expression to a constraint.
@@ -2212,7 +2213,9 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
+    ) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
         )
@@ -2344,7 +2347,7 @@ def merge(
     ],
     dim: str = TERM_DIM,
     cls: type[GenericExpression] = None,  # type: ignore
-    join: str | None = None,
+    join: JoinOptions | None = None,
     **kwargs: Any,
 ) -> GenericExpression:
     """
