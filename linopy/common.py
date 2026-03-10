@@ -161,26 +161,6 @@ def pandas_to_dataarray(
         axis.name or get_from_iterable(dims, i) or f"dim_{i}"
         for i, axis in enumerate(arr.axes)
     ]
-    if coords is not None:
-        pandas_coords = dict(zip(dims, arr.axes))
-        if isinstance(coords, Sequence):
-            coords = dict(zip(dims, coords))
-        shared_dims = set(pandas_coords.keys()) & set(coords.keys())
-        non_aligned = []
-        for dim in shared_dims:
-            coord = coords[dim]
-            if not isinstance(coord, pd.Index):
-                coord = pd.Index(coord)
-            if not pandas_coords[dim].equals(coord):
-                non_aligned.append(dim)
-        if any(non_aligned):
-            warn(
-                f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
-                "Previously, the indexes of the pandas were ignored and overwritten in "
-                "these cases. Now, the pandas object's coordinates are taken considered"
-                " for alignment."
-            )
-
     return DataArray(arr, coords=None, dims=dims, **kwargs)
 
 

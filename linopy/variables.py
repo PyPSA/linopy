@@ -74,6 +74,7 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
+    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -515,13 +516,31 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __le__(self, other: SideLike) -> Constraint:
+    @overload
+    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __le__(self, other: SideLike) -> Constraint: ...
+
+    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other: SideLike) -> Constraint:
+    @overload
+    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __ge__(self, other: SideLike) -> Constraint: ...
+
+    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
+    @overload  # type: ignore[override]
+    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __eq__(self, other: SideLike) -> Constraint: ...
+
+    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1770,7 +1789,7 @@ class ScalarVariable:
     def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
-    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
+    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore[override]
         return self.to_scalar_linexpr(1).__eq__(other)
 
     def __gt__(self, other: Any) -> None:

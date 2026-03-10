@@ -64,10 +64,14 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.piecewise import (
-    add_disjunctive_piecewise_constraints,
     add_piecewise_constraints,
 )
-from linopy.remote import OetcHandler, RemoteHandler
+from linopy.remote import RemoteHandler
+
+try:
+    from linopy.remote import OetcHandler
+except ImportError:
+    OetcHandler = None  # type: ignore
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -660,7 +664,6 @@ class Model:
         variable.attrs.update(attrs_update)
 
     add_piecewise_constraints = add_piecewise_constraints
-    add_disjunctive_piecewise_constraints = add_disjunctive_piecewise_constraints
 
     def add_constraints(
         self,
@@ -780,7 +783,7 @@ class Model:
 
         rhs_nan = data.rhs.isnull()
         if rhs_nan.any():
-            data["rhs"] = data.rhs.fillna(0)
+            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
             rhs_mask = ~rhs_nan
             mask = (
                 rhs_mask

@@ -55,7 +55,7 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp", True))
 
 
-# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# Note: Platform-specific solver bugs are now
 # handled in linopy/solver_capabilities.py by adjusting the registry at import time.
 feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
