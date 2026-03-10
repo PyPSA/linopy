@@ -7,6 +7,7 @@ Created on Wed Mar 17 17:06:36 2021.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 
 import numpy as np
@@ -25,7 +26,7 @@ from linopy.variables import ScalarVariable
 
 
 @pytest.fixture(autouse=True)
-def _use_v1_convention():
+def _use_v1_convention() -> Generator[None, None, None]:
     """Use v1 arithmetic convention for all tests in this module."""
     linopy.options["arithmetic_convention"] = "v1"
     yield

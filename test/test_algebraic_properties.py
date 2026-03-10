@@ -39,6 +39,8 @@ SPECIFICATION
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -51,7 +53,7 @@ from linopy.variables import Variable
 
 
 @pytest.fixture(autouse=True)
-def _use_v1_convention():
+def _use_v1_convention() -> Generator[None, None, None]:
     """Use v1 arithmetic convention for all tests in this module."""
     linopy.options["arithmetic_convention"] = "v1"
     yield

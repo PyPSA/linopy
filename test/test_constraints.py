@@ -5,6 +5,7 @@ Created on Wed Mar 10 11:23:13 2021.
 @author: fabulous
 """
 
+from collections.abc import Generator
 from typing import Any
 
 import dask
@@ -20,7 +21,7 @@ from linopy.testing import assert_conequal
 
 
 @pytest.fixture(autouse=True)
-def _use_v1_convention():
+def _use_v1_convention() -> Generator[None, None, None]:
     """Use v1 arithmetic convention for all tests in this module."""
     linopy.options["arithmetic_convention"] = "v1"
     yield

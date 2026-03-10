@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -60,7 +61,7 @@ def pytest_collection_modifyitems(
 
 
 @pytest.fixture
-def v1_convention():
+def v1_convention() -> Generator[None, None, None]:
     """Set arithmetic_convention to 'v1' for the duration of a test."""
     linopy.options["arithmetic_convention"] = "v1"
     yield
