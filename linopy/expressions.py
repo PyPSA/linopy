@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -30,6 +30,7 @@ from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 try:
@@ -89,12 +90,35 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
+    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
     from linopy.variables import ScalarVariable, Variable
 
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+
+
+def _to_piecewise_constraint_descriptor(
+    lhs: Any, rhs: Any, operator: str
+) -> PiecewiseConstraintDescriptor | None:
+    """Build a piecewise descriptor for reversed RHS syntax if applicable."""
+    from linopy.piecewise import PiecewiseExpression
+
+    if not isinstance(rhs, PiecewiseExpression):
+        return None
+
+    if operator == "<=":
+        return rhs.__ge__(lhs)
+    if operator == ">=":
+        return rhs.__le__(lhs)
+    if operator == "==":
+        return rhs.__eq__(lhs)
+
+    msg = f"Unsupported operator '{operator}' for piecewise dispatch."
+    raise ValueError(msg)
 
 
 def exprwrap(
@@ -526,7 +550,7 @@ class BaseExpression(ABC):
         self: GenericExpression,
         other: DataArray,
         fill_value: float = 0,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -597,7 +621,7 @@ class BaseExpression(ABC):
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const + other)
@@ -620,7 +644,7 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
@@ -638,12 +662,12 @@ class BaseExpression(ABC):
         return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
         return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
 
@@ -662,13 +686,40 @@ class BaseExpression(ABC):
     def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
         return self.__div__(other)
 
-    def __le__(self, rhs: SideLike) -> Constraint:
+    @overload
+    def __le__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __le__(self, rhs: SideLike) -> Constraint: ...
+
+    def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    def __ge__(self, rhs: SideLike) -> Constraint:
+    @overload
+    def __ge__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __ge__(self, rhs: SideLike) -> Constraint: ...
+
+    def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore
+    @overload  # type: ignore[override]
+    def __eq__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __eq__(self, rhs: SideLike) -> Constraint: ...
+
+    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
+        if descriptor is not None:
+            return descriptor
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -684,7 +735,7 @@ class BaseExpression(ABC):
     def add(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Add an expression to others.
@@ -707,12 +758,12 @@ class BaseExpression(ABC):
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)
+        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
 
     def sub(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
@@ -731,7 +782,7 @@ class BaseExpression(ABC):
     def mul(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -756,7 +807,7 @@ class BaseExpression(ABC):
     def div(
         self: GenericExpression,
         other: VariableLike | ConstantLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -783,7 +834,7 @@ class BaseExpression(ABC):
     def le(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Less than or equal constraint.
@@ -802,7 +853,7 @@ class BaseExpression(ABC):
     def ge(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Greater than or equal constraint.
@@ -821,7 +872,7 @@ class BaseExpression(ABC):
     def eq(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Equality constraint.
@@ -1077,7 +1128,7 @@ class BaseExpression(ABC):
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         """
         Convert a linear expression to a constraint.
@@ -2245,7 +2296,9 @@ class QuadraticExpression(BaseExpression):
         sol = (self.coeffs * vals.prod(FACTOR_DIM)).sum(TERM_DIM) + self.const
         return sol.rename("solution")
 
-    def to_constraint(self, sign: SignLike, rhs: SideLike) -> NotImplementedType:
+    def to_constraint(
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
+    ) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
         )
@@ -2377,7 +2430,7 @@ def merge(
     ],
     dim: str = TERM_DIM,
     cls: type[GenericExpression] = None,  # type: ignore
-    join: str | None = None,
+    join: JoinOptions | None = None,
     **kwargs: Any,
 ) -> GenericExpression:
     """
@@ -2641,6 +2694,10 @@ class ScalarLinearExpression:
         return self.__div__(other)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
+        descriptor = _to_piecewise_constraint_descriptor(self, other, "<=")
+        if descriptor is not None:
+            return descriptor  # type: ignore[return-value]
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
@@ -2649,6 +2706,10 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
+        descriptor = _to_piecewise_constraint_descriptor(self, other, ">=")
+        if descriptor is not None:
+            return descriptor  # type: ignore[return-value]
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
@@ -2656,7 +2717,13 @@ class ScalarLinearExpression:
 
         return constraints.AnonymousScalarConstraint(self, GREATER_EQUAL, other)
 
-    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
+    def __eq__(  # type: ignore[override]
+        self, other: int | float
+    ) -> AnonymousScalarConstraint:
+        descriptor = _to_piecewise_constraint_descriptor(self, other, "==")
+        if descriptor is not None:
+            return descriptor  # type: ignore[return-value]
+
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"
