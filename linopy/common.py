@@ -1207,7 +1207,7 @@ def forward_as_properties(**routes: list[str]) -> Callable[[type], type]:
 
 def align(
     *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
-    join: JoinOptions = "exact",
+    join: JoinOptions | None = None,
     copy: bool = True,
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
@@ -1267,8 +1267,22 @@ def align(
 
 
     """
+    from linopy.config import options
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
+
+    if join is None:
+        join = options["arithmetic_join"]
+
+    if join == "legacy":
+        warn(
+            "The 'legacy' arithmetic join is deprecated and will be removed "
+            "in a future version. Set linopy.options['arithmetic_join'] = "
+            "'exact' to opt in to the new behavior.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        join = "inner"
 
     # Extract underlying Datasets for index computation.
     das: list[Any] = []

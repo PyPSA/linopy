@@ -42,8 +42,17 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+import linopy
 from linopy import Model
 from linopy.expressions import LinearExpression
+
+
+@pytest.fixture(autouse=True)
+def _use_exact_join():
+    """Use exact arithmetic join for all tests in this module."""
+    linopy.options["arithmetic_join"] = "exact"
+    yield
+    linopy.options["arithmetic_join"] = "legacy"
 
 
 @pytest.fixture

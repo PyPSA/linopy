@@ -527,7 +527,6 @@ class BaseExpression(ABC):
         other: DataArray,
         fill_value: float = 0,
         join: str | None = None,
-        default_join: str = "exact",
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -539,10 +538,7 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses default_join.
-        default_join : str, default: "exact"
-            Default join mode when join is None. Use "exact" for add/sub,
-            "inner" for mul/div.
+            Alignment method. If None, uses ``options["arithmetic_join"]``.
 
         Returns
         -------
@@ -554,7 +550,24 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            join = default_join
+            join = options["arithmetic_join"]
+
+        if join == "legacy":
+            warn(
+                "The 'legacy' arithmetic join is deprecated and will be removed in a "
+                "future version. Set linopy.options['arithmetic_join'] = 'exact' to "
+                "opt in to the new behavior.",
+                FutureWarning,
+                stacklevel=4,
+            )
+            # Old behavior: override when same sizes, left join otherwise
+            if other.sizes == self.const.sizes:
+                return self.const, other.assign_coords(coords=self.coords), False
+            return (
+                self.const,
+                other.reindex_like(self.const, fill_value=fill_value),
+                False,
+            )
 
         if join == "override":
             return self.const, other.assign_coords(coords=self.coords), False
@@ -589,7 +602,7 @@ class BaseExpression(ABC):
             return self.assign(const=self.const + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
-            da, fill_value=0, join=join, default_join="exact"
+            da, fill_value=0, join=join
         )
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
@@ -610,7 +623,7 @@ class BaseExpression(ABC):
     ) -> GenericExpression:
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
-            factor, fill_value=fill_value, join=join, default_join="exact"
+            factor, fill_value=fill_value, join=join
         )
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
@@ -1093,8 +1106,35 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
+        effective_join = join if join is not None else options["arithmetic_join"]
+
+        if effective_join == "legacy":
+            warn(
+                "The 'legacy' arithmetic join is deprecated and will be removed "
+                "in a future version. Set linopy.options['arithmetic_join'] = "
+                "'exact' to opt in to the new behavior.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            # Old behavior: convert to DataArray, warn about extra dims,
+            # reindex_like (left join), then sub
+            if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+                extra_dims = set(rhs.dims) - set(self.coord_dims)
+                if extra_dims:
+                    logger.warning(
+                        f"Constant RHS contains dimensions {extra_dims} not present "
+                        f"in the expression, which might lead to inefficiencies. "
+                        f"Consider collapsing the dimensions by taking min/max."
+                    )
+                rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+            all_to_lhs = self.sub(rhs, join=join).data
+            data = assign_multiindex_safe(
+                all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+            )
+            return constraints.Constraint(data, model=self.model)
+
         if isinstance(rhs, DataArray):
-            effective_join = join if join is not None else "exact"
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)
                 expr_const = self.const
@@ -1127,13 +1167,6 @@ class BaseExpression(ABC):
                 expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
             )
             return constraints.Constraint(data, model=self.model)
-        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame) and rhs.ndim > len(
-            self.coord_dims
-        ):
-            raise ValueError(
-                f"RHS has {rhs.ndim} dimensions, but the expression only "
-                f"has {len(self.coord_dims)}. Cannot create constraint."
-            )
 
         all_to_lhs = self.sub(rhs, join=join).data
         data = assign_multiindex_safe(
@@ -2413,10 +2446,33 @@ def merge(
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
 
-        if join is not None:
-            kwargs["join"] = join
+        effective_join = join if join is not None else options["arithmetic_join"]
+
+        if effective_join == "legacy":
+            warn(
+                "The 'legacy' arithmetic join is deprecated and will be removed "
+                "in a future version. Set linopy.options['arithmetic_join'] = "
+                "'exact' to opt in to the new behavior.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            # Reproduce old behavior: override when all shared dims have
+            # matching sizes, outer otherwise.
+            if cls in linopy_types and dim in HELPER_DIMS:
+                coord_dims = [
+                    {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS}
+                    for e in exprs
+                ]
+                common_keys = set.intersection(*(set(d.keys()) for d in coord_dims))
+                override = all(
+                    len({d[k] for d in coord_dims if k in d}) == 1 for k in common_keys
+                )
+            else:
+                override = False
+
+            kwargs["join"] = "override" if override else "outer"
         else:
-            kwargs["join"] = "exact"
+            kwargs["join"] = effective_join
 
     try:
         if dim == TERM_DIM:
