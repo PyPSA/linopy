@@ -5,7 +5,6 @@ Created on Wed Mar 10 11:23:13 2021.
 @author: fabulous
 """
 
-from collections.abc import Generator
 from typing import Any
 
 import dask
@@ -15,18 +14,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-import linopy
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, Variable, available_solvers
 from linopy.testing import assert_conequal
-
-
-@pytest.fixture(autouse=True)
-def _use_v1_convention() -> Generator[None, None, None]:
-    """Use v1 arithmetic convention for all tests in this module."""
-    linopy.options["arithmetic_convention"] = "v1"
-    yield
-    linopy.options["arithmetic_convention"] = "legacy"
-
 
 # Test model functions
 
@@ -179,14 +168,32 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     assert c.shape == (10, 10)
 
 
-def test_constraint_rhs_higher_dim_constant_broadcasts() -> None:
+@pytest.mark.parametrize(
+    "rhs_factory",
+    [
+        pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
+        pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
+    ],
+)
+def test_constraint_rhs_higher_dim_constant_warns(
+    rhs_factory: Any, caplog: Any
+) -> None:
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
-    # DataArray RHS with extra dims broadcasts (creates redundant constraints)
+    with caplog.at_level("WARNING", logger="linopy.expressions"):
+        m.add_constraints(x >= rhs_factory(m))
+    assert "dimensions" in caplog.text
+
+
+def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:
+    """DataArray RHS with extra dims reindexes to expression coords (no raise)."""
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
     rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
-    c = m.add_constraints(x >= rhs, name="broadcast_con")
-    assert "extra" in c.dims
+
+    c = m.add_constraints(x >= rhs)
+    assert c.shape == (5, 3)
 
 
 @pytest.mark.parametrize(
@@ -207,35 +214,6 @@ def test_constraint_rhs_higher_dim_expression(rhs_factory: Any) -> None:
     x = m.add_variables(coords=[range(5)], name="x")
 
     c = m.add_constraints(x >= rhs_factory(m))
-    assert c.shape == (5, 3)
-
-
-@pytest.mark.parametrize(
-    "rhs_factory",
-    [
-        pytest.param(lambda m: np.ones((5, 3)), id="numpy"),
-        pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
-    ],
-)
-def test_constraint_rhs_higher_dim_constant_warns_legacy(
-    rhs_factory: Any, caplog: Any, legacy_convention: None
-) -> None:
-    """Legacy convention warns on higher-dim constant RHS."""
-    m = Model()
-    x = m.add_variables(coords=[range(5)], name="x")
-    with caplog.at_level("WARNING", logger="linopy.expressions"):
-        m.add_constraints(x >= rhs_factory(m))
-    assert "dimensions" in caplog.text
-
-
-def test_constraint_rhs_higher_dim_dataarray_reindexes_legacy(
-    legacy_convention: None,
-) -> None:
-    """Legacy convention: DataArray RHS with extra dims reindexes to expression coords."""
-    m = Model()
-    x = m.add_variables(coords=[range(5)], name="x")
-    rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
-    c = m.add_constraints(x >= rhs)
     assert c.shape == (5, 3)
 
 
@@ -368,9 +346,7 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
-class _ConstraintAlignmentFixtures:
-    """Shared fixtures for constraint coordinate alignment tests."""
-
+class TestConstraintCoordinateAlignment:
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "xarray":
@@ -388,104 +364,6 @@ class _ConstraintAlignmentFixtures:
         return pd.Series(
             np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
         )
-
-
-class TestConstraintCoordinateAlignmentV1(_ConstraintAlignmentFixtures):
-    def test_var_le_subset_raises(self, v: Variable, subset: xr.DataArray) -> None:
-        with pytest.raises(ValueError, match="exact"):
-            v <= subset
-
-    def test_var_le_subset_join_left(self, v: Variable) -> None:
-        subset_da = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        con = v.to_linexpr().le(subset_da, join="left")
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == 10.0
-        assert con.rhs.sel(dim_2=3).item() == 30.0
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-
-    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
-    def test_var_comparison_subset_raises(
-        self, v: Variable, subset: xr.DataArray, sign: str
-    ) -> None:
-        with pytest.raises(ValueError, match="exact"):
-            if sign == LESS_EQUAL:
-                v <= subset
-            elif sign == GREATER_EQUAL:
-                v >= subset
-            else:
-                v == subset
-
-    def test_expr_le_subset_raises(self, v: Variable, subset: xr.DataArray) -> None:
-        expr = v + 5
-        with pytest.raises(ValueError, match="exact"):
-            expr <= subset
-
-    def test_expr_le_subset_join_left(self, v: Variable) -> None:
-        subset_da = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        expr = v + 5
-        con = expr.le(subset_da, join="left")
-        assert con.sizes["dim_2"] == v.sizes["dim_2"]
-        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
-        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
-        assert np.isnan(con.rhs.sel(dim_2=0).item())
-
-    def test_subset_comparison_var_raises(
-        self, v: Variable, subset: xr.DataArray
-    ) -> None:
-        with pytest.raises(ValueError, match="exact"):
-            subset <= v
-
-    def test_superset_comparison_var_raises(
-        self, v: Variable, superset: xr.DataArray
-    ) -> None:
-        with pytest.raises(ValueError, match="exact"):
-            superset <= v
-
-    def test_constraint_rhs_extra_dims_raises_on_mismatch(self, v: Variable) -> None:
-        rhs = xr.DataArray(
-            [[1.0, 2.0]],
-            dims=["extra", "dim_2"],
-            coords={"dim_2": [0, 1]},
-        )
-        # dim_2 coords [0,1] don't match v's [0..19] under exact join
-        with pytest.raises(ValueError, match="exact"):
-            v <= rhs
-
-    def test_constraint_rhs_extra_dims_broadcasts_matching(self, v: Variable) -> None:
-        rhs = xr.DataArray(
-            np.ones((2, 20)),
-            dims=["extra", "dim_2"],
-            coords={"dim_2": range(20)},
-        )
-        c = v <= rhs
-        assert "extra" in c.dims
-
-    def test_subset_constraint_solve_integration(self) -> None:
-        if not available_solvers:
-            pytest.skip("No solver available")
-        solver = "highs" if "highs" in available_solvers else available_solvers[0]
-        m = Model()
-        coords = pd.RangeIndex(5, name="i")
-        x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
-        subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
-        # exact default raises — use explicit join="left" (NaN = no constraint)
-        m.add_constraints(x.to_linexpr().le(subset_ub, join="left"), name="subset_ub")
-        m.add_objective(x.sum(), sense="max")
-        m.solve(solver_name=solver)
-        sol = m.solution["x"]
-        assert sol.sel(i=1).item() == pytest.approx(10.0)
-        assert sol.sel(i=3).item() == pytest.approx(20.0)
-        assert sol.sel(i=0).item() == pytest.approx(100.0)
-        assert sol.sel(i=2).item() == pytest.approx(100.0)
-        assert sol.sel(i=4).item() == pytest.approx(100.0)
-
-
-class TestConstraintCoordinateAlignmentLegacy(_ConstraintAlignmentFixtures):
-    """Legacy convention: outer join with NaN fill behavior for constraints."""
-
-    @pytest.fixture(autouse=True)
-    def _use_legacy(self, legacy_convention: None) -> None:
-        pass
 
     def test_var_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
         con = v <= subset

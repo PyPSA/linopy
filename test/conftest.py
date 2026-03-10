@@ -58,36 +58,29 @@ def pytest_collection_modifyitems(
                 item.add_marker(pytest.mark.gpu)
 
 
-@pytest.fixture
-def v1_convention() -> Generator[None, None, None]:
-    """Set arithmetic_convention to 'v1' for the duration of a test."""
-    import linopy
-
-    linopy.options["arithmetic_convention"] = "v1"
-    yield
-    linopy.options["arithmetic_convention"] = "legacy"
-
-
-@pytest.fixture
-def legacy_convention() -> Generator[None, None, None]:
-    """Set arithmetic_convention to 'legacy' for the duration of a test."""
-    import linopy
-
-    old = linopy.options["arithmetic_convention"]
-    linopy.options["arithmetic_convention"] = "legacy"
-    yield
-    linopy.options["arithmetic_convention"] = old
-
-
-@pytest.fixture(params=["v1", "legacy"])
+@pytest.fixture(autouse=True, params=["legacy", "v1"])
 def convention(request: pytest.FixtureRequest) -> Generator[str, None, None]:
-    """Run the test under both arithmetic conventions."""
+    """Run every test under both arithmetic conventions by default."""
     import linopy
 
     old = linopy.options["arithmetic_convention"]
     linopy.options["arithmetic_convention"] = request.param
     yield request.param
     linopy.options["arithmetic_convention"] = old
+
+
+@pytest.fixture
+def legacy_convention(convention: str) -> None:
+    """Opt-out: skip this test when convention is not 'legacy'."""
+    if convention != "legacy":
+        pytest.skip("legacy-only test")
+
+
+@pytest.fixture
+def v1_convention(convention: str) -> None:
+    """Opt-out: skip this test when convention is not 'v1'."""
+    if convention != "v1":
+        pytest.skip("v1-only test")
 
 
 @pytest.fixture
