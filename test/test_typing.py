@@ -5,8 +5,8 @@ import linopy
 
 
 @pytest.fixture(autouse=True)
-def _use_exact_join():
-    """Use exact arithmetic join for all tests in this module."""
+def _use_v1_convention():
+    """Use v1 arithmetic convention for all tests in this module."""
     linopy.options["arithmetic_convention"] = "v1"
     yield
     linopy.options["arithmetic_convention"] = "legacy"
