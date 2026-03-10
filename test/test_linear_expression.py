@@ -388,7 +388,7 @@ def test_linear_expression_substraction(
 
 
 def test_linear_expression_sum(
-    x: Variable, y: Variable, z: Variable, v: Variable
+    legacy_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
@@ -403,14 +403,38 @@ def test_linear_expression_sum(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # test special case otherride coords (legacy outer join allows this)
     expr = v.loc[:9] + v.loc[10:]
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
 
+def test_linear_expression_sum_v1(
+    v1_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+) -> None:
+    expr = 10 * x + y + z
+    res = expr.sum("dim_0")
+
+    assert res.size == expr.size
+    assert res.nterm == expr.nterm * len(expr.data.dim_0)
+
+    res = expr.sum()
+    assert res.size == expr.size
+    assert res.nterm == expr.size
+    assert res.data.notnull().all().to_array().all()
+
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
+
+    # v1: mismatched coords require explicit assign_coords
+    a = v.loc[:9]
+    b = v.loc[10:].assign_coords(dim_2=a.coords["dim_2"])
+    expr = a + b
+    assert expr.nterm == 2
+    assert len(expr.coords["dim_2"]) == 10
+
+
 def test_linear_expression_sum_with_const(
-    x: Variable, y: Variable, z: Variable, v: Variable
+    legacy_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
@@ -427,8 +451,34 @@ def test_linear_expression_sum_with_const(
 
     assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
 
-    # test special case otherride coords
+    # test special case otherride coords (legacy outer join allows this)
     expr = v.loc[:9] + v.loc[10:]
+    assert expr.nterm == 2
+    assert len(expr.coords["dim_2"]) == 10
+
+
+def test_linear_expression_sum_with_const_v1(
+    v1_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+) -> None:
+    expr = 10 * x + y + z + 10
+    res = expr.sum("dim_0")
+
+    assert res.size == expr.size
+    assert res.nterm == expr.nterm * len(expr.data.dim_0)
+    assert (res.const == 20).all()
+
+    res = expr.sum()
+    assert res.size == expr.size
+    assert res.nterm == expr.size
+    assert res.data.notnull().all().to_array().all()
+    assert (res.const == 60).item()
+
+    assert_linequal(expr.sum(["dim_0", TERM_DIM]), expr.sum("dim_0"))
+
+    # v1: mismatched coords require explicit assign_coords
+    a = v.loc[:9]
+    b = v.loc[10:].assign_coords(dim_2=a.coords["dim_2"])
+    expr = a + b
     assert expr.nterm == 2
     assert len(expr.coords["dim_2"]) == 10
 
@@ -537,7 +587,13 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
-class TestCoordinateAlignment:
+class TestCoordinateAlignmentLegacy:
+    """Legacy: outer join with NaN fill / zero fill for coordinate mismatches."""
+
+    @pytest.fixture(autouse=True)
+    def _legacy_only(self, legacy_convention: None) -> None:
+        pass
+
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "da":
@@ -1878,11 +1934,21 @@ class TestJoinParameter:
 
     class TestAddition:
         def test_add_join_none_preserves_default(
-            self, a: Variable, b: Variable
+            self, legacy_convention: None, a: Variable, b: Variable
         ) -> None:
+            """Legacy: join=None uses outer join for mismatched coords."""
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
+
+        def test_add_join_none_raises_on_mismatch_v1(
+            self, v1_convention: None, a: Variable, b: Variable
+        ) -> None:
+            """V1: join=None uses exact join, raises on mismatched coords."""
+            with pytest.raises(ValueError, match="Coordinate mismatch"):
+                a.to_linexpr() + b.to_linexpr()
+            with pytest.raises(ValueError, match="Coordinate mismatch"):
+                a.to_linexpr().add(b.to_linexpr(), join=None)
 
         def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:
             result = a.to_linexpr().add(b.to_linexpr(), join="inner")
@@ -2138,12 +2204,22 @@ class TestJoinParameter:
 
     class TestQuadratic:
         def test_quadratic_add_constant_join_inner(
-            self, a: Variable, b: Variable
+            self, legacy_convention: None, a: Variable, b: Variable
         ) -> None:
+            """Legacy: a*b with mismatched coords uses outer join."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.add(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+        def test_quadratic_add_constant_join_inner_v1(
+            self, v1_convention: None, a: Variable, c: Variable
+        ) -> None:
+            """V1: use a*c (same coords) to create quad, then join inner."""
+            quad = a.to_linexpr() * c.to_linexpr()
+            const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
+            result = quad.add(const, join="inner")
+            assert list(result.data.indexes["i"]) == [1, 2]
 
         def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
             quad = a.to_linexpr() * a.to_linexpr()
@@ -2152,9 +2228,232 @@ class TestJoinParameter:
             assert list(result.data.indexes["i"]) == [0, 1]
 
         def test_quadratic_mul_constant_join_inner(
-            self, a: Variable, b: Variable
+            self, legacy_convention: None, a: Variable, b: Variable
         ) -> None:
+            """Legacy: a*b with mismatched coords uses outer join."""
             quad = a.to_linexpr() * b.to_linexpr()
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+        def test_quadratic_mul_constant_join_inner_v1(
+            self, v1_convention: None, a: Variable, c: Variable
+        ) -> None:
+            """V1: use a*c (same coords) to create quad, then join inner."""
+            quad = a.to_linexpr() * c.to_linexpr()
+            const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+            result = quad.mul(const, join="inner")
+            assert list(result.data.indexes["i"]) == [1, 2]
+
+
+class TestCoordinateAlignmentV1:
+    """V1: exact join raises on mismatched coords; explicit join= is the escape hatch."""
+
+    @pytest.fixture(autouse=True)
+    def _v1_only(self, v1_convention: None) -> None:
+        pass
+
+    @pytest.fixture(params=["da", "series"])
+    def subset(self, request: Any) -> xr.DataArray | pd.Series:
+        if request.param == "da":
+            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
+
+    @pytest.fixture(params=["da", "series"])
+    def superset(self, request: Any) -> xr.DataArray | pd.Series:
+        if request.param == "da":
+            return xr.DataArray(
+                np.arange(25, dtype=float),
+                dims=["dim_2"],
+                coords={"dim_2": range(25)},
+            )
+        return pd.Series(
+            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
+        )
+
+    class TestSubset:
+        """Under v1, subset operations raise ValueError (exact join)."""
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            with pytest.raises(ValueError, match="exact"):
+                target * subset
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            with pytest.raises(ValueError, match="exact"):
+                target + subset
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_sub_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            with pytest.raises(ValueError, match="exact"):
+                target - subset
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_div_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            with pytest.raises(ValueError, match="exact"):
+                target / subset
+
+        def test_subset_add_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                subset + v
+
+        def test_subset_sub_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                subset - v
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_join_left(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            """Explicit join='left' fills zeros for missing coords."""
+            target = v if operand == "var" else 1 * v
+            result = target.mul(subset, join="left")
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+
+    class TestSuperset:
+        """Under v1, superset operations raise ValueError (exact join)."""
+
+        def test_add_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v + superset
+
+        def test_mul_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v * superset
+
+    class TestDisjoint:
+        """Under v1, disjoint coord operations raise ValueError."""
+
+        def test_add_disjoint_raises(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            with pytest.raises(ValueError, match="exact"):
+                v + disjoint
+
+        def test_mul_disjoint_raises(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            with pytest.raises(ValueError, match="exact"):
+                v * disjoint
+
+    class TestCommutativity:
+        """Under v1, only matching coords allow commutativity."""
+
+        def test_add_commutativity_matching_coords(self, v: Variable) -> None:
+            matching = xr.DataArray(
+                np.arange(20, dtype=float),
+                dims=["dim_2"],
+                coords={"dim_2": range(20)},
+            )
+            assert_linequal(v + matching, matching + v)
+
+        def test_subset_raises_both_sides(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v * subset
+            with pytest.raises(ValueError, match="exact"):
+                subset * v
+
+    class TestQuadratic:
+        """Under v1, subset operations on quadratic expressions raise."""
+
+        def test_quadexpr_add_subset_raises(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            qexpr = v * v
+            with pytest.raises(ValueError, match="exact"):
+                qexpr + subset
+
+        def test_quadexpr_mul_subset_raises(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            qexpr = v * v
+            with pytest.raises(ValueError, match="exact"):
+                qexpr * subset
+
+    class TestMissingValues:
+        """Under v1, NaN values propagate (no implicit fillna)."""
+
+        NAN_POSITIONS = [0, 5, 19]
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_nan_propagates(self, v: Variable, operand: str) -> None:
+            vals = np.arange(20, dtype=float)
+            vals[0] = np.nan
+            vals[5] = np.nan
+            vals[19] = np.nan
+            nan_constant = xr.DataArray(
+                vals, dims=["dim_2"], coords={"dim_2": range(20)}
+            )
+            target = v if operand == "var" else v + 5
+            result = target + nan_constant
+            for i in self.NAN_POSITIONS:
+                assert np.isnan(result.const.values[i])
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_nan_propagates(self, v: Variable, operand: str) -> None:
+            vals = np.arange(20, dtype=float)
+            vals[0] = np.nan
+            nan_constant = xr.DataArray(
+                vals, dims=["dim_2"], coords={"dim_2": range(20)}
+            )
+            target = v if operand == "var" else 1 * v
+            result = target * nan_constant
+            assert np.isnan(result.coeffs.squeeze().values[0])
+
+    class TestExpressionWithNaN:
+        """Under v1, NaN in expression's own const/coeffs propagates."""
+
+        def test_shifted_expr_add_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + 5
+            assert np.isnan(result.const.values[0])
+
+        def test_shifted_expr_mul_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * 2
+            assert np.isnan(result.coeffs.squeeze().values[0])
+
+    class TestMultiDim:
+        """Under v1, multi-dim subset operations raise."""
+
+        def test_multidim_subset_mul_raises(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            with pytest.raises(ValueError, match="exact"):
+                w * subset_2d
+
+        def test_multidim_subset_add_raises(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            with pytest.raises(ValueError, match="exact"):
+                w + subset_2d

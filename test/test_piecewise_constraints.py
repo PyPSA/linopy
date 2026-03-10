@@ -51,6 +51,11 @@ _any_solvers = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _legacy_only(legacy_convention: None) -> None:
+    """Piecewise implementation not yet adapted for v1 convention."""
+
+
 # ===========================================================================
 # slopes_to_points
 # ===========================================================================

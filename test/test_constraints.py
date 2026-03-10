@@ -176,8 +176,9 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     ],
 )
 def test_constraint_rhs_higher_dim_constant_warns(
-    rhs_factory: Any, caplog: Any
+    legacy_convention: None, rhs_factory: Any, caplog: Any
 ) -> None:
+    """Legacy: higher-dim constant RHS warns about dimensions."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
 
@@ -186,8 +187,21 @@ def test_constraint_rhs_higher_dim_constant_warns(
     assert "dimensions" in caplog.text
 
 
-def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:
-    """DataArray RHS with extra dims reindexes to expression coords (no raise)."""
+def test_constraint_rhs_higher_dim_constant_broadcasts_v1(
+    v1_convention: None,
+) -> None:
+    """V1: higher-dim constant RHS broadcasts (creates redundant constraints)."""
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+    rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
+    c = m.add_constraints(x >= rhs, name="broadcast_con")
+    assert "extra" in c.dims
+
+
+def test_constraint_rhs_higher_dim_dataarray_reindexes(
+    legacy_convention: None,
+) -> None:
+    """Legacy: DataArray RHS with extra dims reindexes to expression coords."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
     rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
@@ -346,7 +360,13 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
-class TestConstraintCoordinateAlignment:
+class TestConstraintCoordinateAlignmentLegacy:
+    """Legacy: outer join with NaN fill for constraint coordinate mismatches."""
+
+    @pytest.fixture(autouse=True)
+    def _legacy_only(self, legacy_convention: None) -> None:
+        pass
+
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "xarray":
@@ -438,6 +458,67 @@ class TestConstraintCoordinateAlignment:
         x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
         subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
         m.add_constraints(x <= subset_ub, name="subset_ub")
+        m.add_objective(x.sum(), sense="max")
+        m.solve(solver_name=solver)
+        sol = m.solution["x"]
+        assert sol.sel(i=1).item() == pytest.approx(10.0)
+        assert sol.sel(i=3).item() == pytest.approx(20.0)
+        assert sol.sel(i=0).item() == pytest.approx(100.0)
+        assert sol.sel(i=2).item() == pytest.approx(100.0)
+        assert sol.sel(i=4).item() == pytest.approx(100.0)
+
+
+class TestConstraintCoordinateAlignmentV1:
+    """V1: exact join raises on coordinate mismatches; explicit join= is the escape hatch."""
+
+    @pytest.fixture(autouse=True)
+    def _v1_only(self, v1_convention: None) -> None:
+        pass
+
+    def test_var_le_subset_raises(self, v: Variable) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        with pytest.raises(ValueError, match="exact"):
+            v <= subset
+
+    def test_var_le_subset_join_left(self, v: Variable) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        con = v.to_linexpr().le(subset, join="left")
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == 10.0
+        assert con.rhs.sel(dim_2=3).item() == 30.0
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    def test_superset_comparison_raises(self, v: Variable) -> None:
+        superset = xr.DataArray(
+            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
+        )
+        with pytest.raises(ValueError, match="exact"):
+            superset <= v
+
+    def test_constraint_rhs_extra_dims_matching_broadcasts(self, v: Variable) -> None:
+        rhs = xr.DataArray(
+            np.ones((2, 20)), dims=["extra", "dim_2"], coords={"dim_2": range(20)}
+        )
+        c = v <= rhs
+        assert "extra" in c.dims
+
+    def test_constraint_rhs_extra_dims_mismatched_raises(self, v: Variable) -> None:
+        rhs = xr.DataArray(
+            [[1.0, 2.0]], dims=["extra", "dim_2"], coords={"dim_2": [0, 1]}
+        )
+        with pytest.raises(ValueError, match="exact"):
+            v <= rhs
+
+    def test_subset_constraint_solve_integration(self) -> None:
+        if not available_solvers:
+            pytest.skip("No solver available")
+        solver = "highs" if "highs" in available_solvers else available_solvers[0]
+        m = Model()
+        coords = pd.RangeIndex(5, name="i")
+        x = m.add_variables(lower=0, upper=100, coords=[coords], name="x")
+        subset_ub = xr.DataArray([10.0, 20.0], dims=["i"], coords={"i": [1, 3]})
+        # exact default raises — use explicit join="left" (NaN = no constraint)
+        m.add_constraints(x.to_linexpr().le(subset_ub, join="left"), name="subset_ub")
         m.add_objective(x.sum(), sense="max")
         m.solve(solver_name=solver)
         sol = m.solution["x"]
