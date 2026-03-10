@@ -19,6 +19,11 @@ from linopy.sos_reformulation import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _legacy_only(legacy_convention: None) -> None:
+    """SOS reformulation not yet adapted for v1 convention."""
+
+
 class TestValidateBounds:
     """Tests for bound validation in compute_big_m_values."""
 
