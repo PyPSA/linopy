@@ -551,12 +551,8 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
-class TestCoordinateAlignmentV1:
-    @pytest.fixture
-    def matching(self) -> xr.DataArray:
-        return xr.DataArray(
-            np.arange(20, dtype=float), dims=["dim_2"], coords={"dim_2": range(20)}
-        )
+class _CoordinateAlignmentFixtures:
+    """Shared fixtures for coordinate alignment test classes."""
 
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
@@ -592,6 +588,14 @@ class TestCoordinateAlignmentV1:
         if request.param == "xarray":
             return xr.DataArray(vals, dims=["dim_2"], coords={"dim_2": range(20)})
         return pd.Series(vals, index=pd.Index(range(20), name="dim_2"))
+
+
+class TestCoordinateAlignmentV1(_CoordinateAlignmentFixtures):
+    @pytest.fixture
+    def matching(self) -> xr.DataArray:
+        return xr.DataArray(
+            np.arange(20, dtype=float), dims=["dim_2"], coords={"dim_2": range(20)}
+        )
 
     class TestSubset:
         """
@@ -1108,50 +1112,12 @@ class TestCoordinateAlignmentV1:
                 da / v  # type: ignore[operator]
 
 
-class TestCoordinateAlignmentLegacy:
+class TestCoordinateAlignmentLegacy(_CoordinateAlignmentFixtures):
     """Legacy convention: outer join with NaN fill / zero fill behavior."""
 
     @pytest.fixture(autouse=True)
-    def _use_legacy(self) -> Generator[None, None, None]:
-        old = linopy.options["arithmetic_convention"]
-        linopy.options["arithmetic_convention"] = "legacy"
-        yield
-        linopy.options["arithmetic_convention"] = old
-
-    @pytest.fixture(params=["da", "series"])
-    def subset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "da":
-            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
-
-    @pytest.fixture(params=["da", "series"])
-    def superset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "da":
-            return xr.DataArray(
-                np.arange(25, dtype=float),
-                dims=["dim_2"],
-                coords={"dim_2": range(25)},
-            )
-        return pd.Series(
-            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
-        )
-
-    @pytest.fixture
-    def expected_fill(self) -> np.ndarray:
-        arr = np.zeros(20)
-        arr[1] = 10.0
-        arr[3] = 30.0
-        return arr
-
-    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
-    def nan_constant(self, request: Any) -> xr.DataArray | pd.Series:
-        vals = np.arange(20, dtype=float)
-        vals[0] = np.nan
-        vals[5] = np.nan
-        vals[19] = np.nan
-        if request.param == "xarray":
-            return xr.DataArray(vals, dims=["dim_2"], coords={"dim_2": range(20)})
-        return pd.Series(vals, index=pd.Index(range(20), name="dim_2"))
+    def _use_legacy(self, legacy_convention: None) -> None:
+        pass
 
     class TestSubset:
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -2740,11 +2706,8 @@ class TestJoinParameterLegacy:
     """Legacy convention: default outer join for mismatched coords."""
 
     @pytest.fixture(autouse=True)
-    def _use_legacy(self) -> Generator[None, None, None]:
-        old = linopy.options["arithmetic_convention"]
-        linopy.options["arithmetic_convention"] = "legacy"
-        yield
-        linopy.options["arithmetic_convention"] = old
+    def _use_legacy(self, legacy_convention: None) -> None:
+        pass
 
     @pytest.fixture
     def m2(self) -> Model:
@@ -2771,6 +2734,12 @@ class TestJoinParameterLegacy:
         const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
         result = quad.add(const, join="inner")
         assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
+        quad = a.to_linexpr() * a.to_linexpr()
+        const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
+        result = quad.add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [0, 1]
 
     def test_quadratic_mul_constant_join_inner(self, a: Variable, b: Variable) -> None:
         quad = a.to_linexpr() * b.to_linexpr()

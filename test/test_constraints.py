@@ -218,33 +218,25 @@ def test_constraint_rhs_higher_dim_expression(rhs_factory: Any) -> None:
     ],
 )
 def test_constraint_rhs_higher_dim_constant_warns_legacy(
-    rhs_factory: Any, caplog: Any
+    rhs_factory: Any, caplog: Any, legacy_convention: None
 ) -> None:
     """Legacy convention warns on higher-dim constant RHS."""
-    old = linopy.options["arithmetic_convention"]
-    linopy.options["arithmetic_convention"] = "legacy"
-    try:
-        m = Model()
-        x = m.add_variables(coords=[range(5)], name="x")
-        with caplog.at_level("WARNING", logger="linopy.expressions"):
-            m.add_constraints(x >= rhs_factory(m))
-        assert "dimensions" in caplog.text
-    finally:
-        linopy.options["arithmetic_convention"] = old
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+    with caplog.at_level("WARNING", logger="linopy.expressions"):
+        m.add_constraints(x >= rhs_factory(m))
+    assert "dimensions" in caplog.text
 
 
-def test_constraint_rhs_higher_dim_dataarray_reindexes_legacy() -> None:
+def test_constraint_rhs_higher_dim_dataarray_reindexes_legacy(
+    legacy_convention: None,
+) -> None:
     """Legacy convention: DataArray RHS with extra dims reindexes to expression coords."""
-    old = linopy.options["arithmetic_convention"]
-    linopy.options["arithmetic_convention"] = "legacy"
-    try:
-        m = Model()
-        x = m.add_variables(coords=[range(5)], name="x")
-        rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
-        c = m.add_constraints(x >= rhs)
-        assert c.shape == (5, 3)
-    finally:
-        linopy.options["arithmetic_convention"] = old
+    m = Model()
+    x = m.add_variables(coords=[range(5)], name="x")
+    rhs = xr.DataArray(np.ones((5, 3)), dims=["dim_0", "extra"])
+    c = m.add_constraints(x >= rhs)
+    assert c.shape == (5, 3)
 
 
 def test_wrong_constraint_assignment_repeated() -> None:
@@ -376,7 +368,9 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
-class TestConstraintCoordinateAlignmentV1:
+class _ConstraintAlignmentFixtures:
+    """Shared fixtures for constraint coordinate alignment tests."""
+
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
         if request.param == "xarray":
@@ -395,6 +389,8 @@ class TestConstraintCoordinateAlignmentV1:
             np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
         )
 
+
+class TestConstraintCoordinateAlignmentV1(_ConstraintAlignmentFixtures):
     def test_var_le_subset_raises(self, v: Variable, subset: xr.DataArray) -> None:
         with pytest.raises(ValueError, match="exact"):
             v <= subset
@@ -484,33 +480,12 @@ class TestConstraintCoordinateAlignmentV1:
         assert sol.sel(i=4).item() == pytest.approx(100.0)
 
 
-class TestConstraintCoordinateAlignmentLegacy:
+class TestConstraintCoordinateAlignmentLegacy(_ConstraintAlignmentFixtures):
     """Legacy convention: outer join with NaN fill behavior for constraints."""
 
     @pytest.fixture(autouse=True)
-    def _use_legacy(self) -> Generator[None, None, None]:
-        old = linopy.options["arithmetic_convention"]
-        linopy.options["arithmetic_convention"] = "legacy"
-        yield
-        linopy.options["arithmetic_convention"] = old
-
-    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
-    def subset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "xarray":
-            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
-
-    @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
-    def superset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "xarray":
-            return xr.DataArray(
-                np.arange(25, dtype=float),
-                dims=["dim_2"],
-                coords={"dim_2": range(25)},
-            )
-        return pd.Series(
-            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
-        )
+    def _use_legacy(self, legacy_convention: None) -> None:
+        pass
 
     def test_var_le_subset(self, v: Variable, subset: xr.DataArray) -> None:
         con = v <= subset

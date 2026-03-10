@@ -25,8 +25,8 @@ def test_operations_with_data_arrays_are_typed_correctly(convention: str) -> Non
     _ = q + s
 
 
-def test_constant_with_extra_dims_broadcasts() -> None:
-    """Only valid under v1 convention (legacy uses outer join which also works)."""
+def test_constant_with_extra_dims_broadcasts(convention: str) -> None:
+    """Broadcasting with extra dims works under both conventions."""
     m = linopy.Model()
 
     a: xr.DataArray = xr.DataArray([1, 2, 3])
