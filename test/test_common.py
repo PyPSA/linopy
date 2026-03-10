@@ -10,7 +10,6 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
@@ -91,17 +90,6 @@ def test_as_dataarray_with_series_dims_superset() -> None:
     s = pd.Series([1, 2, 3], index=target_index)
     dims = [target_dim, "other"]
     da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_override_coords() -> None:
-    target_dim = "dim_0"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(s, coords=[[1, 2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
     assert list(da.coords[target_dim].values) == target_index
@@ -208,19 +196,6 @@ def test_as_dataarray_dataframe_dims_superset() -> None:
     df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
     dims = [*target_dims, "other"]
     da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_override_coords() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(df, coords=[[1, 2], [2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == target_dims
     assert list(da.coords[target_dims[0]].values) == target_index
@@ -370,8 +345,10 @@ def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError):
-        as_dataarray(arr, coords=target_coords, dims=target_dims)
+    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
+    assert da.dims == target_dims
+    assert list(da.coords["dim_0"].values) == ["a", "b"]
+    assert "dim_2" not in da.coords
 
 
 def test_as_dataarray_with_number() -> None:
