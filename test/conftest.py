@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 
-import linopy
-
 if TYPE_CHECKING:
     from linopy import Model, Variable
 
@@ -63,6 +61,8 @@ def pytest_collection_modifyitems(
 @pytest.fixture
 def v1_convention() -> Generator[None, None, None]:
     """Set arithmetic_convention to 'v1' for the duration of a test."""
+    import linopy
+
     linopy.options["arithmetic_convention"] = "v1"
     yield
     linopy.options["arithmetic_convention"] = "legacy"
