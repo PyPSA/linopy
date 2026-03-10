@@ -32,7 +32,12 @@ from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
-from xarray.structure.alignment import AlignmentError
+
+try:
+    from xarray.structure.alignment import AlignmentError
+except ImportError:
+    # Fallback for older xarray versions where this isn't a separate class
+    AlignmentError = ValueError  # type: ignore[assignment, misc]
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -578,6 +583,7 @@ class BaseExpression(ABC):
             join = options["arithmetic_convention"]
 
         if join == "legacy":
+            # stacklevel=4: user code -> __add__/__mul__ -> _add_constant/_apply_constant_op -> _align_constant
             warn(
                 LEGACY_DEPRECATION_MESSAGE,
                 LinopyDeprecationWarning,
@@ -657,6 +663,11 @@ class BaseExpression(ABC):
         is_legacy = (
             join is None and options["arithmetic_convention"] == "legacy"
         ) or join == "legacy"
+        # Fast path for scalars: no dimensions to align
+        if np.isscalar(other):
+            coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
+            const = self.const.fillna(0) if is_legacy else self.const
+            return self.assign(coeffs=op(coeffs, other), const=op(const, other))
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
@@ -694,7 +705,7 @@ class BaseExpression(ABC):
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
                     "unsupported operand type(s) for /: "
-                    f"{type(self)} and {type(other)}"
+                    f"{type(self)} and {type(other)}. "
                     "Non-linear expressions are not yet supported."
                 )
             return self._divide_by_constant(other)
@@ -1719,18 +1730,6 @@ class LinearExpression(BaseExpression):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
-                if options["arithmetic_convention"] == "v1":
-                    # Enforce exact coordinate alignment before merge
-                    try:
-                        xr.align(self.const, other.const, join="exact")
-                    except (ValueError, AlignmentError) as e:
-                        raise ValueError(
-                            f"{e}\n"
-                            "Use .add()/.sub() with an explicit join= parameter:\n"
-                            '  .add(other, join="inner")   # intersection\n'
-                            '  .add(other, join="outer")   # union with fill\n'
-                            '  .add(other, join="left")    # keep left coordinates'
-                        ) from None
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2269,18 +2268,6 @@ class QuadraticExpression(BaseExpression):
                 if isinstance(other, LinearExpression):
                     other = other.to_quadexpr()
 
-                if options["arithmetic_convention"] == "v1":
-                    try:
-                        xr.align(self.const, other.const, join="exact")
-                    except (ValueError, AlignmentError) as e:
-                        raise ValueError(
-                            f"{e}\n"
-                            "Use .add()/.sub() with an explicit join= parameter:\n"
-                            '  .add(other, join="inner")   # intersection\n'
-                            '  .add(other, join="outer")   # union with fill\n'
-                            '  .add(other, join="left")    # keep left coordinates'
-                        ) from None
-
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2480,13 +2467,25 @@ def merge(
     **kwargs: Any,
 ) -> GenericExpression:
     """
-    Merge multiple expression together.
+    Merge multiple expressions together.
 
-    This function is a bit faster than summing over multiple linear expressions.
-    In case a list of LinearExpression with exactly the same shape is passed
-    and the dimension to concatenate on is TERM_DIM, the concatenation uses
-    the coordinates of the first object as a basis which overrides the
-    coordinates of the consecutive objects.
+    Concatenates expressions along a given dimension (default: ``_term``).
+    Faster than summing expressions individually.
+
+    Join behavior by convention (when ``join=None``):
+
+    - **v1**: Enforces exact match on shared user-dimension coordinates.
+      Helper dims (``_term``, ``_factor``) and the concat dim are excluded
+      from this check. Raises ``ValueError`` on mismatch. The actual
+      ``xr.concat`` uses ``join="outer"`` since helper dims legitimately
+      differ between expressions.
+    - **legacy**: Uses ``join="override"`` (positional alignment) when all
+      shared user dims have matching sizes, ``join="outer"`` otherwise.
+    - **explicit** (e.g. ``join="inner"``): Passed through to ``xr.concat``.
+
+    Internal callers that bypass the convention:
+
+    - ``.add(join=X)``: passes explicit join through.
 
     Parameters
     ----------
@@ -2495,21 +2494,20 @@ def merge(
     dim : str
         Dimension along which the expressions should be concatenated.
     cls : type
-        Explicitly set the type of the resulting expression (So that the type checker will know the return type)
+        Explicitly set the type of the resulting expression (So that the
+        type checker will know the return type)
     join : str, optional
         How to align coordinates. One of "outer", "inner", "left", "right",
-        "exact", "override". When None (default), auto-detects based on
-        expression shapes.
+        "exact", "override". When None (default), uses the current
+        arithmetic convention.
     **kwargs
-        Additional keyword arguments passed to xarray.concat. Defaults to
-        {coords: "minimal", compat: "override"} or, in the special case described
-        above, to {coords: "minimal", compat: "override", "join": "override"}.
+        Additional keyword arguments passed to xarray.concat.
 
     Returns
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if not isinstance(exprs, list) and len(add_exprs):
+    if not isinstance(exprs, list) and len(add_exprs) > 0:
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
@@ -2571,13 +2569,32 @@ def merge(
 
             kwargs["join"] = "override" if override else "outer"
         elif effective_join == "v1":
-            # Merge uses outer join for xr.concat since helper dims
-            # (_term, _factor) commonly have different sizes and
-            # expressions may have different user dimensions.
-            # Coordinate enforcement for v1 is done at the operator
-            # level (__add__, __sub__, etc.) before calling merge.
+            # Enforce exact alignment on user dims only. Helper dims
+            # (_term, _factor) legitimately differ between expressions,
+            # so we can't pass join="exact" to xr.concat directly.
+            # Instead: pre-validate user dims, then concat with outer.
+            # Check only dimension-coordinates (not scalar coords left
+            # from .sel()), excluding helper dims and the concat dim.
+            skip_dims = set(HELPER_DIMS) | {dim}
+            user_coords = [
+                {k: d.coords[k] for k in d.dims if k not in skip_dims} for d in data
+            ]
+            # Only check dims shared by all datasets (broadcasting is OK)
+            shared_dims = set.intersection(*(set(c.keys()) for c in user_coords))
+            for d_name in shared_dims:
+                ref = user_coords[0][d_name]
+                for i, uc in enumerate(user_coords[1:], 1):
+                    if not ref.equals(uc[d_name]):
+                        raise ValueError(
+                            f"Coordinate mismatch on dimension '{d_name}'.\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection of coordinates\n'
+                            '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                            '  .add(other, join="left")    # keep left operand\'s coordinates'
+                        )
             kwargs["join"] = "outer"
         else:
+            # Explicit join passed through (e.g., from .add(join="inner"))
             kwargs["join"] = effective_join
 
     if dim == TERM_DIM:

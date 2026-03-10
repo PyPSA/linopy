@@ -1960,9 +1960,9 @@ class TestJoinParameter:
             self, a: Variable, b: Variable
         ) -> None:
             # a has i=[0,1,2], b has i=[1,2,3] — exact default raises
-            with pytest.raises(ValueError, match="exact"):
+            with pytest.raises(ValueError, match="Coordinate mismatch"):
                 a.to_linexpr() + b.to_linexpr()
-            with pytest.raises(ValueError, match="exact"):
+            with pytest.raises(ValueError, match="Coordinate mismatch"):
                 a.to_linexpr().add(b.to_linexpr(), join=None)
 
         def test_add_expr_join_inner(self, a: Variable, b: Variable) -> None:

@@ -205,6 +205,9 @@ def numpy_to_dataarray(
         if isinstance(coords, list):
             coords = dict(zip(dims, coords[: arr.ndim]))
         elif is_dict_like(coords):
+            # Filter coords to matching dims — this is expected when a
+            # lower-dimensional constant is broadcast against an expression
+            # whose full coords are passed through as_dataarray.
             coords = {k: v for k, v in coords.items() if k in dims}
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
