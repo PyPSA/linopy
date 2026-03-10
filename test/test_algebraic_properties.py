@@ -37,6 +37,8 @@ SPECIFICATION
    a * 0 == 0                         multiplication by zero
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -44,49 +46,50 @@ import xarray as xr
 
 from linopy import Model
 from linopy.expressions import LinearExpression
+from linopy.variables import Variable
 
 
 @pytest.fixture
-def m():
+def m() -> Model:
     return Model()
 
 
 @pytest.fixture
-def time():
+def time() -> pd.RangeIndex:
     return pd.RangeIndex(3, name="time")
 
 
 @pytest.fixture
-def tech():
+def tech() -> pd.Index:
     return pd.Index(["solar", "wind"], name="tech")
 
 
 @pytest.fixture
-def x(m, time):
+def x(m: Model, time: pd.RangeIndex) -> Variable:
     """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="x")
 
 
 @pytest.fixture
-def y(m, time):
+def y(m: Model, time: pd.RangeIndex) -> Variable:
     """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="y")
 
 
 @pytest.fixture
-def z(m, time):
+def z(m: Model, time: pd.RangeIndex) -> Variable:
     """Variable with dims [time]."""
     return m.add_variables(lower=0, coords=[time], name="z")
 
 
 @pytest.fixture
-def g(m, time, tech):
+def g(m: Model, time: pd.RangeIndex, tech: pd.Index) -> Variable:
     """Variable with dims [time, tech]."""
     return m.add_variables(lower=0, coords=[time, tech], name="g")
 
 
 @pytest.fixture
-def c(tech):
+def c(tech: pd.Index) -> xr.DataArray:
     """Constant (DataArray) with dims [tech]."""
     return xr.DataArray([2.0, 3.0], dims=["tech"], coords={"tech": tech})
 
@@ -95,7 +98,7 @@ def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
     """Assert two linear expressions are algebraically equivalent."""
     assert set(a.dims) == set(b.dims), f"dims differ: {a.dims} vs {b.dims}"
     for dim in a.dims:
-        if dim.startswith("_"):
+        if isinstance(dim, str) and dim.startswith("_"):
             continue
         np.testing.assert_array_equal(
             sorted(a.coords[dim].values), sorted(b.coords[dim].values)
@@ -109,15 +112,15 @@ def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
 
 
 class TestCommutativity:
-    def test_add_expr_expr(self, x, y):
+    def test_add_expr_expr(self, x: Variable, y: Variable) -> None:
         """X + y == y + x"""
         assert_linequal(x + y, y + x)
 
-    def test_mul_expr_constant(self, g, c):
+    def test_mul_expr_constant(self, g: Variable, c: xr.DataArray) -> None:
         """G * c == c * g"""
         assert_linequal(g * c, c * g)
 
-    def test_add_expr_constant(self, g, c):
+    def test_add_expr_constant(self, g: Variable, c: xr.DataArray) -> None:
         """G + c == c + g"""
         assert_linequal(g + c, c + g)
 
@@ -128,11 +131,11 @@ class TestCommutativity:
 
 
 class TestAssociativity:
-    def test_add_same_dims(self, x, y, z):
+    def test_add_same_dims(self, x: Variable, y: Variable, z: Variable) -> None:
         """(x + y) + z == x + (y + z)"""
         assert_linequal((x + y) + z, x + (y + z))
 
-    def test_add_with_constant(self, x, g, c):
+    def test_add_with_constant(self, x: Variable, g: Variable, c: xr.DataArray) -> None:
         """(x[A] + c[B]) + g[A,B] == x[A] + (c[B] + g[A,B])"""
         assert_linequal((x + c) + g, x + (c + g))
 
@@ -143,15 +146,17 @@ class TestAssociativity:
 
 
 class TestDistributivity:
-    def test_scalar(self, x, y):
+    def test_scalar(self, x: Variable, y: Variable) -> None:
         """S * (x + y) == s*x + s*y"""
         assert_linequal(3 * (x + y), 3 * x + 3 * y)
 
-    def test_constant_subset_dims(self, g, c):
+    def test_constant_subset_dims(self, g: Variable, c: xr.DataArray) -> None:
         """c[B] * (g[A,B] + g[A,B]) == c*g + c*g"""
         assert_linequal(c * (g + g), c * g + c * g)
 
-    def test_constant_mixed_dims(self, x, g, c):
+    def test_constant_mixed_dims(
+        self, x: Variable, g: Variable, c: xr.DataArray
+    ) -> None:
         """c[B] * (x[A] + g[A,B]) == c*x + c*g"""
         assert_linequal(c * (x + g), c * x + c * g)
 
@@ -162,14 +167,14 @@ class TestDistributivity:
 
 
 class TestIdentity:
-    def test_additive(self, x):
+    def test_additive(self, x: Variable) -> None:
         """X + 0 == x"""
         result = x + 0
         assert isinstance(result, LinearExpression)
         assert (result.const == 0).all()
         np.testing.assert_array_equal(result.coeffs.squeeze().values, [1, 1, 1])
 
-    def test_multiplicative(self, x):
+    def test_multiplicative(self, x: Variable) -> None:
         """X * 1 == x"""
         result = x * 1
         assert isinstance(result, LinearExpression)
@@ -182,15 +187,15 @@ class TestIdentity:
 
 
 class TestNegation:
-    def test_subtraction_is_add_negation(self, x, y):
+    def test_subtraction_is_add_negation(self, x: Variable, y: Variable) -> None:
         """X - y == x + (-y)"""
         assert_linequal(x - y, x + (-y))
 
-    def test_subtraction_definition(self, x, y):
+    def test_subtraction_definition(self, x: Variable, y: Variable) -> None:
         """X - y == x + (-1) * y"""
         assert_linequal(x - y, x + (-1) * y)
 
-    def test_double_negation(self, x):
+    def test_double_negation(self, x: Variable) -> None:
         """-(-x) has same coefficients as x"""
         result = -(-x)
         np.testing.assert_array_equal(
@@ -205,7 +210,7 @@ class TestNegation:
 
 
 class TestZero:
-    def test_multiplication_by_zero(self, x):
+    def test_multiplication_by_zero(self, x: Variable) -> None:
         """X * 0 has zero coefficients"""
         result = x * 0
         assert (result.coeffs == 0).all()
