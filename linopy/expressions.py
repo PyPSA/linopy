@@ -623,14 +623,19 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
         if np.isscalar(other) and join is None:
-            return self.assign(const=self.const.fillna(0) + other)
+            const = self.const.fillna(0) + other if is_legacy else self.const + other
+            return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
-        da = da.fillna(0)
-        self_const = self_const.fillna(0)
+        if is_legacy:
+            da = da.fillna(0)
+            self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -648,24 +653,29 @@ class BaseExpression(ABC):
         fill_value: float,
         join: JoinOptions | None = None,
     ) -> GenericExpression:
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        factor = factor.fillna(fill_value)
-        self_const = self_const.fillna(0)
+        if is_legacy:
+            factor = factor.fillna(fill_value)
+            self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
+            coeffs = data.coeffs.fillna(0) if is_legacy else data.coeffs
             return self.__class__(
                 assign_multiindex_safe(
                     data,
-                    coeffs=op(data.coeffs.fillna(0), factor),
+                    coeffs=op(coeffs, factor),
                     const=op(self_const, factor),
                 ),
                 self.model,
             )
-        coeffs = self.coeffs.fillna(0)
+        coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
@@ -1185,11 +1195,13 @@ class BaseExpression(ABC):
                         f"Consider collapsing the dimensions by taking min/max."
                     )
                 rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-            all_to_lhs = self.sub(rhs, join=join).data
-            data = assign_multiindex_safe(
-                all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
-            )
-            return constraints.Constraint(data, model=self.model)
+                # Alignment already done — compute constraint directly
+                constraint_rhs = rhs - self.const
+                data = assign_multiindex_safe(
+                    self.data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+                )
+                return constraints.Constraint(data, model=self.model)
+            # Non-constant rhs (Variable/Expression) — fall through to sub path
 
         if effective_join == "v1":
             effective_join = "exact"

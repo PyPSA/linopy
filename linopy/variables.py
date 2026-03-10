@@ -400,6 +400,13 @@ class Variable:
         Multiply variables with a coefficient, variable, or expression.
         """
         try:
+            if isinstance(other, Variable | ScalarVariable):
+                return self.to_linexpr() * other
+
+            # Fast path for scalars: build expression directly with coefficient
+            if np.isscalar(other):
+                return self.to_linexpr(other)
+
             return self.to_linexpr() * other
         except TypeError:
             return NotImplemented
@@ -448,7 +455,13 @@ class Variable:
         """
         Divide variables with a coefficient.
         """
-        return self.to_linexpr() / other
+        if isinstance(other, expressions.LinearExpression | Variable):
+            raise TypeError(
+                "unsupported operand type(s) for /: "
+                f"{type(self)} and {type(other)}. "
+                "Non-linear expressions are not yet supported."
+            )
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
         self, coefficient: ConstantLike | LinearExpression | Variable
