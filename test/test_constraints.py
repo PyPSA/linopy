@@ -20,9 +20,9 @@ from linopy.testing import assert_conequal
 @pytest.fixture(autouse=True)
 def _use_exact_join():
     """Use exact arithmetic join for all tests in this module."""
-    linopy.options["arithmetic_join"] = "v1"
+    linopy.options["arithmetic_convention"] = "v1"
     yield
-    linopy.options["arithmetic_join"] = "legacy"
+    linopy.options["arithmetic_convention"] = "legacy"
 
 
 # Test model functions

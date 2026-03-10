@@ -1272,7 +1272,7 @@ def align(
     from linopy.variables import Variable
 
     if join is None:
-        join = options["arithmetic_join"]
+        join = options["arithmetic_convention"]
 
     if join == "legacy":
         from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning

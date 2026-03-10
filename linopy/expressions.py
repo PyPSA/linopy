@@ -538,7 +538,7 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses ``options["arithmetic_join"]``.
+            Alignment method. If None, uses ``options["arithmetic_convention"]``.
 
         Returns
         -------
@@ -550,7 +550,7 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
-            join = options["arithmetic_join"]
+            join = options["arithmetic_convention"]
 
         if join == "legacy":
             warn(
@@ -1107,7 +1107,7 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        effective_join = join if join is not None else options["arithmetic_join"]
+        effective_join = join if join is not None else options["arithmetic_convention"]
 
         if effective_join == "legacy":
             warn(
@@ -2448,7 +2448,7 @@ def merge(
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
 
-        effective_join = join if join is not None else options["arithmetic_join"]
+        effective_join = join if join is not None else options["arithmetic_convention"]
 
         if effective_join == "legacy":
             warn(

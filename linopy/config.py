@@ -12,8 +12,8 @@ from typing import Any
 VALID_ARITHMETIC_JOINS = {"legacy", "v1"}
 
 LEGACY_DEPRECATION_MESSAGE = (
-    "The 'legacy' arithmetic join is deprecated and will be removed in a "
-    "future version. Set linopy.options['arithmetic_join'] = 'v1' to opt in "
+    "The 'legacy' arithmetic convention is deprecated and will be removed in "
+    "linopy v1. Set linopy.options['arithmetic_convention'] = 'v1' to opt in "
     "to the new behavior, or filter this warning with:\n"
     "  import warnings; warnings.filterwarnings('ignore', category=LinopyDeprecationWarning)"
 )
@@ -41,9 +41,9 @@ class OptionSettings:
         for k, v in kwargs.items():
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
-            if k == "arithmetic_join" and v not in VALID_ARITHMETIC_JOINS:
+            if k == "arithmetic_convention" and v not in VALID_ARITHMETIC_JOINS:
                 raise ValueError(
-                    f"Invalid arithmetic_join: {v!r}. "
+                    f"Invalid arithmetic_convention: {v!r}. "
                     f"Must be one of {VALID_ARITHMETIC_JOINS}."
                 )
             self._current_values[k] = v
@@ -78,5 +78,5 @@ class OptionSettings:
 options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
-    arithmetic_join="legacy",
+    arithmetic_convention="legacy",
 )

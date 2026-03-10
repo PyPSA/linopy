@@ -7,9 +7,9 @@ import linopy
 @pytest.fixture(autouse=True)
 def _use_exact_join():
     """Use exact arithmetic join for all tests in this module."""
-    linopy.options["arithmetic_join"] = "v1"
+    linopy.options["arithmetic_convention"] = "v1"
     yield
-    linopy.options["arithmetic_join"] = "legacy"
+    linopy.options["arithmetic_convention"] = "legacy"
 
 
 def test_operations_with_data_arrays_are_typed_correctly() -> None:
