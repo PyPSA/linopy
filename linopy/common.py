@@ -10,7 +10,7 @@ from __future__ import annotations
 import operator
 import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
-from functools import reduce, wraps
+from functools import partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
@@ -1267,38 +1267,36 @@ def align(
     elif join == "v1":
         join = "exact"
 
-    # Extract underlying Datasets for index computation.
+    finisher: list[partial[Any] | Callable[[Any], Any]] = []
     das: list[Any] = []
     for obj in objects:
-        if isinstance(obj, LinearExpression | QuadraticExpression | Variable):
+        if isinstance(obj, LinearExpression | QuadraticExpression):
+            finisher.append(partial(obj.__class__, model=obj.model))
+            das.append(obj.data)
+        elif isinstance(obj, Variable):
+            finisher.append(
+                partial(
+                    obj.__class__,
+                    model=obj.model,
+                    name=obj.data.attrs["name"],
+                    skip_broadcast=True,
+                )
+            )
             das.append(obj.data)
         else:
+            finisher.append(lambda x: x)
             das.append(obj)
 
     exclude = frozenset(exclude).union(HELPER_DIMS)
-
-    # Compute target indexes.
-    target_aligned = xr_align(
-        *das, join=join, copy=False, indexes=indexes, exclude=exclude
+    aligned = xr_align(
+        *das,
+        join=join,
+        copy=copy,
+        indexes=indexes,
+        exclude=exclude,
+        fill_value=fill_value,
     )
-
-    # Reindex each object to target indexes.
-    reindex_kwargs: dict[str, Any] = {}
-    if fill_value is not dtypes.NA:
-        reindex_kwargs["fill_value"] = fill_value
-    results: list[Any] = []
-    for obj, target in zip(objects, target_aligned):
-        indexers = {
-            dim: target.indexes[dim]
-            for dim in target.dims
-            if dim not in exclude and dim in target.indexes
-        }
-        # Variable.reindex has no fill_value — it always uses sentinels
-        if isinstance(obj, Variable):
-            results.append(obj.reindex(indexers))
-        else:
-            results.append(obj.reindex(indexers, **reindex_kwargs))  # type: ignore[union-attr]
-    return tuple(results)
+    return tuple([f(da) for f, da in zip(finisher, aligned)])
 
 
 LocT = TypeVar(
