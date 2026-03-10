@@ -667,7 +667,8 @@ class BaseExpression(ABC):
         if np.isscalar(other):
             coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
             const = self.const.fillna(0) if is_legacy else self.const
-            return self.assign(coeffs=op(coeffs, other), const=op(const, other))
+            scalar = DataArray(other)
+            return self.assign(coeffs=op(coeffs, scalar), const=op(const, scalar))
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
