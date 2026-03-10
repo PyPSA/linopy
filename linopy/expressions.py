@@ -609,12 +609,16 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
+        # NaN values in self.const or other are filled with 0 (additive identity)
+        # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
-            return self.assign(const=self.const + other)
+            return self.assign(const=self.const.fillna(0) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join, default_join="exact"
         )
+        da = da.fillna(0)
+        self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -632,20 +636,32 @@ class BaseExpression(ABC):
         fill_value: float,
         join: JoinOptions | None = None,
     ) -> GenericExpression:
+        """
+        Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
+
+        NaN values are filled with neutral elements before the operation:
+        - factor (other) is filled with fill_value (0 for mul, 1 for div)
+        - coeffs and const are filled with 0 (additive identity)
+        """
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join, default_join="exact"
         )
+        factor = factor.fillna(fill_value)
+        self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
             return self.__class__(
                 assign_multiindex_safe(
-                    data, coeffs=op(data.coeffs, factor), const=op(self_const, factor)
+                    data,
+                    coeffs=op(data.coeffs.fillna(0), factor),
+                    const=op(self_const, factor),
                 ),
                 self.model,
             )
-        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
+        coeffs = self.coeffs.fillna(0)
+        return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
