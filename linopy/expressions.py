@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -89,6 +89,8 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
     from linopy.variables import ScalarVariable, Variable
