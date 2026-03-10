@@ -593,12 +593,16 @@ class BaseExpression(ABC):
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
     ) -> GenericExpression:
+        # NaN values in self.const or other are filled with 0 (additive identity)
+        # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
-            return self.assign(const=self.const + other)
+            return self.assign(const=self.const.fillna(0) + other)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
+        da = da.fillna(0)
+        self_const = self_const.fillna(0)
         if needs_data_reindex:
             return self.__class__(
                 self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
@@ -615,19 +619,30 @@ class BaseExpression(ABC):
         fill_value: float,
         join: str | None = None,
     ) -> GenericExpression:
+        """
+        Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
+
+        NaN values are filled with neutral elements before the operation:
+        - factor (other) is filled with fill_value (0 for mul, 1 for div)
+        - coeffs and const are filled with 0 (additive identity)
+        """
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
+        factor = factor.fillna(fill_value)
+        self_const = self_const.fillna(0)
         if needs_data_reindex:
             data = self.data.reindex_like(self_const, fill_value=self._fill_value)
+            coeffs = data.coeffs.fillna(0)
             return self.__class__(
                 assign_multiindex_safe(
-                    data, coeffs=op(data.coeffs, factor), const=op(self_const, factor)
+                    data, coeffs=op(coeffs, factor), const=op(self_const, factor)
                 ),
                 self.model,
             )
-        return self.assign(coeffs=op(self.coeffs, factor), const=op(self_const, factor))
+        coeffs = self.coeffs.fillna(0)
+        return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
         self: GenericExpression, other: ConstantLike, join: str | None = None
@@ -1138,9 +1153,24 @@ class BaseExpression(ABC):
                 )
             rhs = rhs.reindex_like(self.const, fill_value=np.nan)
 
+        # Remember where RHS is NaN (meaning "no constraint") before the
+        # subtraction, which may fill NaN with 0 as part of normal
+        # expression arithmetic.
+        if isinstance(rhs, DataArray):
+            rhs_nan_mask = rhs.isnull()
+        else:
+            rhs_nan_mask = None
+
         all_to_lhs = self.sub(rhs, join=join).data
+        computed_rhs = -all_to_lhs.const
+
+        # Restore NaN at positions where the original constant RHS had no
+        # value so that downstream code still treats them as unconstrained.
+        if rhs_nan_mask is not None and rhs_nan_mask.any():
+            computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
+
         data = assign_multiindex_safe(
-            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
 
