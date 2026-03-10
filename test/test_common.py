@@ -713,6 +713,55 @@ def test_is_constant() -> None:
         assert is_constant(cv)
 
 
+def test_align_legacy(x: Variable, u: Variable) -> None:
+    """Legacy convention: default inner join, multiindex support."""
+    old = linopy.options["arithmetic_convention"]
+    linopy.options["arithmetic_convention"] = "legacy"
+    try:
+        alpha = xr.DataArray([1, 2], [[1, 2]])
+        beta = xr.DataArray(
+            [1, 2, 3],
+            [
+                (
+                    "dim_3",
+                    pd.MultiIndex.from_tuples(
+                        [(1, "b"), (2, "b"), (1, "c")], names=["level1", "level2"]
+                    ),
+                )
+            ],
+        )
+
+        # inner join (default)
+        x_obs, alpha_obs = align(x, alpha)
+        assert isinstance(x_obs, Variable)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert_varequal(x_obs, x.loc[[1]])
+
+        # left-join
+        x_obs, alpha_obs = align(x, alpha, join="left")
+        assert x_obs.shape == alpha_obs.shape == (2,)
+        assert isinstance(x_obs, Variable)
+        assert_varequal(x_obs, x)
+        assert_equal(alpha_obs, DataArray([np.nan, 1], [[0, 1]]))
+
+        # multiindex
+        beta_obs, u_obs = align(beta, u)
+        assert u_obs.shape == beta_obs.shape == (2,)
+        assert isinstance(u_obs, Variable)
+        assert_varequal(u_obs, u.loc[[(1, "b"), (2, "b")]])
+        assert_equal(beta_obs, beta.loc[[(1, "b"), (2, "b")]])
+
+        # with linear expression
+        expr = 20 * x
+        x_obs, expr_obs, alpha_obs = align(x, expr, alpha)
+        assert x_obs.shape == alpha_obs.shape == (1,)
+        assert expr_obs.shape == (1, 1)  # _term dim
+        assert isinstance(expr_obs, LinearExpression)
+        assert_linequal(expr_obs, expr.loc[[1]])
+    finally:
+        linopy.options["arithmetic_convention"] = old
+
+
 def test_maybe_group_terms_polars_no_duplicates() -> None:
     """Fast path: distinct (labels, vars) pairs skip group_by."""
     df = pl.DataFrame({"labels": [0, 0], "vars": [1, 2], "coeffs": [3.0, 4.0]})

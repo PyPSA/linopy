@@ -68,6 +68,17 @@ def v1_convention() -> Generator[None, None, None]:
     linopy.options["arithmetic_convention"] = "legacy"
 
 
+@pytest.fixture(params=["v1", "legacy"])
+def convention(request: pytest.FixtureRequest) -> Generator[str, None, None]:
+    """Run the test under both arithmetic conventions."""
+    import linopy
+
+    old = linopy.options["arithmetic_convention"]
+    linopy.options["arithmetic_convention"] = request.param
+    yield request.param
+    linopy.options["arithmetic_convention"] = old
+
+
 @pytest.fixture
 def m() -> Model:
     from linopy import Model

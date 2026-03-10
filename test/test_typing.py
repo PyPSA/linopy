@@ -1,20 +1,9 @@
-from collections.abc import Generator
-
-import pytest
 import xarray as xr
 
 import linopy
 
 
-@pytest.fixture(autouse=True)
-def _use_v1_convention() -> Generator[None, None, None]:
-    """Use v1 arithmetic convention for all tests in this module."""
-    linopy.options["arithmetic_convention"] = "v1"
-    yield
-    linopy.options["arithmetic_convention"] = "legacy"
-
-
-def test_operations_with_data_arrays_are_typed_correctly() -> None:
+def test_operations_with_data_arrays_are_typed_correctly(convention: str) -> None:
     m = linopy.Model()
 
     s: xr.DataArray = xr.DataArray(5.0)
@@ -37,6 +26,7 @@ def test_operations_with_data_arrays_are_typed_correctly() -> None:
 
 
 def test_constant_with_extra_dims_broadcasts() -> None:
+    """Only valid under v1 convention (legacy uses outer join which also works)."""
     m = linopy.Model()
 
     a: xr.DataArray = xr.DataArray([1, 2, 3])
