@@ -551,12 +551,8 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
-class TestCoordinateAlignment:
-    @pytest.fixture
-    def matching(self) -> xr.DataArray:
-        return xr.DataArray(
-            np.arange(20, dtype=float), dims=["dim_2"], coords={"dim_2": range(20)}
-        )
+class _CoordinateAlignmentFixtures:
+    """Shared fixtures for coordinate alignment test classes."""
 
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
@@ -592,6 +588,14 @@ class TestCoordinateAlignment:
         if request.param == "xarray":
             return xr.DataArray(vals, dims=["dim_2"], coords={"dim_2": range(20)})
         return pd.Series(vals, index=pd.Index(range(20), name="dim_2"))
+
+
+class TestCoordinateAlignmentV1(_CoordinateAlignmentFixtures):
+    @pytest.fixture
+    def matching(self) -> xr.DataArray:
+        return xr.DataArray(
+            np.arange(20, dtype=float), dims=["dim_2"], coords={"dim_2": range(20)}
+        )
 
     class TestSubset:
         """
@@ -1089,6 +1093,463 @@ class TestCoordinateAlignment:
             )
             with pytest.raises(ValueError, match="exact"):
                 w + subset_2d
+
+    class TestXarrayCompat:
+        def test_da_eq_da_still_works(self) -> None:
+            da1 = xr.DataArray([1, 2, 3])
+            da2 = xr.DataArray([1, 2, 3])
+            result = da1 == da2
+            assert result.values.all()
+
+        def test_da_eq_scalar_still_works(self) -> None:
+            da = xr.DataArray([1, 2, 3])
+            result = da == 2
+            np.testing.assert_array_equal(result.values, [False, True, False])
+
+        def test_da_truediv_var_raises(self, v: Variable) -> None:
+            da = xr.DataArray(np.ones(20), dims=["dim_2"], coords={"dim_2": range(20)})
+            with pytest.raises(TypeError):
+                da / v  # type: ignore[operator]
+
+
+class TestCoordinateAlignmentLegacy(_CoordinateAlignmentFixtures):
+    """Legacy convention: outer join with NaN fill / zero fill behavior."""
+
+    @pytest.fixture(autouse=True)
+    def _use_legacy(self, legacy_convention: None) -> None:
+        pass
+
+    class TestSubset:
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_fills_zeros(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target * subset
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_subset_fills_zeros(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+            operand: str,
+        ) -> None:
+            if operand == "var":
+                result = v + subset
+                expected = expected_fill
+            else:
+                result = (v + 5) + subset
+                expected = expected_fill + 5
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+            np.testing.assert_array_equal(result.const.values, expected)
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_sub_subset_fills_negated(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+            operand: str,
+        ) -> None:
+            if operand == "var":
+                result = v - subset
+                expected = -expected_fill
+            else:
+                result = (v + 5) - subset
+                expected = 5 - expected_fill
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+            np.testing.assert_array_equal(result.const.values, expected)
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_div_subset_inverts_nonzero(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target / subset
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(0.1)
+            assert result.coeffs.squeeze().sel(dim_2=0).item() == pytest.approx(1.0)
+
+        def test_subset_add_var_coefficients(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            result = subset + v
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
+
+        def test_subset_sub_var_coefficients(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            result = subset - v
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, -np.ones(20))
+
+    class TestSuperset:
+        def test_add_superset_pins_to_lhs_coords(
+            self, v: Variable, superset: xr.DataArray
+        ) -> None:
+            result = v + superset
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+
+        def test_add_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
+            assert_linequal(superset + v, v + superset)
+
+        def test_sub_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
+            assert_linequal(superset - v, -v + superset)
+
+        def test_mul_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
+            assert_linequal(superset * v, v * superset)
+
+        def test_mul_superset_pins_to_lhs_coords(
+            self, v: Variable, superset: xr.DataArray
+        ) -> None:
+            result = v * superset
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+
+        def test_div_superset_pins_to_lhs_coords(self, v: Variable) -> None:
+            superset_nonzero = xr.DataArray(
+                np.arange(1, 26, dtype=float),
+                dims=["dim_2"],
+                coords={"dim_2": range(25)},
+            )
+            result = v / superset_nonzero
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+
+    class TestDisjoint:
+        def test_add_disjoint_fills_zeros(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            result = v + disjoint
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+            np.testing.assert_array_equal(result.const.values, np.zeros(20))
+
+        def test_mul_disjoint_fills_zeros(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            result = v * disjoint
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(20))
+
+        def test_div_disjoint_preserves_coeffs(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            result = v / disjoint
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
+
+    class TestCommutativity:
+        @pytest.mark.parametrize(
+            "make_lhs,make_rhs",
+            [
+                (lambda v, s: s * v, lambda v, s: v * s),
+                (lambda v, s: s * (1 * v), lambda v, s: (1 * v) * s),
+                (lambda v, s: s + v, lambda v, s: v + s),
+                (lambda v, s: s + (v + 5), lambda v, s: (v + 5) + s),
+            ],
+            ids=["subset*var", "subset*expr", "subset+var", "subset+expr"],
+        )
+        def test_commutativity(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            make_lhs: Any,
+            make_rhs: Any,
+        ) -> None:
+            assert_linequal(make_lhs(v, subset), make_rhs(v, subset))
+
+        def test_sub_var_anticommutative(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            assert_linequal(subset - v, -v + subset)
+
+        def test_sub_expr_anticommutative(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            expr = v + 5
+            assert_linequal(subset - expr, -(expr - subset))
+
+        def test_add_commutativity_full_coords(self, v: Variable) -> None:
+            full = xr.DataArray(
+                np.arange(20, dtype=float),
+                dims=["dim_2"],
+                coords={"dim_2": range(20)},
+            )
+            assert_linequal(v + full, full + v)
+
+    class TestQuadratic:
+        def test_quadexpr_add_subset(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+        ) -> None:
+            qexpr = v * v
+            result = qexpr + subset
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+            np.testing.assert_array_equal(result.const.values, expected_fill)
+
+        def test_quadexpr_sub_subset(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+        ) -> None:
+            qexpr = v * v
+            result = qexpr - subset
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.const.values).any()
+            np.testing.assert_array_equal(result.const.values, -expected_fill)
+
+        def test_quadexpr_mul_subset(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+        ) -> None:
+            qexpr = v * v
+            result = qexpr * subset
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+
+        def test_subset_mul_quadexpr(
+            self,
+            v: Variable,
+            subset: xr.DataArray,
+            expected_fill: np.ndarray,
+        ) -> None:
+            qexpr = v * v
+            result = subset * qexpr
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+            np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
+
+        def test_subset_add_quadexpr(self, v: Variable, subset: xr.DataArray) -> None:
+            qexpr = v * v
+            assert_quadequal(subset + qexpr, qexpr + subset)
+
+    class TestMissingValues:
+        """
+        NaN values are filled with operation-specific neutral elements:
+        - Addition/subtraction: NaN -> 0 (additive identity)
+        - Multiplication: NaN -> 0 (zeroes out the variable)
+        - Division: NaN -> 1 (multiplicative identity, no scaling)
+        """
+
+        NAN_POSITIONS = [0, 5, 19]
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_nan_filled(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            base_const = 0.0 if operand == "var" else 5.0
+            target = v if operand == "var" else v + 5
+            result = target + nan_constant
+            assert result.sizes["dim_2"] == 20
+            assert not np.isnan(result.const.values).any()
+            for i in self.NAN_POSITIONS:
+                assert result.const.values[i] == base_const
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_sub_nan_filled(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            base_const = 0.0 if operand == "var" else 5.0
+            target = v if operand == "var" else v + 5
+            result = target - nan_constant
+            assert result.sizes["dim_2"] == 20
+            assert not np.isnan(result.const.values).any()
+            for i in self.NAN_POSITIONS:
+                assert result.const.values[i] == base_const
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_nan_filled(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target * nan_constant
+            assert result.sizes["dim_2"] == 20
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            for i in self.NAN_POSITIONS:
+                assert result.coeffs.squeeze().values[i] == 0.0
+
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_div_nan_filled(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+            operand: str,
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            result = target / nan_constant
+            assert result.sizes["dim_2"] == 20
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            original_coeffs = (1 * v).coeffs.squeeze().values
+            for i in self.NAN_POSITIONS:
+                assert result.coeffs.squeeze().values[i] == original_coeffs[i]
+
+        def test_add_commutativity(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            result_a = v + nan_constant
+            result_b = nan_constant + v
+            assert not np.isnan(result_a.const.values).any()
+            assert not np.isnan(result_b.const.values).any()
+            np.testing.assert_array_equal(result_a.const.values, result_b.const.values)
+            np.testing.assert_array_equal(
+                result_a.coeffs.values, result_b.coeffs.values
+            )
+
+        def test_mul_commutativity(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            result_a = v * nan_constant
+            result_b = nan_constant * v
+            assert not np.isnan(result_a.coeffs.values).any()
+            assert not np.isnan(result_b.coeffs.values).any()
+            np.testing.assert_array_equal(
+                result_a.coeffs.values, result_b.coeffs.values
+            )
+
+        def test_quadexpr_add_nan(
+            self,
+            v: Variable,
+            nan_constant: xr.DataArray | pd.Series,
+        ) -> None:
+            qexpr = v * v
+            result = qexpr + nan_constant
+            assert isinstance(result, QuadraticExpression)
+            assert result.sizes["dim_2"] == 20
+            assert not np.isnan(result.const.values).any()
+
+    class TestExpressionWithNaN:
+        """Test that NaN in expression's own const/coeffs doesn't propagate."""
+
+        def test_shifted_expr_add_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + 5
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == 5.0
+
+        def test_shifted_expr_mul_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * 2
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_add_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float)
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + arr
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == 0.0
+
+        def test_shifted_expr_mul_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * arr
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_div_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr / 2
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_shifted_expr_sub_scalar(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr - 3
+            assert not np.isnan(result.const.values).any()
+            assert result.const.values[0] == -3.0
+
+        def test_shifted_expr_div_array(self, v: Variable) -> None:
+            arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
+            expr = (1 * v).shift(dim_2=1)
+            result = expr / arr
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+        def test_variable_to_linexpr_nan_coefficient(self, v: Variable) -> None:
+            nan_coeff = np.ones(v.sizes["dim_2"])
+            nan_coeff[0] = np.nan
+            result = v.to_linexpr(nan_coeff)
+            assert not np.isnan(result.coeffs.squeeze().values).any()
+            assert result.coeffs.squeeze().values[0] == 0.0
+
+    class TestMultiDim:
+        def test_multidim_subset_mul(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            result = w * subset_2d
+            assert result.sizes["a"] == 4
+            assert result.sizes["b"] == 5
+            assert not np.isnan(result.coeffs.values).any()
+            assert result.coeffs.squeeze().sel(a=1, b=0).item() == pytest.approx(2.0)
+            assert result.coeffs.squeeze().sel(a=3, b=4).item() == pytest.approx(5.0)
+            assert result.coeffs.squeeze().sel(a=0, b=0).item() == pytest.approx(0.0)
+            assert result.coeffs.squeeze().sel(a=1, b=2).item() == pytest.approx(0.0)
+
+        def test_multidim_subset_add(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            result = w + subset_2d
+            assert result.sizes["a"] == 4
+            assert result.sizes["b"] == 5
+            assert not np.isnan(result.const.values).any()
+            assert result.const.sel(a=1, b=0).item() == pytest.approx(2.0)
+            assert result.const.sel(a=3, b=4).item() == pytest.approx(5.0)
+            assert result.const.sel(a=0, b=0).item() == pytest.approx(0.0)
 
     class TestXarrayCompat:
         def test_da_eq_da_still_works(self) -> None:
@@ -2239,3 +2700,49 @@ class TestJoinParameter:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2]
+
+
+class TestJoinParameterLegacy:
+    """Legacy convention: default outer join for mismatched coords."""
+
+    @pytest.fixture(autouse=True)
+    def _use_legacy(self, legacy_convention: None) -> None:
+        pass
+
+    @pytest.fixture
+    def m2(self) -> Model:
+        m = Model()
+        m.add_variables(coords=[pd.Index([0, 1, 2], name="i")], name="a")
+        m.add_variables(coords=[pd.Index([1, 2, 3], name="i")], name="b")
+        return m
+
+    @pytest.fixture
+    def a(self, m2: Model) -> Variable:
+        return m2.variables["a"]
+
+    @pytest.fixture
+    def b(self, m2: Model) -> Variable:
+        return m2.variables["b"]
+
+    def test_add_join_none_preserves_default(self, a: Variable, b: Variable) -> None:
+        result_default = a.to_linexpr() + b.to_linexpr()
+        result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
+        assert_linequal(result_default, result_none)
+
+    def test_quadratic_add_constant_join_inner(self, a: Variable, b: Variable) -> None:
+        quad = a.to_linexpr() * b.to_linexpr()
+        const = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 2, 3]})
+        result = quad.add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_quadratic_add_expr_join_inner(self, a: Variable) -> None:
+        quad = a.to_linexpr() * a.to_linexpr()
+        const = xr.DataArray([10, 20], dims=["i"], coords={"i": [0, 1]})
+        result = quad.add(const, join="inner")
+        assert list(result.data.indexes["i"]) == [0, 1]
+
+    def test_quadratic_mul_constant_join_inner(self, a: Variable, b: Variable) -> None:
+        quad = a.to_linexpr() * b.to_linexpr()
+        const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+        result = quad.mul(const, join="inner")
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
