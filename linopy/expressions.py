@@ -1202,9 +1202,28 @@ class BaseExpression(ABC):
                 f"has {len(self.coord_dims)}. Cannot create constraint."
             )
 
+        # Remember where RHS is NaN (meaning "no constraint") before the
+        # subtraction, which may fill NaN with 0 as part of normal
+        # expression arithmetic.
+        if isinstance(rhs, DataArray):
+            rhs_nan_mask = rhs.isnull()
+        elif isinstance(rhs, np.ndarray | pd.Series | pd.DataFrame):
+            rhs_nan_mask = as_dataarray(
+                rhs, coords=self.coords, dims=self.coord_dims
+            ).isnull()
+        else:
+            rhs_nan_mask = None
+
         all_to_lhs = self.sub(rhs, join=join).data
+        computed_rhs = -all_to_lhs.const
+
+        # Restore NaN at positions where the original constant RHS had no
+        # value so that downstream code still treats them as unconstrained.
+        if rhs_nan_mask is not None and rhs_nan_mask.any():
+            computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
+
         data = assign_multiindex_safe(
-            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=-all_to_lhs.const
+            all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
         return constraints.Constraint(data, model=self.model)
 
