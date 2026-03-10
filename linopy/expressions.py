@@ -1122,7 +1122,6 @@ class BaseExpression(ABC):
                 expr_data = self.data.reindex_like(
                     expr_const_aligned, fill_value=self._fill_value
                 )
-                aligned_rhs = aligned_rhs
             constraint_rhs = aligned_rhs - expr_const
             data = assign_multiindex_safe(
                 expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
