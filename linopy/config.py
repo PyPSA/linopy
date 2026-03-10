@@ -9,28 +9,46 @@ from __future__ import annotations
 
 from typing import Any
 
+VALID_ARITHMETIC_JOINS = {"legacy", "v1"}
+
+LEGACY_DEPRECATION_MESSAGE = (
+    "The 'legacy' arithmetic convention is deprecated and will be removed in "
+    "linopy v1. Set linopy.options['arithmetic_convention'] = 'v1' to opt in "
+    "to the new behavior, or filter this warning with:\n"
+    "  import warnings; warnings.filterwarnings('ignore', category=LinopyDeprecationWarning)"
+)
+
+
+class LinopyDeprecationWarning(FutureWarning):
+    """Warning for deprecated linopy features scheduled for removal."""
+
 
 class OptionSettings:
-    def __init__(self, **kwargs: int) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         self._defaults = kwargs
         self._current_values = kwargs.copy()
 
-    def __call__(self, **kwargs: int) -> None:
+    def __call__(self, **kwargs: Any) -> None:
         self.set_value(**kwargs)
 
-    def __getitem__(self, key: str) -> int:
+    def __getitem__(self, key: str) -> Any:
         return self.get_value(key)
 
-    def __setitem__(self, key: str, value: int) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:
         return self.set_value(**{key: value})
 
-    def set_value(self, **kwargs: int) -> None:
+    def set_value(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             if k not in self._defaults:
                 raise KeyError(f"{k} is not a valid setting.")
+            if k == "arithmetic_convention" and v not in VALID_ARITHMETIC_JOINS:
+                raise ValueError(
+                    f"Invalid arithmetic_convention: {v!r}. "
+                    f"Must be one of {VALID_ARITHMETIC_JOINS}."
+                )
             self._current_values[k] = v
 
-    def get_value(self, name: str) -> int:
+    def get_value(self, name: str) -> Any:
         if name in self._defaults:
             return self._current_values[name]
         else:
@@ -57,4 +75,8 @@ class OptionSettings:
         return f"OptionSettings:\n {settings}"
 
 
-options = OptionSettings(display_max_rows=14, display_max_terms=6)
+options = OptionSettings(
+    display_max_rows=14,
+    display_max_terms=6,
+    arithmetic_convention="legacy",
+)

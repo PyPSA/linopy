@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -55,6 +56,16 @@ def pytest_collection_modifyitems(
             if solver_supports(solver, SolverFeature.GPU_ACCELERATION):
                 item.add_marker(skip_gpu)
                 item.add_marker(pytest.mark.gpu)
+
+
+@pytest.fixture
+def v1_convention() -> Generator[None, None, None]:
+    """Set arithmetic_convention to 'v1' for the duration of a test."""
+    import linopy
+
+    linopy.options["arithmetic_convention"] = "v1"
+    yield
+    linopy.options["arithmetic_convention"] = "legacy"
 
 
 @pytest.fixture

@@ -32,6 +32,7 @@ from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
 from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
+from xarray.structure.alignment import AlignmentError
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -49,7 +50,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -68,7 +68,7 @@ from linopy.common import (
     to_dataframe,
     to_polars,
 )
-from linopy.config import options
+from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning, options
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -563,7 +563,7 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses size-aware default behavior.
+            Alignment method. If None, uses ``options["arithmetic_convention"]``.
 
         Returns
         -------
@@ -575,6 +575,15 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
+            join = options["arithmetic_convention"]
+
+        if join == "legacy":
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=4,
+            )
+            # Old behavior: override when same sizes, left join otherwise
             if other.sizes == self.const.sizes:
                 return self.const, other.assign_coords(coords=self.coords), False
             return (
@@ -582,30 +591,52 @@ class BaseExpression(ABC):
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        elif join == "override":
+
+        elif join == "v1":
+            join = "exact"
+
+        if join == "override":
             return self.const, other.assign_coords(coords=self.coords), False
-        else:
-            self_const, aligned = xr.align(
+        elif join == "left":
+            return (
                 self.const,
-                other,
-                join=join,
-                fill_value=fill_value,
+                other.reindex_like(self.const, fill_value=fill_value),
+                False,
             )
+        else:
+            try:
+                self_const, aligned = xr.align(
+                    self.const, other, join=join, fill_value=fill_value
+                )
+            except ValueError as e:
+                if "exact" in str(e):
+                    raise ValueError(
+                        f"{e}\n"
+                        "Use .add()/.sub()/.mul()/.div() with an explicit join= parameter:\n"
+                        '  .add(other, join="inner")   # intersection of coordinates\n'
+                        '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                        '  .add(other, join="left")    # keep left operand\'s coordinates\n'
+                        '  .add(other, join="override") # positional alignment'
+                    ) from None
+                raise
             return self_const, aligned, True
 
     def _add_constant(
         self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        # NaN values in self.const or other are filled with 0 (additive identity)
-        # so that missing data does not silently propagate through arithmetic.
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
         if np.isscalar(other) and join is None:
-            return self.assign(const=self.const.fillna(0) + other)
+            const = self.const.fillna(0) + other if is_legacy else self.const + other
+            return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
-        da = da.fillna(0)
-        self_const = self_const.fillna(0)
+        if is_legacy:
+            da = da.fillna(0)
+            self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -623,31 +654,29 @@ class BaseExpression(ABC):
         fill_value: float,
         join: JoinOptions | None = None,
     ) -> GenericExpression:
-        """
-        Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
-
-        NaN values are filled with neutral elements before the operation:
-        - factor (other) is filled with fill_value (0 for mul, 1 for div)
-        - coeffs and const are filled with 0 (additive identity)
-        """
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        factor = factor.fillna(fill_value)
-        self_const = self_const.fillna(0)
+        if is_legacy:
+            factor = factor.fillna(fill_value)
+            self_const = self_const.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
+            coeffs = data.coeffs.fillna(0) if is_legacy else data.coeffs
             return self.__class__(
                 assign_multiindex_safe(
                     data,
-                    coeffs=op(data.coeffs.fillna(0), factor),
+                    coeffs=op(coeffs, factor),
                     const=op(self_const, factor),
                 ),
                 self.model,
             )
-        coeffs = self.coeffs.fillna(0)
+        coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
@@ -1147,33 +1176,73 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+        effective_join = join if join is not None else options["arithmetic_convention"]
 
-            extra_dims = set(rhs.dims) - set(self.coord_dims)
-            if extra_dims:
-                logger.warning(
-                    f"Constant RHS contains dimensions {extra_dims} not present "
-                    f"in the expression, which might lead to inefficiencies. "
-                    f"Consider collapsing the dimensions by taking min/max."
+        if effective_join == "legacy":
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=3,
+            )
+            # Old behavior: convert to DataArray, warn about extra dims,
+            # reindex_like (left join), then sub
+            if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+                extra_dims = set(rhs.dims) - set(self.coord_dims)
+                if extra_dims:
+                    logger.warning(
+                        f"Constant RHS contains dimensions {extra_dims} not present "
+                        f"in the expression, which might lead to inefficiencies. "
+                        f"Consider collapsing the dimensions by taking min/max."
+                    )
+                rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                # Alignment already done — compute constraint directly
+                constraint_rhs = rhs - self.const
+                data = assign_multiindex_safe(
+                    self.data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
                 )
-            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                return constraints.Constraint(data, model=self.model)
+            # Non-constant rhs (Variable/Expression) — fall through to sub path
 
-        # Remember where RHS is NaN (meaning "no constraint") before the
-        # subtraction, which may fill NaN with 0 as part of normal
-        # expression arithmetic.
+        if effective_join == "v1":
+            effective_join = "exact"
+
         if isinstance(rhs, DataArray):
-            rhs_nan_mask = rhs.isnull()
-        else:
-            rhs_nan_mask = None
+            if effective_join == "override":
+                aligned_rhs = rhs.assign_coords(coords=self.const.coords)
+                expr_const = self.const
+                expr_data = self.data
+            elif effective_join == "left":
+                aligned_rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                expr_const = self.const
+                expr_data = self.data
+            else:
+                try:
+                    expr_const_aligned, aligned_rhs = xr.align(
+                        self.const, rhs, join=effective_join, fill_value=np.nan
+                    )
+                except ValueError as e:
+                    if "exact" in str(e):
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .le()/.ge()/.eq() with an explicit join= parameter:\n"
+                            '  .le(rhs, join="inner")   # intersection of coordinates\n'
+                            '  .le(rhs, join="left")    # keep expression coordinates (NaN fill)\n'
+                            '  .le(rhs, join="override") # positional alignment'
+                        ) from None
+                    raise
+                expr_const = expr_const_aligned.fillna(0)
+                expr_data = self.data.reindex_like(
+                    expr_const_aligned, fill_value=self._fill_value
+                )
+            constraint_rhs = aligned_rhs - expr_const
+            data = assign_multiindex_safe(
+                expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+            )
+            return constraints.Constraint(data, model=self.model)
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
-
-        # Restore NaN at positions where the original constant RHS had no
-        # value so that downstream code still treats them as unconstrained.
-        if rhs_nan_mask is not None and rhs_nan_mask.any():
-            computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
 
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
@@ -1650,6 +1719,18 @@ class LinearExpression(BaseExpression):
                 return self._add_constant(other)
             else:
                 other = as_expression(other, model=self.model, dims=self.coord_dims)
+                if options["arithmetic_convention"] == "v1":
+                    # Enforce exact coordinate alignment before merge
+                    try:
+                        xr.align(self.const, other.const, join="exact")
+                    except (ValueError, AlignmentError) as e:
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection\n'
+                            '  .add(other, join="outer")   # union with fill\n'
+                            '  .add(other, join="left")    # keep left coordinates'
+                        ) from None
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2188,6 +2269,18 @@ class QuadraticExpression(BaseExpression):
                 if isinstance(other, LinearExpression):
                     other = other.to_quadexpr()
 
+                if options["arithmetic_convention"] == "v1":
+                    try:
+                        xr.align(self.const, other.const, join="exact")
+                    except (ValueError, AlignmentError) as e:
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection\n'
+                            '  .add(other, join="outer")   # union with fill\n'
+                            '  .add(other, join="left")    # keep left coordinates'
+                        ) from None
+
                 return merge([self, other], cls=self.__class__)
         except TypeError:
             return NotImplemented
@@ -2441,16 +2534,6 @@ def merge(
 
     model = exprs[0].model
 
-    if join is not None:
-        override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
-    else:
-        override = False
-
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
@@ -2464,12 +2547,38 @@ def merge(
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
 
-        if join is not None:
-            kwargs["join"] = join
-        elif override:
-            kwargs["join"] = "override"
+        effective_join = join if join is not None else options["arithmetic_convention"]
+
+        if effective_join == "legacy":
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=2,
+            )
+            # Reproduce old behavior: override when all shared dims have
+            # matching sizes, outer otherwise.
+            if cls in linopy_types and dim in HELPER_DIMS:
+                coord_dims = [
+                    {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS}
+                    for e in exprs
+                ]
+                common_keys = set.intersection(*(set(d.keys()) for d in coord_dims))
+                override = all(
+                    len({d[k] for d in coord_dims if k in d}) == 1 for k in common_keys
+                )
+            else:
+                override = False
+
+            kwargs["join"] = "override" if override else "outer"
+        elif effective_join == "v1":
+            # Merge uses outer join for xr.concat since helper dims
+            # (_term, _factor) commonly have different sizes and
+            # expressions may have different user dimensions.
+            # Coordinate enforcement for v1 is done at the operator
+            # level (__add__, __sub__, etc.) before calling merge.
+            kwargs["join"] = "outer"
         else:
-            kwargs.setdefault("join", "outer")
+            kwargs["join"] = effective_join
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
