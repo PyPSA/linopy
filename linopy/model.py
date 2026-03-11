@@ -64,7 +64,6 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.piecewise import (
-    add_disjunctive_piecewise_constraints,
     add_piecewise_constraints,
 )
 from linopy.remote import RemoteHandler
@@ -696,7 +695,6 @@ class Model:
         variable.attrs.update(attrs_update)
 
     add_piecewise_constraints = add_piecewise_constraints
-    add_disjunctive_piecewise_constraints = add_disjunctive_piecewise_constraints
 
     def add_constraints(
         self,
@@ -813,6 +811,16 @@ class Model:
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
+
+        rhs_nan = data.rhs.isnull()
+        if rhs_nan.any():
+            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
+            rhs_mask = ~rhs_nan
+            mask = (
+                rhs_mask
+                if mask is None
+                else (as_dataarray(mask).astype(bool) & rhs_mask)
+            )
 
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
