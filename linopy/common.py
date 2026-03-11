@@ -146,28 +146,23 @@ def _coords_to_mapping(coords: CoordsLike, dims: DimsLike | None = None) -> Mapp
 
 def _validate_dataarray_coords(
     arr: DataArray,
-    coords: CoordsLike | None = None,
+    coords: CoordsLike,
     dims: DimsLike | None = None,
-    allow_extra_dims: bool = False,
 ) -> DataArray:
     """
-    Validate a DataArray's coordinates against expected coords.
+    Validate and broadcast a DataArray against expected coords.
 
-    For shared dimensions, coordinates must match exactly. Extra
-    dimensions in the DataArray raise unless allow_extra_dims is True.
-    Missing dimensions are broadcast via expand_dims.
+    - Shared dimensions must have matching coordinates (raises ValueError).
+    - Extra dimensions in the DataArray raise ValueError.
+    - Missing dimensions are broadcast via expand_dims.
     """
-    if coords is None:
-        return arr
-
     expected = _coords_to_mapping(coords, dims)
     if not expected:
         return arr
 
-    if not allow_extra_dims:
-        extra = set(arr.dims) - set(expected)
-        if extra:
-            raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+    extra = set(arr.dims) - set(expected)
+    if extra:
+        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
 
     expand = {}
     for k, v in expected.items():
@@ -177,14 +172,13 @@ def _validate_dataarray_coords(
                 continue
             expand[k] = v
             continue
-        if not allow_extra_dims:
-            actual = arr.coords[k]
-            v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
-            if not actual.to_index().equals(v_idx):
-                raise ValueError(
-                    f"Coordinates for dimension '{k}' do not match: "
-                    f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
-                )
+        actual = arr.coords[k]
+        v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
+        if not actual.to_index().equals(v_idx):
+            raise ValueError(
+                f"Coordinates for dimension '{k}' do not match: "
+                f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
+            )
 
     if expand:
         arr = arr.expand_dims(expand)
@@ -297,7 +291,6 @@ def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
-    allow_extra_dims: bool = False,
     **kwargs: Any,
 ) -> DataArray:
     """
@@ -311,10 +304,6 @@ def as_dataarray(
             The coordinates for the DataArray. If None, default coordinates will be used.
         dims (Union[list, None]):
             The dimensions for the DataArray. If None, the dimensions will be automatically generated.
-        allow_extra_dims:
-            If False (default), raise ValueError when a DataArray input has
-            dimensions not present in coords. Set to True to allow extra
-            dimensions for broadcasting.
         **kwargs:
             Additional keyword arguments to be passed to the DataArray constructor.
 
@@ -322,16 +311,6 @@ def as_dataarray(
     -------
         DataArray:
             The converted DataArray.
-
-    Raises
-    ------
-    ValueError
-        If arr is a DataArray and coords is provided: raised when
-        coordinates for shared dimensions do not match, or when the
-        DataArray has dimensions not covered by coords (unless
-        allow_extra_dims is True). The DataArray's dimensions may be
-        a subset of coords — missing dimensions are added via
-        expand_dims.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -343,9 +322,6 @@ def as_dataarray(
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, DataArray):
-        if coords is not None:
-            arr = _validate_dataarray_coords(arr, coords, dims, allow_extra_dims)
     elif not isinstance(arr, DataArray):
         supported_types = [
             np.number,

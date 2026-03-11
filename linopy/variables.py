@@ -315,9 +315,7 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        coefficient = as_dataarray(
-            coefficient, coords=self.coords, dims=self.dims, allow_extra_dims=True
-        )
+        coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(

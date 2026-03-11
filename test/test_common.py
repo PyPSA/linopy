@@ -409,56 +409,63 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
     assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
 
 
-def test_as_dataarray_with_dataarray_coord_mismatch() -> None:
-    da_in = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
-    with pytest.raises(ValueError, match="do not match"):
-        as_dataarray(da_in, coords={"x": [10, 20, 40]})
-
-
-def test_as_dataarray_with_dataarray_extra_dims() -> None:
-    da_in = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
-    with pytest.raises(ValueError, match="extra dimensions"):
-        as_dataarray(da_in, coords={"x": [0, 1]})
-
-
-def test_as_dataarray_with_dataarray_extra_dims_allowed() -> None:
-    da_in = DataArray(
-        [[1, 2], [3, 4]],
-        dims=["x", "y"],
-        coords={"x": [0, 1], "y": [0, 1]},
-    )
-    da_out = as_dataarray(da_in, coords={"x": [0, 1]}, allow_extra_dims=True)
-    assert da_out.dims == da_in.dims
-    assert da_out.shape == da_in.shape
-
-
-def test_as_dataarray_with_dataarray_broadcast() -> None:
-    da_in = DataArray([1, 2], dims=["x"], coords={"x": ["a", "b"]})
-    da_out = as_dataarray(
-        da_in, coords={"x": ["a", "b"], "y": [1, 2, 3]}, dims=["x", "y"]
-    )
-    assert set(da_out.dims) == {"x", "y"}
-    assert da_out.sizes["y"] == 3
-
-
 def test_as_dataarray_with_dataarray_no_coords() -> None:
     da_in = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
     da_out = as_dataarray(da_in)
     assert_equal(da_out, da_in)
 
 
-def test_as_dataarray_with_dataarray_sequence_coords() -> None:
-    da_in = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
+def test_validate_dataarray_coords_match() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+    out = _validate_dataarray_coords(da, coords={"x": [10, 20, 30]})
+    assert_equal(out, da)
+
+
+def test_validate_dataarray_coords_mismatch() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+    with pytest.raises(ValueError, match="do not match"):
+        _validate_dataarray_coords(da, coords={"x": [10, 20, 40]})
+
+
+def test_validate_dataarray_coords_extra_dims() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+    with pytest.raises(ValueError, match="extra dimensions"):
+        _validate_dataarray_coords(da, coords={"x": [0, 1]})
+
+
+def test_validate_dataarray_coords_broadcast() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([1, 2], dims=["x"], coords={"x": ["a", "b"]})
+    out = _validate_dataarray_coords(
+        da, coords={"x": ["a", "b"], "y": [1, 2, 3]}, dims=["x", "y"]
+    )
+    assert set(out.dims) == {"x", "y"}
+    assert out.sizes["y"] == 3
+
+
+def test_validate_dataarray_coords_sequence() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
     idx = pd.RangeIndex(2, name="x")
-    da_out = as_dataarray(da_in, coords=[idx], dims=["x"])
-    assert list(da_out.coords["x"].values) == [0, 1]
+    out = _validate_dataarray_coords(da, coords=[idx], dims=["x"])
+    assert list(out.coords["x"].values) == [0, 1]
 
 
-def test_as_dataarray_with_dataarray_sequence_coords_mismatch() -> None:
-    da_in = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
+def test_validate_dataarray_coords_sequence_mismatch() -> None:
+    from linopy.common import _validate_dataarray_coords
+
+    da = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
     idx = pd.RangeIndex(3, name="x")
     with pytest.raises(ValueError, match="do not match"):
-        as_dataarray(da_in, coords=[idx], dims=["x"])
+        _validate_dataarray_coords(da, coords=[idx], dims=["x"])
 
 
 def test_add_variables_with_dataarray_bounds_and_coords() -> None:
