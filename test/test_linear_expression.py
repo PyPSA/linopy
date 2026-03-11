@@ -592,9 +592,8 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
-@pytest.mark.legacy_only
-class TestCoordinateAlignmentLegacy:
-    """Legacy: outer join with NaN fill / zero fill for coordinate mismatches."""
+class TestCoordinateAlignment:
+    """Coordinate alignment tests for both legacy (outer join) and v1 (exact join)."""
 
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
@@ -632,6 +631,7 @@ class TestCoordinateAlignmentLegacy:
         return pd.Series(vals, index=pd.Index(range(20), name="dim_2"))
 
     class TestSubset:
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_mul_subset_fills_zeros(
             self,
@@ -646,6 +646,16 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.values).any()
             np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            with pytest.raises(ValueError, match="exact"):
+                target * subset
+
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_add_subset_fills_zeros(
             self,
@@ -664,6 +674,16 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             np.testing.assert_array_equal(result.const.values, expected)
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            with pytest.raises(ValueError, match="exact"):
+                target + subset
+
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_sub_subset_fills_negated(
             self,
@@ -682,6 +702,16 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             np.testing.assert_array_equal(result.const.values, expected)
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_sub_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else v + 5
+            with pytest.raises(ValueError, match="exact"):
+                target - subset
+
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_div_subset_inverts_nonzero(
             self, v: Variable, subset: xr.DataArray, operand: str
@@ -693,19 +723,52 @@ class TestCoordinateAlignmentLegacy:
             assert result.coeffs.squeeze().sel(dim_2=1).item() == pytest.approx(0.1)
             assert result.coeffs.squeeze().sel(dim_2=0).item() == pytest.approx(1.0)
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_div_subset_raises(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            target = v if operand == "var" else 1 * v
+            with pytest.raises(ValueError, match="exact"):
+                target / subset
+
+        @pytest.mark.legacy_only
         def test_subset_add_var_coefficients(
             self, v: Variable, subset: xr.DataArray
         ) -> None:
             result = subset + v
             np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
 
+        @pytest.mark.v1_only
+        def test_subset_add_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                subset + v
+
+        @pytest.mark.legacy_only
         def test_subset_sub_var_coefficients(
             self, v: Variable, subset: xr.DataArray
         ) -> None:
             result = subset - v
             np.testing.assert_array_equal(result.coeffs.squeeze().values, -np.ones(20))
 
+        @pytest.mark.v1_only
+        def test_subset_sub_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                subset - v
+
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_join_left(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            """Explicit join='left' fills zeros for missing coords."""
+            target = v if operand == "var" else 1 * v
+            result = target.mul(subset, join="left")
+            assert result.sizes["dim_2"] == v.sizes["dim_2"]
+            assert not np.isnan(result.coeffs.values).any()
+
     class TestSuperset:
+        @pytest.mark.legacy_only
         def test_add_superset_pins_to_lhs_coords(
             self, v: Variable, superset: xr.DataArray
         ) -> None:
@@ -713,15 +776,24 @@ class TestCoordinateAlignmentLegacy:
             assert result.sizes["dim_2"] == v.sizes["dim_2"]
             assert not np.isnan(result.const.values).any()
 
+        @pytest.mark.v1_only
+        def test_add_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v + superset
+
+        @pytest.mark.legacy_only
         def test_add_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
             assert_linequal(superset + v, v + superset)
 
+        @pytest.mark.legacy_only
         def test_sub_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
             assert_linequal(superset - v, -v + superset)
 
+        @pytest.mark.legacy_only
         def test_mul_var_commutative(self, v: Variable, superset: xr.DataArray) -> None:
             assert_linequal(superset * v, v * superset)
 
+        @pytest.mark.legacy_only
         def test_mul_superset_pins_to_lhs_coords(
             self, v: Variable, superset: xr.DataArray
         ) -> None:
@@ -729,6 +801,12 @@ class TestCoordinateAlignmentLegacy:
             assert result.sizes["dim_2"] == v.sizes["dim_2"]
             assert not np.isnan(result.coeffs.values).any()
 
+        @pytest.mark.v1_only
+        def test_mul_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v * superset
+
+        @pytest.mark.legacy_only
         def test_div_superset_pins_to_lhs_coords(self, v: Variable) -> None:
             superset_nonzero = xr.DataArray(
                 np.arange(1, 26, dtype=float),
@@ -740,6 +818,7 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.values).any()
 
     class TestDisjoint:
+        @pytest.mark.legacy_only
         def test_add_disjoint_fills_zeros(self, v: Variable) -> None:
             disjoint = xr.DataArray(
                 [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
@@ -749,6 +828,15 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             np.testing.assert_array_equal(result.const.values, np.zeros(20))
 
+        @pytest.mark.v1_only
+        def test_add_disjoint_raises(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            with pytest.raises(ValueError, match="exact"):
+                v + disjoint
+
+        @pytest.mark.legacy_only
         def test_mul_disjoint_fills_zeros(self, v: Variable) -> None:
             disjoint = xr.DataArray(
                 [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
@@ -758,6 +846,15 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.values).any()
             np.testing.assert_array_equal(result.coeffs.squeeze().values, np.zeros(20))
 
+        @pytest.mark.v1_only
+        def test_mul_disjoint_raises(self, v: Variable) -> None:
+            disjoint = xr.DataArray(
+                [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
+            )
+            with pytest.raises(ValueError, match="exact"):
+                v * disjoint
+
+        @pytest.mark.legacy_only
         def test_div_disjoint_preserves_coeffs(self, v: Variable) -> None:
             disjoint = xr.DataArray(
                 [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
@@ -768,6 +865,7 @@ class TestCoordinateAlignmentLegacy:
             np.testing.assert_array_equal(result.coeffs.squeeze().values, np.ones(20))
 
     class TestCommutativity:
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize(
             "make_lhs,make_rhs",
             [
@@ -787,18 +885,20 @@ class TestCoordinateAlignmentLegacy:
         ) -> None:
             assert_linequal(make_lhs(v, subset), make_rhs(v, subset))
 
+        @pytest.mark.legacy_only
         def test_sub_var_anticommutative(
             self, v: Variable, subset: xr.DataArray
         ) -> None:
             assert_linequal(subset - v, -v + subset)
 
+        @pytest.mark.legacy_only
         def test_sub_expr_anticommutative(
             self, v: Variable, subset: xr.DataArray
         ) -> None:
             expr = v + 5
             assert_linequal(subset - expr, -(expr - subset))
 
-        def test_add_commutativity_full_coords(self, v: Variable) -> None:
+        def test_add_commutativity_matching_coords(self, v: Variable) -> None:
             full = xr.DataArray(
                 np.arange(20, dtype=float),
                 dims=["dim_2"],
@@ -806,8 +906,18 @@ class TestCoordinateAlignmentLegacy:
             )
             assert_linequal(v + full, full + v)
 
+        @pytest.mark.v1_only
+        def test_subset_raises_both_sides(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            with pytest.raises(ValueError, match="exact"):
+                v * subset
+            with pytest.raises(ValueError, match="exact"):
+                subset * v
+
     class TestQuadratic:
-        def test_quadexpr_add_subset(
+        @pytest.mark.legacy_only
+        def test_quadexpr_add_subset_fills(
             self,
             v: Variable,
             subset: xr.DataArray,
@@ -820,6 +930,15 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             np.testing.assert_array_equal(result.const.values, expected_fill)
 
+        @pytest.mark.v1_only
+        def test_quadexpr_add_subset_raises(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            qexpr = v * v
+            with pytest.raises(ValueError, match="exact"):
+                qexpr + subset
+
+        @pytest.mark.legacy_only
         def test_quadexpr_sub_subset(
             self,
             v: Variable,
@@ -833,7 +952,8 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             np.testing.assert_array_equal(result.const.values, -expected_fill)
 
-        def test_quadexpr_mul_subset(
+        @pytest.mark.legacy_only
+        def test_quadexpr_mul_subset_fills(
             self,
             v: Variable,
             subset: xr.DataArray,
@@ -846,6 +966,15 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.values).any()
             np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
 
+        @pytest.mark.v1_only
+        def test_quadexpr_mul_subset_raises(
+            self, v: Variable, subset: xr.DataArray
+        ) -> None:
+            qexpr = v * v
+            with pytest.raises(ValueError, match="exact"):
+                qexpr * subset
+
+        @pytest.mark.legacy_only
         def test_subset_mul_quadexpr(
             self,
             v: Variable,
@@ -859,6 +988,7 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.values).any()
             np.testing.assert_array_equal(result.coeffs.squeeze().values, expected_fill)
 
+        @pytest.mark.legacy_only
         def test_subset_add_quadexpr(self, v: Variable, subset: xr.DataArray) -> None:
             qexpr = v * v
             assert_quadequal(subset + qexpr, qexpr + subset)
@@ -867,14 +997,13 @@ class TestCoordinateAlignmentLegacy:
         """
         Same shape as variable but with NaN entries in the constant.
 
-        NaN values are filled with operation-specific neutral elements:
-        - Addition/subtraction: NaN -> 0 (additive identity)
-        - Multiplication: NaN -> 0 (zeroes out the variable)
-        - Division: NaN -> 1 (multiplicative identity, no scaling)
+        Legacy: NaN values are filled with operation-specific neutral elements.
+        V1: NaN values propagate (no implicit fillna).
         """
 
         NAN_POSITIONS = [0, 5, 19]
 
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_add_nan_filled(
             self,
@@ -891,6 +1020,22 @@ class TestCoordinateAlignmentLegacy:
             for i in self.NAN_POSITIONS:
                 assert result.const.values[i] == base_const
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_add_nan_propagates(self, v: Variable, operand: str) -> None:
+            vals = np.arange(20, dtype=float)
+            vals[0] = np.nan
+            vals[5] = np.nan
+            vals[19] = np.nan
+            nan_constant = xr.DataArray(
+                vals, dims=["dim_2"], coords={"dim_2": range(20)}
+            )
+            target = v if operand == "var" else v + 5
+            result = target + nan_constant
+            for i in self.NAN_POSITIONS:
+                assert np.isnan(result.const.values[i])
+
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_sub_nan_filled(
             self,
@@ -907,6 +1052,7 @@ class TestCoordinateAlignmentLegacy:
             for i in self.NAN_POSITIONS:
                 assert result.const.values[i] == base_const
 
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_mul_nan_filled(
             self,
@@ -922,6 +1068,19 @@ class TestCoordinateAlignmentLegacy:
             for i in self.NAN_POSITIONS:
                 assert result.coeffs.squeeze().values[i] == 0.0
 
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_nan_propagates(self, v: Variable, operand: str) -> None:
+            vals = np.arange(20, dtype=float)
+            vals[0] = np.nan
+            nan_constant = xr.DataArray(
+                vals, dims=["dim_2"], coords={"dim_2": range(20)}
+            )
+            target = v if operand == "var" else 1 * v
+            result = target * nan_constant
+            assert np.isnan(result.coeffs.squeeze().values[0])
+
+        @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
         def test_div_nan_filled(
             self,
@@ -938,6 +1097,7 @@ class TestCoordinateAlignmentLegacy:
             for i in self.NAN_POSITIONS:
                 assert result.coeffs.squeeze().values[i] == original_coeffs[i]
 
+        @pytest.mark.legacy_only
         def test_add_commutativity(
             self,
             v: Variable,
@@ -952,6 +1112,7 @@ class TestCoordinateAlignmentLegacy:
                 result_a.coeffs.values, result_b.coeffs.values
             )
 
+        @pytest.mark.legacy_only
         def test_mul_commutativity(
             self,
             v: Variable,
@@ -965,6 +1126,7 @@ class TestCoordinateAlignmentLegacy:
                 result_a.coeffs.values, result_b.coeffs.values
             )
 
+        @pytest.mark.legacy_only
         def test_quadexpr_add_nan(
             self,
             v: Variable,
@@ -977,20 +1139,40 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
 
     class TestExpressionWithNaN:
-        """Test that NaN in expression's own const/coeffs doesn't propagate."""
+        """
+        Test NaN in expression's own const/coeffs.
 
-        def test_shifted_expr_add_scalar(self, v: Variable) -> None:
+        Legacy: NaN is filled with neutral elements.
+        V1: NaN propagates.
+        """
+
+        @pytest.mark.legacy_only
+        def test_shifted_expr_add_scalar_filled(self, v: Variable) -> None:
             expr = (1 * v).shift(dim_2=1)
             result = expr + 5
             assert not np.isnan(result.const.values).any()
             assert result.const.values[0] == 5.0
 
-        def test_shifted_expr_mul_scalar(self, v: Variable) -> None:
+        @pytest.mark.v1_only
+        def test_shifted_expr_add_scalar_propagates(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr + 5
+            assert np.isnan(result.const.values[0])
+
+        @pytest.mark.legacy_only
+        def test_shifted_expr_mul_scalar_filled(self, v: Variable) -> None:
             expr = (1 * v).shift(dim_2=1)
             result = expr * 2
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
 
+        @pytest.mark.v1_only
+        def test_shifted_expr_mul_scalar_propagates(self, v: Variable) -> None:
+            expr = (1 * v).shift(dim_2=1)
+            result = expr * 2
+            assert np.isnan(result.coeffs.squeeze().values[0])
+
+        @pytest.mark.legacy_only
         def test_shifted_expr_add_array(self, v: Variable) -> None:
             arr = np.arange(v.sizes["dim_2"], dtype=float)
             expr = (1 * v).shift(dim_2=1)
@@ -998,6 +1180,7 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.const.values).any()
             assert result.const.values[0] == 0.0
 
+        @pytest.mark.legacy_only
         def test_shifted_expr_mul_array(self, v: Variable) -> None:
             arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
             expr = (1 * v).shift(dim_2=1)
@@ -1005,18 +1188,21 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
 
+        @pytest.mark.legacy_only
         def test_shifted_expr_div_scalar(self, v: Variable) -> None:
             expr = (1 * v).shift(dim_2=1)
             result = expr / 2
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
 
+        @pytest.mark.legacy_only
         def test_shifted_expr_sub_scalar(self, v: Variable) -> None:
             expr = (1 * v).shift(dim_2=1)
             result = expr - 3
             assert not np.isnan(result.const.values).any()
             assert result.const.values[0] == -3.0
 
+        @pytest.mark.legacy_only
         def test_shifted_expr_div_array(self, v: Variable) -> None:
             arr = np.arange(v.sizes["dim_2"], dtype=float) + 1
             expr = (1 * v).shift(dim_2=1)
@@ -1024,6 +1210,7 @@ class TestCoordinateAlignmentLegacy:
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
 
+        @pytest.mark.legacy_only
         def test_variable_to_linexpr_nan_coefficient(self, v: Variable) -> None:
             nan_coeff = np.ones(v.sizes["dim_2"])
             nan_coeff[0] = np.nan
@@ -1032,7 +1219,8 @@ class TestCoordinateAlignmentLegacy:
             assert result.coeffs.squeeze().values[0] == 0.0
 
     class TestMultiDim:
-        def test_multidim_subset_mul(self, m: Model) -> None:
+        @pytest.mark.legacy_only
+        def test_multidim_subset_mul_fills(self, m: Model) -> None:
             coords_a = pd.RangeIndex(4, name="a")
             coords_b = pd.RangeIndex(5, name="b")
             w = m.add_variables(coords=[coords_a, coords_b], name="w")
@@ -1051,7 +1239,21 @@ class TestCoordinateAlignmentLegacy:
             assert result.coeffs.squeeze().sel(a=0, b=0).item() == pytest.approx(0.0)
             assert result.coeffs.squeeze().sel(a=1, b=2).item() == pytest.approx(0.0)
 
-        def test_multidim_subset_add(self, m: Model) -> None:
+        @pytest.mark.v1_only
+        def test_multidim_subset_mul_raises(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            with pytest.raises(ValueError, match="exact"):
+                w * subset_2d
+
+        @pytest.mark.legacy_only
+        def test_multidim_subset_add_fills(self, m: Model) -> None:
             coords_a = pd.RangeIndex(4, name="a")
             coords_b = pd.RangeIndex(5, name="b")
             w = m.add_variables(coords=[coords_a, coords_b], name="w")
@@ -1068,6 +1270,19 @@ class TestCoordinateAlignmentLegacy:
             assert result.const.sel(a=1, b=0).item() == pytest.approx(2.0)
             assert result.const.sel(a=3, b=4).item() == pytest.approx(5.0)
             assert result.const.sel(a=0, b=0).item() == pytest.approx(0.0)
+
+        @pytest.mark.v1_only
+        def test_multidim_subset_add_raises(self, m: Model) -> None:
+            coords_a = pd.RangeIndex(4, name="a")
+            coords_b = pd.RangeIndex(5, name="b")
+            w = m.add_variables(coords=[coords_a, coords_b], name="w")
+            subset_2d = xr.DataArray(
+                [[2.0, 3.0], [4.0, 5.0]],
+                dims=["a", "b"],
+                coords={"a": [1, 3], "b": [0, 4]},
+            )
+            with pytest.raises(ValueError, match="exact"):
+                w + subset_2d
 
     class TestXarrayCompat:
         def test_da_eq_da_still_works(self) -> None:
@@ -2253,213 +2468,3 @@ class TestJoinParameter:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = quad.mul(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2]
-
-
-@pytest.mark.v1_only
-class TestCoordinateAlignmentV1:
-    """V1: exact join raises on mismatched coords; explicit join= is the escape hatch."""
-
-    @pytest.fixture(params=["da", "series"])
-    def subset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "da":
-            return xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
-        return pd.Series([10.0, 30.0], index=pd.Index([1, 3], name="dim_2"))
-
-    @pytest.fixture(params=["da", "series"])
-    def superset(self, request: Any) -> xr.DataArray | pd.Series:
-        if request.param == "da":
-            return xr.DataArray(
-                np.arange(25, dtype=float),
-                dims=["dim_2"],
-                coords={"dim_2": range(25)},
-            )
-        return pd.Series(
-            np.arange(25, dtype=float), index=pd.Index(range(25), name="dim_2")
-        )
-
-    class TestSubset:
-        """Under v1, subset operations raise ValueError (exact join)."""
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_subset_raises(
-            self, v: Variable, subset: xr.DataArray, operand: str
-        ) -> None:
-            target = v if operand == "var" else 1 * v
-            with pytest.raises(ValueError, match="exact"):
-                target * subset
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_add_subset_raises(
-            self, v: Variable, subset: xr.DataArray, operand: str
-        ) -> None:
-            target = v if operand == "var" else v + 5
-            with pytest.raises(ValueError, match="exact"):
-                target + subset
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_sub_subset_raises(
-            self, v: Variable, subset: xr.DataArray, operand: str
-        ) -> None:
-            target = v if operand == "var" else v + 5
-            with pytest.raises(ValueError, match="exact"):
-                target - subset
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_div_subset_raises(
-            self, v: Variable, subset: xr.DataArray, operand: str
-        ) -> None:
-            target = v if operand == "var" else 1 * v
-            with pytest.raises(ValueError, match="exact"):
-                target / subset
-
-        def test_subset_add_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
-            with pytest.raises(ValueError, match="exact"):
-                subset + v
-
-        def test_subset_sub_var_raises(self, v: Variable, subset: xr.DataArray) -> None:
-            with pytest.raises(ValueError, match="exact"):
-                subset - v
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_subset_join_left(
-            self, v: Variable, subset: xr.DataArray, operand: str
-        ) -> None:
-            """Explicit join='left' fills zeros for missing coords."""
-            target = v if operand == "var" else 1 * v
-            result = target.mul(subset, join="left")
-            assert result.sizes["dim_2"] == v.sizes["dim_2"]
-            assert not np.isnan(result.coeffs.values).any()
-
-    class TestSuperset:
-        """Under v1, superset operations raise ValueError (exact join)."""
-
-        def test_add_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
-            with pytest.raises(ValueError, match="exact"):
-                v + superset
-
-        def test_mul_superset_raises(self, v: Variable, superset: xr.DataArray) -> None:
-            with pytest.raises(ValueError, match="exact"):
-                v * superset
-
-    class TestDisjoint:
-        """Under v1, disjoint coord operations raise ValueError."""
-
-        def test_add_disjoint_raises(self, v: Variable) -> None:
-            disjoint = xr.DataArray(
-                [100.0, 200.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
-            )
-            with pytest.raises(ValueError, match="exact"):
-                v + disjoint
-
-        def test_mul_disjoint_raises(self, v: Variable) -> None:
-            disjoint = xr.DataArray(
-                [10.0, 20.0], dims=["dim_2"], coords={"dim_2": [50, 60]}
-            )
-            with pytest.raises(ValueError, match="exact"):
-                v * disjoint
-
-    class TestCommutativity:
-        """Under v1, only matching coords allow commutativity."""
-
-        def test_add_commutativity_matching_coords(self, v: Variable) -> None:
-            matching = xr.DataArray(
-                np.arange(20, dtype=float),
-                dims=["dim_2"],
-                coords={"dim_2": range(20)},
-            )
-            assert_linequal(v + matching, matching + v)
-
-        def test_subset_raises_both_sides(
-            self, v: Variable, subset: xr.DataArray
-        ) -> None:
-            with pytest.raises(ValueError, match="exact"):
-                v * subset
-            with pytest.raises(ValueError, match="exact"):
-                subset * v
-
-    class TestQuadratic:
-        """Under v1, subset operations on quadratic expressions raise."""
-
-        def test_quadexpr_add_subset_raises(
-            self, v: Variable, subset: xr.DataArray
-        ) -> None:
-            qexpr = v * v
-            with pytest.raises(ValueError, match="exact"):
-                qexpr + subset
-
-        def test_quadexpr_mul_subset_raises(
-            self, v: Variable, subset: xr.DataArray
-        ) -> None:
-            qexpr = v * v
-            with pytest.raises(ValueError, match="exact"):
-                qexpr * subset
-
-    class TestMissingValues:
-        """Under v1, NaN values propagate (no implicit fillna)."""
-
-        NAN_POSITIONS = [0, 5, 19]
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_add_nan_propagates(self, v: Variable, operand: str) -> None:
-            vals = np.arange(20, dtype=float)
-            vals[0] = np.nan
-            vals[5] = np.nan
-            vals[19] = np.nan
-            nan_constant = xr.DataArray(
-                vals, dims=["dim_2"], coords={"dim_2": range(20)}
-            )
-            target = v if operand == "var" else v + 5
-            result = target + nan_constant
-            for i in self.NAN_POSITIONS:
-                assert np.isnan(result.const.values[i])
-
-        @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_nan_propagates(self, v: Variable, operand: str) -> None:
-            vals = np.arange(20, dtype=float)
-            vals[0] = np.nan
-            nan_constant = xr.DataArray(
-                vals, dims=["dim_2"], coords={"dim_2": range(20)}
-            )
-            target = v if operand == "var" else 1 * v
-            result = target * nan_constant
-            assert np.isnan(result.coeffs.squeeze().values[0])
-
-    class TestExpressionWithNaN:
-        """Under v1, NaN in expression's own const/coeffs propagates."""
-
-        def test_shifted_expr_add_scalar(self, v: Variable) -> None:
-            expr = (1 * v).shift(dim_2=1)
-            result = expr + 5
-            assert np.isnan(result.const.values[0])
-
-        def test_shifted_expr_mul_scalar(self, v: Variable) -> None:
-            expr = (1 * v).shift(dim_2=1)
-            result = expr * 2
-            assert np.isnan(result.coeffs.squeeze().values[0])
-
-    class TestMultiDim:
-        """Under v1, multi-dim subset operations raise."""
-
-        def test_multidim_subset_mul_raises(self, m: Model) -> None:
-            coords_a = pd.RangeIndex(4, name="a")
-            coords_b = pd.RangeIndex(5, name="b")
-            w = m.add_variables(coords=[coords_a, coords_b], name="w")
-            subset_2d = xr.DataArray(
-                [[2.0, 3.0], [4.0, 5.0]],
-                dims=["a", "b"],
-                coords={"a": [1, 3], "b": [0, 4]},
-            )
-            with pytest.raises(ValueError, match="exact"):
-                w * subset_2d
-
-        def test_multidim_subset_add_raises(self, m: Model) -> None:
-            coords_a = pd.RangeIndex(4, name="a")
-            coords_b = pd.RangeIndex(5, name="b")
-            w = m.add_variables(coords=[coords_a, coords_b], name="w")
-            subset_2d = xr.DataArray(
-                [[2.0, 3.0], [4.0, 5.0]],
-                dims=["a", "b"],
-                coords={"a": [1, 3], "b": [0, 4]},
-            )
-            with pytest.raises(ValueError, match="exact"):
-                w + subset_2d
