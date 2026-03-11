@@ -292,9 +292,15 @@ class Variable:
 
     @property
     def loc(self) -> LocIndexer:
+        """
+        Indexing the variable using coordinates.
+        """
         return LocIndexer(self)
 
     def to_pandas(self) -> pd.Series:
+        """
+        Convert the variable labels to a pandas Series.
+        """
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -844,10 +850,16 @@ class Variable:
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        """
+        Get the coordinate dimensions of the variable.
+        """
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
+        """
+        Get the coordinate sizes of the variable.
+        """
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -1221,6 +1233,19 @@ class Variable:
         return self
 
     def equals(self, other: Variable) -> bool:
+        """
+        Check if this Variable is equal to another.
+
+        Parameters
+        ----------
+        other : Variable
+            The Variable to compare with.
+
+        Returns
+        -------
+        bool
+            True if the variables have equal labels, False otherwise.
+        """
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
