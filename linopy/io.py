@@ -235,7 +235,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
@@ -290,6 +294,44 @@ def binaries_to_file(
         names = tqdm(
             list(names),
             desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
+
+            columns = [
+                *print_variable(pl.col("labels")),
+            ]
+
+            _format_and_write(df, columns, f)
+
+
+def semi_continuous_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out semi-continuous variables of a model to a lp file.
+    """
+    names = m.variables.semi_continuous
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsemi-continuous\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing semi-continuous variables.",
             colour=TQDM_COLOR,
         )
 
@@ -510,6 +552,13 @@ def to_lp_file(
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
+        semi_continuous_to_file(
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
         sos_to_file(
             m,
             f=f,
@@ -594,6 +643,12 @@ def to_mosek(
     """
     if m.variables.sos:
         raise NotImplementedError("SOS constraints are not supported by MOSEK.")
+
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by MOSEK. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
 
     import mosek
 
@@ -721,7 +776,11 @@ def to_gurobipy(
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if (
+        len(m.binaries.labels)
+        + len(m.integers.labels)
+        + len(list(m.variables.semi_continuous))
+    ):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
@@ -794,11 +853,17 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers):
+    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
         vtypes = M.vtypes
-        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
-        n = len(labels)
-        h.changeColsIntegrality(n, labels, ones_like(labels))
+        # Map linopy vtypes to HiGHS integrality values:
+        # 0 = continuous, 1 = integer, 2 = semi-continuous
+        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+        labels = np.arange(len(vtypes))[int_mask]
+        integrality = np.array(
+            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+        )
+        h.changeColsIntegrality(len(labels), labels, integrality)
         if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
@@ -1122,6 +1187,12 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     -------
     model : cupdlpx.Model
     """
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by cuPDLPx. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
+
     import cupdlpx
 
     if explicit_coordinate_names:

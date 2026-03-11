@@ -201,8 +201,23 @@ class MatrixAccessor:
     @property
     def vtypes(self) -> ndarray:
         """Vector of types of all non-missing variables."""
-        _, _, _, vtypes, _ = self._variable_data
-        return vtypes
+        m = self._parent
+        df: pd.DataFrame = self.flat_vars
+        specs = []
+        for name in m.variables:
+            if name in m.binaries:
+                val = "B"
+            elif name in m.integers:
+                val = "I"
+            elif name in m.semi_continuous:
+                val = "S"
+            else:
+                val = "C"
+            specs.append(pd.Series(val, index=m.variables[name].flat.labels))
+
+        ds = pd.concat(specs)
+        ds = df.set_index("key").labels.map(ds)
+        return create_vector(ds.index, ds.to_numpy(), fill_value="")
 
     @property
     def lb(self) -> ndarray:
