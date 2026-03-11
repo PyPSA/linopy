@@ -1635,12 +1635,14 @@ class BaseExpression(ABC):
         Variable labels and coefficients always use sentinel values.
         """
         fv = {**self._fill_value, "const": fill_value}
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
         return self.__class__(
-            self.data.reindex_like(
-                other if isinstance(other, Dataset) else other.data,
-                fill_value=fv,
-                **kwargs,
-            ),
+            self.data.reindex_like(ref, fill_value=fv, **kwargs),
             self.model,
         )
 

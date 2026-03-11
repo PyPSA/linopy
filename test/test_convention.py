@@ -20,12 +20,13 @@ import pytest
 import xarray as xr
 
 import linopy
-from linopy import Model, Variable
+from linopy import LinearExpression, Model, Variable
 from linopy.config import (
     LinopyDeprecationWarning,
     OptionSettings,
     options,
 )
+from linopy.constraints import Constraint
 from linopy.testing import assert_linequal
 
 # ---------------------------------------------------------------------------
@@ -367,3 +368,101 @@ class TestVariableReindex:
         result = var.reindex(i=[])
         assert isinstance(result, Variable)
         assert len(result.data.indexes["i"]) == 0
+
+
+class TestExpressionReindex:
+    @pytest.fixture
+    def expr(self) -> LinearExpression:
+        m = Model()
+        x = m.add_variables(coords=[pd.Index([0, 1, 2, 3, 4], name="i")], name="x")
+        return 2 * x + 10
+
+    def test_reindex_subset(self, expr: LinearExpression) -> None:
+        result = expr.reindex(i=[1, 2, 3])
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+        # Coefficients for existing positions should be preserved
+        np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 2, 2])
+        np.testing.assert_array_equal(result.const.values, [10, 10, 10])
+
+    def test_reindex_superset(self, expr: LinearExpression) -> None:
+        result = expr.reindex(i=[0, 1, 2, 3, 4, 5, 6])
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3, 4, 5, 6]
+        # New positions should have sentinel var labels (-1)
+        assert result.vars.squeeze().sel(i=5).item() == -1
+        assert result.vars.squeeze().sel(i=6).item() == -1
+        # Original positions should be valid
+        assert (result.vars.squeeze().sel(i=[0, 1, 2, 3, 4]).values >= 0).all()
+
+    def test_reindex_fill_value(self, expr: LinearExpression) -> None:
+        result = expr.reindex(i=[0, 1, 5], fill_value=0)
+        assert result.const.sel(i=5).item() == 0
+        result_nan = expr.reindex(i=[0, 1, 5])
+        assert np.isnan(result_nan.const.sel(i=5).item())
+
+    def test_reindex_preserves_type(self, expr: LinearExpression) -> None:
+        result = expr.reindex(i=[0, 1])
+        assert type(result) is type(expr)
+
+    def test_reindex_like_expression(self, expr: LinearExpression) -> None:
+        m = expr.model
+        y = m.add_variables(coords=[pd.Index([2, 3, 4, 5], name="i")], name="y")
+        other = 1 * y
+        result = expr.reindex_like(other)
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [2, 3, 4, 5]
+        assert result.vars.squeeze().sel(i=5).item() == -1
+
+    def test_reindex_like_variable(self, expr: LinearExpression) -> None:
+        m = expr.model
+        y = m.add_variables(coords=[pd.Index([1, 3, 5], name="i")], name="y")
+        result = expr.reindex_like(y)
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [1, 3, 5]
+
+    def test_reindex_like_dataarray(self, expr: LinearExpression) -> None:
+        da = xr.DataArray([10, 20, 30], dims=["i"], coords={"i": [1, 3, 5]})
+        result = expr.reindex_like(da)
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [1, 3, 5]
+        assert result.vars.squeeze().sel(i=5).item() == -1
+
+    def test_reindex_like_dataset(self, expr: LinearExpression) -> None:
+        ds = xr.Dataset({"tmp": (("i",), [1, 2])}, coords={"i": [0, 1]})
+        result = expr.reindex_like(ds)
+        assert isinstance(result, LinearExpression)
+        assert list(result.data.indexes["i"]) == [0, 1]
+
+
+class TestConstraintReindex:
+    @pytest.fixture
+    def con(self) -> Constraint:
+        m = Model()
+        x = m.add_variables(coords=[pd.Index([0, 1, 2, 3, 4], name="i")], name="x")
+        linopy.options["arithmetic_convention"] = "legacy"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", LinopyDeprecationWarning)
+            c = x >= 0
+        m.add_constraints(c, name="c")
+        return m.constraints["c"]
+
+    def test_reindex_subset(self, con: Constraint) -> None:
+        result = con.reindex({"i": [1, 2, 3]})
+        assert list(result.data.indexes["i"]) == [1, 2, 3]
+
+    def test_reindex_superset(self, con: Constraint) -> None:
+        result = con.reindex({"i": [0, 1, 2, 3, 4, 5]})
+        assert list(result.data.indexes["i"]) == [0, 1, 2, 3, 4, 5]
+        # New position should have sentinel label
+        assert result.data.vars.squeeze().sel(i=5).item() == -1
+
+    def test_reindex_like_dataset(self, con: Constraint) -> None:
+        ds = xr.Dataset({"tmp": (("i",), [1, 2])}, coords={"i": [0, 1]})
+        result = con.reindex_like(ds)
+        assert list(result.data.indexes["i"]) == [0, 1]
+
+    def test_reindex_like_dataarray(self, con: Constraint) -> None:
+        da = xr.DataArray([10, 20], dims=["i"], coords={"i": [1, 3]})
+        result = con.reindex_like(da)
+        assert list(result.data.indexes["i"]) == [1, 3]
