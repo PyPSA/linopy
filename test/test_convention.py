@@ -106,11 +106,8 @@ class TestConfigValidation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.legacy_only
 class TestDeprecationWarnings:
-    @pytest.fixture(autouse=True)
-    def _use_legacy(self, legacy_convention: None) -> None:
-        pass
-
     def test_add_constant_emits_deprecation_warning(self, a: Variable) -> None:
         const = xr.DataArray([1, 2, 3, 4, 5], dims=["i"], coords={"i": range(5)})
         with pytest.warns(LinopyDeprecationWarning, match="legacy"):
@@ -132,12 +129,9 @@ class TestDeprecationWarnings:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.v1_only
 class TestScalarFastPath:
     """Scalar operations should produce same results as array operations."""
-
-    @pytest.fixture(autouse=True)
-    def _use_v1(self, v1_convention: None) -> None:
-        pass
 
     def test_add_scalar_matches_array(self, a: Variable) -> None:
         scalar_result = (1 * a) + 5
@@ -169,11 +163,8 @@ class TestScalarFastPath:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.v1_only
 class TestNaNEdgeCases:
-    @pytest.fixture(autouse=True)
-    def _use_v1(self, v1_convention: None) -> None:
-        pass
-
     def test_inf_add_propagates(self, a: Variable) -> None:
         """Adding inf should propagate to const."""
         const = xr.DataArray(
@@ -242,8 +233,8 @@ class TestConventionSwitching:
 # 9. TestJoinParameter deduplication (shared base class)
 # ---------------------------------------------------------------------------
 # The existing TestJoinParameter class already tests both conventions via
-# legacy_convention/v1_convention fixtures. The deduplication is addressed by
-# verifying that explicit join= works identically under both conventions.
+# @pytest.mark.legacy_only / @pytest.mark.v1_only markers. The deduplication
+# is addressed by verifying that explicit join= works identically under both.
 
 
 class TestJoinWorksUnderBothConventions:
@@ -292,11 +283,8 @@ class TestJoinWorksUnderBothConventions:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.v1_only
 class TestErrorMessages:
-    @pytest.fixture(autouse=True)
-    def _use_v1(self, v1_convention: None) -> None:
-        pass
-
     def test_exact_join_error_suggests_escape_hatches(self, a: Variable) -> None:
         """Error message should suggest .add()/.mul() with join= parameter."""
         subset = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})

@@ -27,6 +27,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest with custom markers and behavior."""
     config.addinivalue_line("markers", "gpu: marks tests as requiring GPU hardware")
+    config.addinivalue_line(
+        "markers", "legacy_only: test runs only under the legacy arithmetic convention"
+    )
+    config.addinivalue_line(
+        "markers", "v1_only: test runs only under the v1 arithmetic convention"
+    )
 
     # Set environment variable so test modules can check if GPU tests are enabled
     # This is needed because parametrize happens at import time
@@ -64,12 +70,21 @@ def convention(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     """
     Run every test under both arithmetic conventions by default.
 
+    Tests marked ``@pytest.mark.legacy_only`` or ``@pytest.mark.v1_only``
+    are automatically skipped for the other convention.
+
     Under "legacy", LinopyDeprecationWarning is suppressed so that the test
     output stays clean.  Dedicated tests in test_convention.py verify that
     these warnings are actually emitted.
     """
     import linopy
     from linopy.config import LinopyDeprecationWarning
+
+    item = request.node
+    if item.get_closest_marker("legacy_only") and request.param != "legacy":
+        pytest.skip("legacy-only test")
+    if item.get_closest_marker("v1_only") and request.param != "v1":
+        pytest.skip("v1-only test")
 
     old = linopy.options["arithmetic_convention"]
     linopy.options["arithmetic_convention"] = request.param
@@ -80,20 +95,6 @@ def convention(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     else:
         yield request.param
     linopy.options["arithmetic_convention"] = old
-
-
-@pytest.fixture
-def legacy_convention(convention: str) -> None:
-    """Opt-out: skip this test when convention is not 'legacy'."""
-    if convention != "legacy":
-        pytest.skip("legacy-only test")
-
-
-@pytest.fixture
-def v1_convention(convention: str) -> None:
-    """Opt-out: skip this test when convention is not 'v1'."""
-    if convention != "v1":
-        pytest.skip("v1-only test")
 
 
 @pytest.fixture

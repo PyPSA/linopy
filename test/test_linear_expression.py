@@ -388,8 +388,9 @@ def test_linear_expression_substraction(
     assert res.data.notnull().all().to_array().all()
 
 
+@pytest.mark.legacy_only
 def test_linear_expression_sum(
-    legacy_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+    x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
@@ -410,8 +411,9 @@ def test_linear_expression_sum(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.v1_only
 def test_linear_expression_sum_v1(
-    v1_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+    x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z
     res = expr.sum("dim_0")
@@ -434,8 +436,9 @@ def test_linear_expression_sum_v1(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.legacy_only
 def test_linear_expression_sum_with_const(
-    legacy_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+    x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
@@ -458,8 +461,9 @@ def test_linear_expression_sum_with_const(
     assert len(expr.coords["dim_2"]) == 10
 
 
+@pytest.mark.v1_only
 def test_linear_expression_sum_with_const_v1(
-    v1_convention: None, x: Variable, y: Variable, z: Variable, v: Variable
+    x: Variable, y: Variable, z: Variable, v: Variable
 ) -> None:
     expr = 10 * x + y + z + 10
     res = expr.sum("dim_0")
@@ -588,12 +592,9 @@ def test_linear_expression_multiplication_invalid(
         expr / x
 
 
+@pytest.mark.legacy_only
 class TestCoordinateAlignmentLegacy:
     """Legacy: outer join with NaN fill / zero fill for coordinate mismatches."""
-
-    @pytest.fixture(autouse=True)
-    def _legacy_only(self, legacy_convention: None) -> None:
-        pass
 
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
@@ -1934,16 +1935,18 @@ class TestJoinParameter:
         return m2.variables["c"]
 
     class TestAddition:
+        @pytest.mark.legacy_only
         def test_add_join_none_preserves_default(
-            self, legacy_convention: None, a: Variable, b: Variable
+            self, a: Variable, b: Variable
         ) -> None:
             """Legacy: join=None uses outer join for mismatched coords."""
             result_default = a.to_linexpr() + b.to_linexpr()
             result_none = a.to_linexpr().add(b.to_linexpr(), join=None)
             assert_linequal(result_default, result_none)
 
+        @pytest.mark.v1_only
         def test_add_join_none_raises_on_mismatch_v1(
-            self, v1_convention: None, a: Variable, b: Variable
+            self, a: Variable, b: Variable
         ) -> None:
             """V1: join=None uses exact join, raises on mismatched coords."""
             with pytest.raises(ValueError, match="Coordinate mismatch"):
@@ -2205,8 +2208,9 @@ class TestJoinParameter:
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
     class TestQuadratic:
+        @pytest.mark.legacy_only
         def test_quadratic_add_constant_join_inner(
-            self, legacy_convention: None, a: Variable, b: Variable
+            self, a: Variable, b: Variable
         ) -> None:
             """Legacy: a*b with mismatched coords uses outer join."""
             quad = a.to_linexpr() * b.to_linexpr()
@@ -2214,8 +2218,9 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2, 3]
 
+        @pytest.mark.v1_only
         def test_quadratic_add_constant_join_inner_v1(
-            self, v1_convention: None, a: Variable, c: Variable
+            self, a: Variable, c: Variable
         ) -> None:
             """V1: use a*c (same coords) to create quad, then join inner."""
             quad = a.to_linexpr() * c.to_linexpr()
@@ -2229,8 +2234,9 @@ class TestJoinParameter:
             result = quad.add(const, join="inner")
             assert list(result.data.indexes["i"]) == [0, 1]
 
+        @pytest.mark.legacy_only
         def test_quadratic_mul_constant_join_inner(
-            self, legacy_convention: None, a: Variable, b: Variable
+            self, a: Variable, b: Variable
         ) -> None:
             """Legacy: a*b with mismatched coords uses outer join."""
             quad = a.to_linexpr() * b.to_linexpr()
@@ -2238,8 +2244,9 @@ class TestJoinParameter:
             result = quad.mul(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2, 3]
 
+        @pytest.mark.v1_only
         def test_quadratic_mul_constant_join_inner_v1(
-            self, v1_convention: None, a: Variable, c: Variable
+            self, a: Variable, c: Variable
         ) -> None:
             """V1: use a*c (same coords) to create quad, then join inner."""
             quad = a.to_linexpr() * c.to_linexpr()
@@ -2248,12 +2255,9 @@ class TestJoinParameter:
             assert list(result.data.indexes["i"]) == [1, 2]
 
 
+@pytest.mark.v1_only
 class TestCoordinateAlignmentV1:
     """V1: exact join raises on mismatched coords; explicit join= is the escape hatch."""
-
-    @pytest.fixture(autouse=True)
-    def _v1_only(self, v1_convention: None) -> None:
-        pass
 
     @pytest.fixture(params=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:

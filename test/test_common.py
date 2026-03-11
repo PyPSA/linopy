@@ -649,7 +649,8 @@ def test_get_dims_with_index_levels() -> None:
     assert get_dims_with_index_levels(ds5) == []
 
 
-def test_align(legacy_convention: None, x: Variable, u: Variable) -> None:  # noqa: F811
+@pytest.mark.legacy_only
+def test_align(x: Variable, u: Variable) -> None:  # noqa: F811
     """Legacy: align() defaults to inner join for mismatched coords."""
     alpha = xr.DataArray([1, 2], [[1, 2]])
     beta = xr.DataArray(
@@ -693,7 +694,8 @@ def test_align(legacy_convention: None, x: Variable, u: Variable) -> None:  # no
     assert_linequal(expr_obs, expr.loc[[1]])
 
 
-def test_align_v1(v1_convention: None, x: Variable, u: Variable) -> None:  # noqa: F811
+@pytest.mark.v1_only
+def test_align_v1(x: Variable, u: Variable) -> None:  # noqa: F811
     """V1: align() defaults to exact join; explicit join= needed for mismatched coords."""
     alpha = xr.DataArray([1, 2], [[1, 2]])
     beta = xr.DataArray(

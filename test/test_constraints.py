@@ -175,8 +175,9 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
         pytest.param(lambda m: pd.DataFrame(np.ones((5, 3))), id="dataframe"),
     ],
 )
+@pytest.mark.legacy_only
 def test_constraint_rhs_higher_dim_constant_warns(
-    legacy_convention: None, rhs_factory: Any, caplog: Any
+    rhs_factory: Any, caplog: Any
 ) -> None:
     """Legacy: higher-dim constant RHS warns about dimensions."""
     m = Model()
@@ -187,9 +188,8 @@ def test_constraint_rhs_higher_dim_constant_warns(
     assert "dimensions" in caplog.text
 
 
-def test_constraint_rhs_higher_dim_constant_broadcasts_v1(
-    v1_convention: None,
-) -> None:
+@pytest.mark.v1_only
+def test_constraint_rhs_higher_dim_constant_broadcasts_v1() -> None:
     """V1: higher-dim constant RHS broadcasts (creates redundant constraints)."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
@@ -198,9 +198,8 @@ def test_constraint_rhs_higher_dim_constant_broadcasts_v1(
     assert "extra" in c.dims
 
 
-def test_constraint_rhs_higher_dim_dataarray_reindexes(
-    legacy_convention: None,
-) -> None:
+@pytest.mark.legacy_only
+def test_constraint_rhs_higher_dim_dataarray_reindexes() -> None:
     """Legacy: DataArray RHS with extra dims reindexes to expression coords."""
     m = Model()
     x = m.add_variables(coords=[range(5)], name="x")
@@ -360,12 +359,9 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
 
 
+@pytest.mark.legacy_only
 class TestConstraintCoordinateAlignmentLegacy:
     """Legacy: outer join with NaN fill for constraint coordinate mismatches."""
-
-    @pytest.fixture(autouse=True)
-    def _legacy_only(self, legacy_convention: None) -> None:
-        pass
 
     @pytest.fixture(params=["xarray", "pandas_series"], ids=["da", "series"])
     def subset(self, request: Any) -> xr.DataArray | pd.Series:
@@ -468,12 +464,9 @@ class TestConstraintCoordinateAlignmentLegacy:
         assert sol.sel(i=4).item() == pytest.approx(100.0)
 
 
+@pytest.mark.v1_only
 class TestConstraintCoordinateAlignmentV1:
     """V1: exact join raises on coordinate mismatches; explicit join= is the escape hatch."""
-
-    @pytest.fixture(autouse=True)
-    def _v1_only(self, v1_convention: None) -> None:
-        pass
 
     def test_var_le_subset_raises(self, v: Variable) -> None:
         subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})

@@ -18,10 +18,7 @@ from linopy.sos_reformulation import (
     undo_sos_reformulation,
 )
 
-
-@pytest.fixture(autouse=True)
-def _legacy_only(legacy_convention: None) -> None:
-    """SOS reformulation not yet adapted for v1 convention."""
+pytestmark = pytest.mark.legacy_only
 
 
 class TestValidateBounds:
