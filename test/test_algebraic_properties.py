@@ -106,7 +106,11 @@ def c(tech: pd.Index) -> xr.DataArray:
 
 
 def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
-    """Assert two linear expressions are algebraically equivalent."""
+    """
+    Assert two linear expressions are algebraically equivalent.
+
+    Checks dimensions, coordinates, coefficients, variable references, and constants.
+    """
     assert set(a.dims) == set(b.dims), f"dims differ: {a.dims} vs {b.dims}"
     for dim in a.dims:
         if isinstance(dim, str) and dim.startswith("_"):
@@ -114,7 +118,22 @@ def assert_linequal(a: LinearExpression, b: LinearExpression) -> None:
         np.testing.assert_array_equal(
             sorted(a.coords[dim].values), sorted(b.coords[dim].values)
         )
-    assert a.const.sum().item() == pytest.approx(b.const.sum().item())
+    # Simplify both to canonical form for coefficient/variable comparison
+    a_s = a.simplify()
+    b_s = b.simplify()
+    assert a_s.nterm == b_s.nterm, f"nterm differs: {a_s.nterm} vs {b_s.nterm}"
+    np.testing.assert_array_almost_equal(
+        np.sort(a_s.coeffs.values, axis=None),
+        np.sort(b_s.coeffs.values, axis=None),
+        err_msg="coefficients differ",
+    )
+    np.testing.assert_array_equal(
+        np.sort(a_s.vars.values, axis=None),
+        np.sort(b_s.vars.values, axis=None),
+    )
+    np.testing.assert_array_almost_equal(
+        a.const.values, b.const.values, err_msg="constants differ"
+    )
 
 
 # ============================================================
