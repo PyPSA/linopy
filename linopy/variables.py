@@ -1278,12 +1278,14 @@ class Variable:
         **kwargs: Any,
     ) -> Variable:
         """Reindex like another object, filling with sentinel values."""
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
         return self.__class__(
-            self.data.reindex_like(
-                other if isinstance(other, Dataset) else other.data,
-                fill_value=self._fill_value,
-                **kwargs,
-            ),
+            self.data.reindex_like(ref, fill_value=self._fill_value, **kwargs),
             self.model,
             self.name,
         )
