@@ -711,7 +711,7 @@ def test_align_v1(x: Variable, u: Variable) -> None:  # noqa: F811
     )
 
     # exact join raises on mismatched coords
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="exact"):
         align(x, alpha)
 
     # explicit inner join

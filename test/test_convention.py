@@ -124,12 +124,40 @@ class TestDeprecationWarnings:
             linopy.align(a, alpha)
 
 
+@pytest.mark.v1_only
+class TestNoDeprecationWarnings:
+    """V1: matching-coord operations should not emit deprecation warnings."""
+
+    def test_add_constant_no_deprecation_warning(self, a: Variable) -> None:
+        const = xr.DataArray([1, 2, 3, 4, 5], dims=["i"], coords={"i": range(5)})
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopyDeprecationWarning)
+            _ = (1 * a) + const
+
+    def test_mul_constant_no_deprecation_warning(self, a: Variable) -> None:
+        const = xr.DataArray([1, 2, 3, 4, 5], dims=["i"], coords={"i": range(5)})
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopyDeprecationWarning)
+            _ = (1 * a) * const
+
+    def test_align_no_deprecation_warning(self, a: Variable) -> None:
+        alpha = xr.DataArray([1, 2, 3, 4, 5], dims=["i"], coords={"i": range(5)})
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LinopyDeprecationWarning)
+            linopy.align(a, alpha)
+
+
 # ---------------------------------------------------------------------------
 # 6. Scalar fast path
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.v1_only
 class TestScalarFastPath:
     """Scalar operations should produce same results as array operations."""
 

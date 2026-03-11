@@ -534,14 +534,6 @@ class TestConstraintCoordinateAlignment:
         assert not np.isnan(con.rhs.values).any()
 
     @pytest.mark.v1_only
-    def test_superset_comparison_raises(self, v: Variable) -> None:
-        superset = xr.DataArray(
-            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
-        )
-        with pytest.raises(ValueError, match="exact"):
-            superset <= v
-
-    @pytest.mark.v1_only
     @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL])
     def test_superset_comparison_var_raises(self, v: Variable, sign: str) -> None:
         superset = xr.DataArray(
