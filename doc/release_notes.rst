@@ -1,6 +1,12 @@
 Release Notes
 =============
 
+Version 0.6.7
+-------------
+
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+
+
 Version 0.6.6
 -------------
 
