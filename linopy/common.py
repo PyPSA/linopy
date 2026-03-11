@@ -172,15 +172,19 @@ def _validate_dataarray_coords(
     expand = {}
     for k, v in expected.items():
         if k not in arr.dims:
+            # Skip coords that already exist (e.g. MultiIndex levels)
+            if k in arr.coords:
+                continue
             expand[k] = v
             continue
-        actual = arr.coords[k]
-        v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
-        if not actual.to_index().equals(v_idx):
-            raise ValueError(
-                f"Coordinates for dimension '{k}' do not match: "
-                f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
-            )
+        if not allow_extra_dims:
+            actual = arr.coords[k]
+            v_idx = v if isinstance(v, pd.Index) else pd.Index(v)
+            if not actual.to_index().equals(v_idx):
+                raise ValueError(
+                    f"Coordinates for dimension '{k}' do not match: "
+                    f"expected {v_idx.tolist()}, got {actual.values.tolist()}"
+                )
 
     if expand:
         arr = arr.expand_dims(expand)
@@ -239,7 +243,6 @@ def pandas_to_dataarray(
                 "these cases. Now, the pandas object's coordinates are taken considered"
                 " for alignment."
             )
-
 
     return DataArray(arr, coords=None, dims=dims, **kwargs)
 

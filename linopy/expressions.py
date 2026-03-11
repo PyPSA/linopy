@@ -1146,7 +1146,9 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = as_dataarray(
+                rhs, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+            )
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -2197,7 +2199,9 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = as_dataarray(
+            other, coords=self.coords, dims=self.coord_dims, allow_extra_dims=True
+        )
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
