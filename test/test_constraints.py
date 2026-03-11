@@ -509,6 +509,111 @@ class TestConstraintCoordinateAlignmentV1:
         with pytest.raises(ValueError, match="exact"):
             v <= rhs
 
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
+    def test_var_comparison_subset_raises(self, v: Variable, sign: str) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        with pytest.raises(ValueError, match="exact"):
+            if sign == LESS_EQUAL:
+                v <= subset
+            elif sign == GREATER_EQUAL:
+                v >= subset
+            else:
+                v == subset
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
+    def test_var_comparison_subset_join_left(self, v: Variable, sign: str) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        expr = v.to_linexpr()
+        if sign == LESS_EQUAL:
+            con = expr.le(subset, join="left")
+        elif sign == GREATER_EQUAL:
+            con = expr.ge(subset, join="left")
+        else:
+            con = expr.eq(subset, join="left")
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == 10.0
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    def test_var_comparison_subset_assign_coords(self, v: Variable) -> None:
+        """V1 pattern: use assign_coords to align before comparing."""
+        target_coords = v.coords["dim_2"][:2]
+        subset = xr.DataArray(
+            [10.0, 30.0], dims=["dim_2"], coords={"dim_2": target_coords}
+        )
+        con = v.loc[:1] <= subset
+        assert con.sizes["dim_2"] == 2
+        assert con.rhs.sel(dim_2=0).item() == 10.0
+        assert con.rhs.sel(dim_2=1).item() == 30.0
+
+    def test_expr_le_subset_raises(self, v: Variable) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        expr = v + 5
+        with pytest.raises(ValueError, match="exact"):
+            expr <= subset
+
+    def test_expr_le_subset_join_left(self, v: Variable) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        expr = v.to_linexpr() + 5
+        con = expr.le(subset, join="left")
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert con.rhs.sel(dim_2=1).item() == pytest.approx(5.0)
+        assert con.rhs.sel(dim_2=3).item() == pytest.approx(25.0)
+        assert np.isnan(con.rhs.sel(dim_2=0).item())
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL, EQUAL])
+    def test_subset_comparison_var_raises(self, v: Variable, sign: str) -> None:
+        subset = xr.DataArray([10.0, 30.0], dims=["dim_2"], coords={"dim_2": [1, 3]})
+        with pytest.raises(ValueError, match="exact"):
+            if sign == LESS_EQUAL:
+                subset <= v
+            elif sign == GREATER_EQUAL:
+                subset >= v
+            else:
+                subset == v
+
+    @pytest.mark.parametrize("sign", [LESS_EQUAL, GREATER_EQUAL])
+    def test_superset_comparison_var_raises(self, v: Variable, sign: str) -> None:
+        superset = xr.DataArray(
+            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
+        )
+        with pytest.raises(ValueError, match="exact"):
+            if sign == LESS_EQUAL:
+                superset <= v
+            else:
+                superset >= v
+
+    def test_superset_comparison_var_join_inner(self, v: Variable) -> None:
+        superset = xr.DataArray(
+            np.arange(25, dtype=float), dims=["dim_2"], coords={"dim_2": range(25)}
+        )
+        con = v.to_linexpr().le(superset, join="inner")
+        assert con.sizes["dim_2"] == v.sizes["dim_2"]
+        assert not np.isnan(con.rhs.values).any()
+
+    def test_constraint_rhs_higher_dim_dataarray_broadcasts(self) -> None:
+        """V1: DataArray RHS with extra dims broadcasts if shared dim coords match."""
+        m = Model()
+        x = m.add_variables(coords=[range(5)], name="x")
+        rhs = xr.DataArray(
+            np.ones((5, 3)),
+            dims=["dim_0", "extra"],
+            coords={"dim_0": range(5)},
+        )
+        c = m.add_constraints(x >= rhs)
+        assert c.shape == (5, 3)
+
+    def test_constraint_rhs_higher_dim_dataarray_mismatched_raises(self) -> None:
+        """V1: DataArray RHS with mismatched shared dim coords raises."""
+        m = Model()
+        x = m.add_variables(coords=[range(5)], name="x")
+        rhs = xr.DataArray(
+            np.ones((3, 3)),
+            dims=["dim_0", "extra"],
+            coords={"dim_0": [10, 11, 12]},
+        )
+        with pytest.raises(ValueError, match="exact"):
+            m.add_constraints(x >= rhs)
+
     def test_subset_constraint_solve_integration(self) -> None:
         if not available_solvers:
             pytest.skip("No solver available")

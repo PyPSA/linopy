@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
@@ -60,12 +61,24 @@ def pytest_collection_modifyitems(
 
 @pytest.fixture(autouse=True, params=["legacy", "v1"])
 def convention(request: pytest.FixtureRequest) -> Generator[str, None, None]:
-    """Run every test under both arithmetic conventions by default."""
+    """
+    Run every test under both arithmetic conventions by default.
+
+    Under "legacy", LinopyDeprecationWarning is suppressed so that the test
+    output stays clean.  Dedicated tests in test_convention.py verify that
+    these warnings are actually emitted.
+    """
     import linopy
+    from linopy.config import LinopyDeprecationWarning
 
     old = linopy.options["arithmetic_convention"]
     linopy.options["arithmetic_convention"] = request.param
-    yield request.param
+    if request.param == "legacy":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", LinopyDeprecationWarning)
+            yield request.param
+    else:
+        yield request.param
     linopy.options["arithmetic_convention"] = old
 
 
