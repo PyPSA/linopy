@@ -858,10 +858,13 @@ def _add_pwl_incremental_core(
         fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
         binary_hi = binary_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
+        binary_hi = binary_hi.assign_coords(
+            {LP_SEG_DIM: delta_lo.coords[LP_SEG_DIM].values}
+        )
         model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
 
-    x0 = x_points.isel({BREAKPOINT_DIM: 0})
-    y0 = y_points.isel({BREAKPOINT_DIM: 0})
+    x0 = x_points.isel({BREAKPOINT_DIM: 0}, drop=True)
+    y0 = y_points.isel({BREAKPOINT_DIM: 0}, drop=True)
 
     # When active is provided, multiply base terms by active
     x_base: DataArray | LinearExpression = x0

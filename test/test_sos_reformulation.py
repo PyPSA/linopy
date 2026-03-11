@@ -18,8 +18,6 @@ from linopy.sos_reformulation import (
     undo_sos_reformulation,
 )
 
-pytestmark = pytest.mark.legacy_only
-
 
 class TestValidateBounds:
     """Tests for bound validation in compute_big_m_values."""
