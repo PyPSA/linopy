@@ -104,7 +104,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 
-FILL_VALUE = {"vars": -1, "coeffs": 0, "const": np.nan}
+FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
 
 def _to_piecewise_constraint_descriptor(
@@ -2240,7 +2240,7 @@ class QuadraticExpression(BaseExpression):
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": 0, "const": np.nan}
+    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         super().__init__(data, model)

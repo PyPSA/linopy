@@ -1674,7 +1674,7 @@ def test_linear_expression_fillna(v: Variable) -> None:
     filled = filtered.fillna(10)
     assert isinstance(filled, LinearExpression)
     assert filled.const.sum() == 200
-    assert (filled.coeffs.squeeze() == 0).sum() == 10
+    assert filled.coeffs.isnull().sum() == 10
 
 
 def test_variable_expand_dims(v: Variable) -> None:
