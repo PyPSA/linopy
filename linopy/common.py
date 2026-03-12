@@ -234,7 +234,7 @@ def pandas_to_dataarray(
             warn(
                 f"coords for dimension(s) {non_aligned} is not aligned with the pandas object. "
                 "Previously, the indexes of the pandas were ignored and overwritten in "
-                "these cases. Now, the pandas object's coordinates are taken considered"
+                "these cases. Now, the pandas object's coordinates are considered"
                 " for alignment."
             )
 

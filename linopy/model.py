@@ -528,6 +528,8 @@ class Model:
             is fitted to these coords: shared dimensions must have
             matching coordinates, and missing dimensions are broadcast.
             A ValueError is raised if the data is not compatible.
+            When ``coords`` is ``None``, coordinates are inferred from
+            the bounds (``lower``/``upper``) if they are DataArrays.
             The default is None.
         name : str, optional
             Reference name of the added variables. The default None results in
@@ -613,6 +615,9 @@ class Model:
                 lower = _validate_dataarray_coords(lower, coords)
             if isinstance(upper, DataArray):
                 upper = _validate_dataarray_coords(upper, coords)
+            # TODO: validate mask DataArray coords too, but this would
+            # change behavior — broadcast_mask currently fills mismatched
+            # coords with False silently. Needs a deprecation path.
 
         data = Dataset(
             {
