@@ -1343,7 +1343,9 @@ class Model:
 
         if remote is not None:
             if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(self)
+                solved = remote.solve_on_oetc(
+                    self, solver_name=solver_name, **solver_options
+                )
             else:
                 solved = remote.solve_on_remote(
                     self,

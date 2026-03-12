@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import gzip
 import json
@@ -8,6 +10,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from linopy.model import Model
 
 try:
     import requests
@@ -42,10 +48,124 @@ class OetcSettings:
     orchestrator_server_url: str
     compute_provider: ComputeProvider = ComputeProvider.GCP
     solver: str = "highs"
-    solver_options: dict = field(default_factory=dict)
+    solver_options: dict[str, Any] = field(default_factory=dict)
     cpu_cores: int = 2
     disk_space_gb: int = 10
     delete_worker_on_error: bool = False
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+        name: str | None = None,
+        authentication_server_url: str | None = None,
+        orchestrator_server_url: str | None = None,
+        solver: str | None = None,
+        solver_options: dict[str, Any] | None = None,
+        cpu_cores: int | None = None,
+        disk_space_gb: int | None = None,
+        compute_provider: ComputeProvider | str | None = None,
+        delete_worker_on_error: bool | None = None,
+    ) -> OetcSettings:
+        required_fields = {
+            "email": ("OETC_EMAIL", email),
+            "password": ("OETC_PASSWORD", password),
+            "name": ("OETC_NAME", name),
+            "authentication_server_url": ("OETC_AUTH_URL", authentication_server_url),
+            "orchestrator_server_url": (
+                "OETC_ORCHESTRATOR_URL",
+                orchestrator_server_url,
+            ),
+        }
+
+        resolved: dict[str, Any] = {}
+        missing: list[str] = []
+
+        for field_name, (env_var, kwarg) in required_fields.items():
+            if kwarg is not None:
+                resolved[field_name] = kwarg
+            else:
+                env_val = os.environ.get(env_var, "").strip()
+                if env_val:
+                    resolved[field_name] = env_val
+                else:
+                    missing.append(env_var)
+
+        if missing:
+            raise ValueError(
+                f"Missing required OETC configuration: {', '.join(missing)}"
+            )
+
+        kwargs: dict[str, Any] = {
+            "credentials": OetcCredentials(
+                email=resolved["email"], password=resolved["password"]
+            ),
+            "name": resolved["name"],
+            "authentication_server_url": resolved["authentication_server_url"],
+            "orchestrator_server_url": resolved["orchestrator_server_url"],
+        }
+
+        if solver is not None:
+            kwargs["solver"] = solver
+        elif env_val := os.environ.get("OETC_SOLVER", "").strip():
+            kwargs["solver"] = env_val
+
+        if solver_options is not None:
+            kwargs["solver_options"] = solver_options
+        elif (env_val := os.environ.get("OETC_SOLVER_OPTIONS")) is not None:
+            try:
+                parsed = json.loads(env_val)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"OETC_SOLVER_OPTIONS is not valid JSON: {e}") from e
+            if not isinstance(parsed, dict):
+                raise ValueError(
+                    "OETC_SOLVER_OPTIONS is not valid JSON: expected a JSON object"
+                )
+            kwargs["solver_options"] = parsed
+
+        if cpu_cores is not None:
+            kwargs["cpu_cores"] = cpu_cores
+        elif (env_val := os.environ.get("OETC_CPU_CORES")) is not None:
+            try:
+                kwargs["cpu_cores"] = int(env_val)
+            except ValueError as e:
+                raise ValueError(
+                    f"OETC_CPU_CORES is not a valid integer: {env_val}"
+                ) from e
+
+        if disk_space_gb is not None:
+            kwargs["disk_space_gb"] = disk_space_gb
+        elif (env_val := os.environ.get("OETC_DISK_SPACE_GB")) is not None:
+            try:
+                kwargs["disk_space_gb"] = int(env_val)
+            except ValueError as e:
+                raise ValueError(
+                    f"OETC_DISK_SPACE_GB is not a valid integer: {env_val}"
+                ) from e
+
+        if compute_provider is not None:
+            if isinstance(compute_provider, str):
+                compute_provider = ComputeProvider(compute_provider.upper())
+            kwargs["compute_provider"] = compute_provider
+        elif (env_val := os.environ.get("OETC_COMPUTE_PROVIDER")) is not None:
+            kwargs["compute_provider"] = ComputeProvider(env_val.upper())
+
+        if delete_worker_on_error is not None:
+            kwargs["delete_worker_on_error"] = delete_worker_on_error
+        elif (env_val := os.environ.get("OETC_DELETE_WORKER_ON_ERROR")) is not None:
+            low = env_val.lower()
+            if low in ("true", "1", "yes"):
+                kwargs["delete_worker_on_error"] = True
+            elif low in ("false", "0", "no"):
+                kwargs["delete_worker_on_error"] = False
+            else:
+                raise ValueError(
+                    f"OETC_DELETE_WORKER_ON_ERROR has invalid value: {env_val}"
+                )
+
+        return cls(**kwargs)
 
 
 @dataclass
@@ -226,12 +346,16 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Error fetching GCP credentials: {e}")
 
-    def _submit_job_to_compute_service(self, input_file_name: str) -> str:
+    def _submit_job_to_compute_service(
+        self, input_file_name: str, solver: str, solver_options: dict[str, Any]
+    ) -> str:
         """
         Submit a job to the compute service.
 
         Args:
             input_file_name: Name of the input file uploaded to GCP
+            solver: Solver name to use
+            solver_options: Solver options dict
 
         Returns:
             CreateComputeJobResult: The job creation result with UUID
@@ -243,8 +367,8 @@ class OetcHandler:
             logger.info("OETC - Submitting compute job...")
             payload = {
                 "name": self.settings.name,
-                "solver": self.settings.solver,
-                "solver_options": self.settings.solver_options,
+                "solver": solver,
+                "solver_options": solver_options,
                 "provider": self.settings.compute_provider.value,
                 "cpu_cores": self.settings.cpu_cores,
                 "disk_space_gb": self.settings.disk_space_gb,
@@ -534,13 +658,19 @@ class OetcHandler:
         except Exception as e:
             raise Exception(f"Failed to download file from GCP: {e}")
 
-    def solve_on_oetc(self, model):  # type: ignore
+    def solve_on_oetc(
+        self, model: Model, solver_name: str | None = None, **solver_options: Any
+    ) -> Model:
         """
         Solve a linopy model on the OET Cloud compute app.
 
         Parameters
         ----------
         model : linopy.model.Model
+        solver_name : str, optional
+            Override the solver from settings.
+        **solver_options
+            Override/extend solver_options from settings.
 
         Returns
         -------
@@ -552,17 +682,19 @@ class OetcHandler:
             Exception: If solving fails at any stage
         """
         try:
-            # Save model to temporary file and upload
+            effective_solver = solver_name or self.settings.solver
+            merged_solver_options = {**self.settings.solver_options, **solver_options}
+
             with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
                 fn.file.close()
                 model.to_netcdf(fn.name)
                 input_file_name = self._upload_file_to_gcp(fn.name)
 
-            # Submit job and wait for completion
-            job_uuid = self._submit_job_to_compute_service(input_file_name)
+            job_uuid = self._submit_job_to_compute_service(
+                input_file_name, effective_solver, merged_solver_options
+            )
             job_result = self.wait_and_get_job_data(job_uuid)
 
-            # Download and load the solution
             if not job_result.output_files:
                 raise Exception("No output files found in completed job")
 
@@ -572,18 +704,14 @@ class OetcHandler:
 
             solution_file_path = self._download_file_from_gcp(output_file_name)
 
-            # Load the solved model
             solved_model = linopy.read_netcdf(solution_file_path)
 
-            # Clean up downloaded file
             os.remove(solution_file_path)
 
             logger.info(
                 f"OETC - Model solved successfully. Status: {solved_model.status}"
             )
-            if hasattr(solved_model, "objective") and hasattr(
-                solved_model.objective, "value"
-            ):
+            if solved_model.objective.value is not None:
                 logger.info(
                     f"OETC - Objective value: {solved_model.objective.value:.2e}"
                 )
@@ -591,7 +719,7 @@ class OetcHandler:
             return solved_model
 
         except Exception as e:
-            raise Exception(f"Error solving model on OETC: {e}")
+            raise Exception(f"Error solving model on OETC: {e}") from e
 
     def _gzip_compress(self, source_path: str) -> str:
         """
