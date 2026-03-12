@@ -220,7 +220,7 @@ def _coords_to_mapping(
     ``pd.Index`` or ``pd.RangeIndex``).
     """
     if is_dict_like(coords):
-        return coords  # type: ignore[return-value]
+        return coords
 
     result: dict[Hashable, Any] = {}
     for idx in coords:
