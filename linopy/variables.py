@@ -292,9 +292,15 @@ class Variable:
 
     @property
     def loc(self) -> LocIndexer:
+        """
+        Indexing the variable using coordinates.
+        """
         return LocIndexer(self)
 
     def to_pandas(self) -> pd.Series:
+        """
+        Convert the variable labels to a pandas Series.
+        """
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -844,10 +850,16 @@ class Variable:
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        """
+        Get the coordinate dimensions of the variable.
+        """
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
+        """
+        Get the coordinate sizes of the variable.
+        """
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -1221,6 +1233,19 @@ class Variable:
         return self
 
     def equals(self, other: Variable) -> bool:
+        """
+        Check if this Variable is equal to another.
+
+        Parameters
+        ----------
+        other : Variable
+            The Variable to compare with.
+
+        Returns
+        -------
+        bool
+            True if the variables have equal labels, False otherwise.
+        """
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1361,6 +1386,8 @@ class Variables:
                 sos_dim := ds.attrs.get(SOS_DIM_ATTR)
             ):
                 coords += f" - sos{sos_type} on {sos_dim}"
+            if ds.attrs.get("semi_continuous", False):
+                coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1500,7 +1527,23 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+                if not self[name].attrs["integer"]
+                and not self[name].attrs["binary"]
+                and not self[name].attrs.get("semi_continuous", False)
+            },
+            self.model,
+        )
+
+    @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("semi_continuous", False)
             },
             self.model,
         )
