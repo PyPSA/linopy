@@ -241,10 +241,10 @@ class _FakeXpressProblem:
 def _install_fake_xpress(monkeypatch: pytest.MonkeyPatch) -> _FakeXpressProblem:
     problem = _FakeXpressProblem()
     fake_xpress = types.ModuleType("xpress")
-    fake_xpress.infinity = 1.0e20
-    fake_xpress.ObjSense = types.SimpleNamespace(MAXIMIZE="MAX", MINIMIZE="MIN")
-    fake_xpress.Namespaces = types.SimpleNamespace(ROW=1, COLUMN=2)
-    fake_xpress.problem = lambda: problem  # type: ignore[assignment]
+    fake_xpress.infinity = 1.0e20  # type: ignore[attr-defined]
+    fake_xpress.ObjSense = types.SimpleNamespace(MAXIMIZE="MAX", MINIMIZE="MIN")  # type: ignore[attr-defined]
+    fake_xpress.Namespaces = types.SimpleNamespace(ROW=1, COLUMN=2)  # type: ignore[attr-defined]
+    fake_xpress.problem = lambda: problem  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "xpress", fake_xpress)
     return problem
 
