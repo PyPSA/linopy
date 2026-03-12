@@ -156,6 +156,7 @@ def test_from_env_bool_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _make_handler(settings: OetcSettings) -> OetcHandler:
     with (
+        patch("linopy.remote.oetc._oetc_deps_available", True),
         patch.object(OetcHandler, "_OetcHandler__sign_in", return_value=MagicMock()),
         patch.object(
             OetcHandler,
