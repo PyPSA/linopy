@@ -167,7 +167,7 @@ def _make_handler(settings: OetcSettings) -> OetcHandler:
 
 
 def _default_settings(**overrides: Any) -> OetcSettings:
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         credentials=OetcCredentials(email="a@b.com", password="pw"),
         name="test",
         authentication_server_url="https://auth",

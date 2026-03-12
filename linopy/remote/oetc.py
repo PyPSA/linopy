@@ -106,35 +106,35 @@ class OetcSettings:
 
         if cpu_cores is not None:
             kwargs["cpu_cores"] = cpu_cores
-        elif (env_val := os.environ.get("OETC_CPU_CORES")) is not None:
+        elif (cpu_env := os.environ.get("OETC_CPU_CORES")) is not None:
             try:
-                kwargs["cpu_cores"] = int(env_val)
+                kwargs["cpu_cores"] = int(cpu_env)
             except ValueError as e:
                 raise ValueError(
-                    f"OETC_CPU_CORES is not a valid integer: {env_val}"
+                    f"OETC_CPU_CORES is not a valid integer: {cpu_env}"
                 ) from e
 
         if disk_space_gb is not None:
             kwargs["disk_space_gb"] = disk_space_gb
-        elif (env_val := os.environ.get("OETC_DISK_SPACE_GB")) is not None:
+        elif (disk_env := os.environ.get("OETC_DISK_SPACE_GB")) is not None:
             try:
-                kwargs["disk_space_gb"] = int(env_val)
+                kwargs["disk_space_gb"] = int(disk_env)
             except ValueError as e:
                 raise ValueError(
-                    f"OETC_DISK_SPACE_GB is not a valid integer: {env_val}"
+                    f"OETC_DISK_SPACE_GB is not a valid integer: {disk_env}"
                 ) from e
 
         if delete_worker_on_error is not None:
             kwargs["delete_worker_on_error"] = delete_worker_on_error
-        elif (env_val := os.environ.get("OETC_DELETE_WORKER_ON_ERROR")) is not None:
-            low = env_val.lower()
+        elif (del_env := os.environ.get("OETC_DELETE_WORKER_ON_ERROR")) is not None:
+            low = del_env.lower()
             if low in ("true", "1", "yes"):
                 kwargs["delete_worker_on_error"] = True
             elif low in ("false", "0", "no"):
                 kwargs["delete_worker_on_error"] = False
             else:
                 raise ValueError(
-                    f"OETC_DELETE_WORKER_ON_ERROR has invalid value: {env_val}"
+                    f"OETC_DELETE_WORKER_ON_ERROR has invalid value: {del_env}"
                 )
 
         return cls(**kwargs)

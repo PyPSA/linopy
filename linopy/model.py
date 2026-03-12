@@ -1419,7 +1419,8 @@ class Model:
                     **solver_options,
                 )
 
-            self.objective.set_value(solved.objective.value)
+            if solved.objective.value is not None:
+                self.objective.set_value(float(solved.objective.value))
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
