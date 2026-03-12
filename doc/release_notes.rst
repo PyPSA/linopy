@@ -17,6 +17,9 @@ Upcoming Version
 * Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Add semi-continous variables for solvers that support them
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
 
 
