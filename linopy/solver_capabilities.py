@@ -7,7 +7,6 @@ replacing scattered hardcoded checks throughout the codebase.
 
 from __future__ import annotations
 
-import platform
 from dataclasses import dataclass
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -51,6 +50,9 @@ class SolverFeature(Enum):
     SOS_CONSTRAINTS = auto()  # Special Ordered Sets (SOS1/SOS2) constraints
     INDICATOR_CONSTRAINTS = auto()  # Indicator (conditional) constraints
 
+    # Special variable types
+    SEMI_CONTINUOUS_VARIABLES = auto()  # Semi-continuous variable support
+
     # Solver-specific
     SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
 
@@ -88,6 +90,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.IIS_COMPUTATION,
                 SolverFeature.SOS_CONSTRAINTS,
                 SolverFeature.INDICATOR_CONSTRAINTS,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
                 SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
             }
         ),
@@ -103,6 +106,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             }
         ),
     ),
@@ -137,6 +141,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOS_CONSTRAINTS,
                 SolverFeature.INDICATOR_CONSTRAINTS,
+                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             }
         ),
     ),
@@ -183,20 +188,11 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         features=frozenset(
             {
                 SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-            if platform.system() == "Windows"
-            else {
-                SolverFeature.INTEGER_VARIABLES,
                 SolverFeature.QUADRATIC_OBJECTIVE,
                 SolverFeature.LP_FILE_NAMES,
                 SolverFeature.READ_MODEL_FROM_FILE,
                 SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             }
-            # SCIP has a bug with quadratic models on Windows, see:
-            # https://github.com/PyPSA/linopy/actions/runs/7615240686/job/20739454099?pr=78
         ),
     ),
     "mosek": SolverInfo(

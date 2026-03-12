@@ -1,8 +1,15 @@
 """Pytest configuration and fixtures."""
 
-import os
+from __future__ import annotations
 
+import os
+from typing import TYPE_CHECKING
+
+import pandas as pd
 import pytest
+
+if TYPE_CHECKING:
+    from linopy import Model, Variable
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -48,3 +55,43 @@ def pytest_collection_modifyitems(
             if solver_supports(solver, SolverFeature.GPU_ACCELERATION):
                 item.add_marker(skip_gpu)
                 item.add_marker(pytest.mark.gpu)
+
+
+@pytest.fixture
+def m() -> Model:
+    from linopy import Model
+
+    m = Model()
+    m.add_variables(pd.Series([0, 0]), 1, name="x")
+    m.add_variables(4, pd.Series([8, 10]), name="y")
+    m.add_variables(0, pd.DataFrame([[1, 2], [3, 4], [5, 6]]).T, name="z")
+    m.add_variables(coords=[pd.RangeIndex(20, name="dim_2")], name="v")
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "dim_3"
+    m.add_variables(coords=[idx], name="u")
+    return m
+
+
+@pytest.fixture
+def x(m: Model) -> Variable:
+    return m.variables["x"]
+
+
+@pytest.fixture
+def y(m: Model) -> Variable:
+    return m.variables["y"]
+
+
+@pytest.fixture
+def z(m: Model) -> Variable:
+    return m.variables["z"]
+
+
+@pytest.fixture
+def v(m: Model) -> Variable:
+    return m.variables["v"]
+
+
+@pytest.fixture
+def u(m: Model) -> Variable:
+    return m.variables["u"]

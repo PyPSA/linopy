@@ -55,7 +55,7 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp", True))
 
 
-# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# Note: Platform-specific solver bugs are now
 # handled in linopy/solver_capabilities.py by adjusting the registry at import time.
 feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
@@ -530,7 +530,7 @@ def test_solver_time_limit_options(
         "cplex": {"timelimit": 1},
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
-        "scip": {"limits/time": 1},
+        "scip": {"limits/time": 10},  # increase time limit to avoid race condition
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},

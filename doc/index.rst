@@ -111,7 +111,10 @@ This package is published under MIT license.
    creating-variables
    creating-expressions
    creating-constraints
+   coordinate-alignment
    sos-constraints
+   piecewise-linear-constraints
+   piecewise-linear-constraints-tutorial
    manipulating-models
    testing-framework
    transport-tutorial

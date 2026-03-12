@@ -4,8 +4,31 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Harmonize coordinate alignment for operations with subset/superset objects:
+  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
+  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
+  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
+  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
+  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
+* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
+* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
+* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
+* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
+* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add indicator constraints for solvers that support them.
+* Add semi-continous variables for solvers that support them
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Enable quadratic problems with SCIP on windows.
+
+
+Version 0.6.5
+-------------
+
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
 
 Version 0.6.4
 --------------
