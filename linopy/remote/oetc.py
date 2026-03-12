@@ -62,11 +62,8 @@ class OetcSettings:
         name: str | None = None,
         authentication_server_url: str | None = None,
         orchestrator_server_url: str | None = None,
-        solver: str | None = None,
-        solver_options: dict[str, Any] | None = None,
         cpu_cores: int | None = None,
         disk_space_gb: int | None = None,
-        compute_provider: ComputeProvider | str | None = None,
         delete_worker_on_error: bool | None = None,
     ) -> OetcSettings:
         required_fields = {
@@ -107,24 +104,6 @@ class OetcSettings:
             "orchestrator_server_url": resolved["orchestrator_server_url"],
         }
 
-        if solver is not None:
-            kwargs["solver"] = solver
-        elif env_val := os.environ.get("OETC_SOLVER", "").strip():
-            kwargs["solver"] = env_val
-
-        if solver_options is not None:
-            kwargs["solver_options"] = solver_options
-        elif (env_val := os.environ.get("OETC_SOLVER_OPTIONS")) is not None:
-            try:
-                parsed = json.loads(env_val)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"OETC_SOLVER_OPTIONS is not valid JSON: {e}") from e
-            if not isinstance(parsed, dict):
-                raise ValueError(
-                    "OETC_SOLVER_OPTIONS is not valid JSON: expected a JSON object"
-                )
-            kwargs["solver_options"] = parsed
-
         if cpu_cores is not None:
             kwargs["cpu_cores"] = cpu_cores
         elif (env_val := os.environ.get("OETC_CPU_CORES")) is not None:
@@ -144,13 +123,6 @@ class OetcSettings:
                 raise ValueError(
                     f"OETC_DISK_SPACE_GB is not a valid integer: {env_val}"
                 ) from e
-
-        if compute_provider is not None:
-            if isinstance(compute_provider, str):
-                compute_provider = ComputeProvider(compute_provider.upper())
-            kwargs["compute_provider"] = compute_provider
-        elif (env_val := os.environ.get("OETC_COMPUTE_PROVIDER")) is not None:
-            kwargs["compute_provider"] = ComputeProvider(env_val.upper())
 
         if delete_worker_on_error is not None:
             kwargs["delete_worker_on_error"] = delete_worker_on_error

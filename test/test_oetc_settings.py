@@ -33,11 +33,8 @@ def _clear_oetc_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OETC_NAME",
         "OETC_AUTH_URL",
         "OETC_ORCHESTRATOR_URL",
-        "OETC_SOLVER",
-        "OETC_SOLVER_OPTIONS",
         "OETC_CPU_CORES",
         "OETC_DISK_SPACE_GB",
-        "OETC_COMPUTE_PROVIDER",
         "OETC_DELETE_WORKER_ON_ERROR",
     ]:
         monkeypatch.delenv(key, raising=False)
@@ -46,19 +43,14 @@ def _clear_oetc_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_from_env_all_set(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_oetc_env(monkeypatch)
     _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_SOLVER", "gurobi")
-    monkeypatch.setenv("OETC_SOLVER_OPTIONS", '{"TimeLimit": 100}')
     monkeypatch.setenv("OETC_CPU_CORES", "8")
     monkeypatch.setenv("OETC_DISK_SPACE_GB", "20")
-    monkeypatch.setenv("OETC_COMPUTE_PROVIDER", "GCP")
     monkeypatch.setenv("OETC_DELETE_WORKER_ON_ERROR", "true")
 
     s = OetcSettings.from_env()
     assert s.credentials.email == "test@example.com"
     assert s.credentials.password == "secret"
     assert s.name == "test-job"
-    assert s.solver == "gurobi"
-    assert s.solver_options == {"TimeLimit": 100}
     assert s.cpu_cores == 8
     assert s.disk_space_gb == 20
     assert s.compute_provider == ComputeProvider.GCP
@@ -68,11 +60,9 @@ def test_from_env_all_set(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_from_env_kwargs_override(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_oetc_env(monkeypatch)
     _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_SOLVER", "highs")
 
-    s = OetcSettings.from_env(email="override@example.com", solver="gurobi")
+    s = OetcSettings.from_env(email="override@example.com")
     assert s.credentials.email == "override@example.com"
-    assert s.solver == "gurobi"
 
 
 def test_from_env_missing_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,33 +110,6 @@ def test_from_env_defaults_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.delete_worker_on_error is False
 
 
-def test_from_env_solver_options_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_SOLVER_OPTIONS", '{"TimeLimit": 3600}')
-
-    s = OetcSettings.from_env()
-    assert s.solver_options == {"TimeLimit": 3600}
-
-
-def test_from_env_solver_options_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_SOLVER_OPTIONS", "not json")
-
-    with pytest.raises(ValueError, match="OETC_SOLVER_OPTIONS is not valid JSON"):
-        OetcSettings.from_env()
-
-
-def test_from_env_solver_options_non_dict(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_SOLVER_OPTIONS", "[1,2,3]")
-
-    with pytest.raises(ValueError, match="OETC_SOLVER_OPTIONS is not valid JSON"):
-        OetcSettings.from_env()
-
-
 def test_from_env_cpu_cores_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_oetc_env(monkeypatch)
     _set_required_env(monkeypatch)
@@ -189,33 +152,6 @@ def test_from_env_bool_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ValueError, match="OETC_DELETE_WORKER_ON_ERROR"):
         OetcSettings.from_env()
-
-
-def test_from_env_compute_provider_lowercase(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_COMPUTE_PROVIDER", "gcp")
-
-    assert OetcSettings.from_env().compute_provider == ComputeProvider.GCP
-
-
-def test_from_env_compute_provider_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-    monkeypatch.setenv("OETC_COMPUTE_PROVIDER", "AWS")
-
-    with pytest.raises(ValueError):
-        OetcSettings.from_env()
-
-
-def test_from_env_compute_provider_kwarg_string(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_oetc_env(monkeypatch)
-    _set_required_env(monkeypatch)
-
-    s = OetcSettings.from_env(compute_provider="gcp")
-    assert s.compute_provider == ComputeProvider.GCP
 
 
 def _make_handler(settings: OetcSettings) -> OetcHandler:
