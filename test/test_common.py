@@ -419,8 +419,8 @@ def test_validate_dataarray_coords_match() -> None:
     from linopy.common import _validate_dataarray_coords
 
     da = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
-    out = _validate_dataarray_coords(da, coords={"x": [10, 20, 30]})
-    assert_equal(out, da)
+    # Should not raise
+    _validate_dataarray_coords(da, coords={"x": [10, 20, 30]})
 
 
 def test_validate_dataarray_coords_mismatch() -> None:
@@ -439,24 +439,13 @@ def test_validate_dataarray_coords_extra_dims() -> None:
         _validate_dataarray_coords(da, coords={"x": [0, 1]})
 
 
-def test_validate_dataarray_coords_broadcast() -> None:
-    from linopy.common import _validate_dataarray_coords
-
-    da = DataArray([1, 2], dims=["x"], coords={"x": ["a", "b"]})
-    out = _validate_dataarray_coords(
-        da, coords={"x": ["a", "b"], "y": [1, 2, 3]}, dims=["x", "y"]
-    )
-    assert set(out.dims) == {"x", "y"}
-    assert out.sizes["y"] == 3
-
-
 def test_validate_dataarray_coords_sequence() -> None:
     from linopy.common import _validate_dataarray_coords
 
     da = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
     idx = pd.RangeIndex(2, name="x")
-    out = _validate_dataarray_coords(da, coords=[idx], dims=["x"])
-    assert list(out.coords["x"].values) == [0, 1]
+    # Should not raise
+    _validate_dataarray_coords(da, coords=[idx], dims=["x"])
 
 
 def test_validate_dataarray_coords_sequence_mismatch() -> None:
@@ -466,6 +455,55 @@ def test_validate_dataarray_coords_sequence_mismatch() -> None:
     idx = pd.RangeIndex(3, name="x")
     with pytest.raises(ValueError, match="do not match"):
         _validate_dataarray_coords(da, coords=[idx], dims=["x"])
+
+
+def test_coerce_to_dataarray_scalar() -> None:
+    from linopy.common import _coerce_to_dataarray
+
+    da = _coerce_to_dataarray(1, coords={"x": [10, 20]}, dims=["x"])
+    assert isinstance(da, DataArray)
+    assert da.dims == ("x",)
+    assert list(da.coords["x"].values) == [10, 20]
+
+
+def test_coerce_to_dataarray_numpy() -> None:
+    from linopy.common import _coerce_to_dataarray
+
+    arr = np.array([1, 2, 3])
+    da = _coerce_to_dataarray(arr, coords={"x": [10, 20, 30]}, dims=["x"])
+    assert isinstance(da, DataArray)
+    assert da.dims == ("x",)
+    assert list(da.coords["x"].values) == [10, 20, 30]
+
+
+def test_coerce_to_dataarray_no_expand() -> None:
+    from linopy.common import _coerce_to_dataarray
+
+    da_in = DataArray([1, 2], dims=["x"], coords={"x": ["a", "b"]})
+    # Missing dim "y" should NOT be expanded — coerce only does type conversion
+    da = _coerce_to_dataarray(
+        da_in, coords={"x": ["a", "b"], "y": [1, 2, 3]}, dims=["x", "y"]
+    )
+    assert da.dims == ("x",)
+    assert "y" not in da.dims
+
+
+def test_coerce_to_dataarray_allows_extra_dims() -> None:
+    from linopy.common import _coerce_to_dataarray
+
+    da_in = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+    # Should NOT raise even though "y" is not in coords
+    da = _coerce_to_dataarray(da_in, coords={"x": [0, 1]}, dims=["x"])
+    assert set(da.dims) == {"x", "y"}
+
+
+def test_coerce_to_dataarray_no_coord_validation() -> None:
+    from linopy.common import _coerce_to_dataarray
+
+    da_in = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+    # Should NOT raise even though coords don't match
+    da = _coerce_to_dataarray(da_in, coords={"x": [10, 20, 40]}, dims=["x"])
+    assert list(da.coords["x"].values) == [10, 20, 30]
 
 
 def test_add_variables_with_dataarray_bounds_and_coords() -> None:

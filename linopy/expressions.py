@@ -46,6 +46,7 @@ from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
+    _coerce_to_dataarray,
     as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
@@ -597,7 +598,7 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -626,7 +627,7 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1142,7 +1143,7 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = _coerce_to_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1705,7 +1706,9 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = _coerce_to_dataarray(
+                other, coords=self.coords, dims=self.coord_dims
+            )
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2191,7 +2194,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

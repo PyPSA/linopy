@@ -26,7 +26,7 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.common import (
-    _validate_dataarray_coords,
+    _coerce_to_dataarray,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
@@ -610,15 +610,6 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
-        if coords is not None:
-            if isinstance(lower, DataArray):
-                lower = _validate_dataarray_coords(lower, coords)
-            if isinstance(upper, DataArray):
-                upper = _validate_dataarray_coords(upper, coords)
-            # TODO: validate mask DataArray coords too, but this would
-            # change behavior — broadcast_mask currently fills mismatched
-            # coords with False silently. Needs a deprecation path.
-
         data = Dataset(
             {
                 "lower": as_dataarray(lower, coords, **kwargs),
@@ -631,7 +622,9 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            mask = _coerce_to_dataarray(
+                mask, coords=data.coords, dims=data.dims
+            ).astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
@@ -860,7 +853,9 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            mask = _coerce_to_dataarray(
+                mask, coords=data.coords, dims=data.dims
+            ).astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
