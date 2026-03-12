@@ -51,6 +51,7 @@ from linopy.common import (
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
+    ensure_dataarray,
     fill_missing_coords,
     filter_nulls_polars,
     forward_as_properties,
@@ -597,10 +598,7 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        if not isinstance(other, DataArray):
-            da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        else:
-            da = other
+        da = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -629,10 +627,7 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        if not isinstance(other, DataArray):
-            factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
-        else:
-            factor = other
+        factor = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1148,8 +1143,7 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            if not isinstance(rhs, DataArray):
-                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = ensure_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1712,8 +1706,7 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            if not isinstance(other, DataArray):
-                other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+            other = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2199,8 +2192,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        if not isinstance(other, DataArray):
-            other = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

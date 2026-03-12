@@ -295,31 +295,31 @@ def _validate_dataarray_coords(
     return da
 
 
-def as_dataarray(
+def ensure_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
     """
-    Convert an object to a DataArray.
+    Convert an object to a DataArray without coordinate validation.
 
-    When ``coords`` is provided the result is guaranteed to have exactly
-    those dimensions and coordinate values.  For DataArray inputs this
-    means the array is validated (shared dims must match, extra dims are
-    rejected, missing dims are broadcast).  For other input types the
-    coords are forwarded to the DataArray constructor.
+    DataArray inputs pass through unchanged. For all other types, ``coords``
+    and ``dims`` are forwarded to the DataArray constructor.
 
     Parameters
     ----------
         arr:
             The input object.
         coords (Union[dict, list, None]):
-            The coordinates for the DataArray. If None, default coordinates will be used.
+            The coordinates for the DataArray. If None, default coordinates
+            will be used.
         dims (Union[list, None]):
-            The dimensions for the DataArray. If None, the dimensions will be automatically generated.
+            The dimensions for the DataArray. If None, the dimensions will
+            be automatically generated.
         **kwargs:
-            Additional keyword arguments to be passed to the DataArray constructor.
+            Additional keyword arguments to be passed to the DataArray
+            constructor.
 
     Returns
     -------
@@ -336,17 +336,7 @@ def as_dataarray(
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, DataArray):
-        if coords is not None:
-            # If coords is a plain sequence (no .name attributes), use dims
-            # to build a proper mapping; fall back to the DataArray's own dims.
-            if not is_dict_like(coords) and dims is not None:
-                dim_names = list(dims) if isinstance(dims, Iterable) else [dims]
-                coords = dict(zip(dim_names, coords))
-            elif not is_dict_like(coords) and dims is None:
-                coords = dict(zip(arr.dims, coords))
-            arr = _validate_dataarray_coords(arr, coords)
-    else:
+    elif not isinstance(arr, DataArray):
         supported_types = [
             np.number,
             str,
@@ -364,6 +354,56 @@ def as_dataarray(
         )
 
     arr = fill_missing_coords(arr)
+    return arr
+
+
+def as_dataarray(
+    arr: Any,
+    coords: CoordsLike | None = None,
+    dims: DimsLike | None = None,
+    **kwargs: Any,
+) -> DataArray:
+    """
+    Convert an object to a DataArray with coordinate validation.
+
+    When ``coords`` is provided the result is guaranteed to have exactly
+    those dimensions and coordinate values.  For DataArray inputs this
+    means the array is validated (shared dims must match, extra dims are
+    rejected, missing dims are broadcast).  For other input types the
+    coords are forwarded to the DataArray constructor.
+
+    Parameters
+    ----------
+        arr:
+            The input object.
+        coords (Union[dict, list, None]):
+            The coordinates for the DataArray. If None, default coordinates
+            will be used.
+        dims (Union[list, None]):
+            The dimensions for the DataArray. If None, the dimensions will
+            be automatically generated.
+        **kwargs:
+            Additional keyword arguments to be passed to the DataArray
+            constructor.
+
+    Returns
+    -------
+        DataArray:
+            The converted DataArray.
+    """
+    is_input_dataarray = isinstance(arr, DataArray)
+    arr = ensure_dataarray(arr, coords=coords, dims=dims, **kwargs)
+
+    if is_input_dataarray and coords is not None:
+        # Normalize plain sequence coords to a mapping using dims or arr.dims
+        if not is_dict_like(coords):
+            if dims is not None:
+                dim_names = list(dims) if isinstance(dims, Iterable) else [dims]
+            else:
+                dim_names = list(arr.dims)
+            coords = dict(zip(dim_names, coords))
+        arr = _validate_dataarray_coords(arr, coords)
+
     return arr
 
 

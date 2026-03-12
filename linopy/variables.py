@@ -33,10 +33,10 @@ import linopy.expressions as expressions
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
-    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
+    ensure_dataarray,
     filter_nulls_polars,
     format_string_as_variable_name,
     generate_indices_for_printout,
@@ -321,8 +321,7 @@ class Variable:
         linopy.LinearExpression
             Linear expression with the variables and coefficients.
         """
-        if not isinstance(coefficient, DataArray):
-            coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = ensure_dataarray(coefficient, coords=self.coords, dims=self.dims)
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
