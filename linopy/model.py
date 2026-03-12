@@ -615,7 +615,9 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            if not isinstance(mask, DataArray):
+                mask = as_dataarray(mask, coords=data.coords, dims=data.dims)
+            mask = mask.astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
@@ -844,7 +846,9 @@ class Model:
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            if not isinstance(mask, DataArray):
+                mask = as_dataarray(mask, coords=data.coords, dims=data.dims)
+            mask = mask.astype(bool)
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)

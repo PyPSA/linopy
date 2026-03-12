@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import operator
 import os
-from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
 from functools import partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
@@ -210,6 +210,91 @@ def numpy_to_dataarray(
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
 
 
+def _coords_to_mapping(
+    coords: CoordsLike,
+) -> Mapping[Hashable, Any]:
+    """
+    Normalize coords to a mapping of ``{dim_name: index_values}``.
+
+    Handles both dict-like coords and sequence coords (e.g. a list of
+    ``pd.Index`` or ``pd.RangeIndex``).
+    """
+    if is_dict_like(coords):
+        return coords  # type: ignore[return-value]
+
+    result: dict[Hashable, Any] = {}
+    for idx in coords:
+        if isinstance(idx, pd.Index):
+            name = idx.name
+        elif isinstance(idx, DataArray):
+            name = idx.dims[0] if idx.dims else None
+        else:
+            name = None
+        if name is None:
+            msg = (
+                "Cannot determine dimension name from coords sequence element "
+                f"{idx!r}. Use a dict or ensure each element has a .name attribute."
+            )
+            raise ValueError(msg)
+        result[name] = idx
+    return result
+
+
+def _validate_dataarray_coords(
+    da: DataArray,
+    coords: CoordsLike,
+) -> DataArray:
+    """
+    Validate that a DataArray's coordinates match the expected coords.
+
+    For shared dimensions, coordinates must match exactly. Extra dimensions
+    in the DataArray (not in coords) raise ``ValueError``. Missing dimensions
+    (in coords but not in the DataArray) are broadcast via ``expand_dims``.
+
+    Parameters
+    ----------
+    da : DataArray
+        The input DataArray to validate.
+    coords : CoordsLike
+        The expected coordinates.
+
+    Returns
+    -------
+    DataArray
+        The validated (and possibly broadcast) DataArray.
+
+    Raises
+    ------
+    ValueError
+        If the DataArray has extra dimensions or mismatched coordinates.
+    """
+    coords_map = _coords_to_mapping(coords)
+
+    extra_dims = set(da.dims) - set(coords_map)
+    if extra_dims:
+        raise ValueError(
+            f"DataArray has dimensions not present in coords: {extra_dims}"
+        )
+
+    for dim in da.dims:
+        if dim not in coords_map:
+            continue
+        expected = pd.Index(coords_map[dim])
+        actual = pd.Index(da.coords[dim].values)
+        if not expected.equals(actual):
+            raise ValueError(
+                f"Coordinates for dimension '{dim}' do not match: "
+                f"expected {expected.tolist()}, got {actual.tolist()}"
+            )
+
+    # Broadcast to dimensions present in coords but not in the DataArray
+    missing_dims = set(coords_map) - set(da.dims)
+    for dim in missing_dims:
+        da = da.expand_dims({dim: coords_map[dim]})
+
+    return da
+
+
 def as_dataarray(
     arr: Any,
     coords: CoordsLike | None = None,
@@ -218,6 +303,12 @@ def as_dataarray(
 ) -> DataArray:
     """
     Convert an object to a DataArray.
+
+    When ``coords`` is provided the result is guaranteed to have exactly
+    those dimensions and coordinate values.  For DataArray inputs this
+    means the array is validated (shared dims must match, extra dims are
+    rejected, missing dims are broadcast).  For other input types the
+    coords are forwarded to the DataArray constructor.
 
     Parameters
     ----------
@@ -245,8 +336,17 @@ def as_dataarray(
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
-
-    elif not isinstance(arr, DataArray):
+    elif isinstance(arr, DataArray):
+        if coords is not None:
+            # If coords is a plain sequence (no .name attributes), use dims
+            # to build a proper mapping; fall back to the DataArray's own dims.
+            if not is_dict_like(coords) and dims is not None:
+                dim_names = list(dims) if isinstance(dims, Iterable) else [dims]
+                coords = dict(zip(dim_names, coords))
+            elif not is_dict_like(coords) and dims is None:
+                coords = dict(zip(arr.dims, coords))
+            arr = _validate_dataarray_coords(arr, coords)
+    else:
         supported_types = [
             np.number,
             str,

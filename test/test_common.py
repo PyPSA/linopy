@@ -414,6 +414,64 @@ def test_as_dataarray_with_unsupported_type() -> None:
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
 
 
+def test_as_dataarray_dataarray_matching_coords() -> None:
+    da = DataArray([1, 2, 3], dims=["x"], coords={"x": [0, 1, 2]})
+    result = as_dataarray(da, coords={"x": [0, 1, 2]})
+    assert_equal(result, da)
+
+
+def test_as_dataarray_dataarray_mismatched_coords() -> None:
+    da = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 11, 12]})
+    with pytest.raises(ValueError, match="do not match"):
+        as_dataarray(da, coords={"x": [0, 1, 2]})
+
+
+def test_as_dataarray_dataarray_extra_dims() -> None:
+    da = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+    with pytest.raises(ValueError, match="not present in coords"):
+        as_dataarray(da, coords={"x": [0, 1]})
+
+
+def test_as_dataarray_dataarray_broadcast_missing_dims() -> None:
+    da = DataArray([1, 2], dims=["x"], coords={"x": [0, 1]})
+    result = as_dataarray(da, coords={"x": [0, 1], "y": [10, 20, 30]})
+    assert result.dims == ("y", "x")  # expand_dims prepends
+    assert result.shape == (3, 2)
+    # Values should be broadcast
+    assert (result.sel(y=10) == da).all()
+
+
+def test_as_dataarray_dataarray_sequence_coords() -> None:
+    time = pd.RangeIndex(3, name="time")
+    da = DataArray([1, 2, 3], dims=["time"], coords={"time": [0, 1, 2]})
+    result = as_dataarray(da, coords=[time])
+    assert_equal(result, da)
+
+
+def test_as_dataarray_dataarray_sequence_coords_mismatch() -> None:
+    time = pd.RangeIndex(5, name="time")
+    da = DataArray([1, 2, 3], dims=["time"], coords={"time": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match"):
+        as_dataarray(da, coords=[time])
+
+
+def test_add_variables_dataarray_bounds_validated() -> None:
+    m = Model()
+    time = pd.RangeIndex(3, name="time")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": [10, 11, 12]})
+    with pytest.raises(ValueError, match="do not match"):
+        m.add_variables(lower=lower, coords=[time], name="x")
+
+
+def test_add_variables_dataarray_bounds_broadcast() -> None:
+    m = Model()
+    time = pd.RangeIndex(3, name="time")
+    space = pd.Index(["a", "b"], name="space")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": [0, 1, 2]})
+    v = m.add_variables(lower=lower, coords=[time, space], name="x")
+    assert v.shape == (3, 2)
+
+
 def test_best_int() -> None:
     # Test for int8
     assert best_int(127) == np.int8
