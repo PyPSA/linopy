@@ -1108,14 +1108,15 @@ def auto_mask_variable_model() -> Model:
 
 @pytest.fixture
 def auto_mask_constraint_model() -> Model:
-    """Model with auto_mask=True and NaN in constraint RHS."""
-    m = Model(auto_mask=True)
+    """Model with NaN in constraint RHS, masked explicitly."""
+    m = Model()
 
     x = m.add_variables(lower=0, coords=[range(10)], name="x")
     y = m.add_variables(lower=0, coords=[range(10)], name="y")
 
     rhs = pd.Series([10.0] * 8 + [np.nan, np.nan], range(10))
-    m.add_constraints(x + y, GREATER_EQUAL, rhs)  # NaN rhs auto-masked
+    mask = rhs.notnull()
+    m.add_constraints(x + y, GREATER_EQUAL, rhs.fillna(0), mask=mask)
     m.add_constraints(x + y, GREATER_EQUAL, 5)
 
     m.add_objective(2 * x + y)

@@ -104,7 +104,7 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 
-FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+FILL_VALUE = {"vars": -1, "coeffs": 0, "const": np.nan}
 
 
 def _to_piecewise_constraint_descriptor(
@@ -634,6 +634,11 @@ class BaseExpression(ABC):
             join is None and options["arithmetic_convention"] == "legacy"
         ) or join == "legacy"
         if np.isscalar(other) and join is None:
+            if not is_legacy and np.isnan(other):
+                raise ValueError(
+                    "Constant contains NaN values. Use .fillna() to handle "
+                    "missing values before arithmetic operations."
+                )
             const = self.const.fillna(0) + other if is_legacy else self.const + other
             return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -643,6 +648,11 @@ class BaseExpression(ABC):
         if is_legacy:
             da = da.fillna(0)
             self_const = self_const.fillna(0)
+        elif da.isnull().any():
+            raise ValueError(
+                "Constant contains NaN values. Use .fillna() to handle "
+                "missing values before arithmetic operations."
+            )
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -665,6 +675,11 @@ class BaseExpression(ABC):
         ) or join == "legacy"
         # Fast path for scalars: no dimensions to align
         if np.isscalar(other):
+            if not is_legacy and np.isnan(other):
+                raise ValueError(
+                    "Factor contains NaN values. Use .fillna() to handle "
+                    "missing values before arithmetic operations."
+                )
             coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
             const = self.const.fillna(0) if is_legacy else self.const
             scalar = DataArray(other)
@@ -676,6 +691,11 @@ class BaseExpression(ABC):
         if is_legacy:
             factor = factor.fillna(fill_value)
             self_const = self_const.fillna(0)
+        elif factor.isnull().any():
+            raise ValueError(
+                "Factor contains NaN values. Use .fillna() to handle "
+                "missing values before arithmetic operations."
+            )
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
@@ -1219,7 +1239,18 @@ class BaseExpression(ABC):
         if effective_join == "v1":
             effective_join = "exact"
 
+        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES) and not isinstance(rhs, DataArray):
+            rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+
         if isinstance(rhs, DataArray):
+            is_legacy = (
+                join is None and options["arithmetic_convention"] == "legacy"
+            ) or join == "legacy"
+            if not is_legacy and rhs.isnull().any():
+                raise ValueError(
+                    "Constraint RHS contains NaN values. Use .fillna() and "
+                    "mask= to handle missing values explicitly."
+                )
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)
                 expr_const = self.const
@@ -2209,7 +2240,7 @@ class QuadraticExpression(BaseExpression):
     __array_priority__ = 10000
     __pandas_priority__ = 10000
 
-    _fill_value = {"vars": -1, "coeffs": np.nan, "const": np.nan}
+    _fill_value = {"vars": -1, "coeffs": 0, "const": np.nan}
 
     def __init__(self, data: Dataset | None, model: Model) -> None:
         super().__init__(data, model)

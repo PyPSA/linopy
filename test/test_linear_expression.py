@@ -1116,7 +1116,7 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_add_nan_propagates(self, v: Variable, operand: str) -> None:
+        def test_add_nan_raises(self, v: Variable, operand: str) -> None:
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             vals[5] = np.nan
@@ -1125,9 +1125,8 @@ class TestCoordinateAlignment:
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else v + 5
-            result = target + nan_constant
-            for i in self.NAN_POSITIONS:
-                assert np.isnan(result.const.values[i])
+            with pytest.raises(ValueError, match="NaN"):
+                target + nan_constant
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1148,7 +1147,7 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_sub_nan_propagates(self, v: Variable, operand: str) -> None:
+        def test_sub_nan_raises(self, v: Variable, operand: str) -> None:
             vals = np.arange(20, dtype=float)
             for i in self.NAN_POSITIONS:
                 vals[i] = np.nan
@@ -1156,9 +1155,8 @@ class TestCoordinateAlignment:
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else v + 5
-            result = target - nan_constant
-            for i in self.NAN_POSITIONS:
-                assert np.isnan(result.const.values[i])
+            with pytest.raises(ValueError, match="NaN"):
+                target - nan_constant
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1178,15 +1176,15 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_nan_propagates(self, v: Variable, operand: str) -> None:
+        def test_mul_nan_raises(self, v: Variable, operand: str) -> None:
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else 1 * v
-            result = target * nan_constant
-            assert np.isnan(result.coeffs.squeeze().values[0])
+            with pytest.raises(ValueError, match="NaN"):
+                target * nan_constant
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1207,7 +1205,7 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_div_nan_propagates(self, v: Variable, operand: str) -> None:
+        def test_div_nan_raises(self, v: Variable, operand: str) -> None:
             vals = np.arange(20, dtype=float) + 1
             vals[0] = np.nan
             vals[5] = np.nan
@@ -1215,9 +1213,8 @@ class TestCoordinateAlignment:
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else 1 * v
-            result = target / nan_constant
-            assert np.isnan(result.coeffs.squeeze().values[0])
-            assert np.isnan(result.coeffs.squeeze().values[5])
+            with pytest.raises(ValueError, match="NaN"):
+                target / nan_constant
 
         @pytest.mark.legacy_only
         def test_add_commutativity(
@@ -1235,16 +1232,16 @@ class TestCoordinateAlignment:
             )
 
         @pytest.mark.v1_only
-        def test_add_commutativity_nan_propagates(self, v: Variable) -> None:
+        def test_add_commutativity_nan_raises(self, v: Variable) -> None:
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
-            result_a = v + nan_constant
-            result_b = nan_constant + v
-            assert np.isnan(result_a.const.values[0])
-            assert np.isnan(result_b.const.values[0])
+            with pytest.raises(ValueError, match="NaN"):
+                v + nan_constant
+            with pytest.raises(ValueError, match="NaN"):
+                nan_constant + v
 
         @pytest.mark.legacy_only
         def test_mul_commutativity(
@@ -1261,16 +1258,16 @@ class TestCoordinateAlignment:
             )
 
         @pytest.mark.v1_only
-        def test_mul_commutativity_nan_propagates(self, v: Variable) -> None:
+        def test_mul_commutativity_nan_raises(self, v: Variable) -> None:
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
-            result_a = v * nan_constant
-            result_b = nan_constant * v
-            assert np.isnan(result_a.coeffs.squeeze().values[0])
-            assert np.isnan(result_b.coeffs.squeeze().values[0])
+            with pytest.raises(ValueError, match="NaN"):
+                v * nan_constant
+            with pytest.raises(ValueError, match="NaN"):
+                nan_constant * v
 
         @pytest.mark.legacy_only
         def test_quadexpr_add_nan(
@@ -1285,16 +1282,15 @@ class TestCoordinateAlignment:
             assert not np.isnan(result.const.values).any()
 
         @pytest.mark.v1_only
-        def test_quadexpr_add_nan_propagates(self, v: Variable) -> None:
+        def test_quadexpr_add_nan_raises(self, v: Variable) -> None:
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             qexpr = v * v
-            result = qexpr + nan_constant
-            assert isinstance(result, QuadraticExpression)
-            assert np.isnan(result.const.values[0])
+            with pytest.raises(ValueError, match="NaN"):
+                qexpr + nan_constant
 
     class TestExpressionWithNaN:
         """
@@ -1678,7 +1674,7 @@ def test_linear_expression_fillna(v: Variable) -> None:
     filled = filtered.fillna(10)
     assert isinstance(filled, LinearExpression)
     assert filled.const.sum() == 200
-    assert filled.coeffs.isnull().sum() == 10
+    assert (filled.coeffs.squeeze() == 0).sum() == 10
 
 
 def test_variable_expand_dims(v: Variable) -> None:

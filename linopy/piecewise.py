@@ -762,10 +762,10 @@ def _add_pwl_sos2_core(
         lambda_var.sum(dim=BREAKPOINT_DIM) == rhs, name=convex_name
     )
 
-    x_weighted = (lambda_var * x_points).sum(dim=BREAKPOINT_DIM)
+    x_weighted = (lambda_var * x_points.fillna(0)).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (lambda_var * y_points).sum(dim=BREAKPOINT_DIM)
+    y_weighted = (lambda_var * y_points.fillna(0)).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return convex_con
