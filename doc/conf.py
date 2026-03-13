@@ -91,15 +91,20 @@ nbsphinx_prolog = """
 
 """
 
-nbsphinx_allow_errors = True
+nbsphinx_allow_errors = False
 nbsphinx_execute = "auto"
 nbsphinx_execute_arguments = [
     "--InlineBackend.figure_formats={'svg', 'pdf'}",
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
 
-# Exclude notebooks that require credentials or special setup
-nbsphinx_execute_never = ["**/solve-on-oetc*"]
+# Exclude notebooks that require credentials or commercial solvers
+nbsphinx_execute_never = [
+    "**/solve-on-oetc*",
+    "**/solve-on-remote*",
+    "**/infeasible-model*",
+    "**/piecewise-linear-constraints*",
+]
 
 # -- Options for HTML output -------------------------------------------------
 
