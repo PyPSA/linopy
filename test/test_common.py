@@ -479,6 +479,53 @@ def test_add_variables_with_mixed_dataarray_bounds() -> None:
     assert var.data.sizes["space"] == 2
 
 
+def test_add_variables_with_dataarray_upper_mismatch() -> None:
+    """Validation should catch mismatched upper bounds too, not just lower."""
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(5, name="time")
+    upper = DataArray([1, 2, 3], dims=["time"], coords={"time": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match"):
+        model.add_variables(upper=upper, coords=[time], name="x")
+
+
+def test_add_variables_with_multiindex_coords() -> None:
+    """MultiIndex with scalar bounds should still work (existing pattern)."""
+    from linopy import Model
+
+    model = Model()
+    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
+    idx.name = "multi"
+    var = model.add_variables(lower=0, upper=1, coords=[idx], name="x")
+    assert var.shape == (4,)
+
+
+def test_add_variables_with_xarray_coordinates() -> None:
+    """Coords passed as xarray Coordinates object should work."""
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(3, name="time")
+    existing_var = model.add_variables(lower=0, coords=[time], name="base")
+    xr_coords = existing_var.data.coords
+    lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
+    var = model.add_variables(lower=lower, coords=xr_coords, name="x2")
+    assert var.shape == (3,)
+
+
+def test_add_variables_with_dims_only_dataarray() -> None:
+    """DataArray with dims but no explicit coord values should still work."""
+    from linopy import Model
+
+    model = Model()
+    lower = DataArray([0, 0, 0], dims=["x"])
+    var = model.add_variables(
+        lower=lower, coords=[pd.RangeIndex(3, name="x")], name="x"
+    )
+    assert var.shape == (3,)
+
+
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
