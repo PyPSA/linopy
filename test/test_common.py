@@ -457,6 +457,30 @@ def test_validate_dataarray_coords_sequence_mismatch() -> None:
         _validate_dataarray_coords(da, coords=[idx], dims=["x"])
 
 
+def test_coords_to_mapping_dims_length_mismatch() -> None:
+    from linopy.common import _coords_to_mapping
+
+    with pytest.raises(ValueError, match="Length of dims"):
+        _coords_to_mapping([pd.RangeIndex(3), pd.RangeIndex(5)], dims=["x"])
+
+
+def test_coords_to_mapping_unnamed_index_warns() -> None:
+    from linopy.common import _coords_to_mapping
+
+    with pytest.warns(UserWarning, match="no .name attribute"):
+        result = _coords_to_mapping([np.array([1, 2, 3])])
+    assert result == {}
+
+
+def test_coords_to_mapping_duplicate_name() -> None:
+    from linopy.common import _coords_to_mapping
+
+    idx1 = pd.RangeIndex(3, name="x")
+    idx2 = pd.RangeIndex(5, name="x")
+    with pytest.raises(ValueError, match="Duplicate coordinate name"):
+        _coords_to_mapping([idx1, idx2])
+
+
 def test_ensure_dataarray_scalar() -> None:
     from linopy.common import ensure_dataarray
 

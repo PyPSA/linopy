@@ -140,8 +140,28 @@ def _coords_to_mapping(coords: CoordsLike, dims: DimsLike | None = None) -> Mapp
     seq = list(coords)
     if dims is not None:
         dim_names: list[str] = [dims] if isinstance(dims, str) else list(dims)  # type: ignore[arg-type]
+        if len(dim_names) != len(seq):
+            raise ValueError(
+                f"Length of dims ({len(dim_names)}) does not match "
+                f"length of coords sequence ({len(seq)})."
+            )
         return dict(zip(dim_names, seq))
-    return {c.name: c for c in seq if hasattr(c, "name") and c.name}
+    result: dict = {}
+    for c in seq:
+        if not hasattr(c, "name") or not c.name:
+            warn(
+                f"Coordinate {c!r} has no .name attribute and will be ignored. "
+                "Pass dims explicitly or use named indexes (e.g. pd.RangeIndex).",
+                UserWarning,
+                stacklevel=3,
+            )
+            continue
+        if c.name in result:
+            raise ValueError(
+                f"Duplicate coordinate name '{c.name}' in coords sequence."
+            )
+        result[c.name] = c
+    return result
 
 
 def _validate_dataarray_coords(
