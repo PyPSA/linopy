@@ -508,6 +508,75 @@ class TestAddVariablesBoundsWithCoords:
         var = model.add_variables(lower=lower, coords=base.data.coords, name="x2")
         assert var.shape == (3,)
 
+    # -- Mixed bound type combinations ------------------------------------
+
+    @pytest.mark.parametrize(
+        "lower, upper",
+        [
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]}),
+                np.array([1, 1, 1]),
+                id="da-lower+numpy-upper",
+            ),
+            pytest.param(
+                np.array([0, 0, 0]),
+                DataArray([1, 1, 1], dims=["x"], coords={"x": [0, 1, 2]}),
+                id="numpy-lower+da-upper",
+            ),
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]}),
+                DataArray([1, 1, 1], dims=["x"], coords={"x": [0, 1, 2]}),
+                id="da-lower+da-upper",
+            ),
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]}),
+                10,
+                id="da-lower+scalar-upper",
+            ),
+            pytest.param(
+                0,
+                DataArray([1, 1, 1], dims=["x"], coords={"x": [0, 1, 2]}),
+                id="scalar-lower+da-upper",
+            ),
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]}),
+                xr.DataArray(10),
+                id="da-lower+scalar-da-upper",
+            ),
+        ],
+    )
+    def test_mixed_bound_types(self, model: "Model", lower, upper) -> None:
+        var = model.add_variables(
+            lower=lower, upper=upper, coords=self.SEQ_COORDS, name="x"
+        )
+        assert var.shape == (3,)
+        assert var.dims == ("x",)
+        assert not var.data.lower.isnull().any()
+        assert not var.data.upper.isnull().any()
+
+    def test_both_dataarray_different_dim_subsets(self, model: "Model") -> None:
+        """Lower and upper cover different subsets of dims, both broadcast."""
+        time = pd.RangeIndex(3, name="time")
+        space = pd.Index(["a", "b"], name="space")
+        lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
+        upper = DataArray([10, 20], dims=["space"], coords={"space": ["a", "b"]})
+        var = model.add_variables(
+            lower=lower, upper=upper, coords=[time, space], name="x"
+        )
+        assert var.data.sizes == {"time": 3, "space": 2}
+        assert not var.data.lower.isnull().any()
+        assert not var.data.upper.isnull().any()
+        assert (var.data.upper.sel(time=0) == [10, 20]).all()
+
+    def test_one_dataarray_mismatches_other_ok(self, model: "Model") -> None:
+        """Only the mismatched bound should raise, regardless of the other."""
+        lower = DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]})
+        upper = DataArray([1, 1], dims=["x"], coords={"x": [10, 20]})
+        with pytest.raises(ValueError, match="do not match"):
+            model.add_variables(
+                lower=lower, upper=upper, coords=self.SEQ_COORDS, name="x"
+            )
+
 
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
