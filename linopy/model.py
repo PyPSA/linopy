@@ -1585,9 +1585,7 @@ class Model:
                 safe_idx = np.clip(idx, 0, sol_max_idx)
                 vals = sol_arr[safe_idx]
                 vals[idx < 0] = nan
-                var.solution = xr.DataArray(
-                    vals.reshape(var.labels.shape), var.coords
-                )
+                var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
             if not result.solution.dual.empty:
                 dual = result.solution.dual.copy()
@@ -1596,9 +1594,7 @@ class Model:
 
                 dual_max_idx = max(dual.index.max(), 0)
                 dual_arr = np.full(dual_max_idx + 1, nan)
-                dual_arr[dual.index[dual.index >= 0]] = dual.values[
-                    dual.index >= 0
-                ]
+                dual_arr[dual.index[dual.index >= 0]] = dual.values[dual.index >= 0]
 
                 for name, con in self.constraints.items():
                     idx = np.ravel(con.labels)
