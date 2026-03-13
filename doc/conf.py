@@ -91,7 +91,7 @@ nbsphinx_prolog = """
 
 """
 
-nbsphinx_allow_errors = True
+nbsphinx_allow_errors = False
 nbsphinx_execute = "auto"
 nbsphinx_execute_arguments = [
     "--InlineBackend.figure_formats={'svg', 'pdf'}",
