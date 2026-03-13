@@ -46,12 +46,11 @@ from linopy import constraints, variables
 from linopy.common import (
     EmptyDeprecationWrapper,
     LocIndexer,
-    _coerce_to_dataarray,
-    as_dataarray,
     assign_multiindex_safe,
     check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
+    ensure_dataarray,
     fill_missing_coords,
     filter_nulls_polars,
     forward_as_properties,
@@ -356,7 +355,7 @@ class BaseExpression(ABC):
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": 0.0})
         elif isinstance(data, SUPPORTED_CONSTANT_TYPES):
-            const = as_dataarray(data)
+            const = ensure_dataarray(data)
             da = xr.DataArray([], dims=[TERM_DIM])
             data = Dataset({"coeffs": da, "vars": da, "const": const})
         elif not isinstance(data, Dataset):
@@ -598,7 +597,7 @@ class BaseExpression(ABC):
         # so that missing data does not silently propagate through arithmetic.
         if np.isscalar(other) and join is None:
             return self.assign(const=self.const.fillna(0) + other)
-        da = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        da = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
@@ -627,7 +626,7 @@ class BaseExpression(ABC):
         - factor (other) is filled with fill_value (0 for mul, 1 for div)
         - coeffs and const are filled with 0 (additive identity)
         """
-        factor = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        factor = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
@@ -1143,7 +1142,7 @@ class BaseExpression(ABC):
             )
 
         if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
-            rhs = _coerce_to_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+            rhs = ensure_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
             extra_dims = set(rhs.dims) - set(self.coord_dims)
             if extra_dims:
@@ -1706,9 +1705,7 @@ class LinearExpression(BaseExpression):
         Matrix multiplication with other, similar to xarray dot.
         """
         if not isinstance(other, LinearExpression | variables.Variable):
-            other = _coerce_to_dataarray(
-                other, coords=self.coords, dims=self.coord_dims
-            )
+            other = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
 
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
@@ -2042,7 +2039,7 @@ class LinearExpression(BaseExpression):
                     DeprecationWarning,
                 )
                 # assume that the element is a constant
-                const = as_dataarray(t[0])
+                const = ensure_dataarray(t[0])
                 if model is None:
                     raise ValueError("Model must be provided when using constants.")
                 return LinearExpression(const, model)
@@ -2070,7 +2067,7 @@ class LinearExpression(BaseExpression):
         linopy.LinearExpression
             A linear expression representing the constant value.
         """
-        const_da = as_dataarray(constant)
+        const_da = ensure_dataarray(constant)
         return LinearExpression(const_da, model)
 
 
@@ -2194,7 +2191,7 @@ class QuadraticExpression(BaseExpression):
                 "Higher order non-linear expressions are not yet supported."
             )
 
-        other = _coerce_to_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        other = ensure_dataarray(other, coords=self.coords, dims=self.coord_dims)
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
@@ -2329,7 +2326,7 @@ def as_expression(
         return obj.to_linexpr()
     else:
         try:
-            obj = as_dataarray(obj, **kwargs)
+            obj = ensure_dataarray(obj, **kwargs)
         except ValueError as e:
             raise ValueError("Cannot convert to LinearExpression") from e
         return LinearExpression(obj, model)

@@ -26,11 +26,11 @@ from xarray.core.types import T_Chunks
 
 from linopy import solvers
 from linopy.common import (
-    _coerce_to_dataarray,
     as_dataarray,
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
+    ensure_dataarray,
     maybe_replace_signs,
     replace_by_map,
     set_int_index,
@@ -622,9 +622,9 @@ class Model:
         self._check_valid_dim_names(data)
 
         if mask is not None:
-            mask = _coerce_to_dataarray(
-                mask, coords=data.coords, dims=data.dims
-            ).astype(bool)
+            mask = ensure_dataarray(mask, coords=data.coords, dims=data.dims).astype(
+                bool
+            )
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on NaN in bounds (use numpy for speed)
@@ -786,14 +786,14 @@ class Model:
             name = f"con{self._connameCounter}"
             self._connameCounter += 1
         if sign is not None:
-            sign = maybe_replace_signs(as_dataarray(sign))
+            sign = maybe_replace_signs(ensure_dataarray(sign))
 
         # Capture original RHS for auto-masking before constraint creation
         # (NaN values in RHS are lost during constraint creation)
         # Use numpy for speed instead of xarray's notnull()
         original_rhs_mask = None
         if self.auto_mask and rhs is not None:
-            rhs_da = as_dataarray(rhs)
+            rhs_da = ensure_dataarray(rhs)
             original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
 
         if isinstance(lhs, LinearExpression):
@@ -846,16 +846,16 @@ class Model:
             mask = (
                 rhs_mask
                 if mask is None
-                else (as_dataarray(mask).astype(bool) & rhs_mask)
+                else (ensure_dataarray(mask).astype(bool) & rhs_mask)
             )
 
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = _coerce_to_dataarray(
-                mask, coords=data.coords, dims=data.dims
-            ).astype(bool)
+            mask = ensure_dataarray(mask, coords=data.coords, dims=data.dims).astype(
+                bool
+            )
             mask = broadcast_mask(mask, data.labels)
 
         # Auto-mask based on null expressions or NaN RHS (use numpy for speed)

@@ -283,7 +283,7 @@ def _type_dispatch(
     Convert arr to a DataArray via type dispatch.
 
     This is the shared conversion logic used by both ``as_dataarray``
-    and ``_coerce_to_dataarray``.  It does NOT validate or expand dims.
+    and ``ensure_dataarray``.  It does NOT validate or expand dims.
     """
     if isinstance(arr, pd.Series | pd.DataFrame):
         arr = pandas_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
@@ -350,9 +350,9 @@ def _expand_missing_dims(
     return arr
 
 
-def _coerce_to_dataarray(
+def ensure_dataarray(
     arr: Any,
-    coords: CoordsLike,
+    coords: CoordsLike | None = None,
     dims: DimsLike | None = None,
     **kwargs: Any,
 ) -> DataArray:
@@ -368,7 +368,7 @@ def _coerce_to_dataarray(
             The input object.
         coords:
             Coordinates used as construction hints for types without
-            their own coords (numpy, scalar, list).
+            their own coords (numpy, scalar, list). Optional.
         dims:
             Dimension names.
         **kwargs:
@@ -388,55 +388,55 @@ def as_dataarray(
     **kwargs: Any,
 ) -> DataArray:
     """
-    Convert an object to a DataArray with strict coord validation.
+    Convert an object to a DataArray with optional strict coord validation.
 
-    Behavior depends on whether ``coords`` is provided:
+    When ``coords`` is provided, performs type conversion plus
+    validation:
 
-    - **No coords**: just type conversion (scalar->DA, numpy->DA,
-      pandas->DA, DataArray->passthrough).
-    - **With coords** (strict): shared dims must have matching
-      coordinates (ValueError if not), extra dims in input are
-      rejected (ValueError), missing dims are broadcast via
-      ``expand_dims``.
+    - For inputs with their own coordinates (DataArray, pandas, scalars): shared dims must match exactly
+    (``ValueError`` if not), extra dims are rejected (``ValueError``), missing dims are broadcast via ``expand_dims``.
+    - For raw arrays (numpy, list, polars): ``coords`` is applied
+      during construction (no validation needed).
+
+    When ``coords`` is ``None``, performs pure type conversion only
+    (accepts any input type, including numpy/list/polars).
 
     Parameters
     ----------
-        arr:
-            The input object.
-        coords:
-            The coordinates for the DataArray. If None, only type
-            conversion is performed.
-        dims:
-            The dimensions for the DataArray. If None, the dimensions
-            will be automatically generated.
-        **kwargs:
-            Additional keyword arguments passed to the DataArray constructor.
+    arr :
+        The input object.
+    coords : CoordsLike, optional
+        Expected coordinates. When provided, used for construction
+        (numpy, scalar, list) and for validation (DataArray, pandas).
+        When ``None``, only type conversion is performed.
+    dims : DimsLike, optional
+        Dimension names.
+    **kwargs :
+        Additional keyword arguments passed to the DataArray
+        constructor.
 
     Returns
     -------
-        DataArray:
-            The converted DataArray.
+    DataArray
     """
-    if coords is not None:
-        # Inputs that already have their own coordinates (DataArray,
-        # pandas) or scalars need validation against coords. Raw arrays
-        # (numpy, list) get coords applied during construction, so
-        # validation and expand_dims are not needed.
-        needs_validation = isinstance(arr, DataArray | pd.Series | pd.DataFrame) or (
-            not isinstance(arr, np.ndarray | pl.Series | list) and np.ndim(arr) == 0
-        )
+    if coords is None:
+        return _type_dispatch(arr, coords=None, dims=dims, **kwargs)
 
-        if needs_validation:
-            arr = _type_dispatch(arr, coords=coords, dims=dims, **kwargs)
-            arr = _expand_missing_dims(arr, coords, dims)
-            _validate_dataarray_coords(arr, coords, dims)
-        else:
-            arr = _type_dispatch(arr, coords=coords, dims=dims, **kwargs)
+    # Inputs that already have their own coordinates (DataArray,
+    # pandas) or scalars need validation against coords. Raw arrays
+    # (numpy, list) get coords applied during construction, so
+    # validation and expand_dims are not needed.
+    needs_validation = isinstance(arr, DataArray | pd.Series | pd.DataFrame) or (
+        not isinstance(arr, np.ndarray | pl.Series | list) and np.ndim(arr) == 0
+    )
 
-        return arr
+    arr = _type_dispatch(arr, coords=coords, dims=dims, **kwargs)
 
-    # No coords — just type conversion
-    return _type_dispatch(arr, coords=None, dims=dims, **kwargs)
+    if needs_validation:
+        arr = _expand_missing_dims(arr, coords, dims)
+        _validate_dataarray_coords(arr, coords, dims)
+
+    return arr
 
 
 def broadcast_mask(mask: DataArray, labels: DataArray) -> DataArray:
