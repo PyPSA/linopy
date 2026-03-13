@@ -98,12 +98,6 @@ nbsphinx_execute_arguments = [
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
 
-# Exclude notebooks that require credentials or special setup
-nbsphinx_execute_never = [
-    "**/solve-on-oetc*",
-    "**/solve-on-remote*",
-]
-
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
