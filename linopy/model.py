@@ -671,6 +671,10 @@ class Model:
             lower = _validate_dataarray_bounds(lower, coords)
             upper = _validate_dataarray_bounds(upper, coords)
 
+        # TODO: as_dataarray fails for scalars with dict coords (e.g.
+        # as_dataarray(inf, coords={"x": [0,1,2]})) because dims is not
+        # inferred from the dict keys. Sequence coords work fine.
+        # See https://github.com/PyPSA/linopy/pull/551
         data = Dataset(
             {
                 "lower": as_dataarray(lower, coords, **kwargs),
