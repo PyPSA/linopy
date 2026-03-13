@@ -514,6 +514,16 @@ def test_add_variables_with_xarray_coordinates() -> None:
     assert var.shape == (3,)
 
 
+def test_add_variables_with_scalar_and_dict_coords() -> None:
+    """Scalar bounds with dict coords should infer dims from dict keys."""
+    from linopy import Model
+
+    model = Model()
+    var = model.add_variables(lower=0, upper=10, coords={"x": [0, 1, 2]}, name="x")
+    assert var.shape == (3,)
+    assert list(var.data.coords["x"].values) == [0, 1, 2]
+
+
 def test_add_variables_with_dims_only_dataarray() -> None:
     """DataArray with dims but no explicit coord values should still work."""
     from linopy import Model
