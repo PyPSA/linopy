@@ -144,7 +144,7 @@ class MatrixAccessor:
         if not len(m.constraints):
             return None
         A: csc_matrix = m.constraints.to_matrix(filter_missings=False)
-        return A[self.clabels][:, self.vlabels]
+        return A[np.ix_(self.clabels, self.vlabels)]
 
     @property
     def sense(self) -> ndarray:
@@ -178,4 +178,4 @@ class MatrixAccessor:
         expr = m.objective.expression
         if not isinstance(expr, expressions.QuadraticExpression):
             return None
-        return expr.to_matrix()[self.vlabels][:, self.vlabels]
+        return expr.to_matrix()[np.ix_(self.vlabels, self.vlabels)]
