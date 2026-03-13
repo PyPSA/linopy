@@ -1572,26 +1572,42 @@ class Model:
             sol = set_int_index(sol)
             sol.loc[-1] = nan
 
+            # Convert to numpy array for fast label-based lookup.
+            # Labels are integers; build a dense lookup array so each
+            # variable can index directly without pandas overhead.
+            sol_max_idx = max(sol.index.max(), 0)
+            sol_arr = np.full(sol_max_idx + 1, nan)
+            sol_arr[sol.index[sol.index >= 0]] = sol.values[sol.index >= 0]
+
             for name, var in self.variables.items():
                 idx = np.ravel(var.labels)
-                try:
-                    vals = sol[idx].values.reshape(var.labels.shape)
-                except KeyError:
-                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
-                var.solution = xr.DataArray(vals, var.coords)
+                # Use numpy indexing: labels ≥ 0 map to sol_arr, -1 maps to NaN
+                safe_idx = np.clip(idx, 0, sol_max_idx)
+                vals = sol_arr[safe_idx]
+                vals[idx < 0] = nan
+                var.solution = xr.DataArray(
+                    vals.reshape(var.labels.shape), var.coords
+                )
 
             if not result.solution.dual.empty:
                 dual = result.solution.dual.copy()
                 dual = set_int_index(dual)
                 dual.loc[-1] = nan
 
+                dual_max_idx = max(dual.index.max(), 0)
+                dual_arr = np.full(dual_max_idx + 1, nan)
+                dual_arr[dual.index[dual.index >= 0]] = dual.values[
+                    dual.index >= 0
+                ]
+
                 for name, con in self.constraints.items():
                     idx = np.ravel(con.labels)
-                    try:
-                        vals = dual[idx].values.reshape(con.labels.shape)
-                    except KeyError:
-                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                    con.dual = xr.DataArray(vals, con.labels.coords)
+                    safe_idx = np.clip(idx, 0, dual_max_idx)
+                    vals = dual_arr[safe_idx]
+                    vals[idx < 0] = nan
+                    con.dual = xr.DataArray(
+                        vals.reshape(con.labels.shape), con.labels.coords
+                    )
 
             return result.status.status.value, result.status.termination_condition.value
         finally:
