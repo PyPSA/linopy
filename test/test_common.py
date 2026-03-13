@@ -579,6 +579,101 @@ class TestAddVariablesBoundsWithCoords:
                 lower=lower, upper=upper, coords=self.SEQ_COORDS, name="x"
             )
 
+    # -- Coords inferred from bounds (no coords arg) ----------------------
+
+    @pytest.mark.parametrize(
+        "lower",
+        [
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [10, 20, 30]}),
+                id="dataarray",
+            ),
+            pytest.param(
+                pd.Series([0, 0, 0], index=pd.Index([10, 20, 30], name="x")),
+                id="pandas",
+            ),
+        ],
+    )
+    def test_coords_inferred_from_bounds(self, model: "Model", lower) -> None:
+        """When coords is None, dims/coords are inferred from the bounds."""
+        var = model.add_variables(lower=lower, name="x")
+        assert var.dims == ("x",)
+        assert list(var.data.coords["x"].values) == [10, 20, 30]
+
+    def test_coords_inferred_multidim(self, model: "Model") -> None:
+        lower = DataArray(
+            np.zeros((3, 2)),
+            dims=["time", "space"],
+            coords={"time": [0, 1, 2], "space": ["a", "b"]},
+        )
+        var = model.add_variables(lower=lower, name="x")
+        assert set(var.dims) == {"time", "space"}
+        assert var.data.sizes == {"time": 3, "space": 2}
+
+    # -- Multi-dimensional coords -----------------------------------------
+
+    @pytest.mark.parametrize(
+        "coords",
+        [
+            pytest.param(
+                [pd.RangeIndex(3, name="time"), pd.Index(["a", "b"], name="space")],
+                id="seq-coords",
+            ),
+            pytest.param(
+                {"time": [0, 1, 2], "space": ["a", "b"]},
+                id="dict-coords",
+            ),
+        ],
+    )
+    def test_multidim_coords_with_scalar(self, model: "Model", coords) -> None:
+        var = model.add_variables(lower=0, upper=1, coords=coords, name="x")
+        assert set(var.dims) == {"time", "space"}
+        assert var.data.sizes == {"time": 3, "space": 2}
+
+    def test_multidim_dataarray_with_coords(self, model: "Model") -> None:
+        lower = DataArray(
+            np.zeros((3, 2)),
+            dims=["time", "space"],
+            coords={"time": [0, 1, 2], "space": ["a", "b"]},
+        )
+        coords = [pd.RangeIndex(3, name="time"), pd.Index(["a", "b"], name="space")]
+        var = model.add_variables(lower=lower, coords=coords, name="x")
+        assert set(var.dims) == {"time", "space"}
+        assert var.data.sizes == {"time": 3, "space": 2}
+        assert not var.data.lower.isnull().any()
+
+    # -- String and datetime coordinates -----------------------------------
+
+    def test_string_coordinates(self, model: "Model") -> None:
+        coords = {"region": ["north", "south", "east"]}
+        lower = DataArray(
+            [0, 0, 0],
+            dims=["region"],
+            coords={"region": ["north", "south", "east"]},
+        )
+        var = model.add_variables(lower=lower, coords=coords, name="x")
+        assert var.dims == ("region",)
+        assert list(var.data.coords["region"].values) == ["north", "south", "east"]
+
+    def test_datetime_coordinates(self, model: "Model") -> None:
+        dates = pd.date_range("2025-01-01", periods=3)
+        coords = [dates.rename("time")]
+        lower = DataArray([0, 0, 0], dims=["time"], coords={"time": dates})
+        var = model.add_variables(lower=lower, coords=coords, name="x")
+        assert var.dims == ("time",)
+        assert var.shape == (3,)
+
+    def test_string_coords_mismatch(self, model: "Model") -> None:
+        lower = DataArray(
+            [0, 0], dims=["region"], coords={"region": ["north", "south"]}
+        )
+        with pytest.raises(ValueError, match="do not match"):
+            model.add_variables(
+                lower=lower,
+                coords={"region": ["north", "south", "east"]},
+                name="x",
+            )
+
 
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
