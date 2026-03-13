@@ -51,7 +51,22 @@ class MatrixAccessor:
     def clean_cached_properties(self) -> None:
         """Clear the cache for all cached properties of an object"""
 
-        for cached_prop in ["flat_vars", "flat_cons", "sol", "dual"]:
+        for cached_prop in [
+            "flat_vars",
+            "flat_cons",
+            "sol",
+            "dual",
+            "vlabels",
+            "clabels",
+            "A",
+            "c",
+            "b",
+            "sense",
+            "lb",
+            "ub",
+            "vtypes",
+            "Q",
+        ]:
             # check existence of cached_prop without creating it
             if cached_prop in self.__dict__:
                 delattr(self, cached_prop)
@@ -66,13 +81,13 @@ class MatrixAccessor:
         m = self._parent
         return m.constraints.flat
 
-    @property
+    @cached_property
     def vlabels(self) -> ndarray:
         """Vector of labels of all non-missing variables."""
         df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.labels, -1)
 
-    @property
+    @cached_property
     def vtypes(self) -> ndarray:
         """Vector of types of all non-missing variables."""
         m = self._parent
@@ -93,7 +108,7 @@ class MatrixAccessor:
         ds = df.set_index("key").labels.map(ds)
         return create_vector(ds.index, ds.to_numpy(), fill_value="")
 
-    @property
+    @cached_property
     def lb(self) -> ndarray:
         """Vector of lower bounds of all non-missing variables."""
         df: pd.DataFrame = self.flat_vars
@@ -123,13 +138,13 @@ class MatrixAccessor:
             )
         return create_vector(df.key, df.dual, fill_value=np.nan)
 
-    @property
+    @cached_property
     def ub(self) -> ndarray:
         """Vector of upper bounds of all non-missing variables."""
         df: pd.DataFrame = self.flat_vars
         return create_vector(df.key, df.upper)
 
-    @property
+    @cached_property
     def clabels(self) -> ndarray:
         """Vector of labels of all non-missing constraints."""
         df: pd.DataFrame = self.flat_cons
@@ -137,7 +152,7 @@ class MatrixAccessor:
             return np.array([], dtype=int)
         return create_vector(df.key, df.labels, fill_value=-1)
 
-    @property
+    @cached_property
     def A(self) -> csc_matrix | None:
         """Constraint matrix of all non-missing constraints and variables."""
         m = self._parent
@@ -146,19 +161,19 @@ class MatrixAccessor:
         A: csc_matrix = m.constraints.to_matrix(filter_missings=False)
         return A[self.clabels][:, self.vlabels]
 
-    @property
+    @cached_property
     def sense(self) -> ndarray:
         """Vector of senses of all non-missing constraints."""
         df: pd.DataFrame = self.flat_cons
         return create_vector(df.key, df.sign.astype(np.dtype("<U1")), fill_value="")
 
-    @property
+    @cached_property
     def b(self) -> ndarray:
         """Vector of right-hand-sides of all non-missing constraints."""
         df: pd.DataFrame = self.flat_cons
         return create_vector(df.key, df.rhs)
 
-    @property
+    @cached_property
     def c(self) -> ndarray:
         """Vector of objective coefficients of all non-missing variables."""
         m = self._parent
@@ -171,7 +186,7 @@ class MatrixAccessor:
         shape: int = self.flat_vars.key.max() + 1
         return create_vector(vars, ds.coeffs, fill_value=0.0, shape=shape)
 
-    @property
+    @cached_property
     def Q(self) -> csc_matrix | None:
         """Matrix objective coefficients of quadratic terms of all non-missing variables."""
         m = self._parent
