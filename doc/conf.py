@@ -98,12 +98,10 @@ nbsphinx_execute_arguments = [
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
 
-# Exclude notebooks that require credentials or commercial solvers
+# Exclude notebooks that require credentials or special setup
 nbsphinx_execute_never = [
     "**/solve-on-oetc*",
     "**/solve-on-remote*",
-    "**/infeasible-model*",
-    "**/piecewise-linear-constraints*",
 ]
 
 # -- Options for HTML output -------------------------------------------------
