@@ -100,9 +100,6 @@ def _coords_to_dict(
     """Normalize coords to a dict mapping dim names to coordinate values."""
     if isinstance(coords, Mapping):
         return dict(coords)
-    # xarray Coordinates objects
-    if hasattr(coords, "dims"):
-        return {k: v for k, v in coords.items() if k in coords.dims}
     # Sequence of indexes
     result: dict[str, Any] = {}
     for c in coords:

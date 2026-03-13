@@ -5,6 +5,8 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -449,7 +451,9 @@ class TestAddVariablesBoundsWithCoords:
             pytest.param({"x": [0, 1, 2]}, id="dict-coords"),
         ],
     )
-    def test_bound_types_with_coords(self, model: "Model", lower, coords) -> None:
+    def test_bound_types_with_coords(
+        self, model: "Model", lower: Any, coords: Any
+    ) -> None:
         var = model.add_variables(lower=lower, coords=coords, name="x")
         assert var.shape == (3,)
         assert var.dims == ("x",)
@@ -464,7 +468,7 @@ class TestAddVariablesBoundsWithCoords:
             pytest.param({"x": [0, 1, 2, 3, 4]}, id="dict-coords"),
         ],
     )
-    def test_dataarray_coord_mismatch(self, model: "Model", coords) -> None:
+    def test_dataarray_coord_mismatch(self, model: "Model", coords: Any) -> None:
         lower = DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]})
         with pytest.raises(ValueError, match="do not match"):
             model.add_variables(lower=lower, coords=coords, name="x")
@@ -547,7 +551,7 @@ class TestAddVariablesBoundsWithCoords:
             ),
         ],
     )
-    def test_mixed_bound_types(self, model: "Model", lower, upper) -> None:
+    def test_mixed_bound_types(self, model: "Model", lower: Any, upper: Any) -> None:
         var = model.add_variables(
             lower=lower, upper=upper, coords=self.SEQ_COORDS, name="x"
         )
@@ -594,7 +598,7 @@ class TestAddVariablesBoundsWithCoords:
             ),
         ],
     )
-    def test_coords_inferred_from_bounds(self, model: "Model", lower) -> None:
+    def test_coords_inferred_from_bounds(self, model: "Model", lower: Any) -> None:
         """When coords is None, dims/coords are inferred from the bounds."""
         var = model.add_variables(lower=lower, name="x")
         assert var.dims == ("x",)
@@ -625,7 +629,7 @@ class TestAddVariablesBoundsWithCoords:
             ),
         ],
     )
-    def test_multidim_coords_with_scalar(self, model: "Model", coords) -> None:
+    def test_multidim_coords_with_scalar(self, model: "Model", coords: Any) -> None:
         var = model.add_variables(lower=0, upper=1, coords=coords, name="x")
         assert set(var.dims) == {"time", "space"}
         assert var.data.sizes == {"time": 3, "space": 2}
