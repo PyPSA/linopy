@@ -191,6 +191,8 @@ def numpy_to_dataarray(
     """
     # fallback case for zero dim arrays
     if arr.ndim == 0:
+        if dims is None and is_dict_like(coords):
+            dims = list(coords.keys())
         return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
 
     if isinstance(dims, Iterable | Sequence):

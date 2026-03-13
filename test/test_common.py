@@ -428,7 +428,8 @@ class TestAddVariablesBoundsWithCoords:
         [
             pytest.param(0, id="scalar"),
             pytest.param(np.float64(0), id="np.number"),
-            pytest.param(np.array([0, 0, 0]), id="numpy"),
+            pytest.param(np.array(0), id="numpy-0d"),
+            pytest.param(np.array([0, 0, 0]), id="numpy-1d"),
             pytest.param(
                 pd.Series([0, 0, 0], index=pd.RangeIndex(3, name="x")), id="pandas"
             ),
@@ -438,6 +439,7 @@ class TestAddVariablesBoundsWithCoords:
                 id="dataarray",
             ),
             pytest.param(DataArray([0, 0, 0], dims=["x"]), id="dataarray-no-coords"),
+            pytest.param(xr.DataArray(0), id="dataarray-0d"),
         ],
     )
     @pytest.mark.parametrize(
