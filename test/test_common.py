@@ -482,10 +482,14 @@ class TestAddVariablesBoundsWithCoords:
     def test_dataarray_broadcast_missing_dim(self, model: "Model") -> None:
         time = pd.RangeIndex(3, name="time")
         space = pd.Index(["a", "b"], name="space")
-        lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
+        lower = DataArray([1, 2, 3], dims=["time"], coords={"time": range(3)})
         var = model.add_variables(lower=lower, coords=[time, space], name="x")
         assert set(var.data.dims) == {"time", "space"}
         assert var.data.sizes == {"time": 3, "space": 2}
+        # Verify broadcast filled with actual values, not NaN
+        assert not var.data.lower.isnull().any()
+        assert (var.data.lower.sel(space="a") == [1, 2, 3]).all()
+        assert (var.data.lower.sel(space="b") == [1, 2, 3]).all()
 
     # -- Special coord formats ---------------------------------------------
 
