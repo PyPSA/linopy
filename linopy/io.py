@@ -129,7 +129,8 @@ def vectorized_label_names(
     prefix: str,
     printer: Callable | None = None,
 ) -> np.ndarray:
-    """Generate label name arrays using vectorized string ops when possible.
+    """
+    Generate label name arrays using vectorized string ops when possible.
 
     For simple prefix-based names (e.g. "x0", "x1", ..., "c0", "c1", ...),
     uses np.char operations which are ~100x faster than np.vectorize for large
