@@ -409,131 +409,100 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
     assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
 
 
-def test_add_variables_with_dataarray_bounds_and_coords() -> None:
-    from linopy import Model
+class TestAddVariablesBoundsWithCoords:
+    """Test that add_variables correctly handles all bound types with coords."""
 
-    model = Model()
-    time = pd.RangeIndex(5, name="time")
-    lower = DataArray([0, 0, 0, 0, 0], dims=["time"], coords={"time": range(5)})
-    var = model.add_variables(lower=lower, coords=[time], name="x")
-    assert var.shape == (5,)
-    assert list(var.data.coords["time"].values) == list(range(5))
+    SEQ_COORDS = [pd.RangeIndex(3, name="x")]
+    DICT_COORDS = {"x": [0, 1, 2]}
 
+    @pytest.fixture()
+    def model(self) -> "Model":
+        from linopy import Model
 
-def test_add_variables_with_dataarray_bounds_coord_mismatch() -> None:
-    from linopy import Model
+        return Model()
 
-    model = Model()
-    time = pd.RangeIndex(5, name="time")
-    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": [0, 1, 2]})
-    with pytest.raises(ValueError, match="do not match"):
-        model.add_variables(lower=lower, coords=[time], name="x")
+    # -- All bound types should work with both coord formats ---------------
 
-
-def test_add_variables_with_dataarray_bounds_extra_dims() -> None:
-    from linopy import Model
-
-    model = Model()
-    lower = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
-    with pytest.raises(ValueError, match="extra dimensions"):
-        model.add_variables(lower=lower, coords={"x": [0, 1]}, name="x")
-
-
-def test_add_variables_with_dataarray_bounds_broadcast() -> None:
-    from linopy import Model
-
-    model = Model()
-    time = pd.RangeIndex(3, name="time")
-    space = pd.Index(["a", "b"], name="space")
-    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
-    var = model.add_variables(lower=lower, coords=[time, space], name="x")
-    assert set(var.data.dims) == {"time", "space"}
-    assert var.data.sizes["time"] == 3
-    assert var.data.sizes["space"] == 2
-
-
-def test_add_variables_with_non_dataarray_bounds_unchanged() -> None:
-    """Non-DataArray bounds (scalars, numpy) should work as before."""
-    from linopy import Model
-
-    model = Model()
-    time = pd.RangeIndex(3, name="time")
-    var = model.add_variables(
-        lower=0, upper=np.array([1, 2, 3]), coords=[time], name="x"
+    @pytest.mark.parametrize(
+        "lower",
+        [
+            pytest.param(0, id="scalar"),
+            pytest.param(np.float64(0), id="np.number"),
+            pytest.param(np.array([0, 0, 0]), id="numpy"),
+            pytest.param(
+                pd.Series([0, 0, 0], index=pd.RangeIndex(3, name="x")), id="pandas"
+            ),
+            pytest.param([0, 0, 0], id="list"),
+            pytest.param(
+                DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]}),
+                id="dataarray",
+            ),
+            pytest.param(DataArray([0, 0, 0], dims=["x"]), id="dataarray-no-coords"),
+        ],
     )
-    assert var.shape == (3,)
-
-
-def test_add_variables_with_mixed_dataarray_bounds() -> None:
-    """Non-DataArray bounds (scalars, numpy) should work as before."""
-    from linopy import Model
-
-    model = Model()
-    time = pd.RangeIndex(3, name="time")
-    space = pd.Index(["a", "b"], name="space")
-    lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
-    upper = xr.DataArray(0)
-    var = model.add_variables(lower=lower, upper=upper, coords=[time, space], name="x")
-    assert set(var.data.dims) == {"time", "space"}
-    assert var.data.sizes["time"] == 3
-    assert var.data.sizes["space"] == 2
-
-
-def test_add_variables_with_dataarray_upper_mismatch() -> None:
-    """Validation should catch mismatched upper bounds too, not just lower."""
-    from linopy import Model
-
-    model = Model()
-    time = pd.RangeIndex(5, name="time")
-    upper = DataArray([1, 2, 3], dims=["time"], coords={"time": [0, 1, 2]})
-    with pytest.raises(ValueError, match="do not match"):
-        model.add_variables(upper=upper, coords=[time], name="x")
-
-
-def test_add_variables_with_multiindex_coords() -> None:
-    """MultiIndex with scalar bounds should still work (existing pattern)."""
-    from linopy import Model
-
-    model = Model()
-    idx = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=("level1", "level2"))
-    idx.name = "multi"
-    var = model.add_variables(lower=0, upper=1, coords=[idx], name="x")
-    assert var.shape == (4,)
-
-
-def test_add_variables_with_xarray_coordinates() -> None:
-    """Coords passed as xarray Coordinates object should work."""
-    from linopy import Model
-
-    model = Model()
-    time = pd.RangeIndex(3, name="time")
-    existing_var = model.add_variables(lower=0, coords=[time], name="base")
-    xr_coords = existing_var.data.coords
-    lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
-    var = model.add_variables(lower=lower, coords=xr_coords, name="x2")
-    assert var.shape == (3,)
-
-
-def test_add_variables_with_scalar_and_dict_coords() -> None:
-    """Scalar bounds with dict coords should infer dims from dict keys."""
-    from linopy import Model
-
-    model = Model()
-    var = model.add_variables(lower=0, upper=10, coords={"x": [0, 1, 2]}, name="x")
-    assert var.shape == (3,)
-    assert list(var.data.coords["x"].values) == [0, 1, 2]
-
-
-def test_add_variables_with_dims_only_dataarray() -> None:
-    """DataArray with dims but no explicit coord values should still work."""
-    from linopy import Model
-
-    model = Model()
-    lower = DataArray([0, 0, 0], dims=["x"])
-    var = model.add_variables(
-        lower=lower, coords=[pd.RangeIndex(3, name="x")], name="x"
+    @pytest.mark.parametrize(
+        "coords",
+        [
+            pytest.param([pd.RangeIndex(3, name="x")], id="seq-coords"),
+            pytest.param({"x": [0, 1, 2]}, id="dict-coords"),
+        ],
     )
-    assert var.shape == (3,)
+    def test_bound_types_with_coords(self, model: "Model", lower, coords) -> None:
+        var = model.add_variables(lower=lower, coords=coords, name="x")
+        assert var.shape == (3,)
+        assert var.dims == ("x",)
+        assert list(var.data.coords["x"].values) == [0, 1, 2]
+
+    # -- DataArray validation: mismatch and extra dims ---------------------
+
+    @pytest.mark.parametrize(
+        "coords",
+        [
+            pytest.param([pd.RangeIndex(5, name="x")], id="seq-coords"),
+            pytest.param({"x": [0, 1, 2, 3, 4]}, id="dict-coords"),
+        ],
+    )
+    def test_dataarray_coord_mismatch(self, model: "Model", coords) -> None:
+        lower = DataArray([0, 0, 0], dims=["x"], coords={"x": [0, 1, 2]})
+        with pytest.raises(ValueError, match="do not match"):
+            model.add_variables(lower=lower, coords=coords, name="x")
+
+    def test_dataarray_coord_mismatch_upper(self, model: "Model") -> None:
+        upper = DataArray([1, 2, 3], dims=["x"], coords={"x": [10, 20, 30]})
+        with pytest.raises(ValueError, match="do not match"):
+            model.add_variables(upper=upper, coords=self.SEQ_COORDS, name="x")
+
+    def test_dataarray_extra_dims(self, model: "Model") -> None:
+        lower = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+        with pytest.raises(ValueError, match="extra dimensions"):
+            model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
+
+    # -- Broadcasting missing dims -----------------------------------------
+
+    def test_dataarray_broadcast_missing_dim(self, model: "Model") -> None:
+        time = pd.RangeIndex(3, name="time")
+        space = pd.Index(["a", "b"], name="space")
+        lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
+        var = model.add_variables(lower=lower, coords=[time, space], name="x")
+        assert set(var.data.dims) == {"time", "space"}
+        assert var.data.sizes == {"time": 3, "space": 2}
+
+    # -- Special coord formats ---------------------------------------------
+
+    def test_multiindex_coords(self, model: "Model") -> None:
+        idx = pd.MultiIndex.from_product(
+            [[1, 2], ["a", "b"]], names=("level1", "level2")
+        )
+        idx.name = "multi"
+        var = model.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        assert var.shape == (4,)
+
+    def test_xarray_coordinates_object(self, model: "Model") -> None:
+        time = pd.RangeIndex(3, name="time")
+        base = model.add_variables(lower=0, coords=[time], name="base")
+        lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
+        var = model.add_variables(lower=lower, coords=base.data.coords, name="x2")
+        assert var.shape == (3,)
 
 
 def test_as_dataarray_with_unsupported_type() -> None:
