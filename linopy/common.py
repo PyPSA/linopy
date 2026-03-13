@@ -191,6 +191,8 @@ def numpy_to_dataarray(
     """
     # fallback case for zero dim arrays
     if arr.ndim == 0:
+        if dims is None and is_dict_like(coords):
+            dims = list(coords.keys())
         return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
 
     if isinstance(dims, Iterable | Sequence):
@@ -242,8 +244,12 @@ def as_dataarray(
     elif isinstance(arr, pl.Series):
         arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.number):
+        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
+            dims = list(coords.keys())
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
+        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
+            dims = list(coords.keys())
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
