@@ -464,6 +464,21 @@ def test_add_variables_with_non_dataarray_bounds_unchanged() -> None:
     assert var.shape == (3,)
 
 
+def test_add_variables_with_mixed_dataarray_bounds() -> None:
+    """Non-DataArray bounds (scalars, numpy) should work as before."""
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(3, name="time")
+    space = pd.Index(["a", "b"], name="space")
+    lower = DataArray([1, 1, 1], dims=["time"], coords={"time": range(3)})
+    upper = xr.DataArray(0)
+    var = model.add_variables(lower=lower, upper=upper, coords=[time, space], name="x")
+    assert set(var.data.dims) == {"time", "space"}
+    assert var.data.sizes["time"] == 3
+    assert var.data.sizes["space"] == 2
+
+
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
