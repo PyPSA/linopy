@@ -42,7 +42,7 @@ jobs:
 
           # Skip notebooks that require credentials or special setup
           case "$name" in
-            solve-on-oetc.ipynb|solve-on-remote.ipynb|infeasible-model.ipynb)
+            solve-on-oetc.ipynb|solve-on-remote.ipynb|infeasible-model.ipynb|piecewise-linear-constraints.ipynb)
               echo "Skipping $name (requires credentials or commercial solver)"
               continue
               ;;
