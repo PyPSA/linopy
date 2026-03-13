@@ -409,6 +409,61 @@ def test_as_dataarray_with_dataarray_default_dims_coords() -> None:
     assert list(da_out.coords["dim2"].values) == list(da_in.coords["dim2"].values)
 
 
+def test_add_variables_with_dataarray_bounds_and_coords() -> None:
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(5, name="time")
+    lower = DataArray([0, 0, 0, 0, 0], dims=["time"], coords={"time": range(5)})
+    var = model.add_variables(lower=lower, coords=[time], name="x")
+    assert var.shape == (5,)
+    assert list(var.data.coords["time"].values) == list(range(5))
+
+
+def test_add_variables_with_dataarray_bounds_coord_mismatch() -> None:
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(5, name="time")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": [0, 1, 2]})
+    with pytest.raises(ValueError, match="do not match"):
+        model.add_variables(lower=lower, coords=[time], name="x")
+
+
+def test_add_variables_with_dataarray_bounds_extra_dims() -> None:
+    from linopy import Model
+
+    model = Model()
+    lower = DataArray([[1, 2], [3, 4]], dims=["x", "y"])
+    with pytest.raises(ValueError, match="extra dimensions"):
+        model.add_variables(lower=lower, coords={"x": [0, 1]}, name="x")
+
+
+def test_add_variables_with_dataarray_bounds_broadcast() -> None:
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(3, name="time")
+    space = pd.Index(["a", "b"], name="space")
+    lower = DataArray([0, 0, 0], dims=["time"], coords={"time": range(3)})
+    var = model.add_variables(lower=lower, coords=[time, space], name="x")
+    assert set(var.data.dims) == {"time", "space"}
+    assert var.data.sizes["time"] == 3
+    assert var.data.sizes["space"] == 2
+
+
+def test_add_variables_with_non_dataarray_bounds_unchanged() -> None:
+    """Non-DataArray bounds (scalars, numpy) should work as before."""
+    from linopy import Model
+
+    model = Model()
+    time = pd.RangeIndex(3, name="time")
+    var = model.add_variables(
+        lower=0, upper=np.array([1, 2, 3]), coords=[time], name="x"
+    )
+    assert var.shape == (3,)
+
+
 def test_as_dataarray_with_unsupported_type() -> None:
     with pytest.raises(TypeError):
         as_dataarray(lambda x: 1, dims=["dim1"], coords=[["a"]])
