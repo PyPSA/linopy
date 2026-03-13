@@ -642,6 +642,27 @@ class TestAddVariablesBoundsWithCoords:
         assert var.data.sizes == {"time": 3, "space": 2}
         assert not var.data.lower.isnull().any()
 
+    def test_bounds_with_different_dim_order(self, model: "Model") -> None:
+        """Lower (time, space) and upper (space, time) should align correctly."""
+        time = pd.RangeIndex(3, name="time")
+        space = pd.Index(["a", "b"], name="space")
+        lower = DataArray(
+            np.zeros((3, 2)),
+            dims=["time", "space"],
+            coords={"time": range(3), "space": ["a", "b"]},
+        )
+        upper = DataArray(
+            np.ones((2, 3)),
+            dims=["space", "time"],
+            coords={"space": ["a", "b"], "time": range(3)},
+        )
+        var = model.add_variables(
+            lower=lower, upper=upper, coords=[time, space], name="x"
+        )
+        assert var.data.sizes == {"time": 3, "space": 2}
+        assert (var.data.lower.values == 0).all()
+        assert (var.data.upper.values == 1).all()
+
     # -- String and datetime coordinates -----------------------------------
 
     def test_string_coordinates(self, model: "Model") -> None:
