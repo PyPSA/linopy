@@ -145,10 +145,16 @@ def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
         )
         actual_idx = arr.coords[dim].to_index()
         if not actual_idx.equals(expected_idx):
-            raise ValueError(
-                f"Coordinates for dimension '{dim}' do not match: "
-                f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
-            )
+            # Same values, different order → reindex to match expected order
+            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
+                expected_idx
+            ):
+                arr = arr.reindex({dim: expected_idx})
+            else:
+                raise ValueError(
+                    f"Coordinates for dimension '{dim}' do not match: "
+                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
+                )
 
     # Expand missing dimensions
     expand = {k: v for k, v in expected.items() if k not in arr.dims}

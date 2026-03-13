@@ -663,6 +663,22 @@ class TestAddVariablesBoundsWithCoords:
         assert (var.data.lower.values == 0).all()
         assert (var.data.upper.values == 1).all()
 
+    # -- Reordered coordinates ---------------------------------------------
+
+    def test_reordered_coords_reindexed(self, model: "Model") -> None:
+        """Same coord values in different order should reindex, not raise."""
+        lower = DataArray([10, 20, 30], dims=["x"], coords={"x": ["c", "a", "b"]})
+        var = model.add_variables(lower=lower, coords={"x": ["a", "b", "c"]}, name="x")
+        assert list(var.data.coords["x"].values) == ["a", "b", "c"]
+        # Values must follow the reindexed order, not the original
+        assert list(var.data.lower.values) == [20, 30, 10]
+
+    def test_reordered_coords_different_values_raises(self, model: "Model") -> None:
+        """Overlapping but not identical coord sets must still raise."""
+        lower = DataArray([10, 20], dims=["x"], coords={"x": ["a", "b"]})
+        with pytest.raises(ValueError, match="do not match"):
+            model.add_variables(lower=lower, coords={"x": ["a", "c"]}, name="x")
+
     # -- String and datetime coordinates -----------------------------------
 
     def test_string_coordinates(self, model: "Model") -> None:
