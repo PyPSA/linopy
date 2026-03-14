@@ -1087,7 +1087,10 @@ class Constraints:
             return pd.DataFrame(columns=["coeffs", "vars", "labels", "key"])
         df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
-        map_labels = pd.Series(np.arange(len(unique_labels)), index=unique_labels)
+        map_labels = pd.Series(
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
+            index=unique_labels,
+        )
         df["key"] = df.labels.map(map_labels)
         return df
 
