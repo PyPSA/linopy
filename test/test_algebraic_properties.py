@@ -58,6 +58,25 @@ SPECIFICATION
 9. Named methods with fill_value
    .add(v, fill_value=f)  fills const before adding
    .mul(v, fill_value=f)  fills const before multiplying
+
+10. Expression–expression algebraic laws
+    (2x+3) + (4y+1) == (4y+1) + (2x+3)      commutativity
+    ((2x+1)+(3y+2))+(4z+3) == (2x+1)+((3y+2)+(4z+3))  associativity
+
+11. Division distributivity
+    (a + b) / c == a/c + b/c
+
+12. Subtraction distributivity
+    c * (a - b) == c*a - c*b
+
+13. Negative scalar distributivity
+    -s * (a + b) == -s*a + (-s*b)
+
+14. Multi-step constant folding
+    (x + 3) * 2 + 1  should equal  2*x + 7
+
+15. Mixed-type commutativity
+    Variable + Expression == Expression + Variable
 """
 
 from __future__ import annotations
@@ -601,3 +620,201 @@ class TestMultiDimensionalAbsentSlots:
         """2 * (g.shift(1) + g2) == 2*g.shift(1) + 2*g2 in 2D."""
         gs = g.shift(time=1)
         assert_linequal(2 * (gs + g2), 2 * gs + 2 * g2)
+
+
+# ============================================================
+# 13. Expression–expression algebraic laws
+# ============================================================
+
+
+class TestExpressionExpressionAlgebra:
+    """Algebraic laws where both operands are multi-term expressions."""
+
+    def test_commutativity(self, x: Variable, y: Variable) -> None:
+        """(2x+3) + (4y+1) == (4y+1) + (2x+3)"""
+        a = 2 * x + 3
+        b = 4 * y + 1
+        assert_linequal(a + b, b + a)
+
+    def test_associativity(self, x: Variable, y: Variable, z: Variable) -> None:
+        """((2x+1)+(3y+2))+(4z+3) == (2x+1)+((3y+2)+(4z+3))"""
+        a = 2 * x + 1
+        b = 3 * y + 2
+        c = 4 * z + 3
+        assert_linequal((a + b) + c, a + (b + c))
+
+    def test_commutativity_shifted(self, x: Variable, y: Variable) -> None:
+        """Shifted expressions: (xs+5) + (2y+1) == (2y+1) + (xs+5)"""
+        a = x.shift(time=1) + 5
+        b = 2 * y + 1
+        assert_linequal(a + b, b + a)
+
+    def test_associativity_shifted(self, x: Variable, y: Variable, z: Variable) -> None:
+        """Shifted: ((xs+5)+(2y))+(3z) == (xs+5)+((2y)+(3z))"""
+        a = x.shift(time=1) + 5
+        b = 2 * y
+        c = 3 * z
+        assert_linequal((a + b) + c, a + (b + c))
+
+    def test_four_term_associativity(
+        self, x: Variable, y: Variable, z: Variable
+    ) -> None:
+        """((a+b)+c)+d == a+(b+(c+d)) with four expression operands."""
+        a = 1 * x + 1
+        b = 2 * y + 2
+        c = 3 * z + 3
+        d = 4 * x + 4
+        assert_linequal(((a + b) + c) + d, a + (b + (c + d)))
+
+
+# ============================================================
+# 14. Division distributivity
+# ============================================================
+
+
+class TestDivisionDistributivity:
+    """(a + b) / c == a/c + b/c"""
+
+    def test_scalar(self, x: Variable, y: Variable) -> None:
+        assert_linequal((x + y) / 2, x / 2 + y / 2)
+
+    def test_array(self, g: Variable, g2: Variable, c: xr.DataArray) -> None:
+        assert_linequal((g + g2) / c, g / c + g2 / c)
+
+    def test_with_constant_offset(self, x: Variable, y: Variable) -> None:
+        """(x + y + 6) / 2 == x/2 + y/2 + 3"""
+        assert_linequal((x + y + 6) / 2, x / 2 + y / 2 + 3)
+
+    def test_shifted(self, x: Variable, y: Variable) -> None:
+        """(xs + y) / 2 == xs/2 + y/2"""
+        xs = x.shift(time=1)
+        assert_linequal((xs + y) / 2, xs / 2 + y / 2)
+
+
+# ============================================================
+# 15. Subtraction distributivity
+# ============================================================
+
+
+class TestSubtractionDistributivity:
+    """c * (a - b) == c*a - c*b"""
+
+    def test_scalar(self, x: Variable, y: Variable) -> None:
+        assert_linequal(3 * (x - y), 3 * x - 3 * y)
+
+    def test_array(self, g: Variable, g2: Variable, c: xr.DataArray) -> None:
+        assert_linequal(c * (g - g2), c * g - c * g2)
+
+    def test_shifted(self, x: Variable, y: Variable) -> None:
+        xs = x.shift(time=1)
+        assert_linequal(3 * (xs - y), 3 * xs - 3 * y)
+
+    def test_sub_then_div(self, x: Variable, y: Variable) -> None:
+        """(a - b) / c == a/c - b/c"""
+        assert_linequal((x - y) / 2, x / 2 - y / 2)
+
+
+# ============================================================
+# 16. Negative scalar distributivity
+# ============================================================
+
+
+class TestNegativeDistributivity:
+    """-s * (a + b) == -s*a + (-s*b)"""
+
+    def test_negative_scalar(self, x: Variable, y: Variable) -> None:
+        assert_linequal(-3 * (x + y), -3 * x + (-3) * y)
+
+    def test_negative_one(self, x: Variable, y: Variable) -> None:
+        """-(x + y) == -x + (-y)"""
+        assert_linequal(-(x + y), -x + (-y))
+
+    def test_negative_scalar_with_constant(self, x: Variable) -> None:
+        """-2 * (x + 5) == -2*x + (-10)"""
+        assert_linequal(-2 * (x + 5), -2 * x + (-10))
+
+    def test_negative_scalar_shifted(self, x: Variable, y: Variable) -> None:
+        xs = x.shift(time=1)
+        assert_linequal(-3 * (xs + y), -3 * xs + (-3) * y)
+
+    def test_negate_expression(self, x: Variable, y: Variable) -> None:
+        """-(2x + 3y + 5) == -2x + (-3y) + (-5)"""
+        assert_linequal(-(2 * x + 3 * y + 5), -2 * x + (-3) * y + (-5))
+
+
+# ============================================================
+# 17. Multi-step constant folding
+# ============================================================
+
+
+class TestMultiStepArithmetic:
+    """Chains of operations that combine constants through multiple steps."""
+
+    def test_add_then_mul_then_add(self, x: Variable) -> None:
+        """(x + 3) * 2 + 1 == 2*x + 7"""
+        assert_linequal((x + 3) * 2 + 1, 2 * x + 7)
+
+    def test_mul_then_add_then_mul(self, x: Variable) -> None:
+        """(x * 2 + 1) * 3 == 6*x + 3"""
+        assert_linequal((x * 2 + 1) * 3, 6 * x + 3)
+
+    def test_sub_then_mul(self, x: Variable) -> None:
+        """(x - 4) * 3 == 3*x - 12"""
+        assert_linequal((x - 4) * 3, 3 * x - 12)
+
+    def test_div_then_add(self, x: Variable) -> None:
+        """(x + 6) / 2 + 1 == x/2 + 4"""
+        assert_linequal((x + 6) / 2 + 1, x / 2 + 4)
+
+    def test_chain_three_ops(self, x: Variable) -> None:
+        """((x + 1) * 2 - 3) * 4 == 8*x + (-4)"""
+        assert_linequal(((x + 1) * 2 - 3) * 4, 8 * x + (-4))
+
+    def test_chain_with_two_vars(self, x: Variable, y: Variable) -> None:
+        """(2x + 3y + 5) * 2 - 4 == 4x + 6y + 6"""
+        assert_linequal((2 * x + 3 * y + 5) * 2 - 4, 4 * x + 6 * y + 6)
+
+    def test_chain_shifted(self, x: Variable) -> None:
+        """(xs + 3) * 2 + 1: at absent slot const should be 7."""
+        result = (x.shift(time=1) + 3) * 2 + 1
+        assert result.const.values[0] == 7
+
+
+# ============================================================
+# 18. Mixed-type commutativity (Variable + Expression)
+# ============================================================
+
+
+class TestMixedTypeCommutativity:
+    """Variable + Expression == Expression + Variable and similar mixes."""
+
+    def test_var_plus_expr(self, x: Variable, y: Variable) -> None:
+        """X + (2*y + 3) == (2*y + 3) + x"""
+        expr = 2 * y + 3
+        assert_linequal(x + expr, expr + x)
+
+    def test_var_minus_expr(self, x: Variable, y: Variable) -> None:
+        """X - (2*y + 3) == x + (-(2*y + 3))"""
+        expr = 2 * y + 3
+        assert_linequal(x - expr, x + (-expr))
+
+    def test_expr_plus_var_plus_expr(
+        self, x: Variable, y: Variable, z: Variable
+    ) -> None:
+        """(2x+1) + y + (3z+2) == y + (2x+1) + (3z+2)"""
+        a = 2 * x + 1
+        b = 3 * z + 2
+        assert_linequal((a + y) + b, (y + a) + b)
+
+    def test_shifted_var_plus_expr(self, x: Variable, y: Variable) -> None:
+        """x.shift(1) + (2*y + 1) == (2*y + 1) + x.shift(1)"""
+        xs = x.shift(time=1)
+        expr = 2 * y + 1
+        assert_linequal(xs + expr, expr + xs)
+
+    def test_var_plus_multiterm_expr(
+        self, x: Variable, y: Variable, z: Variable
+    ) -> None:
+        """X + (2y + 3z + 5) == (2y + 3z + 5) + x"""
+        expr = 2 * y + 3 * z + 5
+        assert_linequal(x + expr, expr + x)
