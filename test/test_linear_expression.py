@@ -1308,10 +1308,12 @@ class TestCoordinateAlignment:
             assert result.const.values[0] == 5.0
 
         @pytest.mark.v1_only
-        def test_shifted_expr_add_scalar_propagates(self, v: Variable) -> None:
+        def test_shifted_expr_add_scalar_revives(self, v: Variable) -> None:
+            """Addition fills const with 0 (additive identity) then adds."""
             expr = (1 * v).shift(dim_2=1)
             result = expr + 5
-            assert np.isnan(result.const.values[0])
+            assert not np.isnan(result.const.values[0])
+            assert result.const.values[0] == 5.0
 
         @pytest.mark.legacy_only
         def test_shifted_expr_mul_scalar_filled(self, v: Variable) -> None:
@@ -1335,11 +1337,13 @@ class TestCoordinateAlignment:
             assert result.const.values[0] == 0.0
 
         @pytest.mark.v1_only
-        def test_shifted_expr_add_array_propagates(self, v: Variable) -> None:
+        def test_shifted_expr_add_array_revives(self, v: Variable) -> None:
+            """Addition fills const with 0 (additive identity) then adds."""
             arr = np.arange(v.sizes["dim_2"], dtype=float)
             expr = (1 * v).shift(dim_2=1)
             result = expr + arr
-            assert np.isnan(result.const.values[0])
+            assert not np.isnan(result.const.values[0])
+            assert result.const.values[0] == 0.0
 
         @pytest.mark.legacy_only
         def test_shifted_expr_mul_array(self, v: Variable) -> None:
@@ -1377,10 +1381,12 @@ class TestCoordinateAlignment:
             assert result.const.values[0] == -3.0
 
         @pytest.mark.v1_only
-        def test_shifted_expr_sub_scalar_propagates(self, v: Variable) -> None:
+        def test_shifted_expr_sub_scalar_revives(self, v: Variable) -> None:
+            """Subtraction fills const with 0 (additive identity) then subtracts."""
             expr = (1 * v).shift(dim_2=1)
             result = expr - 3
-            assert np.isnan(result.const.values[0])
+            assert not np.isnan(result.const.values[0])
+            assert result.const.values[0] == -3.0
 
         @pytest.mark.legacy_only
         def test_shifted_expr_div_array(self, v: Variable) -> None:

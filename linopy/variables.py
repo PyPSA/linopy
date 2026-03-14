@@ -322,6 +322,15 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
+        # In v1 mode, set const=NaN where the variable is absent so that
+        # absence propagates through arithmetic (consistent with expression path)
+        if options["arithmetic_convention"] == "v1":
+            absent = self.labels == -1
+            if absent.any():
+                const = DataArray(
+                    np.where(absent, np.nan, 0.0), coords=self.labels.coords
+                )
+                ds = ds.assign(const=const)
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
@@ -1144,19 +1153,30 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
-    ) -> Variable:
+        fill_value: int
+        | float
+        | ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset,
+    ) -> Variable | expressions.LinearExpression:
         """
-        Fill missing values with a variable.
+        Fill missing values.
 
-        This operation call ``xarray.DataArray.fillna`` but ensures preserving
-        the linopy.Variable type.
+        When ``fill_value`` is numeric, absent variable slots are replaced
+        with that constant and a :class:`LinearExpression` is returned
+        (since a constant is not a variable). When ``fill_value`` is a
+        Variable, the result stays a Variable.
 
         Parameters
         ----------
-        fill_value : Variable/ScalarVariable
-            Variable to use for filling.
+        fill_value : numeric, Variable, or ScalarVariable
+            Value to use for filling. Numeric values produce a
+            LinearExpression; Variable values produce a Variable.
         """
+        if isinstance(fill_value, int | float | np.integer | np.floating):
+            expr = self.to_linexpr()
+            return expr.fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
