@@ -2633,8 +2633,15 @@ def merge(
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+        # Concat without fill to detect where all constants were NaN
+        raw_consts = xr.concat([d["const"] for d in data], dim, **kwargs)
+        all_const_nan = raw_consts.isnull().all(TERM_DIM)
+        # Sum with fill_value=0 so valid NaN + valid 5 = 5 (not NaN)
         subkwargs = {**kwargs, "fill_value": 0}
         const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
+        # Restore NaN where all input constants were NaN (all terms absent)
+        if all_const_nan.any():
+            const = const.where(~all_const_nan)
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)
