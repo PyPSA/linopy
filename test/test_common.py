@@ -10,7 +10,6 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
-from test_linear_expression import m, u, x  # noqa: F401
 from xarray import DataArray
 from xarray.testing.assertions import assert_equal
 
@@ -23,6 +22,7 @@ from linopy.common import (
     get_dims_with_index_levels,
     is_constant,
     iterate_slices,
+    maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
 
@@ -90,17 +90,6 @@ def test_as_dataarray_with_series_dims_superset() -> None:
     s = pd.Series([1, 2, 3], index=target_index)
     dims = [target_dim, "other"]
     da = as_dataarray(s, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == (target_dim,)
-    assert list(da.coords[target_dim].values) == target_index
-
-
-def test_as_dataarray_with_series_override_coords() -> None:
-    target_dim = "dim_0"
-    target_index = ["a", "b", "c"]
-    s = pd.Series([1, 2, 3], index=target_index)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(s, coords=[[1, 2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == (target_dim,)
     assert list(da.coords[target_dim].values) == target_index
@@ -207,19 +196,6 @@ def test_as_dataarray_dataframe_dims_superset() -> None:
     df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
     dims = [*target_dims, "other"]
     da = as_dataarray(df, dims=dims)
-    assert isinstance(da, DataArray)
-    assert da.dims == target_dims
-    assert list(da.coords[target_dims[0]].values) == target_index
-    assert list(da.coords[target_dims[1]].values) == target_columns
-
-
-def test_as_dataarray_dataframe_override_coords() -> None:
-    target_dims = ("dim_0", "dim_1")
-    target_index = ["a", "b"]
-    target_columns = ["A", "B"]
-    df = pd.DataFrame([[1, 2], [3, 4]], index=target_index, columns=target_columns)
-    with pytest.warns(UserWarning):
-        da = as_dataarray(df, coords=[[1, 2], [2, 3]])
     assert isinstance(da, DataArray)
     assert da.dims == target_dims
     assert list(da.coords[target_dims[0]].values) == target_index
@@ -369,8 +345,10 @@ def test_as_dataarray_with_ndarray_coords_dict_set_dims_not_aligned() -> None:
     target_dims = ("dim_0", "dim_1")
     target_coords = {"dim_0": ["a", "b"], "dim_2": ["A", "B"]}
     arr = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError):
-        as_dataarray(arr, coords=target_coords, dims=target_dims)
+    da = as_dataarray(arr, coords=target_coords, dims=target_dims)
+    assert da.dims == target_dims
+    assert list(da.coords["dim_0"].values) == ["a", "b"]
+    assert "dim_2" not in da.coords
 
 
 def test_as_dataarray_with_number() -> None:
@@ -737,3 +715,20 @@ def test_is_constant() -> None:
     ]
     for cv in constant_values:
         assert is_constant(cv)
+
+
+def test_maybe_group_terms_polars_no_duplicates() -> None:
+    """Fast path: distinct (labels, vars) pairs skip group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 2], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (2, 3)
+    assert result.columns == ["labels", "vars", "coeffs"]
+    assert result["coeffs"].to_list() == [3.0, 4.0]
+
+
+def test_maybe_group_terms_polars_with_duplicates() -> None:
+    """Slow path: duplicate (labels, vars) pairs trigger group_by."""
+    df = pl.DataFrame({"labels": [0, 0], "vars": [1, 1], "coeffs": [3.0, 4.0]})
+    result = maybe_group_terms_polars(df)
+    assert result.shape == (1, 3)
+    assert result["coeffs"].to_list() == [7.0]

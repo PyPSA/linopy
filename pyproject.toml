@@ -33,12 +33,10 @@ dependencies = [
     "numexpr",
     "xarray>=2024.2.0",
     "dask>=0.18.0",
-    "polars",
+    "polars>=1.31.1",
     "tqdm",
     "deprecation",
     "packaging",
-    "google-cloud-storage",
-    "requests",
 ]
 
 [project.urls]
@@ -46,6 +44,10 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
+oetc = [
+    "google-cloud-storage",
+    "requests",
+]
 docs = [
     "ipython==8.26.0",
     "numpydoc==1.7.0",
@@ -84,6 +86,7 @@ solvers = [
     "coptpy!=7.2.1",
     "xpress; platform_system != 'Darwin' and python_version < '3.11'",
     "pyscipopt; platform_system != 'Darwin'",
+    "knitro>=15.1.0",
     # "cupdlpx>=0.1.2", pip package currently unstable
 ]
 
@@ -156,6 +159,7 @@ ignore = [
     'D101', # Missing docstring in public class
     'D102', # Missing docstring in public method
     'D103', # Missing docstring in public function
+    'D106', # Missing docstring in public nested class
     'D107', # Missing docstring in __init__
     'D202', # No blank lines allowed after function docstring
     'D203', # 1 blank line required before class docstring

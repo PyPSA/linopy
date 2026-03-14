@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from linopy import solvers
 from linopy.common import to_polars
-from linopy.constants import CONCAT_DIM
+from linopy.constants import CONCAT_DIM, SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.objective import Objective
 
 if TYPE_CHECKING:
@@ -52,6 +52,21 @@ def clean_name(name: str) -> str:
 
 
 coord_sanitizer = str.maketrans("[,]", "(,)", " ")
+
+
+def _format_and_write(
+    df: pl.DataFrame, columns: list[pl.Expr], f: BufferedWriter
+) -> None:
+    """
+    Format columns via concat_str and write to file.
+
+    Uses Polars streaming engine for better memory efficiency.
+    """
+    df.lazy().select(pl.concat_str(columns, ignore_nulls=True)).collect(
+        engine="streaming"
+    ).write_csv(
+        f, separator=" ", null_value="", quote_style="never", include_header=False
+    )
 
 
 def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
@@ -155,10 +170,7 @@ def objective_write_linear_terms(
         *signed_number(pl.col("coeffs")),
         *print_variable(pl.col("vars")),
     ]
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
 
 
 def objective_write_quadratic_terms(
@@ -171,10 +183,7 @@ def objective_write_quadratic_terms(
         *print_variable(pl.col("vars2")),
     ]
     f.write(b"+ [\n")
-    df = df.select(pl.concat_str(cols, ignore_nulls=True))
-    df.write_csv(
-        f, separator=" ", null_value="", quote_style="never", include_header=False
-    )
+    _format_and_write(df, cols, f)
     f.write(b"] / 2\n")
 
 
@@ -225,7 +234,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
@@ -254,11 +267,7 @@ def bounds_to_file(
                 *signed_number(pl.col("upper")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def binaries_to_file(
@@ -296,11 +305,45 @@ def binaries_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
+
+
+def semi_continuous_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out semi-continuous variables of a model to a lp file.
+    """
+    names = m.variables.semi_continuous
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsemi-continuous\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing semi-continuous variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
+
+            columns = [
+                *print_variable(pl.col("labels")),
+            ]
+
+            _format_and_write(df, columns, f)
 
 
 def integers_to_file(
@@ -339,11 +382,7 @@ def integers_to_file(
                 *print_variable(pl.col("labels")),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def sos_to_file(
@@ -374,8 +413,8 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs["sos_type"]
-        sos_dim = var.attrs["sos_dim"]
+        sos_type = var.attrs[SOS_TYPE_ATTR]
+        sos_dim = var.attrs[SOS_DIM_ATTR]
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
@@ -399,11 +438,7 @@ def sos_to_file(
                 pl.col("var_weights"),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
 
 def constraints_to_file(
@@ -440,58 +475,32 @@ def constraints_to_file(
             if df.height == 0:
                 continue
 
-            # Ensure each constraint has both coefficient and RHS terms
-            analysis = df.group_by("labels").agg(
-                [
-                    pl.col("coeffs").is_not_null().sum().alias("coeff_rows"),
-                    pl.col("sign").is_not_null().sum().alias("rhs_rows"),
-                ]
-            )
-
-            valid = analysis.filter(
-                (pl.col("coeff_rows") > 0) & (pl.col("rhs_rows") > 0)
-            )
-
-            if valid.height == 0:
-                continue
-
-            # Keep only constraints that have both parts
-            df = df.join(valid.select("labels"), on="labels", how="inner")
-
             # Sort by labels and mark first/last occurrences
             df = df.sort("labels").with_columns(
                 [
-                    pl.when(pl.col("labels").is_first_distinct())
-                    .then(pl.col("labels"))
-                    .otherwise(pl.lit(None))
-                    .alias("labels_first"),
+                    pl.col("labels").is_first_distinct().alias("is_first_in_group"),
                     (pl.col("labels") != pl.col("labels").shift(-1))
                     .fill_null(True)
                     .alias("is_last_in_group"),
                 ]
             )
 
-            row_labels = print_constraint(pl.col("labels_first"))
+            row_labels = print_constraint(pl.col("labels"))
             col_labels = print_variable(pl.col("vars"))
             columns = [
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[0]),
-                pl.when(pl.col("labels_first").is_not_null()).then(row_labels[1]),
-                pl.when(pl.col("labels_first").is_not_null())
-                .then(pl.lit(":\n"))
-                .alias(":"),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[0]),
+                pl.when(pl.col("is_first_in_group")).then(row_labels[1]),
+                pl.when(pl.col("is_first_in_group")).then(pl.lit(":\n")).alias(":"),
                 *signed_number(pl.col("coeffs")),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[0]),
-                pl.when(pl.col("vars").is_not_null()).then(col_labels[1]),
+                col_labels[0],
+                col_labels[1],
+                pl.when(pl.col("is_last_in_group")).then(pl.lit("\n")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("sign")),
                 pl.when(pl.col("is_last_in_group")).then(pl.lit(" ")),
                 pl.when(pl.col("is_last_in_group")).then(pl.col("rhs").cast(pl.String)),
             ]
 
-            kwargs: Any = dict(
-                separator=" ", null_value="", quote_style="never", include_header=False
-            )
-            formatted = df.select(pl.concat_str(columns, ignore_nulls=True))
-            formatted.write_csv(f, **kwargs)
+            _format_and_write(df, columns, f)
 
             # in the future, we could use lazy dataframes when they support appending
             # tp existent files
@@ -537,6 +546,13 @@ def to_lp_file(
         integers_to_file(
             m,
             integer_label=integer_label,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+        semi_continuous_to_file(
+            m,
             f=f,
             progress=progress,
             slice_size=slice_size,
@@ -626,6 +642,12 @@ def to_mosek(
     """
     if m.variables.sos:
         raise NotImplementedError("SOS constraints are not supported by MOSEK.")
+
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by MOSEK. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
 
     import mosek
 
@@ -753,7 +775,11 @@ def to_gurobipy(
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if (
+        len(m.binaries.labels)
+        + len(m.integers.labels)
+        + len(list(m.variables.semi_continuous))
+    ):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
@@ -773,8 +799,8 @@ def to_gurobipy(
     if m.variables.sos:
         for var_name in m.variables.sos:
             var = m.variables.sos[var_name]
-            sos_type: int = var.attrs["sos_type"]  # type: ignore[assignment]
-            sos_dim: str = var.attrs["sos_dim"]  # type: ignore[assignment]
+            sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
+            sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
 
             def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                 s = s.squeeze()
@@ -826,11 +852,17 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers):
+    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
         vtypes = M.vtypes
-        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
-        n = len(labels)
-        h.changeColsIntegrality(n, labels, ones_like(labels))
+        # Map linopy vtypes to HiGHS integrality values:
+        # 0 = continuous, 1 = integer, 2 = semi-continuous
+        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+        labels = np.arange(len(vtypes))[int_mask]
+        integrality = np.array(
+            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+        )
+        h.changeColsIntegrality(len(labels), labels, integrality)
         if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
@@ -889,6 +921,12 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     -------
     model : cupdlpx.Model
     """
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by cuPDLPx. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
+
     import cupdlpx
 
     if explicit_coordinate_names:

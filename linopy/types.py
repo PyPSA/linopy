@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         QuadraticExpression,
         ScalarLinearExpression,
     )
+    from linopy.piecewise import PiecewiseConstraintDescriptor
     from linopy.variables import ScalarVariable, Variable
 
 # Type aliases using Union for Python 3.9 compatibility
@@ -46,7 +47,10 @@ ExpressionLike = Union[
     "LinearExpression",
     "QuadraticExpression",
 ]
-ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
+ConstraintLike = Union[
+    "Constraint", "AnonymousScalarConstraint", "PiecewiseConstraintDescriptor"
+]
+LinExprLike = Union["Variable", "LinearExpression"]
 MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]  # noqa: UP007
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007
 PathLike = Union[str, Path]  # noqa: UP007

@@ -37,6 +37,25 @@ DEFAULT_LABEL_DTYPE = np.int32
 
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
+
+PWL_LAMBDA_SUFFIX = "_lambda"
+PWL_CONVEX_SUFFIX = "_convex"
+PWL_X_LINK_SUFFIX = "_x_link"
+PWL_Y_LINK_SUFFIX = "_y_link"
+PWL_DELTA_SUFFIX = "_delta"
+PWL_FILL_SUFFIX = "_fill"
+PWL_BINARY_SUFFIX = "_binary"
+PWL_SELECT_SUFFIX = "_select"
+PWL_AUX_SUFFIX = "_aux"
+PWL_LP_SUFFIX = "_lp"
+PWL_LP_DOMAIN_SUFFIX = "_lp_domain"
+PWL_INC_BINARY_SUFFIX = "_inc_binary"
+PWL_INC_LINK_SUFFIX = "_inc_link"
+PWL_INC_ORDER_SUFFIX = "_inc_order"
+PWL_ACTIVE_BOUND_SUFFIX = "_active_bound"
+BREAKPOINT_DIM = "_breakpoint"
+SEGMENT_DIM = "_segment"
+LP_SEG_DIM = f"{BREAKPOINT_DIM}_seg"
 GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
@@ -50,6 +69,11 @@ HELPER_DIMS: list[str] = [
     CONCAT_DIM,
     CV_DIM,
 ]
+
+# SOS constraint attribute keys
+SOS_TYPE_ATTR = "sos_type"
+SOS_DIM_ATTR = "sos_dim"
+SOS_BIG_M_ATTR = "big_m_upper"
 
 
 class ModelStatus(Enum):

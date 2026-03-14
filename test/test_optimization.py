@@ -55,7 +55,7 @@ if "mosek" in available_solvers:
     params.append(("mosek", "lp", True))
 
 
-# Note: Platform-specific solver bugs (e.g., SCIP quadratic on Windows) are now
+# Note: Platform-specific solver bugs are now
 # handled in linopy/solver_capabilities.py by adjusting the registry at import time.
 feasible_quadratic_solvers: list[str] = list(quadratic_solvers)
 
@@ -530,7 +530,7 @@ def test_solver_time_limit_options(
         "cplex": {"timelimit": 1},
         "xpress": {"maxtime": 1},
         "highs": {"time_limit": 1},
-        "scip": {"limits/time": 1},
+        "scip": {"limits/time": 10},  # increase time limit to avoid race condition
         "mosek": {"MSK_DPAR_OPTIMIZER_MAX_TIME": 1},
         "mindopt": {"MaxTime": 1},
         "copt": {"TimeLimit": 1},
@@ -1089,6 +1089,70 @@ def test_solver_classes_direct(
     elif not solver_supports(solver, SolverFeature.DIRECT_API):
         with pytest.raises(NotImplementedError):
             solver_.solve_problem(model=model)
+
+
+@pytest.fixture
+def auto_mask_variable_model() -> Model:
+    """Model with auto_mask=True and NaN in variable bounds."""
+    m = Model(auto_mask=True)
+
+    x = m.add_variables(lower=0, coords=[range(10)], name="x")
+    lower = pd.Series([0.0] * 8 + [np.nan, np.nan], range(10))
+    y = m.add_variables(lower=lower, name="y")  # NaN bounds auto-masked
+
+    m.add_constraints(x + y, GREATER_EQUAL, 10)
+    m.add_constraints(y, GREATER_EQUAL, 0)
+    m.add_objective(2 * x + y)
+    return m
+
+
+@pytest.fixture
+def auto_mask_constraint_model() -> Model:
+    """Model with auto_mask=True and NaN in constraint RHS."""
+    m = Model(auto_mask=True)
+
+    x = m.add_variables(lower=0, coords=[range(10)], name="x")
+    y = m.add_variables(lower=0, coords=[range(10)], name="y")
+
+    rhs = pd.Series([10.0] * 8 + [np.nan, np.nan], range(10))
+    m.add_constraints(x + y, GREATER_EQUAL, rhs)  # NaN rhs auto-masked
+    m.add_constraints(x + y, GREATER_EQUAL, 5)
+
+    m.add_objective(2 * x + y)
+    return m
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_auto_mask_variable_model(
+    auto_mask_variable_model: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """Test that auto_mask=True correctly masks variables with NaN bounds."""
+    auto_mask_variable_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    y = auto_mask_variable_model.variables.y
+    # Same assertions as test_masked_variable_model
+    assert y.solution[-2:].isnull().all()
+    assert y.solution[:-2].notnull().all()
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_auto_mask_constraint_model(
+    auto_mask_constraint_model: Model,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    """Test that auto_mask=True correctly masks constraints with NaN RHS."""
+    auto_mask_constraint_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    # Same assertions as test_masked_constraint_model
+    assert (auto_mask_constraint_model.solution.y[:-2] == 10).all()
+    assert (auto_mask_constraint_model.solution.y[-2:] == 5).all()
 
 
 # def init_model_large():
