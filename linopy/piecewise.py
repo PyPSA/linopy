@@ -762,10 +762,10 @@ def _add_pwl_sos2_core(
         lambda_var.sum(dim=BREAKPOINT_DIM) == rhs, name=convex_name
     )
 
-    x_weighted = (lambda_var * x_points).sum(dim=BREAKPOINT_DIM)
+    x_weighted = (lambda_var * x_points.fillna(0)).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(x_expr == x_weighted, name=x_link_name)
 
-    y_weighted = (lambda_var * y_points).sum(dim=BREAKPOINT_DIM)
+    y_weighted = (lambda_var * y_points.fillna(0)).sum(dim=BREAKPOINT_DIM)
     model.add_constraints(target_expr == y_weighted, name=y_link_name)
 
     return convex_con
@@ -851,13 +851,20 @@ def _add_pwl_incremental_core(
         delta_lo = delta_var.isel({LP_SEG_DIM: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
         # Keep existing fill constraint as LP relaxation tightener
+        # Align coords for positional comparison (lo=[0..n-2], hi=[1..n-1])
+        delta_hi = delta_hi.assign_coords(
+            {LP_SEG_DIM: delta_lo.coords[LP_SEG_DIM].values}
+        )
         fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
         binary_hi = binary_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
+        binary_hi = binary_hi.assign_coords(
+            {LP_SEG_DIM: delta_lo.coords[LP_SEG_DIM].values}
+        )
         model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
 
-    x0 = x_points.isel({BREAKPOINT_DIM: 0})
-    y0 = y_points.isel({BREAKPOINT_DIM: 0})
+    x0 = x_points.isel({BREAKPOINT_DIM: 0}, drop=True)
+    y0 = y_points.isel({BREAKPOINT_DIM: 0}, drop=True)
 
     # When active is provided, multiply base terms by active
     x_base: DataArray | LinearExpression = x0

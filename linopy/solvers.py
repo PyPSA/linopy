@@ -1544,6 +1544,7 @@ class SCIP(Solver[None]):
 
         condition = m.getStatus()
         termination_condition = CONDITION_MAP.get(condition, condition)
+        assert termination_condition is not None
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 

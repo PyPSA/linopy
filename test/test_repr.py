@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
 from linopy import Model, options
+from linopy.config import LinopyDeprecationWarning
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression
 from linopy.variables import Variable
+
+warnings.filterwarnings("ignore", category=LinopyDeprecationWarning)
 
 m = Model()
 
