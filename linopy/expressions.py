@@ -639,15 +639,17 @@ class BaseExpression(ABC):
                     "Constant contains NaN values. Use .fillna() to handle "
                     "missing values before arithmetic operations."
                 )
-            const = self.const.fillna(0) + other if is_legacy else self.const + other
+            const = self.const.fillna(0) + other
             return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
+        # Always fill self_const with 0 (additive identity) to stay
+        # consistent with merge() and preserve associativity.
+        self_const = self_const.fillna(0)
         if is_legacy:
             da = da.fillna(0)
-            self_const = self_const.fillna(0)
         elif da.isnull().any():
             raise ValueError(
                 "Constant contains NaN values. Use .fillna() to handle "
