@@ -1028,7 +1028,8 @@ class Constraints:
         values : list, array-like
             One dimensional array of constraint labels.
         display_max_terms : int, optional
-            Maximum number of terms to display per constraint.
+            Maximum number of terms to display per constraint. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
 
         Returns
         -------
