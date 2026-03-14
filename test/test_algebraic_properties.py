@@ -90,8 +90,6 @@ from linopy import Model
 from linopy.expressions import LinearExpression
 from linopy.variables import Variable
 
-pytestmark = pytest.mark.v1_only
-
 
 @pytest.fixture
 def m() -> Model:
@@ -371,16 +369,19 @@ class TestAbsentSlotAddition:
 class TestAbsentSlotMultiplication:
     """Multiplication propagates NaN → absent stays absent."""
 
+    @pytest.mark.v1_only
     def test_mul_scalar_propagates(self, x: Variable) -> None:
         result = x.shift(time=1) * 3
         assert result.isnull().values[0]
         assert not result.isnull().values[1]
 
+    @pytest.mark.v1_only
     def test_mul_array_propagates(self, x: Variable) -> None:
         arr = xr.DataArray([2.0, 2.0, 2.0], dims=["time"])
         result = (1 * x).shift(time=1) * arr
         assert result.isnull().values[0]
 
+    @pytest.mark.v1_only
     def test_div_scalar_propagates(self, x: Variable) -> None:
         result = (1 * x).shift(time=1) / 2
         assert result.isnull().values[0]
@@ -437,6 +438,7 @@ class TestAbsentSlotMixed:
         assert not result.isnull().any()
         assert result.const.values[1] == 10
 
+    @pytest.mark.v1_only
     def test_where_mul_propagates(self, x: Variable) -> None:
         mask = xr.DataArray([True, False, True], dims=["time"])
         result = (1 * x).where(mask) * 3
@@ -462,6 +464,7 @@ class TestFillNA:
         assert not result.isnull().any()
         assert result.const.values[0] == 0
 
+    @pytest.mark.v1_only
     def test_variable_fillna_custom_value(self, x: Variable) -> None:
         result = x.shift(time=1).fillna(42)
         assert result.const.values[0] == 42
@@ -540,11 +543,13 @@ class TestFillValueParam:
 class TestDivisionAbsentSlots:
     """Division propagates NaN same as multiplication."""
 
+    @pytest.mark.v1_only
     def test_div_scalar_propagates(self, x: Variable) -> None:
         result = (1 * x).shift(time=1) / 2
         assert result.isnull().values[0]
         assert not result.isnull().values[1]
 
+    @pytest.mark.v1_only
     def test_div_array_propagates(self, x: Variable) -> None:
         arr = xr.DataArray([2.0, 2.0, 2.0], dims=["time"])
         result = (1 * x).shift(time=1) / arr
@@ -606,6 +611,7 @@ class TestMultiDimensionalAbsentSlots:
         assert not result.isnull().isel(time=0).any()
         assert (result.const.isel(time=0) == 5).all()
 
+    @pytest.mark.v1_only
     def test_2d_mul_propagates(self, g: Variable) -> None:
         shifted = (1 * g).shift(time=1)
         result = shifted * 3
