@@ -1655,17 +1655,36 @@ class Variables:
             self._label_position_index = LabelPositionIndex(self)
         return self._label_position_index.find_single_with_index(label)
 
-    def print_labels(self, values: list[int]) -> None:
+    def format_labels(self, values: list[int]) -> str:
         """
-        Print a selection of labels of the variables.
+        Get a string representation of a selection of variable labels.
 
         Parameters
         ----------
         values : list, array-like
-            One dimensional array of constraint labels.
+            One dimensional array of variable labels.
+
+        Returns
+        -------
+        str
+            String representation of the selected variables.
         """
         res = [print_single_variable(self.model, v) for v in values]
-        print("\n".join(res))
+        return "\n".join(res)
+
+    def print_labels(self, values: list[int]) -> None:
+        """
+        Print a selection of labels of the variables.
+
+        .. deprecated::
+            Use :meth:`format_labels` instead.
+        """
+        warn(
+            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:
