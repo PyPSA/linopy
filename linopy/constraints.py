@@ -15,6 +15,7 @@ from typing import (
     Any,
     overload,
 )
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -1016,29 +1017,46 @@ class Constraints:
             self._label_position_index = LabelPositionIndex(self)
         return get_label_position(self, values, self._label_position_index)
 
-    def print_labels(
+    def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
-    ) -> None:
+    ) -> str:
         """
-        Print a selection of labels of the constraints.
+        Get a string representation of a selection of constraint labels.
 
         Parameters
         ----------
         values : list, array-like
             One dimensional array of constraint labels.
+        display_max_terms : int, optional
+            Maximum number of terms to display per constraint.
+
+        Returns
+        -------
+        str
+            String representation of the selected constraints.
         """
         with options as opts:
             if display_max_terms is not None:
                 opts.set_value(display_max_terms=display_max_terms)
             res = [print_single_constraint(self.model, v) for v in values]
 
-        output = "\n".join(res)
-        try:
-            print(output)
-        except UnicodeEncodeError:
-            # Replace Unicode math symbols with ASCII equivalents for Windows console
-            output = output.replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
-            print(output)
+        return "\n".join(res)
+
+    def print_labels(
+        self, values: Sequence[int], display_max_terms: int | None = None
+    ) -> None:
+        """
+        Print a selection of labels of the constraints.
+
+        .. deprecated::
+            Use :meth:`format_labels` instead.
+        """
+        warn(
+            "`Constraints.print_labels` is deprecated. Use `Constraints.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values, display_max_terms=display_max_terms))
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
