@@ -26,7 +26,6 @@ from xarray.namedarray.utils import is_dict_like
 
 from linopy.config import options
 from linopy.constants import (
-    DEFAULT_LABEL_DTYPE,
     HELPER_DIMS,
     SIGNS,
     SIGNS_alternative,
@@ -486,7 +485,7 @@ def save_join(*dataarrays: DataArray, integer_dtype: bool = False) -> Dataset:
         )
         arrs = xr_align(*dataarrays, join="outer")
         if integer_dtype:
-            arrs = tuple([ds.fillna(-1).astype(DEFAULT_LABEL_DTYPE) for ds in arrs])
+            arrs = tuple([ds.fillna(-1).astype(options["label_dtype"]) for ds in arrs])
     return Dataset({ds.name: ds for ds in arrs})
 
 
@@ -547,7 +546,7 @@ def fill_missing_coords(
     # Fill in missing integer coordinates
     for dim in ds.dims:
         if dim not in ds.coords and dim not in skip_dims:
-            ds.coords[dim] = np.arange(ds.sizes[dim], dtype=DEFAULT_LABEL_DTYPE)
+            ds.coords[dim] = np.arange(ds.sizes[dim], dtype=options["label_dtype"])
 
     return ds
 

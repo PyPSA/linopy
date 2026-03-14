@@ -35,8 +35,8 @@ from linopy.common import (
     set_int_index,
     to_path,
 )
+from linopy.config import options
 from linopy.constants import (
-    DEFAULT_LABEL_DTYPE,
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
@@ -634,14 +634,15 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        if end > np.iinfo(DEFAULT_LABEL_DTYPE).max:
+        label_dtype = options["label_dtype"]
+        if end > np.iinfo(label_dtype).max:
             raise ValueError(
                 f"Number of labels ({end}) exceeds the maximum value for "
-                f"{DEFAULT_LABEL_DTYPE.__name__} ({np.iinfo(DEFAULT_LABEL_DTYPE).max}). "
+                f"{label_dtype.__name__} ({np.iinfo(label_dtype).max})."
             )
-        data.labels.values = np.arange(start, end, dtype=DEFAULT_LABEL_DTYPE).reshape(
-            data.labels.shape
-        )
+        data.labels.values = np.arange(
+            start, end, dtype=options["label_dtype"]
+        ).reshape(data.labels.shape)
         self._xCounter += data.labels.size
 
         if mask is not None:
@@ -880,14 +881,15 @@ class Model:
 
         start = self._cCounter
         end = start + data.labels.size
-        if end > np.iinfo(DEFAULT_LABEL_DTYPE).max:
+        label_dtype = options["label_dtype"]
+        if end > np.iinfo(label_dtype).max:
             raise ValueError(
                 f"Number of labels ({end}) exceeds the maximum value for "
-                f"{DEFAULT_LABEL_DTYPE.__name__} ({np.iinfo(DEFAULT_LABEL_DTYPE).max}). "
+                f"{label_dtype.__name__} ({np.iinfo(label_dtype).max})."
             )
-        data.labels.values = np.arange(start, end, dtype=DEFAULT_LABEL_DTYPE).reshape(
-            data.labels.shape
-        )
+        data.labels.values = np.arange(
+            start, end, dtype=options["label_dtype"]
+        ).reshape(data.labels.shape)
         self._cCounter += data.labels.size
 
         if mask is not None:

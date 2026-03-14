@@ -54,7 +54,6 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
-    DEFAULT_LABEL_DTYPE,
     HELPER_DIMS,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
@@ -1198,7 +1197,7 @@ class Variable:
             .fillna(self._fill_value)
         )
         return self.assign_multiindex_safe(
-            labels=data.labels.astype(DEFAULT_LABEL_DTYPE)
+            labels=data.labels.astype(options["label_dtype"])
         )
 
     def bfill(self, dim: str, limit: None = None) -> Variable:
@@ -1226,7 +1225,7 @@ class Variable:
             .map(DataArray.bfill, dim=dim, limit=limit)
             .fillna(self._fill_value)
         )
-        return self.assign(labels=data.labels.astype(DEFAULT_LABEL_DTYPE))
+        return self.assign(labels=data.labels.astype(options["label_dtype"]))
 
     def sanitize(self) -> Variable:
         """
@@ -1238,7 +1237,7 @@ class Variable:
         """
         if issubdtype(self.labels.dtype, floating):
             return self.assign(
-                labels=self.labels.fillna(-1).astype(DEFAULT_LABEL_DTYPE)
+                labels=self.labels.fillna(-1).astype(options["label_dtype"])
             )
         return self
 
@@ -1692,7 +1691,7 @@ class Variables:
         df = pd.concat([self[k].flat for k in self], ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=DEFAULT_LABEL_DTYPE),
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
             index=unique_labels,
         )
         df["key"] = df.labels.map(map_labels)

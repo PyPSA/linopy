@@ -55,7 +55,6 @@ from linopy.common import (
 )
 from linopy.config import options
 from linopy.constants import (
-    DEFAULT_LABEL_DTYPE,
     EQUAL,
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -1089,7 +1088,7 @@ class Constraints:
         df = pd.concat(dfs, ignore_index=True)
         unique_labels = df.labels.unique()
         map_labels = pd.Series(
-            np.arange(len(unique_labels), dtype=DEFAULT_LABEL_DTYPE),
+            np.arange(len(unique_labels), dtype=options["label_dtype"]),
             index=unique_labels,
         )
         df["key"] = df.labels.map(map_labels)

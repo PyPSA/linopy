@@ -70,7 +70,6 @@ from linopy.common import (
 from linopy.config import options
 from linopy.constants import (
     CV_DIM,
-    DEFAULT_LABEL_DTYPE,
     EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
@@ -293,7 +292,7 @@ class LinearExpressionGroupby:
         def func(ds: Dataset) -> Dataset:
             ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
             ds = ds.assign_coords(
-                {TERM_DIM: np.arange(len(ds._term), dtype=DEFAULT_LABEL_DTYPE)}
+                {TERM_DIM: np.arange(len(ds._term), dtype=options["label_dtype"])}
             )
             return ds
 
@@ -376,7 +375,7 @@ class BaseExpression(ABC):
 
         if np.issubdtype(data.vars, np.floating):
             data = assign_multiindex_safe(
-                data, vars=data.vars.fillna(-1).astype(DEFAULT_LABEL_DTYPE)
+                data, vars=data.vars.fillna(-1).astype(options["label_dtype"])
             )
         if not np.issubdtype(data.coeffs, np.floating):
             data["coeffs"].values = data.coeffs.values.astype(float)
@@ -1441,7 +1440,7 @@ class BaseExpression(ABC):
         linopy.LinearExpression
         """
         if not np.issubdtype(self.vars.dtype, np.integer):
-            return self.assign(vars=self.vars.fillna(-1).astype(DEFAULT_LABEL_DTYPE))
+            return self.assign(vars=self.vars.fillna(-1).astype(options["label_dtype"]))
 
         return self
 
@@ -1845,12 +1844,12 @@ class LinearExpression(BaseExpression):
         # Combined has dimensions (.., CV_DIM, TERM_DIM)
 
         # Drop terms where all vars are -1 (i.e., empty terms across all coordinates)
-        vars = combined.isel({CV_DIM: 0}).astype(DEFAULT_LABEL_DTYPE)
+        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
         non_empty_terms = (vars != -1).any(dim=[d for d in vars.dims if d != TERM_DIM])
         combined = combined.isel({TERM_DIM: non_empty_terms})
 
         # Extract vars and coeffs from the combined result
-        vars = combined.isel({CV_DIM: 0}).astype(DEFAULT_LABEL_DTYPE)
+        vars = combined.isel({CV_DIM: 0}).astype(options["label_dtype"])
         coeffs = combined.isel({CV_DIM: 1})
 
         # Create new dataset with simplified data

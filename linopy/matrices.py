@@ -18,6 +18,7 @@ from pandas.core.series import Series
 from scipy.sparse._csc import csc_matrix
 
 from linopy import expressions
+from linopy.config import options
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -134,7 +135,7 @@ class MatrixAccessor:
         """Vector of labels of all non-missing constraints."""
         df: pd.DataFrame = self.flat_cons
         if df.empty:
-            return np.array([], dtype=int)
+            return np.array([], dtype=options["label_dtype"])
         return create_vector(df.key, df.labels, fill_value=-1)
 
     @property
