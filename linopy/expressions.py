@@ -786,6 +786,7 @@ class BaseExpression(ABC):
         self: GenericExpression,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Add an expression to others.
@@ -798,22 +799,27 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Fill NaN in the expression's constant before adding. Useful
+            for reviving absent slots with a defined value.
         """
+        expr = self.fillna(fill_value) if fill_value is not None else self
         if join is None:
-            return self.__add__(other)
+            return expr.__add__(other)
         if isinstance(other, SUPPORTED_CONSTANT_TYPES):
-            return self._add_constant(other, join=join)
+            return expr._add_constant(other, join=join)
         other = as_expression(other, model=self.model, dims=self.coord_dims)
         if isinstance(other, LinearExpression) and isinstance(
-            self, QuadraticExpression
+            expr, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
+        return merge([expr, other], cls=self.__class__, join=join)  # type: ignore[list-item]
 
     def sub(
         self: GenericExpression,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
@@ -826,13 +832,16 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Fill NaN in the expression's constant before subtracting.
         """
-        return self.add(-other, join=join)
+        return self.add(-other, join=join, fill_value=fill_value)
 
     def mul(
         self: GenericExpression,
         other: SideLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -845,19 +854,23 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Fill NaN in the expression's constant before multiplying.
         """
+        expr = self.fillna(fill_value) if fill_value is not None else self
         if join is None:
-            return self.__mul__(other)
+            return expr.__mul__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "join parameter is not supported for expression-expression multiplication"
             )
-        return self._multiply_by_constant(other, join=join)
+        return expr._multiply_by_constant(other, join=join)
 
     def div(
         self: GenericExpression,
         other: VariableLike | ConstantLike,
         join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -870,16 +883,19 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Fill NaN in the expression's constant before dividing.
         """
+        expr = self.fillna(fill_value) if fill_value is not None else self
         if join is None:
-            return self.__div__(other)
+            return expr.__div__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
             raise TypeError(
                 "unsupported operand type(s) for /: "
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self._divide_by_constant(other, join=join)
+        return expr._divide_by_constant(other, join=join)
 
     def le(
         self: GenericExpression,

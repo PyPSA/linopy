@@ -235,3 +235,169 @@ class TestZero:
         """X * 0 has zero coefficients"""
         result = x * 0
         assert (result.coeffs == 0).all()
+
+
+# ============================================================
+# 7. NaN propagation
+# ============================================================
+
+
+class TestNaNPropagation:
+    """Absent slots (from shift/where/reindex) propagate through bare operators."""
+
+    def test_variable_add_scalar_propagates(self, x: Variable) -> None:
+        """x.shift(1) + 5 keeps absent slot absent."""
+        result = x.shift(time=1) + 5
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_expression_add_scalar_propagates(self, x: Variable) -> None:
+        """(1*x).shift(1) + 5 keeps absent slot absent."""
+        result = (1 * x).shift(time=1) + 5
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_variable_mul_scalar_propagates(self, x: Variable) -> None:
+        """x.shift(1) * 3 keeps absent slot absent."""
+        result = x.shift(time=1) * 3
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_expression_mul_scalar_propagates(self, x: Variable) -> None:
+        """(1*x).shift(1) * 3 keeps absent slot absent."""
+        result = (1 * x).shift(time=1) * 3
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_variable_and_expression_paths_consistent(self, x: Variable) -> None:
+        """Variable and expression paths produce the same result."""
+        var_result = x.shift(time=1) + 5
+        expr_result = (1 * x).shift(time=1) + 5
+        np.testing.assert_array_equal(
+            var_result.isnull().values, expr_result.isnull().values
+        )
+        np.testing.assert_array_equal(var_result.const.values, expr_result.const.values)
+
+    def test_add_zero_propagates(self, x: Variable) -> None:
+        """x.shift(1) + 0 keeps absent slot absent (no implicit revival)."""
+        result = x.shift(time=1) + 0
+        assert result.isnull().values[0]
+
+    def test_merge_all_absent_stays_absent(self, x: Variable, y: Variable) -> None:
+        """x.shift(1) + y.shift(1) is absent where all terms are absent."""
+        result = (1 * x).shift(time=1) + (1 * y).shift(time=1)
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_merge_partial_absent_not_absent(self, x: Variable, y: Variable) -> None:
+        """X + y.shift(1): valid term from x prevents coordinate from being absent."""
+        result = x + (1 * y).shift(time=1)
+        assert not result.isnull().any()
+
+    def test_where_propagates(self, x: Variable) -> None:
+        """Masked slots stay absent through arithmetic."""
+        mask = xr.DataArray([True, False, True], dims=["time"])
+        result = (1 * x).where(mask) + 10
+        assert not result.isnull().values[0]
+        assert result.isnull().values[1]
+        assert not result.isnull().values[2]
+
+
+# ============================================================
+# 8. fillna
+# ============================================================
+
+
+class TestFillNA:
+    """fillna revives absent slots with explicit values."""
+
+    def test_variable_fillna_numeric_returns_expression(self, x: Variable) -> None:
+        """Variable.fillna(numeric) returns a LinearExpression."""
+        result = x.shift(time=1).fillna(0)
+        assert isinstance(result, LinearExpression)
+
+    def test_variable_fillna_revives_with_constant(self, x: Variable) -> None:
+        """Variable.fillna(0) turns absent slot into a zero constant."""
+        result = x.shift(time=1).fillna(0)
+        assert not result.isnull().any()
+        assert result.const.values[0] == 0
+
+    def test_variable_fillna_custom_value(self, x: Variable) -> None:
+        """Variable.fillna(42) fills absent slot with 42."""
+        result = x.shift(time=1).fillna(42)
+        assert result.const.values[0] == 42
+        # Valid slots are unaffected
+        assert result.const.values[1] == 0
+
+    def test_expression_fillna_revives(self, x: Variable) -> None:
+        """Expression.fillna(0) + 5 gives +5 at formerly absent slot."""
+        result = (1 * x).shift(time=1).fillna(0) + 5
+        assert not result.isnull().any()
+        assert result.const.values[0] == 5
+
+    def test_variable_fillna_variable_returns_variable(
+        self, x: Variable, y: Variable
+    ) -> None:
+        """Variable.fillna(Variable) still returns a Variable."""
+        result = x.shift(time=1).fillna(y)
+        assert isinstance(result, Variable)
+
+    def test_fillna_then_arithmetic(self, x: Variable) -> None:
+        """fillna(0) + 5 and fillna(5) produce the same result."""
+        a = (1 * x).shift(time=1).fillna(0) + 5
+        b = (1 * x).shift(time=1).fillna(5)
+        # At absent slot: both should give const=5
+        assert a.const.values[0] == 5
+        assert b.const.values[0] == 5
+
+
+# ============================================================
+# 9. Named methods with fill_value
+# ============================================================
+
+
+class TestFillValueParam:
+    """Named methods (.add, .sub, .mul, .div) accept fill_value."""
+
+    def test_add_fill_value(self, x: Variable) -> None:
+        """expr.add(5, fill_value=0) revives absent slot."""
+        expr = (1 * x).shift(time=1)
+        result = expr.add(5, fill_value=0)
+        assert not result.isnull().any()
+        assert result.const.values[0] == 5
+
+    def test_sub_fill_value(self, x: Variable) -> None:
+        """expr.sub(5, fill_value=0) revives absent slot."""
+        expr = (1 * x).shift(time=1)
+        result = expr.sub(5, fill_value=0)
+        assert not result.isnull().any()
+        assert result.const.values[0] == -5
+
+    def test_mul_fill_value(self, x: Variable) -> None:
+        """expr.mul(3, fill_value=0) revives absent slot with 0."""
+        expr = (1 * x).shift(time=1)
+        result = expr.mul(3, fill_value=0)
+        assert not result.isnull().any()
+        assert result.const.values[0] == 0
+
+    def test_div_fill_value(self, x: Variable) -> None:
+        """expr.div(2, fill_value=0) revives absent slot with 0."""
+        expr = (1 * x).shift(time=1)
+        result = expr.div(2, fill_value=0)
+        assert not result.isnull().any()
+        assert result.const.values[0] == 0
+
+    def test_add_without_fill_value_propagates(self, x: Variable) -> None:
+        """expr.add(5) without fill_value still propagates NaN."""
+        expr = (1 * x).shift(time=1)
+        result = expr.add(5)
+        assert result.isnull().values[0]
+
+    def test_fill_value_only_affects_absent(self, x: Variable) -> None:
+        """fill_value does not change valid slots."""
+        expr = (1 * x).shift(time=1)
+        result = expr.add(5, fill_value=0)
+        # Valid slot: const should be 0 + 5 = 5
+        assert result.const.values[1] == 5
+        # Coefficients at valid slots unchanged
+        assert result.coeffs.values[1, 0] == 1
