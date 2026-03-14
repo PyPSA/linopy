@@ -511,3 +511,93 @@ class TestFillValueParam:
         result = expr.add(5, fill_value=0)
         assert result.const.values[1] == 5  # valid slot: 0 + 5
         assert result.coeffs.values[1, 0] == 1  # coeff unchanged
+
+
+# ============================================================
+# 10. Division with absent slots
+# ============================================================
+
+
+class TestDivisionAbsentSlots:
+    """Division propagates NaN same as multiplication."""
+
+    def test_div_scalar_propagates(self, x: Variable) -> None:
+        result = (1 * x).shift(time=1) / 2
+        assert result.isnull().values[0]
+        assert not result.isnull().values[1]
+
+    def test_div_array_propagates(self, x: Variable) -> None:
+        arr = xr.DataArray([2.0, 2.0, 2.0], dims=["time"])
+        result = (1 * x).shift(time=1) / arr
+        assert result.isnull().values[0]
+
+    def test_div_consistent_paths(self, x: Variable) -> None:
+        """Variable and expression paths give same result for division."""
+        var_result = x.shift(time=1) / 2
+        expr_result = (1 * x).shift(time=1) / 2
+        assert_linequal(var_result, expr_result)
+
+    def test_div_equals_mul_reciprocal(self, x: Variable) -> None:
+        """Shifted / 2 == shifted * 0.5"""
+        shifted = (1 * x).shift(time=1)
+        assert_linequal(shifted / 2, shifted * 0.5)
+
+
+# ============================================================
+# 11. Subtraction with absent slots
+# ============================================================
+
+
+class TestSubtractionAbsentSlots:
+    """Subtraction with shifted coords preserves associativity."""
+
+    def test_sub_scalar_revives(self, x: Variable) -> None:
+        result = x.shift(time=1) - 5
+        assert not result.isnull().values[0]
+        assert result.const.values[0] == -5
+
+    def test_sub_associativity_shifted(self, x: Variable, y: Variable) -> None:
+        """(x.shift(1) - 5) + y == x.shift(1) + (y - 5)"""
+        xs = x.shift(time=1)
+        assert_linequal((xs - 5) + y, xs + (y - 5))
+
+    def test_sub_equals_add_neg_shifted(self, x: Variable) -> None:
+        """x.shift(1) - 5 == x.shift(1) + (-5)"""
+        xs = x.shift(time=1)
+        assert_linequal(xs - 5, xs + (-5))
+
+
+# ============================================================
+# 12. Multi-dimensional absent slots
+# ============================================================
+
+
+@pytest.fixture
+def g2(m: Model, time: pd.RangeIndex, tech: pd.Index) -> Variable:
+    """Second variable with dims [time, tech]."""
+    return m.add_variables(lower=0, coords=[time, tech], name="g2")
+
+
+class TestMultiDimensionalAbsentSlots:
+    """2D variables with shift: add revives, mul propagates."""
+
+    def test_2d_add_revives(self, g: Variable) -> None:
+        shifted = (1 * g).shift(time=1)
+        result = shifted + 5
+        assert not result.isnull().isel(time=0).any()
+        assert (result.const.isel(time=0) == 5).all()
+
+    def test_2d_mul_propagates(self, g: Variable) -> None:
+        shifted = (1 * g).shift(time=1)
+        result = shifted * 3
+        assert result.isnull().isel(time=0).all()
+
+    def test_2d_associativity(self, g: Variable, g2: Variable) -> None:
+        """(g.shift(1) + g2) + 5 == g.shift(1) + (g2 + 5) in 2D."""
+        gs = g.shift(time=1)
+        assert_linequal((gs + g2) + 5, gs + (g2 + 5))
+
+    def test_2d_distributivity(self, g: Variable, g2: Variable) -> None:
+        """2 * (g.shift(1) + g2) == 2*g.shift(1) + 2*g2 in 2D."""
+        gs = g.shift(time=1)
+        assert_linequal(2 * (gs + g2), 2 * gs + 2 * g2)

@@ -322,15 +322,23 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
-        # In v1 mode, set const=NaN where the variable is absent so that
-        # absence propagates through arithmetic (consistent with expression path)
+        # In v1 mode, set coeffs=NaN and const=NaN where the variable is
+        # absent so that absence propagates through arithmetic (consistent
+        # with expression path where shift/where/reindex fill with FILL_VALUE)
         if options["arithmetic_convention"] == "v1":
             absent = self.labels == -1
             if absent.any():
-                const = DataArray(
+                nan_fill = DataArray(
                     np.where(absent, np.nan, 0.0), coords=self.labels.coords
                 )
-                ds = ds.assign(const=const)
+                coeff_fill = DataArray(
+                    np.where(absent, np.nan, coefficient.values),
+                    coords=self.labels.coords,
+                )
+                ds = ds.assign(
+                    const=nan_fill,
+                    coeffs=coeff_fill.expand_dims(TERM_DIM, -1),
+                )
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
