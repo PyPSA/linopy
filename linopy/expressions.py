@@ -291,9 +291,7 @@ class LinearExpressionGroupby:
 
         def func(ds: Dataset) -> Dataset:
             ds = LinearExpression._sum(ds, str(self.groupby._group_dim))
-            ds = ds.assign_coords(
-                {TERM_DIM: np.arange(len(ds._term), dtype=options["label_dtype"])}
-            )
+            ds = ds.assign_coords({TERM_DIM: np.arange(len(ds._term))})
             return ds
 
         return self.map(func, **kwargs, shortcut=True)

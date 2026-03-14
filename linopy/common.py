@@ -546,7 +546,7 @@ def fill_missing_coords(
     # Fill in missing integer coordinates
     for dim in ds.dims:
         if dim not in ds.coords and dim not in skip_dims:
-            ds.coords[dim] = np.arange(ds.sizes[dim], dtype=options["label_dtype"])
+            ds.coords[dim] = np.arange(ds.sizes[dim])
 
     return ds
 
