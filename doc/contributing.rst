@@ -10,6 +10,9 @@ contributing code.
 You are invited to submit pull requests / issues to our
 `Github repository <https://github.com/pypsa/linopy>`_.
 
+Development Setup
+=================
+
 For linting, formatting and checking your code contributions
 against our guidelines (e.g. we use `Black <https://github.com/psf/black>`_ as code style
 and use `pre-commit <https://pre-commit.com/index.html>`_:
@@ -18,6 +21,52 @@ and use `pre-commit <https://pre-commit.com/index.html>`_:
 2. Usage:
     * To automatically activate ``pre-commit`` on every ``git commit``: Run ``pre-commit install``
     * To manually run it: ``pre-commit run --all``
+
+Running Tests
+=============
+
+Testing is essential for maintaining code quality. We use pytest as our testing framework.
+
+Basic Testing
+-------------
+
+To run the test suite:
+
+.. code-block:: bash
+
+    # Install development dependencies
+    pip install -e .[dev,solvers]
+
+    # Run all tests
+    pytest
+
+    # Run tests with coverage
+    pytest --cov=./ --cov-report=xml linopy --doctest-modules test
+
+    # Run a specific test file
+    pytest test/test_model.py
+
+    # Run a specific test function
+    pytest test/test_model.py::test_model_creation
+
+GPU Testing
+-----------
+
+Tests for GPU-accelerated solvers (e.g., cuPDLPx) are automatically skipped by default since CI machines and most development environments don't have GPU hardware. This ensures tests pass in all environments.
+
+To run GPU tests locally (requires GPU hardware and CUDA):
+
+.. code-block:: bash
+
+    # Run all tests including GPU tests
+    pytest --run-gpu
+
+    # Run only GPU tests
+    pytest -m gpu --run-gpu
+
+GPU tests are automatically detected based on solver capabilities - no manual marking is required. When you add a new GPU solver to linopy, tests using that solver will automatically be marked as GPU tests.
+
+See the :doc:`gpu-acceleration` guide for more information about GPU solver setup and usage.
 
 Contributing examples
 =====================

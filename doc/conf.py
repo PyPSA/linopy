@@ -13,7 +13,7 @@
 # import os
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
-import pkg_resources  # part of setuptools
+import linopy
 
 # -- Project information -----------------------------------------------------
 
@@ -22,11 +22,8 @@ copyright = "2021, Fabian Hofmann"
 author = "Fabian Hofmann"
 
 # The full version, including alpha/beta/rc tags
-version = pkg_resources.get_distribution("linopy").version
+version = linopy.__version__
 release = "master" if "dev" in version else version
-
-# For some reason is this needed, otherwise autosummary does fail on RTD but not locally
-import linopy  # noqa
 
 # -- General configuration ---------------------------------------------------
 
@@ -42,7 +39,11 @@ extensions = [
     "nbsphinx",
     "nbsphinx_link",
     "sphinx.ext.imgconverter",  # for SVG conversion
+    "sphinx_copybutton",
 ]
+
+copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
+copybutton_prompt_is_regexp = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

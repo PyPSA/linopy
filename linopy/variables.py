@@ -14,6 +14,7 @@ from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    cast,
     overload,
 )
 from warnings import warn
@@ -52,7 +53,7 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, TERM_DIM
+from linopy.constants import HELPER_DIMS, SOS_DIM_ATTR, SOS_TYPE_ATTR, TERM_DIM
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
+    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -195,10 +197,10 @@ class Variable:
         if "label_range" not in data.attrs:
             data.assign_attrs(label_range=(data.labels.min(), data.labels.max()))
 
-        if "sos_type" in data.attrs or "sos_dim" in data.attrs:
-            if (sos_type := data.attrs.get("sos_type")) not in (1, 2):
+        if SOS_TYPE_ATTR in data.attrs or SOS_DIM_ATTR in data.attrs:
+            if (sos_type := data.attrs.get(SOS_TYPE_ATTR)) not in (1, 2):
                 raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
-            if (sos_dim := data.attrs.get("sos_dim")) not in data.dims:
+            if (sos_dim := data.attrs.get(SOS_DIM_ATTR)) not in data.dims:
                 raise ValueError(
                     f"sos_dim must name a variable dimension, got {sos_dim}"
                 )
@@ -290,9 +292,15 @@ class Variable:
 
     @property
     def loc(self) -> LocIndexer:
+        """
+        Indexing the variable using coordinates.
+        """
         return LocIndexer(self)
 
     def to_pandas(self) -> pd.Series:
+        """
+        Convert the variable labels to a pandas Series.
+        """
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -314,6 +322,8 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+        coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -328,8 +338,8 @@ class Variable:
         dim_names = self.coord_names
         dim_sizes = list(self.sizes.values())
         masked_entries = (~self.mask).sum().values
-        sos_type = self.attrs.get("sos_type")
-        sos_dim = self.attrs.get("sos_dim")
+        sos_type = self.attrs.get(SOS_TYPE_ATTR)
+        sos_dim = self.attrs.get(SOS_DIM_ATTR)
         lines = []
 
         if dims:
@@ -420,7 +430,9 @@ class Variable:
             return NotImplemented
         if other == 2:
             expr = self.to_linexpr()
-            return expr._multiply_by_linear_expression(expr)
+            return cast(
+                "QuadraticExpression", expr._multiply_by_linear_expression(expr)
+            )
         raise ValueError("Can only raise to the power of 2")
 
     @overload
@@ -440,7 +452,7 @@ class Variable:
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: float | int | LinearExpression | Variable
+        self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -451,10 +463,10 @@ class Variable:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self.to_linexpr(1 / other)
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
-        self, coefficient: float | int | LinearExpression | Variable
+        self, coefficient: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -519,13 +531,31 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    def __le__(self, other: SideLike) -> Constraint:
+    @overload
+    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __le__(self, other: SideLike) -> Constraint: ...
+
+    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__le__(other)
 
-    def __ge__(self, other: SideLike) -> Constraint:
+    @overload
+    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __ge__(self, other: SideLike) -> Constraint: ...
+
+    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
+    @overload  # type: ignore[override]
+    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
+
+    @overload
+    def __eq__(self, other: SideLike) -> Constraint: ...
+
+    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -541,29 +571,118 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: Variable) -> LinearExpression:
+    def add(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
-        """
-        return self.__add__(other)
 
-    def sub(self, other: Variable) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().add(other, join=join)
+
+    def sub(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
-        """
-        return self.__sub__(other)
 
-    def mul(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().sub(other, join=join)
+
+    def mul(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
-        """
-        return self.__mul__(other)
 
-    def div(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : constant-like
+            The coefficient to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().mul(other, join=join)
+
+    def div(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__div__(other)
+        return self.to_linexpr().div(other, join=join)
+
+    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().le(rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().ge(rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().eq(rhs, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """
@@ -731,10 +850,16 @@ class Variable:
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        """
+        Get the coordinate dimensions of the variable.
+        """
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
+        """
+        Get the coordinate sizes of the variable.
+        """
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -1108,6 +1233,19 @@ class Variable:
         return self
 
     def equals(self, other: Variable) -> bool:
+        """
+        Check if this Variable is equal to another.
+
+        Parameters
+        ----------
+        other : Variable
+            The Variable to compare with.
+
+        Returns
+        -------
+        bool
+            True if the variables have equal labels, False otherwise.
+        """
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1244,10 +1382,12 @@ class Variables:
                 if ds.coords
                 else ""
             )
-            if (sos_type := ds.attrs.get("sos_type")) in (1, 2) and (
-                sos_dim := ds.attrs.get("sos_dim")
+            if (sos_type := ds.attrs.get(SOS_TYPE_ATTR)) in (1, 2) and (
+                sos_dim := ds.attrs.get(SOS_DIM_ATTR)
             ):
                 coords += f" - sos{sos_type} on {sos_dim}"
+            if ds.attrs.get("semi_continuous", False):
+                coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1387,7 +1527,23 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+                if not self[name].attrs["integer"]
+                and not self[name].attrs["binary"]
+                and not self[name].attrs.get("semi_continuous", False)
+            },
+            self.model,
+        )
+
+    @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("semi_continuous", False)
             },
             self.model,
         )
@@ -1401,8 +1557,8 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if self[name].attrs.get("sos_dim")
-                and self[name].attrs.get("sos_type") in (1, 2)
+                if self[name].attrs.get(SOS_DIM_ATTR)
+                and self[name].attrs.get(SOS_TYPE_ATTR) in (1, 2)
             },
             self.model,
         )
@@ -1652,7 +1808,7 @@ class ScalarVariable:
     def __ge__(self, other: int) -> AnonymousScalarConstraint:
         return self.to_scalar_linexpr(1).__ge__(other)
 
-    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore
+    def __eq__(self, other: int | float) -> AnonymousScalarConstraint:  # type: ignore[override]
         return self.to_scalar_linexpr(1).__eq__(other)
 
     def __gt__(self, other: Any) -> None:

@@ -29,6 +29,7 @@ from linopy.common import (
     as_dataarray,
     assign_multiindex_safe,
     best_int,
+    broadcast_mask,
     maybe_replace_signs,
     replace_by_map,
     set_int_index,
@@ -38,6 +39,9 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
+    SOS_BIG_M_ATTR,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
     TerminationCondition,
@@ -50,6 +54,7 @@ from linopy.expressions import (
 )
 from linopy.io import (
     to_block_files,
+    to_cupdlpx,
     to_file,
     to_gurobipy,
     to_highspy,
@@ -58,11 +63,23 @@ from linopy.io import (
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
-from linopy.remote import OetcHandler, RemoteHandler
+from linopy.piecewise import (
+    add_piecewise_constraints,
+)
+from linopy.remote import RemoteHandler
+
+try:
+    from linopy.remote import OetcHandler
+except ImportError:
+    OetcHandler = None  # type: ignore
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
     available_solvers,
+)
+from linopy.sos_reformulation import (
+    reformulate_sos_constraints,
+    undo_sos_reformulation,
 )
 from linopy.types import (
     ConstantLike,
@@ -107,6 +124,7 @@ class Model:
     _cCounter: int
     _varnameCounter: int
     _connameCounter: int
+    _pwlCounter: int
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
@@ -129,10 +147,12 @@ class Model:
         "_cCounter",
         "_varnameCounter",
         "_connameCounter",
+        "_pwlCounter",
         "_blocks",
         # TODO: check if these should not be mutable
         "_chunk",
         "_force_dim_names",
+        "_auto_mask",
         "_solver_dir",
         "solver_model",
         "solver_name",
@@ -144,6 +164,7 @@ class Model:
         solver_dir: str | None = None,
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
+        auto_mask: bool = False,
     ) -> None:
         """
         Initialize the linopy model.
@@ -163,6 +184,10 @@ class Model:
             "dim_1" and so on. These helps to avoid unintended broadcasting
             over dimension. Especially the use of pandas DataFrames and Series
             may become safer.
+        auto_mask : bool
+            Whether to automatically mask variables and constraints where
+            bounds, coefficients, or RHS values contain NaN. The default is
+            False.
 
         Returns
         -------
@@ -179,10 +204,12 @@ class Model:
         self._cCounter: int = 0
         self._varnameCounter: int = 0
         self._connameCounter: int = 0
+        self._pwlCounter: int = 0
         self._blocks: DataArray | None = None
 
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
+        self._auto_mask: bool = bool(auto_mask)
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -213,12 +240,20 @@ class Model:
     @objective.setter
     def objective(
         self, obj: Objective | LinearExpression | QuadraticExpression
-    ) -> Objective:
+    ) -> None:
+        """
+        Set the objective function.
+
+        Parameters
+        ----------
+        obj : Objective, LinearExpression, or QuadraticExpression
+            The objective to assign to the model. If not an Objective instance,
+            it will be wrapped in an Objective.
+        """
         if not isinstance(obj, Objective):
             obj = Objective(obj, self)
 
         self._objective = obj
-        return self._objective
 
     @property
     def sense(self) -> str:
@@ -229,6 +264,9 @@ class Model:
 
     @sense.setter
     def sense(self, value: str) -> None:
+        """
+        Set the sense of the objective function.
+        """
         self.objective.sense = value
 
     @property
@@ -243,6 +281,9 @@ class Model:
 
     @parameters.setter
     def parameters(self, value: Dataset | Mapping) -> None:
+        """
+        Set the parameters of the model.
+        """
         self._parameters = Dataset(value)
 
     @property
@@ -268,6 +309,9 @@ class Model:
 
     @status.setter
     def status(self, value: str) -> None:
+        """
+        Set the status of the model.
+        """
         self._status = ModelStatus[value].value
 
     @property
@@ -279,11 +323,13 @@ class Model:
 
     @termination_condition.setter
     def termination_condition(self, value: str) -> None:
-        # TODO: remove if-clause, only kept for backward compatibility
-        if value:
-            self._termination_condition = TerminationCondition[value].value
-        else:
+        """
+        Set the termination condition of the model.
+        """
+        if value == "":
             self._termination_condition = value
+        else:
+            self._termination_condition = TerminationCondition[value].value
 
     @property
     def chunk(self) -> T_Chunks:
@@ -294,6 +340,9 @@ class Model:
 
     @chunk.setter
     def chunk(self, value: T_Chunks) -> None:
+        """
+        Set the chunk sizes of the model.
+        """
         self._chunk = value
 
     @property
@@ -311,7 +360,25 @@ class Model:
 
     @force_dim_names.setter
     def force_dim_names(self, value: bool) -> None:
+        """
+        Set whether to force custom dimension names for variables and constraints.
+        """
         self._force_dim_names = bool(value)
+
+    @property
+    def auto_mask(self) -> bool:
+        """
+        If True, automatically mask variables and constraints where bounds,
+        coefficients, or RHS values contain NaN.
+        """
+        return self._auto_mask
+
+    @auto_mask.setter
+    def auto_mask(self, value: bool) -> None:
+        """
+        Set whether to automatically mask variables and constraints with NaN values.
+        """
+        self._auto_mask = bool(value)
 
     @property
     def solver_dir(self) -> Path:
@@ -322,6 +389,9 @@ class Model:
 
     @solver_dir.setter
     def solver_dir(self, value: str | Path) -> None:
+        """
+        Set the solver directory of the model.
+        """
         if not isinstance(value, str | Path):
             raise TypeError("'solver_dir' must path-like.")
         self._solver_dir = Path(value)
@@ -339,7 +409,9 @@ class Model:
             "_cCounter",
             "_varnameCounter",
             "_connameCounter",
+            "_pwlCounter",
             "force_dim_names",
+            "auto_mask",
         ]
 
     def __repr__(self) -> str:
@@ -428,6 +500,7 @@ class Model:
         mask: DataArray | ndarray | Series | None = None,
         binary: bool = False,
         integer: bool = False,
+        semi_continuous: bool = False,
         **kwargs: Any,
     ) -> Variable:
         """
@@ -466,6 +539,11 @@ class Model:
         integer : bool
             Whether the new variable is a integer variable which are used for
             Mixed-Integer problems.
+        semi_continuous : bool
+            Whether the new variable is a semi-continuous variable. A
+            semi-continuous variable can take the value 0 or any value
+            between its lower and upper bounds. Requires a positive lower
+            bound.
         **kwargs :
             Additional keyword arguments are passed to the DataArray creation.
 
@@ -508,14 +586,22 @@ class Model:
         if name in self.variables:
             raise ValueError(f"Variable '{name}' already assigned to model")
 
-        if binary and integer:
-            raise ValueError("Variable cannot be both binary and integer.")
+        if sum([binary, integer, semi_continuous]) > 1:
+            raise ValueError(
+                "Variable can only be one of binary, integer, or semi-continuous."
+            )
 
         if binary:
             if (lower != -inf) or (upper != inf):
                 raise ValueError("Binary variables cannot have lower or upper bounds.")
             else:
                 lower, upper = 0, 1
+
+        if semi_continuous:
+            if not np.isscalar(lower) or float(lower) <= 0:  # type: ignore[arg-type]
+                raise ValueError(
+                    "Semi-continuous variables require a positive scalar lower bound."
+                )
 
         data = Dataset(
             {
@@ -530,6 +616,20 @@ class Model:
 
         if mask is not None:
             mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            mask = broadcast_mask(mask, data.labels)
+
+        # Auto-mask based on NaN in bounds (use numpy for speed)
+        if self.auto_mask:
+            auto_mask_values = ~np.isnan(data.lower.values) & ~np.isnan(
+                data.upper.values
+            )
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.coords, dims=data.dims
+            )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
 
         start = self._xCounter
         end = start + data.labels.size
@@ -537,10 +637,14 @@ class Model:
         self._xCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(
-            label_range=(start, end), name=name, binary=binary, integer=integer
+            label_range=(start, end),
+            name=name,
+            binary=binary,
+            integer=integer,
+            semi_continuous=semi_continuous,
         )
 
         if self.chunk:
@@ -555,6 +659,7 @@ class Model:
         variable: Variable,
         sos_type: Literal[1, 2],
         sos_dim: str,
+        big_m: float | None = None,
     ) -> None:
         """
         Add an sos1 or sos2 constraint for one dimension of a variable
@@ -568,15 +673,26 @@ class Model:
             Type of SOS
         sos_dim : str
             Which dimension of variable to add SOS constraint to
+        big_m : float | None, optional
+            Big-M value for SOS reformulation. Only used when reformulating
+            SOS constraints for solvers that don't support them natively.
+
+            - None (default): Use variable upper bounds as Big-M
+            - float: Custom Big-M value
+
+            The reformulation uses the tighter of big_m and variable upper bound:
+            M = min(big_m, var.upper).
+
+            Tighter Big-M values improve LP relaxation quality and solve time.
         """
         if sos_type not in (1, 2):
             raise ValueError(f"sos_type must be 1 or 2, got {sos_type}")
         if sos_dim not in variable.dims:
             raise ValueError(f"sos_dim must name a variable dimension, got {sos_dim}")
 
-        if "sos_type" in variable.attrs or "sos_dim" in variable.attrs:
-            existing_sos_type = variable.attrs.get("sos_type")
-            existing_sos_dim = variable.attrs.get("sos_dim")
+        if SOS_TYPE_ATTR in variable.attrs or SOS_DIM_ATTR in variable.attrs:
+            existing_sos_type = variable.attrs.get(SOS_TYPE_ATTR)
+            existing_sos_dim = variable.attrs.get(SOS_DIM_ATTR)
             raise ValueError(
                 f"variable already has an sos{existing_sos_type} constraint on {existing_sos_dim}"
             )
@@ -588,7 +704,15 @@ class Model:
                 f"but got {variable.coords[sos_dim].dtype}"
             )
 
-        variable.attrs.update(sos_type=sos_type, sos_dim=sos_dim)
+        attrs_update: dict[str, Any] = {SOS_TYPE_ATTR: sos_type, SOS_DIM_ATTR: sos_dim}
+        if big_m is not None:
+            if big_m <= 0:
+                raise ValueError(f"big_m must be positive, got {big_m}")
+            attrs_update[SOS_BIG_M_ATTR] = float(big_m)
+
+        variable.attrs.update(attrs_update)
+
+    add_piecewise_constraints = add_piecewise_constraints
 
     def add_constraints(
         self,
@@ -655,6 +779,14 @@ class Model:
         if sign is not None:
             sign = maybe_replace_signs(as_dataarray(sign))
 
+        # Capture original RHS for auto-masking before constraint creation
+        # (NaN values in RHS are lost during constraint creation)
+        # Use numpy for speed instead of xarray's notnull()
+        original_rhs_mask = None
+        if self.auto_mask and rhs is not None:
+            rhs_da = as_dataarray(rhs)
+            original_rhs_mask = (rhs_da.coords, rhs_da.dims, ~np.isnan(rhs_da.values))
+
         if isinstance(lhs, LinearExpression):
             if sign is None or rhs is None:
                 raise ValueError(msg_sign_rhs_not_none)
@@ -698,15 +830,43 @@ class Model:
             # TODO: add a warning here, routines should be safe against this
             data = data.drop_vars(drop_dims)
 
+        rhs_nan = data.rhs.isnull()
+        if rhs_nan.any():
+            data = assign_multiindex_safe(data, rhs=data.rhs.fillna(0))
+            rhs_mask = ~rhs_nan
+            mask = (
+                rhs_mask
+                if mask is None
+                else (as_dataarray(mask).astype(bool) & rhs_mask)
+            )
+
         data["labels"] = -1
         (data,) = xr.broadcast(data, exclude=[TERM_DIM])
 
         if mask is not None:
-            mask = as_dataarray(mask).astype(bool)
-            # TODO: simplify
-            assert set(mask.dims).issubset(data.dims), (
-                "Dimensions of mask not a subset of resulting labels dimensions."
+            mask = as_dataarray(mask, coords=data.coords, dims=data.dims).astype(bool)
+            mask = broadcast_mask(mask, data.labels)
+
+        # Auto-mask based on null expressions or NaN RHS (use numpy for speed)
+        if self.auto_mask:
+            # Check if expression is null: all vars == -1
+            # Use max() instead of all() - if max == -1, all are -1 (since valid vars >= 0)
+            # This is ~30% faster for large term dimensions
+            vars_all_invalid = data.vars.values.max(axis=-1) == -1
+            auto_mask_values = ~vars_all_invalid
+            if original_rhs_mask is not None:
+                coords, dims, rhs_notnull = original_rhs_mask
+                if rhs_notnull.shape != auto_mask_values.shape:
+                    rhs_da = DataArray(rhs_notnull, coords=coords, dims=dims)
+                    rhs_notnull = rhs_da.broadcast_like(data.labels).values
+                auto_mask_values = auto_mask_values & rhs_notnull
+            auto_mask_arr = DataArray(
+                auto_mask_values, coords=data.labels.coords, dims=data.labels.dims
             )
+            if mask is not None:
+                mask = mask & auto_mask_arr
+            else:
+                mask = auto_mask_arr
 
         self.check_force_dim_names(data)
 
@@ -716,7 +876,7 @@ class Model:
         self._cCounter += data.labels.size
 
         if mask is not None:
-            data.labels.values = data.labels.where(mask, -1).values
+            data.labels.values = np.where(mask.values, data.labels.values, -1)
 
         data = data.assign_attrs(label_range=(start, end), name=name)
 
@@ -829,17 +989,21 @@ class Model:
         -------
         None.
         """
-        if "sos_type" not in variable.attrs or "sos_dim" not in variable.attrs:
+        if SOS_TYPE_ATTR not in variable.attrs or SOS_DIM_ATTR not in variable.attrs:
             raise ValueError(f"Variable '{variable.name}' has no SOS constraints")
 
-        sos_type = variable.attrs["sos_type"]
-        sos_dim = variable.attrs["sos_dim"]
+        sos_type = variable.attrs[SOS_TYPE_ATTR]
+        sos_dim = variable.attrs[SOS_DIM_ATTR]
 
-        del variable.attrs["sos_type"], variable.attrs["sos_dim"]
+        del variable.attrs[SOS_TYPE_ATTR], variable.attrs[SOS_DIM_ATTR]
+
+        variable.attrs.pop(SOS_BIG_M_ATTR, None)
 
         logger.debug(
             f"Removed sos{sos_type} constraint on {sos_dim} from {variable.name}"
         )
+
+    reformulate_sos_constraints = reformulate_sos_constraints
 
     def remove_objective(self) -> None:
         """
@@ -873,6 +1037,13 @@ class Model:
         return self.variables.integers
 
     @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.variables.semi_continuous
+
+    @property
     def is_linear(self) -> bool:
         return self.objective.is_linear
 
@@ -882,9 +1053,11 @@ class Model:
 
     @property
     def type(self) -> str:
-        if (len(self.binaries) or len(self.integers)) and len(self.continuous):
+        if (
+            len(self.binaries) or len(self.integers) or len(self.semi_continuous)
+        ) and len(self.continuous):
             variable_type = "MI"
-        elif len(self.binaries) or len(self.integers):
+        elif len(self.binaries) or len(self.integers) or len(self.semi_continuous):
             variable_type = "I"
         else:
             variable_type = ""
@@ -1124,6 +1297,8 @@ class Model:
         slice_size: int = 2_000_000,
         remote: RemoteHandler | OetcHandler = None,  # type: ignore
         progress: bool | None = None,
+        mock_solve: bool = False,
+        reformulate_sos: bool | Literal["auto"] = False,
         **solver_options: Any,
     ) -> tuple[str, str]:
         """
@@ -1191,6 +1366,16 @@ class Model:
             Whether to show a progress bar of writing the lp file. The default is
             None, which means that the progress bar is shown if the model has more
             than 10000 variables and constraints.
+        mock_solve : bool, optional
+            Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
+        reformulate_sos : bool | Literal["auto"], optional
+            Whether to automatically reformulate SOS constraints as binary + linear
+            constraints for solvers that don't support them natively.
+            If True, always reformulates (warns if solver supports SOS natively).
+            If "auto", silently reformulates only when the solver lacks SOS support.
+            If False, raises if solver doesn't support SOS.
+            This uses the Big-M method and requires all SOS variables to have finite bounds.
+            Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1200,6 +1385,11 @@ class Model:
             Tuple containing the status and termination condition of the
             optimization process.
         """
+        if mock_solve:
+            return self._mock_solve(
+                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
@@ -1283,11 +1473,37 @@ class Model:
                 f"Solver {solver_name} does not support quadratic problems."
             )
 
-        # SOS constraints are not supported by all solvers
-        if self.variables.sos and not solver_supports(
-            solver_name, SolverFeature.SOS_CONSTRAINTS
-        ):
-            raise ValueError(f"Solver {solver_name} does not support SOS constraints.")
+        if reformulate_sos not in (True, False, "auto"):
+            raise ValueError(
+                f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
+                "Must be True, False, or 'auto'."
+            )
+
+        sos_reform_result = None
+        if self.variables.sos:
+            supports_sos = solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+            if reformulate_sos in (True, "auto") and not supports_sos:
+                logger.info(f"Reformulating SOS constraints for solver {solver_name}")
+                sos_reform_result = reformulate_sos_constraints(self)
+            elif reformulate_sos is True and supports_sos:
+                logger.warning(
+                    f"Solver {solver_name} supports SOS natively; "
+                    "reformulate_sos=True is ignored."
+                )
+            elif reformulate_sos is False and not supports_sos:
+                raise ValueError(
+                    f"Solver {solver_name} does not support SOS constraints. "
+                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
+                )
+
+        if self.variables.semi_continuous:
+            if not solver_supports(
+                solver_name, SolverFeature.SEMI_CONTINUOUS_VARIABLES
+            ):
+                raise ValueError(
+                    f"Solver {solver_name} does not support semi-continuous variables. "
+                    "Use a solver that supports them (gurobi, cplex, highs)."
+                )
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
@@ -1336,44 +1552,85 @@ class Model:
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
 
-        result.info()
+        try:
+            result.info()
 
-        self.objective._value = result.solution.objective
-        self.status = result.status.status.value
-        self.termination_condition = result.status.termination_condition.value
-        self.solver_model = result.solver_model
+            self.objective._value = result.solution.objective
+            self.status = result.status.status.value
+            self.termination_condition = result.status.termination_condition.value
+            self.solver_model = result.solver_model
+            self.solver_name = solver_name
+
+            if not result.status.is_ok:
+                return (
+                    result.status.status.value,
+                    result.status.termination_condition.value,
+                )
+
+            # map solution and dual to original shape which includes missing values
+            sol = result.solution.primal.copy()
+            sol = set_int_index(sol)
+            sol.loc[-1] = nan
+
+            for name, var in self.variables.items():
+                idx = np.ravel(var.labels)
+                try:
+                    vals = sol[idx].values.reshape(var.labels.shape)
+                except KeyError:
+                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
+                var.solution = xr.DataArray(vals, var.coords)
+
+            if not result.solution.dual.empty:
+                dual = result.solution.dual.copy()
+                dual = set_int_index(dual)
+                dual.loc[-1] = nan
+
+                for name, con in self.constraints.items():
+                    idx = np.ravel(con.labels)
+                    try:
+                        vals = dual[idx].values.reshape(con.labels.shape)
+                    except KeyError:
+                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                    con.dual = xr.DataArray(vals, con.labels.coords)
+
+            return result.status.status.value, result.status.termination_condition.value
+        finally:
+            if sos_reform_result is not None:
+                undo_sos_reformulation(self, sos_reform_result)
+
+    def _mock_solve(
+        self,
+        sanitize_zeros: bool = True,
+        sanitize_infinities: bool = True,
+    ) -> tuple[str, str]:
+        solver_name = "mock"
+
+        # clear cached matrix properties potentially present from previous solve commands
+        self.matrices.clean_cached_properties()
+
+        logger.info(f" Solve problem using {solver_name.title()} solver")
+        # reset result
+        self.reset_solution()
+
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
+
+        self.objective._value = 0.0
+        self.status = "ok"
+        self.termination_condition = TerminationCondition.optimal.value
+        self.solver_model = None
         self.solver_name = solver_name
 
-        if not result.status.is_ok:
-            return result.status.status.value, result.status.termination_condition.value
-
-        # map solution and dual to original shape which includes missing values
-        sol = result.solution.primal.copy()
-        sol = set_int_index(sol)
-        sol.loc[-1] = nan
-
         for name, var in self.variables.items():
-            idx = np.ravel(var.labels)
-            try:
-                vals = sol[idx].values.reshape(var.labels.shape)
-            except KeyError:
-                vals = sol.reindex(idx).values.reshape(var.labels.shape)
-            var.solution = xr.DataArray(vals, var.coords)
+            var.solution = xr.DataArray(0.0, var.coords)
 
-        if not result.solution.dual.empty:
-            dual = result.solution.dual.copy()
-            dual = set_int_index(dual)
-            dual.loc[-1] = nan
+        for name, con in self.constraints.items():
+            con.dual = xr.DataArray(0.0, con.labels.coords)
 
-            for name, con in self.constraints.items():
-                idx = np.ravel(con.labels)
-                try:
-                    vals = dual[idx].values.reshape(con.labels.shape)
-                except KeyError:
-                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                con.dual = xr.DataArray(vals, con.labels.coords)
-
-        return result.status.status.value, result.status.termination_condition.value
+        return "ok", "none"
 
     def compute_infeasibilities(self) -> list[int]:
         """
@@ -1456,9 +1713,19 @@ class Model:
         return labels
 
     def _compute_infeasibilities_xpress(self, solver_model: Any) -> list[int]:
-        """Compute infeasibilities for Xpress solver."""
+        """
+        Compute infeasibilities for Xpress solver.
+
+        This function correctly maps solver constraint positions to linopy
+        constraint labels, handling masked constraints where some labels may
+        be skipped (e.g., labels [0, 2, 4] with gaps instead of sequential
+        [0, 1, 2]).
+        """
         # Compute all IIS
-        solver_model.iisall()
+        try:  # Try new API first
+            solver_model.IISAll()
+        except AttributeError:  # Fallback to old API
+            solver_model.iisall()
 
         # Get the number of IIS found
         num_iis = solver_model.attributes.numiis
@@ -1467,20 +1734,21 @@ class Model:
 
         labels = set()
 
-        # Create constraint mapping for efficient lookups
-        constraint_to_index = {
-            constraint: idx
-            for idx, constraint in enumerate(solver_model.getConstraint())
-        }
+        clabels = self.matrices.clabels
+        constraint_position_map = {}
+        for position, constraint_obj in enumerate(solver_model.getConstraint()):
+            if 0 <= position < len(clabels):
+                constraint_label = clabels[position]
+                if constraint_label >= 0:
+                    constraint_position_map[constraint_obj] = constraint_label
 
         # Retrieve each IIS
         for iis_num in range(1, num_iis + 1):
             iis_constraints = self._extract_iis_constraints(solver_model, iis_num)
 
-            # Convert constraint objects to indices
             for constraint_obj in iis_constraints:
-                if constraint_obj in constraint_to_index:
-                    labels.add(constraint_to_index[constraint_obj])
+                if constraint_obj in constraint_position_map:
+                    labels.add(constraint_position_map[constraint_obj])
                 # Note: Silently skip constraints not found in mapping
                 # This can happen if the model structure changed after solving
 
@@ -1502,28 +1770,55 @@ class Model:
         list[Any]
             List of xpress.constraint objects in the IIS
         """
-        # Prepare lists to receive IIS data
-        miisrow: list[Any] = []  # xpress.constraint objects in the IIS
-        miiscol: list[Any] = []  # xpress.variable objects in the IIS
-        constrainttype: list[str] = []  # Constraint types ('L', 'G', 'E')
-        colbndtype: list[str] = []  # Column bound types
-        duals: list[float] = []  # Dual values
-        rdcs: list[float] = []  # Reduced costs
-        isolationrows: list[str] = []  # Row isolation info
-        isolationcols: list[str] = []  # Column isolation info
+        # Declare variables before try/except to avoid mypy redefinition errors
+        miisrow: list[Any]
+        miiscol: list[Any]
+        constrainttype: list[str]
+        colbndtype: list[str]
+        duals: list[float]
+        rdcs: list[float]
+        isolationrows: list[str]
+        isolationcols: list[str]
 
-        # Get IIS data from Xpress
-        solver_model.getiisdata(
-            iis_num,
-            miisrow,
-            miiscol,
-            constrainttype,
-            colbndtype,
-            duals,
-            rdcs,
-            isolationrows,
-            isolationcols,
-        )
+        try:  # Try new API first
+            (
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            ) = solver_model.getIISData(iis_num)
+
+            # Transform list of indices to list of constraint objects
+            for i in range(len(miisrow)):
+                miisrow[i] = solver_model.getConstraint(miisrow[i])
+
+        except AttributeError:  # Fallback to old API
+            # Prepare lists to receive IIS data
+            miisrow = []  # xpress.constraint objects in the IIS
+            miiscol = []  # xpress.variable objects in the IIS
+            constrainttype = []  # Constraint types ('L', 'G', 'E')
+            colbndtype = []  # Column bound types
+            duals = []  # Dual values
+            rdcs = []  # Reduced costs
+            isolationrows = []  # Row isolation info
+            isolationcols = []  # Column isolation info
+
+            # Get IIS data from Xpress
+            solver_model.getiisdata(
+                iis_num,
+                miisrow,
+                miiscol,
+                constrainttype,
+                colbndtype,
+                duals,
+                rdcs,
+                isolationrows,
+                isolationcols,
+            )
 
         return miisrow
 
@@ -1588,5 +1883,7 @@ class Model:
     to_mosek = to_mosek
 
     to_highspy = to_highspy
+
+    to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files

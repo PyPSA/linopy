@@ -83,6 +83,8 @@ class MatrixAccessor:
                 val = "B"
             elif name in m.integers:
                 val = "I"
+            elif name in m.semi_continuous:
+                val = "S"
             else:
                 val = "C"
             specs.append(pd.Series(val, index=m.variables[name].flat.labels))

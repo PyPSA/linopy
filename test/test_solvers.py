@@ -11,6 +11,7 @@ import pytest
 from test_io import model  # noqa: F401
 
 from linopy import Model, solvers
+from linopy.solver_capabilities import SolverFeature, solver_supports
 
 free_mps_problem = """NAME               sample_mip
 ROWS
@@ -44,6 +45,18 @@ BOUNDS
 ENDATA
 """
 
+free_lp_problem = """
+Maximize
+    z: 3 x + 4 y
+Subject To
+    c1: 2 x + y <= 10
+    c2: x + 2 y <= 12
+Bounds
+    0 <= x
+    0 <= y
+End
+"""
+
 
 @pytest.mark.parametrize("solver", set(solvers.available_solvers))
 def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
@@ -52,6 +65,9 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
         solver_class = getattr(solvers, solver_enum.name)
     except ValueError:
         raise ValueError(f"Solver '{solver}' is not recognized")
+
+    if not solver_supports(solver, SolverFeature.READ_MODEL_FROM_FILE):
+        pytest.skip("Solver does not support reading model from file.")
 
     # Write the MPS file to the temporary directory
     mps_file = tmp_path / "problem.mps"
@@ -65,6 +81,88 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_mps(tmp_path: Path) -> None:
+    """Test Knitro solver with a simple MPS problem."""
+    knitro = solvers.Knitro()
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_for_lp(tmp_path: Path) -> None:
+    """Test Knitro solver with a simple LP problem."""
+    knitro = solvers.Knitro()
+
+    lp_file = tmp_path / "problem.lp"
+    lp_file.write_text(free_lp_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = knitro.solve_problem(problem_fn=lp_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    assert result.solution.objective == pytest.approx(26.666, abs=1e-3)
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_with_options(tmp_path: Path) -> None:
+    """Test Knitro solver with custom options."""
+    knitro = solvers.Knitro(maxit=100, feastol=1e-6)
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+    log_file = tmp_path / "knitro.log"
+
+    result = knitro.solve_problem(
+        problem_fn=mps_file, solution_fn=sol_file, log_fn=log_file
+    )
+    assert result.status.is_ok
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F811
+    """Test Knitro solver raises NotImplementedError for model-based solving."""
+    knitro = solvers.Knitro()
+    with pytest.raises(
+        NotImplementedError, match="Direct API not implemented for Knitro"
+    ):
+        knitro.solve_problem(model=model)
+
+
+@pytest.mark.skipif(
+    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+)
+def test_knitro_solver_no_log(tmp_path: Path) -> None:
+    """Test Knitro solver without log file."""
+    knitro = solvers.Knitro(outlev=0)
+
+    mps_file = tmp_path / "problem.mps"
+    mps_file.write_text(free_mps_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = knitro.solve_problem(problem_fn=mps_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
 
 
 @pytest.mark.skipif(

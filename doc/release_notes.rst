@@ -1,14 +1,97 @@
 Release Notes
 =============
 
-.. Upcoming Version
+Upcoming Version
+----------------
 
+* Harmonize coordinate alignment for operations with subset/superset objects:
+  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
+  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
+  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
+  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
+  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
+* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
+* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
+* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
+* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
+* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add the `sphinx-copybutton` to the documentation
+* Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Add semi-continous variables for solvers that support them
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Enable quadratic problems with SCIP on windows.
+
+
+Version 0.6.5
+-------------
+
+* Expose the knitro context to allow for more flexible use of the knitro python API.
+
+
+Version 0.6.4
+--------------
+
+* Add support for the `knitro` solver via the knitro python API
+
+Version 0.6.3
+--------------
+
+**Fix Regression**
+
+*  Reinsert broadcasting logic of mask object to be fully compatible with performance improvements in version 0.6.2 using `np.where` instead of `xr.where`.
+
+
+Version 0.6.2
+--------------
+
+**Features**
+
+* Add ``auto_mask`` parameter to ``Model`` class that automatically masks variables and constraints where bounds, coefficients, or RHS values contain NaN. This eliminates the need to manually create mask arrays when working with sparse or incomplete data.
+
+**Performance**
+
+* Speed up LP file writing by 2-2.7x on large models through Polars streaming engine, join-based constraint assembly, and reduced per-constraint overhead
+
+**Bug Fixes**
+
+* Fix multiplication of constant-only ``LinearExpression`` with other expressions
+* Fix docs and Gurobi license handling
+
+Version 0.6.1
+--------------
+
+* Avoid Gurobi initialization on linopy import.
+* Fix LP file writing for negative zero (-0.0) values that produced invalid syntax like "+-0.0" rejected by Gurobi
+
+Version 0.6.0
+--------------
+
+**Features**
+
+* Add ``mock_solve`` option to ``Model.solve()`` for quick testing without actual solving
 * Add support for SOS1 and SOS2 (Special Ordered Sets) constraints via ``Model.add_sos_constraints()`` and ``Model.remove_sos_constraints()``
-* Add simplify method to LinearExpression to combine duplicate terms
-* Add convenience function to create LinearExpression from constant
-* Fix compatibility for xpress versions below 9.6 (regression)
-* Performance: Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
-* Performance: Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
+* Add ``simplify`` method to ``LinearExpression`` to combine duplicate terms
+* Add convenience function to create ``LinearExpression`` from constant
+* Add support for GPU-accelerated solver `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`_
+* Add solver features registry for introspection of solver capabilities
+
+**Performance**
+
+* Up to 50x faster ``repr()`` for variables/constraints via O(log n) label lookup and direct numpy indexing
+* Up to 46x faster ``ncons`` property by replacing ``.flat.labels.unique()`` with direct counting
+
+**Bug Fixes**
+
+* Fix HiGHS solver to properly stop on Ctrl-C keyboard interrupt
+* Fix CBC solver to correctly parse negative objective values
+* Fix Xpress compatibility for versions below 9.6 (regression from namespace change)
+* Fix Xpress ``getDual()`` fallback for older versions
+* Fix missing dependency for jupyter notebook example in documentation
+
+**Solver Updates**
+
+* Add Xpress 9.8+ API support with full backward compatibility to 9.6+
 
 Version 0.5.8
 --------------
@@ -625,7 +708,7 @@ Version 0.0.5
 * The `Variable` class now has a `lower` and `upper` accessor, which allows to inspect and modify the lower and upper bounds of a assigned variable.
 * The `Constraint` class now has a `lhs`, `vars`, `coeffs`, `rhs` and `sign` accessor, which allows to inspect and modify the left-hand-side, the signs and right-hand-side of a assigned constraint.
 * Constraints can now be build combining linear expressions with right-hand-side via a `>=`, `<=` or a `==` operator. This creates an `AnonymousConstraint` which can be passed to `Model.add_constraints`.
-* Add support of the HiGHS open source solver https://www.maths.ed.ac.uk/hall/HiGHS/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
+* Add support of the HiGHS open source solver https://highs.dev/ (https://github.com/PyPSA/linopy/pull/8, https://github.com/PyPSA/linopy/pull/17).
 
 
 **Breaking changes**
