@@ -1,13 +1,18 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Literal, cast
+
 import numpy as np
 import pytest
 
 from linopy import Model
 from linopy.constants import Result, Solution, Status, TerminationCondition
-from linopy.solvers import Highs
+from linopy.solvers import Highs, SolverName
 
 
 @pytest.fixture
-def model():
+def model() -> Model:
     m = Model()
     x = m.add_variables(lower=0, upper=10, name="x")
     y = m.add_variables(lower=0, upper=10, name="y")
@@ -17,7 +22,7 @@ def model():
     return m
 
 
-def test_apply_result_basic(model):
+def test_apply_result_basic(model: Model) -> None:
     model.solve(solver_name="highs")
 
     status = Status.from_termination_condition(TerminationCondition.optimal)
@@ -30,7 +35,7 @@ def test_apply_result_basic(model):
     assert model.solver_name == "test"
 
 
-def test_apply_result_infeasible(model):
+def test_apply_result_infeasible(model: Model) -> None:
     status = Status.from_termination_condition(TerminationCondition.infeasible)
     result = Result(status=status, solution=Solution(objective=np.nan))
 
@@ -40,7 +45,7 @@ def test_apply_result_infeasible(model):
     assert model.solver_name == "unknown"
 
 
-def test_apply_result_none_solution(model):
+def test_apply_result_none_solution(model: Model) -> None:
     status = Status.from_termination_condition(TerminationCondition.infeasible)
     result = Result(status=status, solution=None)
 
@@ -49,7 +54,7 @@ def test_apply_result_none_solution(model):
     assert tc == "infeasible"
 
 
-def test_resolve_highs(model):
+def test_resolve_highs(model: Model) -> None:
     pytest.importorskip("highspy")
     model.solve(solver_name="highs")
     obj1 = model.objective.value
@@ -60,7 +65,8 @@ def test_resolve_highs(model):
     h.changeColsCost(n_cols, np.arange(n_cols, dtype=np.int32), new_costs)
 
     solver = Highs()
-    result = solver.resolve(h, sense=model.sense)
+    sense = cast(Literal["min", "max"], model.sense)
+    result = solver.resolve(h, sense=sense)
     model.apply_result(result, solver_name="highs")
 
     assert model.status == "ok"
@@ -68,19 +74,36 @@ def test_resolve_highs(model):
     assert model.solution["y"].values.item() >= model.solution["x"].values.item()
 
 
-def test_resolve_not_supported():
+def test_resolve_not_supported() -> None:
     from linopy.solvers import Solver
 
-    class DummySolver(Solver):
-        def solve_problem_from_model(self, **kwargs):
+    class DummySolver(Solver[None]):
+        def solve_problem_from_model(
+            self,
+            model: Model,
+            solution_fn: Path | None = None,
+            log_fn: Path | None = None,
+            warmstart_fn: Path | None = None,
+            basis_fn: Path | None = None,
+            env: Any = None,
+            explicit_coordinate_names: bool = False,
+        ) -> Result:
             raise NotImplementedError
 
-        def solve_problem_from_file(self, **kwargs):
+        def solve_problem_from_file(
+            self,
+            problem_fn: Path,
+            solution_fn: Path | None = None,
+            log_fn: Path | None = None,
+            warmstart_fn: Path | None = None,
+            basis_fn: Path | None = None,
+            env: Any = None,
+        ) -> Result:
             raise NotImplementedError
 
         @property
-        def solver_name(self):
-            return "dummy"
+        def solver_name(self) -> SolverName:
+            return SolverName.Highs
 
     solver = DummySolver.__new__(DummySolver)
     solver.solver_options = {}
