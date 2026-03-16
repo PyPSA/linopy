@@ -12,7 +12,7 @@ Upcoming Version
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Enable quadratic problems with SCIP on windows.
-* Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``dual_bound``, and ``mip_gap`` in a solver-independent way. All solvers populate solver-specific fields where available.
+* Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``dual_bound``, and ``dual_bound`` in a solver-independent way. All solvers populate solver-specific fields where available.
 
 
 Version 0.6.5
