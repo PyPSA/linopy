@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from collections import namedtuple
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -419,7 +419,9 @@ class Solver(ABC, Generic[EnvType]):
             msg = "No problem file or model specified."
             raise ValueError(msg)
 
-    def resolve(self, solver_model: Any, sense: str = "min") -> Result:
+    def resolve(
+        self, solver_model: Any, sense: Literal["min", "max"] = "min"
+    ) -> Result:
         """
         Re-solve an existing native solver model and return a Result.
 
@@ -432,8 +434,8 @@ class Solver(ABC, Generic[EnvType]):
         ----------
         solver_model : Any
             The native solver object (e.g. ``highspy.Highs``, ``gurobipy.Model``).
-        sense : str
-            Optimization sense, ``"min"`` or ``"max"``.
+        sense : {{"min", "max"}}
+            Optimization sense.
 
         Returns
         -------
@@ -943,7 +945,9 @@ class Highs(Solver[None]):
             sense=read_sense_from_problem_file(problem_fn),
         )
 
-    def resolve(self, solver_model: highspy.Highs, sense: str = "min") -> Result:
+    def resolve(
+        self, solver_model: highspy.Highs, sense: Literal["min", "max"] = "min"
+    ) -> Result:
         return self._solve(solver_model, io_api="direct", sense=sense)
 
     def _set_solver_params(
@@ -1188,7 +1192,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 sense=sense,
             )
 
-    def resolve(self, solver_model: gurobipy.Model, sense: str = "min") -> Result:
+    def resolve(
+        self, solver_model: gurobipy.Model, sense: Literal["min", "max"] = "min"
+    ) -> Result:
         return self._solve(
             solver_model,
             solution_fn=None,
@@ -2131,7 +2137,9 @@ class Mosek(Solver[None]):
                 sense=sense,
             )
 
-    def resolve(self, solver_model: mosek.Task, sense: str = "min") -> Result:
+    def resolve(
+        self, solver_model: mosek.Task, sense: Literal["min", "max"] = "min"
+    ) -> Result:
         return self._solve(
             solver_model,
             solution_fn=None,

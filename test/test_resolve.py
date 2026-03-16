@@ -49,11 +49,8 @@ def test_apply_result_none_solution(model):
     assert tc == "infeasible"
 
 
-@pytest.mark.skipif(
-    not pytest.importorskip("highspy", reason="highspy not installed"),
-    reason="highspy not installed",
-)
 def test_resolve_highs(model):
+    pytest.importorskip("highspy")
     model.solve(solver_name="highs")
     obj1 = model.objective.value
 

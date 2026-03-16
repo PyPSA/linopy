@@ -116,6 +116,7 @@ This package is published under MIT license.
    piecewise-linear-constraints
    piecewise-linear-constraints-tutorial
    manipulating-models
+   iterative-resolving
    testing-framework
    transport-tutorial
    infeasible-model
