@@ -1401,7 +1401,9 @@ class Model:
 
         if remote is not None:
             if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(self)
+                solved = remote.solve_on_oetc(
+                    self, solver_name=solver_name, **solver_options
+                )
             else:
                 solved = remote.solve_on_remote(
                     self,
@@ -1417,7 +1419,8 @@ class Model:
                     **solver_options,
                 )
 
-            self.objective.set_value(solved.objective.value)
+            if solved.objective.value is not None:
+                self.objective.set_value(float(solved.objective.value))
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
