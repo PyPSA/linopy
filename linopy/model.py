@@ -44,6 +44,7 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
+    Result,
     TerminationCondition,
 )
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
@@ -1553,50 +1554,77 @@ class Model:
                     os.remove(fn)
 
         try:
-            result.info()
-
-            self.objective._value = result.solution.objective
-            self.status = result.status.status.value
-            self.termination_condition = result.status.termination_condition.value
-            self.solver_model = result.solver_model
-            self.solver_name = solver_name
-
-            if not result.status.is_ok:
-                return (
-                    result.status.status.value,
-                    result.status.termination_condition.value,
-                )
-
-            # map solution and dual to original shape which includes missing values
-            sol = result.solution.primal.copy()
-            sol = set_int_index(sol)
-            sol.loc[-1] = nan
-
-            for name, var in self.variables.items():
-                idx = np.ravel(var.labels)
-                try:
-                    vals = sol[idx].values.reshape(var.labels.shape)
-                except KeyError:
-                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
-                var.solution = xr.DataArray(vals, var.coords)
-
-            if not result.solution.dual.empty:
-                dual = result.solution.dual.copy()
-                dual = set_int_index(dual)
-                dual.loc[-1] = nan
-
-                for name, con in self.constraints.items():
-                    idx = np.ravel(con.labels)
-                    try:
-                        vals = dual[idx].values.reshape(con.labels.shape)
-                    except KeyError:
-                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                    con.dual = xr.DataArray(vals, con.labels.coords)
-
-            return result.status.status.value, result.status.termination_condition.value
+            return self.apply_result(result, solver_name)
         finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
+
+    def apply_result(
+        self,
+        result: Result,
+        solver_name: str | None = None,
+    ) -> tuple[str, str]:
+        """
+        Apply a solver Result to the model, mapping primal/dual values back
+        to variables and constraints.
+
+        Useful for iterative re-solve workflows where the solver model is
+        modified and re-solved outside of ``Model.solve()``.
+
+        Parameters
+        ----------
+        result : Result
+            Result object from a solver's ``resolve()`` or ``solve_problem_*`` method.
+        solver_name : str, optional
+            Name of the solver used.
+
+        Returns
+        -------
+        tuple[str, str]
+            Status and termination condition.
+        """
+        self.reset_solution()
+
+        self.status = result.status.status.value
+        self.termination_condition = result.status.termination_condition.value
+        self.solver_model = result.solver_model
+        self.solver_name = solver_name or "unknown"
+
+        if result.solution is None:
+            return (self.status, self.termination_condition)
+
+        result.info()
+        self.objective._value = result.solution.objective
+
+        if not result.status.is_ok:
+            return (self.status, self.termination_condition)
+
+        sol = result.solution.primal.copy()
+        sol = set_int_index(sol)
+        sol.loc[-1] = nan
+
+        for name, var in self.variables.items():
+            idx = np.ravel(var.labels)
+            try:
+                vals = sol[idx].values.reshape(var.labels.shape)
+            except KeyError:
+                vals = sol.reindex(idx).values.reshape(var.labels.shape)
+            var.solution = xr.DataArray(vals, var.coords)
+
+        if not result.solution.dual.empty:
+            dual = result.solution.dual.copy()
+            dual = set_int_index(dual)
+            dual.loc[-1] = nan
+
+            for name, con in self.constraints.items():
+                idx = np.ravel(con.labels)
+                try:
+                    vals = dual[idx].values.reshape(con.labels.shape)
+                except KeyError:
+                    vals = dual.reindex(idx).values.reshape(con.labels.shape)
+                con.dual = xr.DataArray(vals, con.labels.coords)
+
+        return self.status, self.termination_condition
 
     def _mock_solve(
         self,
