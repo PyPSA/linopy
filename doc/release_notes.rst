@@ -21,6 +21,7 @@ Upcoming Version
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
+* Default internal integer arrays (labels, variable indices, ``_term`` coordinates) to ``int32`` instead of ``int64``, reducing memory usage by ~25% and improving model build speed by 10-35%. The dtype is configurable via ``linopy.options["label_dtype"]`` (e.g. set to ``np.int64`` to restore the old behavior). An overflow guard raises ``ValueError`` if labels exceed the int32 maximum (~2.1 billion).
 
 
 Version 0.6.5
