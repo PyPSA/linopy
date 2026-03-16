@@ -1233,7 +1233,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         metrics = super()._extract_metrics(solver_model, solution)
         is_mip = _safe_get(lambda: m.IsMIP) == 1
         mem_gb = _safe_get(lambda: m.MaxMemUsed)
-        peak_memory = mem_gb * 1024 if mem_gb is not None else None
+        peak_memory = mem_gb * 1000 if mem_gb is not None else None
         return dataclasses.replace(
             metrics,
             solve_time=_safe_get(lambda: m.Runtime),

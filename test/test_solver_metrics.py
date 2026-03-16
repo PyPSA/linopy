@@ -117,6 +117,31 @@ def test_model_metrics_reset() -> None:
     assert m.solver_metrics is None
 
 
+def test_model_metrics_re_solve_different_solver() -> None:
+    """Re-solving with a different solver should overwrite metrics."""
+    m = Model()
+    x = m.add_variables(
+        lower=xr.DataArray(np.zeros(5), dims=["i"]),
+        upper=xr.DataArray(np.ones(5), dims=["i"]),
+        name="x",
+    )
+    m.add_objective(x.sum())
+
+    # First solve
+    m.solve(mock_solve=True)
+    assert m.solver_metrics is not None
+    assert m.solver_metrics.solver_name == "mock"
+
+    # Re-solve with a real solver (if available) to verify metrics are replaced
+    if available_solvers:
+        solver = available_solvers[0]
+        m.add_constraints(x.sum() >= 0, name="con")
+        m.solve(solver_name=solver)
+        assert m.solver_metrics is not None
+        assert m.solver_metrics.solver_name == solver
+        assert m.solver_metrics.solver_name != "mock"
+
+
 # ---------------------------------------------------------------------------
 # Solver-specific integration tests (parametrized over available solvers)
 # ---------------------------------------------------------------------------
