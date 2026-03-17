@@ -622,7 +622,10 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -635,11 +638,18 @@ class Variable:
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the factor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 0.
         """
-        return self.to_linexpr().mul(other, join=join)
+        return self.to_linexpr().mul(other, join=join, fill_value=fill_value)
 
     def div(
-        self, other: ConstantLike, join: JoinOptions | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -652,8 +662,12 @@ class Variable:
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the divisor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 1.
         """
-        return self.to_linexpr().div(other, join=join)
+        return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
     def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """

@@ -495,31 +495,7 @@ class TestFillNA:
 
 
 class TestFillValueParam:
-    """Named methods (.add, .sub, .mul, .div) accept fill_value."""
-
-    def test_add_fill_value(self, x: Variable) -> None:
-        expr = (1 * x).shift(time=1)
-        result = expr.add(5, fill_value=0)
-        assert not result.isnull().any()
-        assert result.const.values[0] == 5
-
-    def test_sub_fill_value(self, x: Variable) -> None:
-        expr = (1 * x).shift(time=1)
-        result = expr.sub(5, fill_value=0)
-        assert not result.isnull().any()
-        assert result.const.values[0] == -5
-
-    def test_mul_fill_value(self, x: Variable) -> None:
-        expr = (1 * x).shift(time=1)
-        result = expr.mul(3, fill_value=0)
-        assert not result.isnull().any()
-        assert result.const.values[0] == 0
-
-    def test_div_fill_value(self, x: Variable) -> None:
-        expr = (1 * x).shift(time=1)
-        result = expr.div(2, fill_value=0)
-        assert not result.isnull().any()
-        assert result.const.values[0] == 0
+    """fill_value on mul/div controls factor alignment for DataArrays."""
 
     def test_add_without_fill_value_still_revives(self, x: Variable) -> None:
         """add() always fills const with 0 (additive identity)."""
@@ -528,11 +504,39 @@ class TestFillValueParam:
         assert not result.isnull().values[0]
         assert result.const.values[0] == 5
 
-    def test_fill_value_only_affects_absent(self, x: Variable) -> None:
-        expr = (1 * x).shift(time=1)
-        result = expr.add(5, fill_value=0)
-        assert result.const.values[1] == 5  # valid slot: 0 + 5
-        assert result.coeffs.values[1, 0] == 1  # coeff unchanged
+    @pytest.mark.v1_only
+    def test_mul_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
+        """In v1, mul with misaligned DataArray raises without explicit fill_value."""
+        expr = 1 * x
+        da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
+        with pytest.raises(ValueError, match="Factor contains NaN"):
+            expr.mul(da, join="left")
+
+    @pytest.mark.v1_only
+    def test_mul_misaligned_da_with_fill_value(self, x: Variable) -> None:
+        """In v1, mul with misaligned DataArray works with explicit fill_value."""
+        expr = 1 * x
+        da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
+        result = expr.mul(da, join="left", fill_value=0)
+        assert not np.isnan(result.coeffs.values).all()
+
+    @pytest.mark.v1_only
+    def test_div_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
+        """In v1, div with misaligned DataArray raises without explicit fill_value."""
+        expr = 1 * x
+        da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
+        with pytest.raises(ValueError, match="Factor contains NaN"):
+            expr.div(da, join="left")
+
+    @pytest.mark.v1_only
+    def test_div_misaligned_da_with_fill_value(self, x: Variable) -> None:
+        """In v1, div with misaligned DataArray works with explicit fill_value=1."""
+        expr = 1 * x
+        da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
+        result = expr.div(da, join="left", fill_value=1)
+        # fill_value=1 preserves terms where da has no entry
+        assert result.coeffs.squeeze().sel(time=0).item() == pytest.approx(1.0)
+        assert result.coeffs.squeeze().sel(time=1).item() == pytest.approx(0.5)
 
 
 # ============================================================

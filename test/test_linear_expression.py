@@ -766,12 +766,22 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_subset_join_left(
+        def test_mul_subset_join_left_raises(
             self, v: Variable, subset: xr.DataArray, operand: str
         ) -> None:
-            """Explicit join='left' fills zeros for missing coords."""
+            """In v1, join='left' with subset raises without explicit fill_value."""
             target = v if operand == "var" else 1 * v
-            result = target.mul(subset, join="left")
+            with pytest.raises(ValueError, match="Factor contains NaN"):
+                target.mul(subset, join="left")
+
+        @pytest.mark.v1_only
+        @pytest.mark.parametrize("operand", ["var", "expr"])
+        def test_mul_subset_join_left_with_fill_value(
+            self, v: Variable, subset: xr.DataArray, operand: str
+        ) -> None:
+            """In v1, join='left' with subset works when fill_value is explicit."""
+            target = v if operand == "var" else 1 * v
+            result = target.mul(subset, join="left", fill_value=0)
             assert result.sizes["dim_2"] == v.sizes["dim_2"]
             assert not np.isnan(result.coeffs.values).any()
 
@@ -2428,9 +2438,27 @@ class TestJoinParameter:
             result = a.to_linexpr().mul(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2]
 
+        @pytest.mark.legacy_only
         def test_mul_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().mul(const, join="outer")
+            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+            assert result.coeffs.sel(i=0).item() == 0
+            assert result.coeffs.sel(i=1).item() == 2
+            assert result.coeffs.sel(i=2).item() == 3
+
+        @pytest.mark.v1_only
+        def test_mul_constant_join_outer_raises(self, a: Variable) -> None:
+            """In v1, outer join with misaligned factor raises without fill_value."""
+            const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+            with pytest.raises(ValueError, match="Factor contains NaN"):
+                a.to_linexpr().mul(const, join="outer")
+
+        @pytest.mark.v1_only
+        def test_mul_constant_join_outer_with_fill_value(self, a: Variable) -> None:
+            """In v1, outer join works with explicit fill_value."""
+            const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+            result = a.to_linexpr().mul(const, join="outer", fill_value=0)
             assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
             assert result.coeffs.sel(i=0).item() == 0
             assert result.coeffs.sel(i=1).item() == 2
@@ -2440,15 +2468,38 @@ class TestJoinParameter:
             with pytest.raises(TypeError, match="join parameter is not supported"):
                 a.to_linexpr().mul(b.to_linexpr(), join="inner")
 
+        def test_mul_expr_with_fill_value_raises(
+            self, a: Variable, b: Variable
+        ) -> None:
+            with pytest.raises(
+                TypeError, match="fill_value parameter is not supported"
+            ):
+                a.to_linexpr().mul(b.to_linexpr(), fill_value=0)
+
     class TestDivision:
         def test_div_constant_join_inner(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="inner")
             assert list(result.data.indexes["i"]) == [1, 2]
 
+        @pytest.mark.legacy_only
         def test_div_constant_join_outer(self, a: Variable) -> None:
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
             result = a.to_linexpr().div(const, join="outer")
+            assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
+
+        @pytest.mark.v1_only
+        def test_div_constant_join_outer_raises(self, a: Variable) -> None:
+            """In v1, outer join with misaligned divisor raises without fill_value."""
+            const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+            with pytest.raises(ValueError, match="Factor contains NaN"):
+                a.to_linexpr().div(const, join="outer")
+
+        @pytest.mark.v1_only
+        def test_div_constant_join_outer_with_fill_value(self, a: Variable) -> None:
+            """In v1, outer join works with explicit fill_value."""
+            const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
+            result = a.to_linexpr().div(const, join="outer", fill_value=1)
             assert list(result.data.indexes["i"]) == [0, 1, 2, 3]
 
         def test_div_expr_with_join_raises(self, a: Variable, b: Variable) -> None:
@@ -2586,10 +2637,31 @@ class TestJoinParameter:
             np.testing.assert_array_equal(result.const.values, [10, 15, 20])
             np.testing.assert_array_equal(result.coeffs.squeeze().values, [2, 3, 4])
 
+        @pytest.mark.legacy_only
         def test_mul_constant_outer_fill_values(self, a: Variable) -> None:
             expr = 1 * a + 5
             other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
             result = expr.mul(other, join="outer")
+            assert set(result.coords["i"].values) == {0, 1, 2, 3}
+            assert result.const.sel(i=0).item() == 0
+            assert result.const.sel(i=1).item() == 10
+            assert result.const.sel(i=2).item() == 0
+            assert result.const.sel(i=3).item() == 0
+            assert result.coeffs.squeeze().sel(i=1).item() == 2
+            assert result.coeffs.squeeze().sel(i=0).item() == 0
+
+        @pytest.mark.v1_only
+        def test_mul_constant_outer_raises_v1(self, a: Variable) -> None:
+            expr = 1 * a + 5
+            other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
+            with pytest.raises(ValueError, match="Factor contains NaN"):
+                expr.mul(other, join="outer")
+
+        @pytest.mark.v1_only
+        def test_mul_constant_outer_with_fill_value_v1(self, a: Variable) -> None:
+            expr = 1 * a + 5
+            other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
+            result = expr.mul(other, join="outer", fill_value=0)
             assert set(result.coords["i"].values) == {0, 1, 2, 3}
             assert result.const.sel(i=0).item() == 0
             assert result.const.sel(i=1).item() == 10
@@ -2605,6 +2677,7 @@ class TestJoinParameter:
             assert list(result.coords["i"].values) == [0, 1, 2]
             np.testing.assert_array_equal(result.const.values, [5.0, 2.0, 1.0])
 
+        @pytest.mark.legacy_only
         def test_div_constant_outer_fill_values(self, a: Variable) -> None:
             expr = 1 * a + 10
             other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
@@ -2612,6 +2685,25 @@ class TestJoinParameter:
             assert set(result.coords["i"].values) == {0, 1, 2, 3}
             assert result.const.sel(i=1).item() == pytest.approx(5.0)
             assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
+            assert result.const.sel(i=0).item() == pytest.approx(10.0)
+            assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
+
+        @pytest.mark.v1_only
+        def test_div_constant_outer_raises_v1(self, a: Variable) -> None:
+            expr = 1 * a + 10
+            other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
+            with pytest.raises(ValueError, match="Factor contains NaN"):
+                expr.div(other, join="outer")
+
+        @pytest.mark.v1_only
+        def test_div_constant_outer_with_fill_value_v1(self, a: Variable) -> None:
+            expr = 1 * a + 10
+            other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
+            result = expr.div(other, join="outer", fill_value=1)
+            assert set(result.coords["i"].values) == {0, 1, 2, 3}
+            assert result.const.sel(i=1).item() == pytest.approx(5.0)
+            assert result.coeffs.squeeze().sel(i=1).item() == pytest.approx(0.5)
+            # fill_value=1 preserves original values where divisor is missing
             assert result.const.sel(i=0).item() == pytest.approx(10.0)
             assert result.coeffs.squeeze().sel(i=0).item() == pytest.approx(1.0)
 
