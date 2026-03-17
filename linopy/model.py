@@ -1905,7 +1905,7 @@ class Model:
             chunk=self._chunk,
             force_dim_names=self._force_dim_names,
             auto_mask=self._auto_mask,
-            solver_dir=self._solver_dir,
+            solver_dir=str(self._solver_dir),
         )
 
         m._variables = Variables(
