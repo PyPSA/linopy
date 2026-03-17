@@ -24,7 +24,7 @@ Main features
 flexible data-handling features:
 
 -  Define (arrays of) contnuous or binary variables with
-   **coordinates**, e.g. time, consumers, etc.
+   **coordinates**, e.g. time, consumers, etc.
 -  Apply **arithmetic operations** on the variables like adding,
    subtracting, multiplying with all the **broadcasting** potentials of
    xarray
@@ -124,6 +124,7 @@ This package is published under MIT license.
    gpu-acceleration
    migrating-from-pyomo
    gurobi-double-logging
+   memory-best-practices
 
 
 .. toctree::
