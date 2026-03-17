@@ -12,8 +12,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, Model
-from linopy.testing import assert_model_equal
+from linopy import EQUAL, Model, available_solvers
+from linopy.testing import (
+    assert_conequal,
+    assert_equal,
+    assert_linequal,
+    assert_model_equal,
+)
 
 target_shape: tuple[int, int] = (10, 10)
 
@@ -163,3 +168,67 @@ def test_assert_model_equal() -> None:
     m.add_objective(obj)
 
     assert_model_equal(m, m)
+
+
+def _build_model() -> Model:
+    """Small representative model used across copy tests."""
+    m: Model = Model()
+
+    lower: xr.DataArray = xr.DataArray(
+        np.zeros((10, 10)), coords=[range(10), range(10)]
+    )
+    upper: xr.DataArray = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_objective((10 * x + 5 * y).sum())
+
+    return m
+
+
+def test_model_copy_unsolved() -> None:
+    """Copy of unsolved model is structurally equal and independent."""
+    m = _build_model()
+    c = m.copy(include_solution=False)
+
+    assert_model_equal(m, c)
+
+    # independence: mutating copy does not affect source
+    c.add_variables(name="z")
+    assert "z" not in m.variables
+
+
+@pytest.mark.skipif(len(available_solvers) == 0, reason="No solver installed")
+def test_model_copy_solved_with_solution() -> None:
+    """Copy with include_solution=True preserves solve state."""
+    m = _build_model()
+    m.solve()
+
+    c = m.copy(include_solution=True)
+    assert_model_equal(m, c)
+
+
+@pytest.mark.skipif(len(available_solvers) == 0, reason="No solver installed")
+def test_model_copy_solved_without_solution() -> None:
+    """Copy with include_solution=False (default) drops solve state but preserves problem structure."""
+    m = _build_model()
+    m.solve()
+
+    c = m.copy(include_solution=False)
+
+    # solve state is dropped
+    assert c.status == "initialized"
+    assert c.termination_condition == ""
+    assert c.objective.value is None
+
+    # problem structure is preserved — compare only dataset_attrs to exclude solution/dual
+    for v in m.variables:
+        assert_equal(
+            c.variables[v].data[c.variables.dataset_attrs],
+            m.variables[v].data[m.variables.dataset_attrs],
+        )
+    for con in m.constraints:
+        assert_conequal(c.constraints[con], m.constraints[con], strict=False)
+    assert_linequal(c.objective.expression, m.objective.expression)
+    assert c.objective.sense == m.objective.sense
