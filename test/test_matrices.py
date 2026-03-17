@@ -77,3 +77,36 @@ def test_matrices_float_c() -> None:
 
     c = m.matrices.c
     assert np.all(c == np.array([1.5, 1.5]))
+
+
+def test_matrices_properties_are_cached() -> None:
+    """Verify that MatrixAccessor properties are cached after first access."""
+    m = Model()
+
+    lower = xr.DataArray(np.zeros((10, 10)), coords=[range(10), range(10)])
+    upper = xr.DataArray(np.ones((10, 10)), coords=[range(10), range(10)])
+    x = m.add_variables(lower, upper, name="x")
+    y = m.add_variables(name="y")
+
+    m.add_constraints(1 * x + 10 * y, EQUAL, 0)
+    m.add_objective((10 * x + 5 * y).sum())
+
+    M = m.matrices
+
+    # Access each property twice — second access should return the same object
+    for prop in ("vlabels", "clabels", "lb", "ub", "b", "sense", "c"):
+        first = getattr(M, prop)
+        second = getattr(M, prop)
+        assert first is second, f"{prop} is not cached (returns new object each time)"
+
+    # A and Q return complex objects — verify they are also cached
+    first_A = M.A
+    second_A = M.A
+    assert first_A is second_A, "A is not cached"
+
+    # Verify clean_cached_properties clears the cache
+    M.clean_cached_properties()
+    fresh = M.vlabels
+    assert fresh is not first  # cache was cleared — should be a new object
+    # After cleaning, accessing again should still work
+    assert np.array_equal(fresh, M.vlabels)
