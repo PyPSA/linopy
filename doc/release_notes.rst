@@ -23,6 +23,7 @@ Upcoming Version
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
+* Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``dual_bound``, and ``dual_bound`` in a solver-independent way. All solvers populate solver-specific fields where available.
 
 
 Version 0.6.5
