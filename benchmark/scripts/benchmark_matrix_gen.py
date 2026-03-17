@@ -36,10 +36,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Model builders
 # ---------------------------------------------------------------------------
+
 
 def build_scigrid_network(n_snapshots: int):
     """Return a PyPSA Network (SciGrid-DE) with extended snapshots, without building the model."""
@@ -58,9 +58,15 @@ def build_scigrid_network(n_snapshots: int):
             if df is not None and not df.empty:
                 tiles = int(np.ceil(n_snapshots / orig_len)) + 1
                 tiled = np.tile(df.values, (tiles, 1))[:n_snapshots]
-                setattr(component_t, attr, pd.DataFrame(
-                    tiled, index=new_snapshots, columns=df.columns,
-                ))
+                setattr(
+                    component_t,
+                    attr,
+                    pd.DataFrame(
+                        tiled,
+                        index=new_snapshots,
+                        columns=df.columns,
+                    ),
+                )
     return n
 
 
@@ -89,6 +95,7 @@ def build_synthetic(n: int):
 # Benchmark phases
 # ---------------------------------------------------------------------------
 
+
 def time_phase(func, label: str, repeats: int = 3) -> dict:
     """Time a callable, return best-of-N result."""
     times = []
@@ -101,8 +108,12 @@ def time_phase(func, label: str, repeats: int = 3) -> dict:
         gc.enable()
         times.append(elapsed)
         del result
-    return {"phase": label, "best_s": min(times), "median_s": sorted(times)[len(times) // 2],
-            "times": times}
+    return {
+        "phase": label,
+        "best_s": min(times),
+        "median_s": sorted(times)[len(times) // 2],
+        "times": times,
+    }
 
 
 def benchmark_model(model, repeats: int = 3) -> list[dict]:
@@ -162,6 +173,7 @@ def benchmark_model(model, repeats: int = 3) -> list[dict]:
 # Solution-unpacking benchmark (#619)
 # ---------------------------------------------------------------------------
 
+
 def benchmark_solution_unpack(n_snapshots: int, repeats: int = 3) -> list[dict]:
     """
     Benchmark the solution-assignment loop in Model.solve (PR #619).
@@ -198,7 +210,9 @@ def benchmark_solution_unpack(n_snapshots: int, repeats: int = 3) -> list[dict]:
     sol_series = pd.concat(parts).drop_duplicates()
     sol_series.loc[-1] = nan
 
-    n_vars = sum(np.ravel(model.variables[name].labels).size for name in model.variables)
+    n_vars = sum(
+        np.ravel(model.variables[name].labels).size for name in model.variables
+    )
     results = []
 
     # ----- Old path (pandas label-based, pre-#619) -----
@@ -243,26 +257,31 @@ FULL_SNAPSHOTS = [24, 100, 200, 500]
 SYNTHETIC_SIZES = [20, 50, 100, 200]
 
 
-def run_benchmarks(model_type: str, quick: bool, repeats: int, include_solve: bool = False) -> list[dict]:
+def run_benchmarks(
+    model_type: str, quick: bool, repeats: int, include_solve: bool = False
+) -> list[dict]:
     """Run benchmarks across problem sizes, return flat list of results."""
     all_results = []
 
     if model_type in ("scigrid", "all"):
         sizes = QUICK_SNAPSHOTS if quick else FULL_SNAPSHOTS
         for n_snap in sizes:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"SciGrid-DE  {n_snap} snapshots")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             model = build_scigrid(n_snap)
             n_vars = len(model.variables.flat)
             n_cons = len(model.constraints.flat)
             print(f"  {n_vars:,} variables, {n_cons:,} constraints")
 
             for r in benchmark_model(model, repeats):
-                r.update(model_type="scigrid", size=n_snap,
-                         n_vars=n_vars, n_cons=n_cons)
+                r.update(
+                    model_type="scigrid", size=n_snap, n_vars=n_vars, n_cons=n_cons
+                )
                 all_results.append(r)
-                print(f"  {r['phase']:20s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)")
+                print(
+                    f"  {r['phase']:20s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)"
+                )
 
             del model
             gc.collect()
@@ -271,29 +290,32 @@ def run_benchmarks(model_type: str, quick: bool, repeats: int, include_solve: bo
         # Solution-unpacking benchmark for PR #619 (SciGrid-DE only, small sizes)
         solve_sizes = QUICK_SNAPSHOTS if quick else [24, 100]
         for n_snap in solve_sizes:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"SciGrid-DE solve + unpack  {n_snap} snapshots  (#619)")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             for r in benchmark_solution_unpack(n_snap, repeats):
                 all_results.append(r)
-                print(f"  {r['phase']:30s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)")
+                print(
+                    f"  {r['phase']:30s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)"
+                )
             gc.collect()
 
     if model_type in ("synthetic", "all"):
         sizes = [20, 50] if quick else SYNTHETIC_SIZES
         for n in sizes:
-            print(f"\n{'='*60}")
-            print(f"Synthetic  N={n}  ({2*n*n} vars, {2*n*n} cons)")
-            print(f"{'='*60}")
+            print(f"\n{'=' * 60}")
+            print(f"Synthetic  N={n}  ({2 * n * n} vars, {2 * n * n} cons)")
+            print(f"{'=' * 60}")
             model = build_synthetic(n)
             n_vars = 2 * n * n
             n_cons = 2 * n * n
 
             for r in benchmark_model(model, repeats):
-                r.update(model_type="synthetic", size=n,
-                         n_vars=n_vars, n_cons=n_cons)
+                r.update(model_type="synthetic", size=n, n_vars=n_vars, n_cons=n_cons)
                 all_results.append(r)
-                print(f"  {r['phase']:20s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)")
+                print(
+                    f"  {r['phase']:20s}  {r['best_s']:.4f}s  (median {r['median_s']:.4f}s)"
+                )
 
             del model
             gc.collect()
@@ -305,7 +327,9 @@ def format_comparison(before: list[dict], after: list[dict]) -> str:
     """Format a before/after comparison table."""
     df_b = pd.DataFrame(before).set_index(["model_type", "size", "phase"])
     df_a = pd.DataFrame(after).set_index(["model_type", "size", "phase"])
-    merged = df_b[["best_s"]].join(df_a[["best_s"]], lsuffix="_before", rsuffix="_after")
+    merged = df_b[["best_s"]].join(
+        df_a[["best_s"]], lsuffix="_before", rsuffix="_after"
+    )
     merged["speedup"] = merged["best_s_before"] / merged["best_s_after"]
     lines = [
         f"{'Model':>10s} {'Size':>6s} {'Phase':>20s} {'Before':>8s} {'After':>8s} {'Speedup':>8s}",
@@ -324,24 +348,34 @@ def format_comparison(before: list[dict], after: list[dict]) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark linopy matrix generation (PRs #616–#619)"
     )
     parser.add_argument(
-        "--model", choices=["scigrid", "synthetic", "all"], default="all",
+        "--model",
+        choices=["scigrid", "synthetic", "all"],
+        default="all",
         help="Model type to benchmark (default: all)",
     )
-    parser.add_argument("--quick", action="store_true", help="Quick mode (smallest sizes only)")
-    parser.add_argument("--repeats", type=int, default=3, help="Timing repeats per phase (default: 3)")
+    parser.add_argument(
+        "--quick", action="store_true", help="Quick mode (smallest sizes only)"
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=3, help="Timing repeats per phase (default: 3)"
+    )
     parser.add_argument("-o", "--output", type=str, help="Save results to JSON file")
     parser.add_argument("--label", type=str, default="", help="Label for this run")
     parser.add_argument(
-        "--compare", nargs=2, metavar=("BEFORE", "AFTER"),
+        "--compare",
+        nargs=2,
+        metavar=("BEFORE", "AFTER"),
         help="Compare two JSON result files instead of running benchmarks",
     )
     parser.add_argument(
-        "--include-solve", action="store_true",
+        "--include-solve",
+        action="store_true",
         help="Also benchmark solution unpacking (PR #619); requires HiGHS solver",
     )
     args = parser.parse_args()
@@ -352,9 +386,11 @@ def main():
         print(format_comparison(before, after))
         return
 
-    print(f"linopy matrix generation benchmark")
-    print(f"Python {sys.version.split()[0]}, numpy {np.__version__}, "
-          f"{platform.machine()}, {platform.system()}")
+    print("linopy matrix generation benchmark")
+    print(
+        f"Python {sys.version.split()[0]}, numpy {np.__version__}, "
+        f"{platform.machine()}, {platform.system()}"
+    )
 
     results = run_benchmarks(args.model, args.quick, args.repeats, args.include_solve)
 
@@ -370,9 +406,9 @@ def main():
         print(f"\nResults saved to {args.output}")
 
     # Summary table
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Summary (best times)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     df = pd.DataFrame(results)
     for (mtype, size), group in df.groupby(["model_type", "size"]):
         n_vars = group.iloc[0]["n_vars"]
