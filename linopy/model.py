@@ -54,6 +54,7 @@ from linopy.expressions import (
     ScalarLinearExpression,
 )
 from linopy.io import (
+    copy,
     to_block_files,
     to_cupdlpx,
     to_file,
@@ -1878,77 +1879,7 @@ class Model:
         self.variables.reset_solution()
         self.constraints.reset_dual()
 
-    def copy(self, include_solution: bool = False) -> Model:
-        """
-        Return a deep copy of this model.
-
-        Copies variables, constraints, objective, parameters, blocks, and all
-        scalar attributes (counters, flags). The copy is fully independent:
-        modifying one does not affect the other.
-
-        Parameters
-        ----------
-        include_solution : bool, optional
-            Whether to include the current solution and dual values in the copy.
-            If False (default), the copy is returned in an initialized state:
-            solution and dual data are excluded, objective value is set to None,
-            and status is set to 'initialized'. If True, solution, dual values,
-            solve status, and objective value are also copied.
-
-        Returns
-        -------
-        Model
-            A deep copy of the model.
-        """
-        SOLVE_STATE_ATTRS = {"status", "termination_condition"}
-
-        m = Model(
-            chunk=self._chunk,
-            force_dim_names=self._force_dim_names,
-            auto_mask=self._auto_mask,
-            solver_dir=str(self._solver_dir),
-        )
-
-        m._variables = Variables(
-            {
-                name: Variable(
-                    var.data.copy()
-                    if include_solution
-                    else var.data[self.variables.dataset_attrs].copy(deep=True),
-                    m,
-                    name,
-                )
-                for name, var in self.variables.items()
-            },
-            m,
-        )
-
-        m._constraints = Constraints(
-            {
-                name: Constraint(
-                    con.data.copy()
-                    if include_solution
-                    else con.data[self.constraints.dataset_attrs].copy(deep=True),
-                    m,
-                    name,
-                )
-                for name, con in self.constraints.items()
-            },
-            m,
-        )
-
-        obj_expr = LinearExpression(self.objective.expression.data.copy(), m)
-        m._objective = Objective(obj_expr, m, self.objective.sense)
-        m._objective._value = self.objective.value if include_solution else None
-
-        m._parameters = self._parameters.copy(deep=True)
-        m._blocks = self._blocks.copy() if self._blocks is not None else None
-
-        for attr in self.scalar_attrs:
-            if include_solution or attr not in SOLVE_STATE_ATTRS:
-                setattr(m, attr, getattr(self, attr))
-
-        return m
+    copy = copy
 
     to_netcdf = to_netcdf
 
