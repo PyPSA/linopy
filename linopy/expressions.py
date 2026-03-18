@@ -1289,8 +1289,15 @@ class BaseExpression(ABC):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
         if isinstance(rhs, DataArray):
-            # NaN in RHS → constraint is skipped at those positions
-            # (NaN propagates into the sign field, which linopy treats as absent)
+            is_legacy = (
+                join is None and options["arithmetic_convention"] == "legacy"
+            ) or join == "legacy"
+            if not is_legacy and rhs.isnull().any():
+                raise ValueError(
+                    "Constraint RHS contains NaN values. NaN in a bound would "
+                    "silently skip constraints. Use .fillna() to set a default "
+                    "bound, or .sel()/mask= to exclude positions explicitly."
+                )
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)
                 expr_const = self.const

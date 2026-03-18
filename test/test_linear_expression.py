@@ -1439,13 +1439,23 @@ class TestCoordinateAlignment:
             result = expr / arr
             assert np.isnan(result.coeffs.squeeze().values[0])
 
-        def test_variable_to_linexpr_nan_coefficient(self, v: Variable) -> None:
-            """to_linexpr fills NaN with 0 under both conventions (internal conversion)."""
+        @pytest.mark.legacy_only
+        def test_variable_to_linexpr_nan_coefficient_fills(self, v: Variable) -> None:
+            """Legacy: to_linexpr fills NaN coefficient with 0."""
             nan_coeff = np.ones(v.sizes["dim_2"])
             nan_coeff[0] = np.nan
             result = v.to_linexpr(nan_coeff)
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
+
+        @pytest.mark.v1_only
+        def test_variable_to_linexpr_nan_coefficient_masks(self, v: Variable) -> None:
+            """v1: NaN coefficient in to_linexpr masks the term."""
+            nan_coeff = np.ones(v.sizes["dim_2"])
+            nan_coeff[0] = np.nan
+            result = v.to_linexpr(nan_coeff)
+            assert result.isnull().values[0]
+            assert not result.isnull().values[1]
 
     class TestMultiDim:
         @pytest.mark.legacy_only
