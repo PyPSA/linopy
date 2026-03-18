@@ -541,9 +541,11 @@ def dualize(
 
     Examples
     --------
-    >>> m2 = m.dualize()
-    >>> m2.solve(solver_name="gurobi", Method=2, Crossover=0)
-    >>> gap = abs(m.objective.value - m2.objective.value)
+    .. code-block:: python
+
+        m2 = m.dualize()
+        m2.solve(solver_name="gurobi", Method=2, Crossover=1)
+        gap = abs(m.objective.value - m2.objective.value)
     """
     from linopy.model import Model
 
