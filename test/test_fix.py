@@ -1,5 +1,7 @@
 """Tests for Variable.fix(), Variable.unfix(), and Variable.fixed."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -221,3 +223,52 @@ class TestRemoveVariablesCleansUpFix:
         m.remove_variables("z")
         assert "z" not in m._relaxed_registry
         assert f"{FIX_CONSTRAINT_PREFIX}z" not in m.constraints
+
+
+class TestFixIO:
+    def test_relaxed_registry_survives_netcdf(
+        self, model_with_solution: Model, tmp_path: Path
+    ) -> None:
+        m = model_with_solution
+        m.variables["z"].fix(relax=True)
+        m.variables["w"].fix(relax=True)
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+
+        from linopy.io import read_netcdf
+
+        m2 = read_netcdf(path)
+        assert m2._relaxed_registry == {"z": "binary", "w": "integer"}
+        # Fix constraints should also survive
+        assert f"{FIX_CONSTRAINT_PREFIX}z" in m2.constraints
+        assert f"{FIX_CONSTRAINT_PREFIX}w" in m2.constraints
+
+    def test_empty_registry_netcdf(
+        self, model_with_solution: Model, tmp_path: Path
+    ) -> None:
+        m = model_with_solution
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+
+        from linopy.io import read_netcdf
+
+        m2 = read_netcdf(path)
+        assert m2._relaxed_registry == {}
+
+    def test_unfix_after_roundtrip(
+        self, model_with_solution: Model, tmp_path: Path
+    ) -> None:
+        m = model_with_solution
+        m.variables["z"].fix(relax=True)
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+
+        from linopy.io import read_netcdf
+
+        m2 = read_netcdf(path)
+        m2.variables["z"].unfix()
+        assert m2.variables["z"].attrs["binary"]
+        assert "z" not in m2._relaxed_registry
+        assert f"{FIX_CONSTRAINT_PREFIX}z" not in m2.constraints
