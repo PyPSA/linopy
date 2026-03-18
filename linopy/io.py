@@ -1239,3 +1239,88 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         setattr(m, k, ds.attrs.get(k))
 
     return m
+
+
+def copy(src: Model, include_solution: bool = False) -> Model:
+    """
+    Return a deep copy of this model.
+
+    Copies variables, constraints, objective, parameters, blocks, and all
+    scalar attributes (counters, flags). The copy is fully independent:
+    modifying one does not affect the other.
+
+    Parameters
+    ----------
+    src : Model
+        The model to copy.
+    include_solution : bool, optional
+        Whether to include the current solution and dual values in the copy.
+        If False (default), the copy is returned in an initialized state:
+        solution and dual data are excluded, objective value is set to None,
+        and status is set to 'initialized'. If True, solution, dual values,
+        solve status, and objective value are also copied.
+
+    Returns
+    -------
+    Model
+        A deep copy of the model.
+    """
+    from linopy.model import (
+        Constraint,
+        Constraints,
+        LinearExpression,
+        Model,
+        Objective,
+        Variable,
+        Variables,
+    )
+
+    SOLVE_STATE_ATTRS = {"status", "termination_condition"}
+
+    m = Model(
+        chunk=src._chunk,
+        force_dim_names=src._force_dim_names,
+        auto_mask=src._auto_mask,
+        solver_dir=str(src._solver_dir),
+    )
+
+    m._variables = Variables(
+        {
+            name: Variable(
+                var.data.copy(deep=True)
+                if include_solution
+                else var.data[src.variables.dataset_attrs].copy(deep=True),
+                m,
+                name,
+            )
+            for name, var in src.variables.items()
+        },
+        m,
+    )
+
+    m._constraints = Constraints(
+        {
+            name: Constraint(
+                con.data.copy(deep=True)
+                if include_solution
+                else con.data[src.constraints.dataset_attrs].copy(deep=True),
+                m,
+                name,
+            )
+            for name, con in src.constraints.items()
+        },
+        m,
+    )
+
+    obj_expr = LinearExpression(src.objective.expression.data.copy(deep=True), m)
+    m._objective = Objective(obj_expr, m, src.objective.sense)
+    m._objective._value = src.objective.value if include_solution else None
+
+    m._parameters = src._parameters.copy(deep=True)
+    m._blocks = src._blocks.copy(deep=True) if src._blocks is not None else None
+
+    for attr in src.scalar_attrs:
+        if include_solution or attr not in SOLVE_STATE_ATTRS:
+            setattr(m, attr, getattr(src, attr))
+
+    return m
