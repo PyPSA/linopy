@@ -193,24 +193,21 @@ def bounds_to_constraints(m: Model) -> None:
 
 def _add_dual_variables(m: Model, m2: Model) -> dict:
     """
-    Add dual variables to m2 corresponding to constraints in m.
+    Add dual variables to m2 corresponding to constraints in m..
 
     For each active constraint in m, adds a dual variable to m2 following
-    linopy's sign convention:
+    standard LP duality sign conventions. The sign of the dual variable bounds
+    depends on both the constraint type and the primal objective sense:
 
+    For a minimization primal:
     - Equality constraints (=)  -> free dual variable (lower=-inf, upper=inf)
     - <= constraints            -> non-positive dual variable (lower=-inf, upper=0)
     - >= constraints            -> non-negative dual variable (lower=0, upper=inf)
 
-    This convention ensures that m2.variables[con_name].solution has the same
-    sign as m.constraints[con_name].dual after solving, allowing direct
-    comparison without sign adjustments.
-
-    The sign encodes the direction of impact on the objective per unit RHS change:
-    - <= constraint dual (<=0): increasing RHS by 1 unit changes objective by
-      dual units (negative = cost decreases, i.e. relaxing the constraint).
-    - >= constraint dual (>=0): increasing RHS by 1 unit changes objective by
-      dual units (positive = cost increases, i.e. tightening the constraint).
+    For a maximization primal:
+    - Equality constraints (=)  -> free dual variable (lower=-inf, upper=inf)
+    - <= constraints            -> non-negative dual variable (lower=0, upper=inf)
+    - >= constraints            -> non-positive dual variable (lower=-inf, upper=0)
 
     Skips constraints with no active rows (empty or fully masked).
 
@@ -510,19 +507,21 @@ def dualize(
     """
     Construct the dual of a linopy LP model.
 
-    Transforms the primal model into its dual equivalent m2 by:
-    1. Converting variable bounds to explicit constraints
-    2. Adding dual variables to m2 (one per active constraint)
-    3. Adding dual feasibility constraints to m2 (one per primal variable)
-    4. Adding the dual objective to m2
+    Transforms the primal model into its dual equivalent m2 following
+    standard LP duality theory. The dual sense is flipped relative to the
+    primal (min -> max, max -> min), and dual variable bounds depend on
+    both constraint type and primal objective sense.
 
-    The dual is constructed following standard LP duality theory:
+    For a minimization primal:
 
-    Primal (min):                       Dual (max):
-    min  c^T x                          max  b_eq^T λ + b_leq^T μ + b_geq^T ν
-    s.t.    A_eq x  =  b_eq   : λ free  s.t.    A_eq^T λ + A_leq^T μ + A_geq^T ν = c
-            A_leq x <= b_leq  : μ <= 0          λ free, μ <= 0, ν >= 0
-            A_geq x >= b_geq  : ν >= 0
+        Primal (min):                       Dual (max):
+        min  c^T x                          max  b_eq^T λ + b_leq^T μ + b_geq^T ν
+        s.t.    A_eq x  =  b_eq   : λ free  s.t.    A_eq^T λ + A_leq^T μ + A_geq^T ν = c
+                A_leq x <= b_leq  : μ <= 0          λ free, μ <= 0, ν >= 0
+                A_geq x >= b_geq  : ν >= 0
+
+    For a maximization primal the dual variable bounds are flipped:
+    μ >= 0 for <= constraints, ν <= 0 for >= constraints.
 
     Variable bounds are converted to explicit constraints before dualization
     via bounds_to_constraints(), so that they appear in the constraint matrix
@@ -535,6 +534,7 @@ def dualize(
         primal objective = dual objective
 
     Note: The standalone dual m2 may be unbounded if the primal is degenerate.
+    Only linear programs (LP) are supported.
 
     Parameters
     ----------
