@@ -925,9 +925,16 @@ def to_poi(
     """
     import pyoptinterface as poi
 
+    num_vars = m._xCounter or int(
+        max(v.data["labels"].max() for _, v in m.variables.items())
+    )
+    num_constrs = m._cCounter or int(
+        max(c.data["labels"].max() for _, c in m.constraints.items())
+    )
+
     # --- Variables ---
     # Build a direct lookup array: linopy label -> POI variable index (O(1) per lookup)
-    vars_to_poi = np.full(m._xCounter + 1, -1, dtype=np.int32)
+    vars_to_poi = np.full(num_vars + 1, -1, dtype=np.int32)
 
     for name, var in m.variables.items():
         df = var.to_polars().with_columns(
@@ -953,29 +960,31 @@ def to_poi(
         "=": poi.ConstraintSense.Equal,
     }
 
-    cons_to_poi = np.full(m._cCounter + 1, -1, dtype=np.int32)
+    cons_to_poi = np.full(num_constrs + 1, -1, dtype=np.int32)
 
-    for con_name, con in m.constraints.items():
+    for _, con in m.constraints.items():
         for con_slice in con.iterate_slices(slice_size):
-            df = con_slice.to_polars()  # columns: labels, coeffs, vars, sign, rhs
-            if df.is_empty():
+            long, short = con_slice.to_polars(
+                joined=False
+            )  # columns: labels, coeffs, vars, sign, rhs
+            if long.is_empty():
                 continue
 
-            df = df.sort("labels")
-            poi_vars = vars_to_poi[df["vars"].to_numpy()].tolist()
-            coefs = df["coeffs"].to_list()
+            poi_vars = vars_to_poi[long["vars"].to_numpy()].tolist()
+            coeffs = long["coeffs"].to_list()
 
             # Compute group boundaries (first row index of each label group)
             df_unique = (
-                df.lazy()
+                long.lazy()
                 .with_row_index()
                 .filter(pl.col("labels").is_first_distinct())
-                .select("index", "labels", "rhs", "sign")
+                .select("index", "labels")
+                .join(short.lazy(), on="labels", how="inner")
                 .with_columns(name=pl.lit("C") + pl.col("labels").cast(pl.String))
                 .collect()
             )
 
-            split = df_unique["index"].to_list() + [df.height]
+            split = df_unique["index"].to_list() + [long.height]
             rhs_list = df_unique["rhs"].to_list()
             sign_list = df_unique["sign"].to_list()
             labels = df_unique["labels"].to_numpy()
@@ -983,7 +992,7 @@ def to_poi(
 
             cons_to_poi[labels] = [
                 poi_model.add_linear_constraint(
-                    poi.ScalarAffineFunction(coefs[s0:s1], poi_vars[s0:s1]),
+                    poi.ScalarAffineFunction(coeffs[s0:s1], poi_vars[s0:s1]),
                     sense_map[sign],
                     rhs,
                     name,  # according to pyoframe it'd be to pass name="C" for all for gurobi
