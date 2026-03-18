@@ -603,7 +603,7 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
-    def to_polars(self) -> pl.DataFrame:
+    def to_polars(self, joined=True) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
 
@@ -631,26 +631,35 @@ class Constraint:
         mask = labels_flat != -1
         labels_masked = labels_flat[mask]
         rhs_flat = np.broadcast_to(ds["rhs"].values, ds["labels"].shape).reshape(-1)
-
         sign_values = ds["sign"].values
-        sign_flat = np.broadcast_to(sign_values, ds["labels"].shape).reshape(-1)
-        all_same_sign = len(sign_flat) > 0 and (
-            sign_flat[0] == sign_flat[-1] and (sign_flat[0] == sign_flat).all()
+
+        short = pl.DataFrame(
+            {
+                "labels": labels_masked,
+                "rhs": rhs_flat[mask],
+            }
         )
 
-        short_data: dict = {
-            "labels": labels_masked,
-            "rhs": rhs_flat[mask],
-        }
-        if all_same_sign:
-            short = pl.DataFrame(short_data).with_columns(
-                pl.lit(sign_flat[0]).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+        all_same_sign = (
+            len(sign_values) > 0
+            and ((x := np.ravel(sign_values))[0] == x[-1])
+            and (x[0] == sign_values).all()
+        )
+
+        short = short.with_columns(
+            pl.lit(np.ravel(sign_values)[0])
+            .cast(pl.Enum(["=", "<=", ">="]))
+            .alias("sign")
+            if all_same_sign
+            else pl.Series(
+                "sign",
+                np.ravel(np.broadcast_to(sign_values, ds["labels"].shape)),
+                dtype=pl.Enum(["=", "<=", ">="]),
             )
-        else:
-            short_data["sign"] = pl.Series(
-                "sign", sign_flat[mask], dtype=pl.Enum(["=", "<=", ">="])
-            )
-            short = pl.DataFrame(short_data)
+        )
+
+        if not joined:
+            return long[["labels", "coeffs", "vars"]], short[["labels", "sign", "rhs"]]
 
         df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
