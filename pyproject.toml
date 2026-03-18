@@ -89,6 +89,10 @@ solvers = [
     "knitro>=15.1.0",
     # "cupdlpx>=0.1.2", pip package currently unstable
 ]
+poi = [
+    "pyoptinterface>=0.5.1",
+    "highsbox>=1.13.1",
+]
 
 [tool.setuptools.packages.find]
 include = ["linopy"]
