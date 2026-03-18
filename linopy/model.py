@@ -1913,7 +1913,7 @@ class Model:
                 name: Variable(
                     var.data.copy()
                     if include_solution
-                    else var.data[self.variables.dataset_attrs].copy(),
+                    else var.data[self.variables.dataset_attrs].copy(deep=True),
                     m,
                     name,
                 )
@@ -1927,7 +1927,7 @@ class Model:
                 name: Constraint(
                     con.data.copy()
                     if include_solution
-                    else con.data[self.constraints.dataset_attrs].copy(),
+                    else con.data[self.constraints.dataset_attrs].copy(deep=True),
                     m,
                     name,
                 )
