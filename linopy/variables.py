@@ -79,6 +79,8 @@ logger = logging.getLogger(__name__)
 
 FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan}
 
+FIX_CONSTRAINT_PREFIX = "__fix__"
+
 
 def varwrap(
     method: Callable, *default_args: Any, **new_default_kwargs: Any
@@ -1289,6 +1291,89 @@ class Variable:
 
     iterate_slices = iterate_slices
 
+    def fix(
+        self,
+        value: ConstantLike | None = None,
+        decimals: int = 8,
+        relax: bool = False,
+    ) -> None:
+        """
+        Fix the variable to a given value by adding an equality constraint.
+
+        If no value is given, the current solution value is used.
+
+        Parameters
+        ----------
+        value : float/array_like, optional
+            Value to fix the variable to. If None, the current solution is used.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+            Integer and binary variables are always rounded to 0 decimal places.
+            Default is 8.
+        relax : bool, optional
+            If True, relax the integrality of integer/binary variables by
+            temporarily treating them as continuous. The original type is stored
+            in the model's ``_relaxed_registry`` and restored by ``unfix()``.
+            Default is False.
+        """
+        if value is None:
+            value = self.solution
+
+        value = DataArray(value).broadcast_like(self.labels)
+
+        # Round: integers/binaries to 0 decimals, continuous to `decimals`
+        if self.attrs.get("integer") or self.attrs.get("binary"):
+            value = value.round(0)
+        else:
+            value = value.round(decimals)
+
+        # Clip to bounds
+        value = value.clip(min=self.lower, max=self.upper)
+
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+
+        # Remove existing fix constraint if present
+        if constraint_name in self.model.constraints:
+            self.model.remove_constraints(constraint_name)
+
+        # Add equality constraint: 1 * var == value
+        self.model.add_constraints(1 * self, "=", value, name=constraint_name)
+
+        # Handle integrality relaxation
+        if relax and (self.attrs.get("integer") or self.attrs.get("binary")):
+            original_type = "binary" if self.attrs.get("binary") else "integer"
+            self.model._relaxed_registry[self.name] = original_type
+            self.attrs["integer"] = False
+            self.attrs["binary"] = False
+
+    def unfix(self) -> None:
+        """
+        Remove the fix constraint for this variable.
+
+        If the variable was relaxed during ``fix(relax=True)``, the original
+        integrality type (integer or binary) is restored.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if constraint_name in self.model.constraints:
+            self.model.remove_constraints(constraint_name)
+
+        # Restore integrality if it was relaxed
+        registry = self.model._relaxed_registry
+        if self.name in registry:
+            original_type = registry.pop(self.name)
+            if original_type == "binary":
+                self.attrs["binary"] = True
+            elif original_type == "integer":
+                self.attrs["integer"] = True
+
+    @property
+    def fixed(self) -> bool:
+        """
+        Return whether the variable is currently fixed.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        return constraint_name in self.model.constraints
+
 
 class AtIndexer:
     __slots__ = ("object",)
@@ -1562,6 +1647,61 @@ class Variables:
             },
             self.model,
         )
+
+    def fix(
+        self,
+        value: int | float | None = None,
+        decimals: int = 8,
+        relax: bool = False,
+    ) -> None:
+        """
+        Fix all variables in this container to their solution or a scalar value.
+
+        Delegates to each variable's ``fix()`` method. See
+        :meth:`Variable.fix` for details.
+
+        Parameters
+        ----------
+        value : int/float, optional
+            Scalar value to fix all variables to. Only scalar values are
+            accepted to avoid shape mismatches across differently-shaped
+            variables. If None, each variable is fixed to its current solution.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+        relax : bool, optional
+            If True, relax integrality of integer/binary variables.
+
+        Note
+        ----
+        When using ``relax=True`` on a filtered view like
+        ``m.variables.integers``, the variables will no longer appear in that
+        view after relaxation. Call ``m.variables.unfix()`` to restore all
+        fixed variables. If other variables are also fixed and should stay
+        fixed, save the names before fixing to selectively unfix::
+
+            names = list(m.variables.integers)
+            m.variables.integers.fix(relax=True)
+            ...
+            m.variables[names].unfix()
+        """
+        for var in self.data.values():
+            var.fix(value=value, decimals=decimals, relax=relax)
+
+    def unfix(self) -> None:
+        """
+        Unfix all variables in this container.
+
+        Delegates to each variable's ``unfix()`` method.
+        """
+        for var in self.data.values():
+            var.unfix()
+
+    @property
+    def fixed(self) -> dict[str, bool]:
+        """
+        Return a dict mapping variable names to whether they are fixed.
+        """
+        return {name: var.fixed for name, var in self.items()}
 
     @property
     def solution(self) -> Dataset:
