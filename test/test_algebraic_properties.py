@@ -506,10 +506,10 @@ class TestFillValueParam:
 
     @pytest.mark.v1_only
     def test_mul_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
-        """In v1, mul with misaligned DataArray raises without explicit fill_value."""
+        """In v1, mul with alignment-introduced NaN raises without fill_value."""
         expr = 1 * x
         da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
-        with pytest.raises(ValueError, match="Factor contains NaN"):
+        with pytest.raises(ValueError, match="fill_value"):
             expr.mul(da, join="left")
 
     @pytest.mark.v1_only
@@ -522,10 +522,10 @@ class TestFillValueParam:
 
     @pytest.mark.v1_only
     def test_div_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
-        """In v1, div with misaligned DataArray raises without explicit fill_value."""
+        """In v1, div with alignment-introduced NaN raises without fill_value."""
         expr = 1 * x
         da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
-        with pytest.raises(ValueError, match="Factor contains NaN"):
+        with pytest.raises(ValueError, match="fill_value"):
             expr.div(da, join="left")
 
     @pytest.mark.v1_only

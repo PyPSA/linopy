@@ -318,15 +318,19 @@ class Variable:
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
         coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+        is_v1 = options["arithmetic_convention"] == "v1"
+        # In v1, NaN in coefficient means "absent term" (masks the variable).
+        # Detect before filling so we can mark those slots absent.
+        coeff_nan = coefficient.isnull() if is_v1 else None
         coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
-        # In v1 mode, set coeffs=NaN and const=NaN where the variable is
-        # absent so that absence propagates through arithmetic (consistent
-        # with expression path where shift/where/reindex fill with FILL_VALUE)
-        if options["arithmetic_convention"] == "v1":
+        if is_v1:
+            # Mark slots as absent where: variable is absent OR coefficient is NaN
             absent = self.labels == -1
+            if coeff_nan is not None:
+                absent = absent | coeff_nan
             if absent.any():
                 nan_fill = DataArray(
                     np.where(absent, np.nan, 0.0), coords=self.labels.coords
@@ -335,9 +339,14 @@ class Variable:
                     np.where(absent, np.nan, coefficient.values),
                     coords=self.labels.coords,
                 )
+                var_fill = DataArray(
+                    np.where(absent, -1, self.labels.values),
+                    coords=self.labels.coords,
+                )
                 ds = ds.assign(
                     const=nan_fill,
                     coeffs=coeff_fill.expand_dims(TERM_DIM, -1),
+                    vars=var_fill.expand_dims(TERM_DIM, -1),
                 )
         return expressions.LinearExpression(ds, self.model)
 

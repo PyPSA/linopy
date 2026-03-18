@@ -635,10 +635,8 @@ class BaseExpression(ABC):
         ) or join == "legacy"
         if np.isscalar(other) and join is None:
             if not is_legacy and np.isnan(other):
-                raise ValueError(
-                    "Constant contains NaN values. Use .fillna() to handle "
-                    "missing values before arithmetic operations."
-                )
+                # NaN additive constant → 0 (additive identity)
+                other = 0
             const = self.const.fillna(0) + other
             return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -650,11 +648,11 @@ class BaseExpression(ABC):
         self_const = self_const.fillna(0)
         if is_legacy:
             da = da.fillna(0)
-        elif da.isnull().any():
-            raise ValueError(
-                "Constant contains NaN values. Use .fillna() to handle "
-                "missing values before arithmetic operations."
-            )
+        else:
+            # NaN in additive constant → 0 (additive identity).
+            # This treats user-supplied NaN the same as absent-slot NaN:
+            # adding NaN contributes nothing.
+            da = da.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -671,6 +669,7 @@ class BaseExpression(ABC):
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
         join: JoinOptions | None = None,
+        _user_fill_value: bool = True,
     ) -> GenericExpression:
         is_legacy = (
             join is None and options["arithmetic_convention"] == "legacy"
@@ -678,40 +677,66 @@ class BaseExpression(ABC):
         # Fast path for scalars: no dimensions to align
         if np.isscalar(other):
             if not is_legacy and np.isnan(other):
-                raise ValueError(
-                    "Factor contains NaN values. Use .fillna() to handle "
-                    "missing values before arithmetic operations."
-                )
+                # NaN scalar → entire expression becomes absent
+                return self.where(False)
             coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
             const = self.const.fillna(0) if is_legacy else self.const
             scalar = DataArray(other)
             return self.assign(coeffs=op(coeffs, scalar), const=op(const, scalar))
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
+        # Track which positions already have NaN before alignment
+        pre_align_nan = factor.isnull() if not is_legacy else None
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
         if is_legacy:
             factor = factor.fillna(fill_value)
             self_const = self_const.fillna(0)
-        elif factor.isnull().any():
-            raise ValueError(
-                "Factor contains NaN values. Use .fillna() to handle "
-                "missing values before arithmetic operations."
+        # In v1, NaN in factor acts as a mask: positions where factor is NaN
+        # become fully absent slots (vars=-1, coeffs=NaN, const=NaN).
+        # But NaN *introduced by alignment* (not in the original data) requires
+        # an explicit fill_value — otherwise it's ambiguous whether the user
+        # wants masking (fill_value=0) or identity (fill_value=1).
+        nan_mask = factor.isnull() if not is_legacy else None
+        if nan_mask is not None and nan_mask.any() and not _user_fill_value:
+            # Positions not in the original factor were not NaN — they
+            # didn't exist. Fill with False so they count as alignment-introduced.
+            alignment_nan = nan_mask & ~pre_align_nan.reindex_like(
+                nan_mask, fill_value=False
             )
+            if alignment_nan.any():
+                raise ValueError(
+                    "Factor has NaN after coordinate alignment. This is "
+                    "ambiguous for mul/div — pass fill_value= explicitly:\n"
+                    "  .mul(other, join=..., fill_value=0)   # NaN → 0 (kill term)\n"
+                    "  .mul(other, join=..., fill_value=1)   # NaN → 1 (no scaling)"
+                )
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
             coeffs = data.coeffs.fillna(0) if is_legacy else data.coeffs
+            new_coeffs = op(coeffs, factor)
+            new_const = op(self_const, factor)
+            new_vars = data.vars
+            if nan_mask is not None and nan_mask.any():
+                new_vars = new_vars.where(~nan_mask, -1)
+                new_const = new_const.where(~nan_mask, np.nan)
             return self.__class__(
                 assign_multiindex_safe(
-                    data,
-                    coeffs=op(coeffs, factor),
-                    const=op(self_const, factor),
+                    data, coeffs=new_coeffs, const=new_const, vars=new_vars
                 ),
                 self.model,
             )
         coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
-        return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
+        new_coeffs = op(coeffs, factor)
+        new_const = op(self_const, factor)
+        result = self.assign(coeffs=new_coeffs, const=new_const)
+        if nan_mask is not None and nan_mask.any():
+            new_vars = self.vars.where(~nan_mask, -1)
+            result = result.assign(
+                vars=new_vars, const=new_const.where(~nan_mask, np.nan)
+            )
+        return result
 
     def _multiply_by_constant(
         self: GenericExpression,
@@ -719,11 +744,16 @@ class BaseExpression(ABC):
         join: JoinOptions | None = None,
         fill_value: float | None = None,
     ) -> GenericExpression:
+        user_specified = fill_value is not None
         if fill_value is None:
             is_legacy = options["arithmetic_convention"] == "legacy" or join == "legacy"
             fill_value = 0 if is_legacy else np.nan
         return self._apply_constant_op(
-            other, operator.mul, fill_value=fill_value, join=join
+            other,
+            operator.mul,
+            fill_value=fill_value,
+            join=join,
+            _user_fill_value=user_specified,
         )
 
     def _divide_by_constant(
@@ -732,11 +762,16 @@ class BaseExpression(ABC):
         join: JoinOptions | None = None,
         fill_value: float | None = None,
     ) -> GenericExpression:
+        user_specified = fill_value is not None
         if fill_value is None:
             is_legacy = options["arithmetic_convention"] == "legacy" or join == "legacy"
             fill_value = 1 if is_legacy else np.nan
         return self._apply_constant_op(
-            other, operator.truediv, fill_value=fill_value, join=join
+            other,
+            operator.truediv,
+            fill_value=fill_value,
+            join=join,
+            _user_fill_value=user_specified,
         )
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
@@ -1288,8 +1323,9 @@ class BaseExpression(ABC):
             ) or join == "legacy"
             if not is_legacy and rhs.isnull().any():
                 raise ValueError(
-                    "Constraint RHS contains NaN values. Use .fillna() and "
-                    "mask= to handle missing values explicitly."
+                    "Constraint RHS contains NaN values. NaN in a bound would "
+                    "silently skip constraints. Use .fillna() to set a default "
+                    "bound, or .sel()/mask= to exclude positions explicitly."
                 )
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)

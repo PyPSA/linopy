@@ -769,9 +769,9 @@ class TestCoordinateAlignment:
         def test_mul_subset_join_left_raises(
             self, v: Variable, subset: xr.DataArray, operand: str
         ) -> None:
-            """In v1, join='left' with subset raises without explicit fill_value."""
+            """In v1, join='left' with subset raises without fill_value."""
             target = v if operand == "var" else 1 * v
-            with pytest.raises(ValueError, match="Factor contains NaN"):
+            with pytest.raises(ValueError, match="fill_value"):
                 target.mul(subset, join="left")
 
         @pytest.mark.v1_only
@@ -1126,7 +1126,8 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_add_nan_raises(self, v: Variable, operand: str) -> None:
+        def test_add_nan_fills_zero(self, v: Variable, operand: str) -> None:
+            """v1: NaN in addend treated as 0 (additive identity)."""
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             vals[5] = np.nan
@@ -1134,9 +1135,12 @@ class TestCoordinateAlignment:
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
+            base_const = 0.0 if operand == "var" else 5.0
             target = v if operand == "var" else v + 5
-            with pytest.raises(ValueError, match="NaN"):
-                target + nan_constant
+            result = target + nan_constant
+            # NaN positions → 0 added → const unchanged from base
+            for i in [0, 5, 19]:
+                assert result.const.values[i] == base_const
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1157,16 +1161,20 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_sub_nan_raises(self, v: Variable, operand: str) -> None:
+        def test_sub_nan_fills_zero(self, v: Variable, operand: str) -> None:
+            """v1: NaN in subtrahend treated as 0 (additive identity)."""
             vals = np.arange(20, dtype=float)
             for i in self.NAN_POSITIONS:
                 vals[i] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
+            base_const = 0.0 if operand == "var" else 5.0
             target = v if operand == "var" else v + 5
-            with pytest.raises(ValueError, match="NaN"):
-                target - nan_constant
+            result = target - nan_constant
+            # NaN positions → 0 subtracted → const unchanged
+            for i in self.NAN_POSITIONS:
+                assert result.const.values[i] == base_const
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1186,15 +1194,17 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_mul_nan_raises(self, v: Variable, operand: str) -> None:
+        def test_mul_nan_masks(self, v: Variable, operand: str) -> None:
+            """v1: NaN in multiplier masks the affected positions."""
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else 1 * v
-            with pytest.raises(ValueError, match="NaN"):
-                target * nan_constant
+            result = target * nan_constant
+            assert result.isnull().values[0]  # NaN position → absent
+            assert not result.isnull().values[1]  # non-NaN → valid
 
         @pytest.mark.legacy_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
@@ -1215,7 +1225,8 @@ class TestCoordinateAlignment:
 
         @pytest.mark.v1_only
         @pytest.mark.parametrize("operand", ["var", "expr"])
-        def test_div_nan_raises(self, v: Variable, operand: str) -> None:
+        def test_div_nan_masks(self, v: Variable, operand: str) -> None:
+            """v1: NaN in divisor masks the affected positions."""
             vals = np.arange(20, dtype=float) + 1
             vals[0] = np.nan
             vals[5] = np.nan
@@ -1223,8 +1234,10 @@ class TestCoordinateAlignment:
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             target = v if operand == "var" else 1 * v
-            with pytest.raises(ValueError, match="NaN"):
-                target / nan_constant
+            result = target / nan_constant
+            assert result.isnull().values[0]  # NaN position → absent
+            assert result.isnull().values[5]  # NaN position → absent
+            assert not result.isnull().values[1]  # non-NaN → valid
 
         @pytest.mark.legacy_only
         def test_add_commutativity(
@@ -1242,16 +1255,19 @@ class TestCoordinateAlignment:
             )
 
         @pytest.mark.v1_only
-        def test_add_commutativity_nan_raises(self, v: Variable) -> None:
+        def test_add_commutativity_nan(self, v: Variable) -> None:
+            """v1: NaN in addend → 0; commutative."""
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
-            with pytest.raises(ValueError, match="NaN"):
-                v + nan_constant
-            with pytest.raises(ValueError, match="NaN"):
-                nan_constant + v
+            result_a = v + nan_constant
+            result_b = nan_constant + v
+            np.testing.assert_array_equal(result_a.const.values, result_b.const.values)
+            np.testing.assert_array_equal(
+                result_a.coeffs.values, result_b.coeffs.values
+            )
 
         @pytest.mark.legacy_only
         def test_mul_commutativity(
@@ -1268,16 +1284,22 @@ class TestCoordinateAlignment:
             )
 
         @pytest.mark.v1_only
-        def test_mul_commutativity_nan_raises(self, v: Variable) -> None:
+        def test_mul_commutativity_nan(self, v: Variable) -> None:
+            """v1: NaN in multiplier masks; commutative."""
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
-            with pytest.raises(ValueError, match="NaN"):
-                v * nan_constant
-            with pytest.raises(ValueError, match="NaN"):
-                nan_constant * v
+            result_a = v * nan_constant
+            result_b = nan_constant * v
+            # Both should mask at position 0
+            assert result_a.isnull().values[0]
+            assert result_b.isnull().values[0]
+            # Non-NaN positions should match
+            np.testing.assert_array_equal(
+                result_a.coeffs.values[:, 1:], result_b.coeffs.values[:, 1:]
+            )
 
         @pytest.mark.legacy_only
         def test_quadexpr_add_nan(
@@ -1292,15 +1314,18 @@ class TestCoordinateAlignment:
             assert not np.isnan(result.const.values).any()
 
         @pytest.mark.v1_only
-        def test_quadexpr_add_nan_raises(self, v: Variable) -> None:
+        def test_quadexpr_add_nan_fills_zero(self, v: Variable) -> None:
+            """v1: NaN in addend to quadratic expr treated as 0."""
             vals = np.arange(20, dtype=float)
             vals[0] = np.nan
             nan_constant = xr.DataArray(
                 vals, dims=["dim_2"], coords={"dim_2": range(20)}
             )
             qexpr = v * v
-            with pytest.raises(ValueError, match="NaN"):
-                qexpr + nan_constant
+            result = qexpr + nan_constant
+            assert isinstance(result, QuadraticExpression)
+            # NaN position → 0 added → const unchanged
+            assert result.const.values[0] == 0.0
 
     class TestExpressionWithNaN:
         """
@@ -1413,13 +1438,23 @@ class TestCoordinateAlignment:
             result = expr / arr
             assert np.isnan(result.coeffs.squeeze().values[0])
 
-        def test_variable_to_linexpr_nan_coefficient(self, v: Variable) -> None:
-            """to_linexpr fills NaN with 0 under both conventions (internal conversion)."""
+        @pytest.mark.legacy_only
+        def test_variable_to_linexpr_nan_coefficient_fills(self, v: Variable) -> None:
+            """Legacy: to_linexpr fills NaN coefficient with 0."""
             nan_coeff = np.ones(v.sizes["dim_2"])
             nan_coeff[0] = np.nan
             result = v.to_linexpr(nan_coeff)
             assert not np.isnan(result.coeffs.squeeze().values).any()
             assert result.coeffs.squeeze().values[0] == 0.0
+
+        @pytest.mark.v1_only
+        def test_variable_to_linexpr_nan_coefficient_masks(self, v: Variable) -> None:
+            """v1: NaN coefficient in to_linexpr masks the term."""
+            nan_coeff = np.ones(v.sizes["dim_2"])
+            nan_coeff[0] = np.nan
+            result = v.to_linexpr(nan_coeff)
+            assert result.isnull().values[0]
+            assert not result.isnull().values[1]
 
     class TestMultiDim:
         @pytest.mark.legacy_only
@@ -2451,7 +2486,7 @@ class TestJoinParameter:
         def test_mul_constant_join_outer_raises(self, a: Variable) -> None:
             """In v1, outer join with misaligned factor raises without fill_value."""
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
-            with pytest.raises(ValueError, match="Factor contains NaN"):
+            with pytest.raises(ValueError, match="fill_value"):
                 a.to_linexpr().mul(const, join="outer")
 
         @pytest.mark.v1_only
@@ -2492,7 +2527,7 @@ class TestJoinParameter:
         def test_div_constant_join_outer_raises(self, a: Variable) -> None:
             """In v1, outer join with misaligned divisor raises without fill_value."""
             const = xr.DataArray([2, 3, 4], dims=["i"], coords={"i": [1, 2, 3]})
-            with pytest.raises(ValueError, match="Factor contains NaN"):
+            with pytest.raises(ValueError, match="fill_value"):
                 a.to_linexpr().div(const, join="outer")
 
         @pytest.mark.v1_only
@@ -2654,7 +2689,7 @@ class TestJoinParameter:
         def test_mul_constant_outer_raises_v1(self, a: Variable) -> None:
             expr = 1 * a + 5
             other = xr.DataArray([2, 3], dims=["i"], coords={"i": [1, 3]})
-            with pytest.raises(ValueError, match="Factor contains NaN"):
+            with pytest.raises(ValueError, match="fill_value"):
                 expr.mul(other, join="outer")
 
         @pytest.mark.v1_only
@@ -2692,7 +2727,7 @@ class TestJoinParameter:
         def test_div_constant_outer_raises_v1(self, a: Variable) -> None:
             expr = 1 * a + 10
             other = xr.DataArray([2.0, 5.0], dims=["i"], coords={"i": [1, 3]})
-            with pytest.raises(ValueError, match="Factor contains NaN"):
+            with pytest.raises(ValueError, match="fill_value"):
                 expr.div(other, join="outer")
 
         @pytest.mark.v1_only
