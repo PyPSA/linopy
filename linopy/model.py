@@ -154,6 +154,7 @@ class Model:
         "_force_dim_names",
         "_auto_mask",
         "_solver_dir",
+        "_relaxed_registry",
         "solver_model",
         "solver_name",
         "matrices",
@@ -210,6 +211,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -937,6 +939,16 @@ class Model:
         -------
         None.
         """
+        from linopy.variables import FIX_CONSTRAINT_PREFIX
+
+        # Clean up fix constraint if present
+        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
+        if fix_name in self.constraints:
+            self.constraints.remove(fix_name)
+
+        # Clean up relaxed registry if present
+        self._relaxed_registry.pop(name, None)
+
         labels = self.variables[name].labels
         self.variables.remove(name)
 
