@@ -7,7 +7,7 @@ This module contains implementations for constructing the dual of a linear optim
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -300,6 +300,9 @@ def _build_dual_feas_terms(
         Nested dict: {var_name: {flat_label: (var_coords, terms, obj_coeff)}}
         where terms is a list of (con_name, con_coords, coeff) tuples.
     """
+    A = m.matrices.A
+    if A is None:
+        raise ValueError("Constraint matrix is None, model has no constraints.")
     A_csc = m.matrices.A.tocsc()
     c = m.matrices.c
     indptr = A_csc.indptr
@@ -308,7 +311,9 @@ def _build_dual_feas_terms(
     vlabels = m.matrices.vlabels
     clabels = m.matrices.clabels
 
-    dual_feas_terms = {var_name: {} for var_name in m.variables}
+    dual_feas_terms: dict[str, dict[int, tuple]] = {
+        var_name: {} for var_name in m.variables
+    }
 
     logger.debug("Building dual feasibility terms for each primal variable.")
 
@@ -379,7 +384,6 @@ def _add_dual_feasibility_constraints(
         Mapping from flat constraint label to (con_name, coord_dict),
         as returned by _con_lookup().
     """
-
     dual_feas_terms = _build_dual_feas_terms(m, dual_vars, var_lookup, con_lookup)
 
     c = m.matrices.c
@@ -401,7 +405,12 @@ def _add_dual_feasibility_constraints(
             coords=var.labels.coords,
         )
 
-        def rule(m, *coord_vals, vname=var_name, vdims=var.labels.dims):
+        def rule(
+            m: Model,
+            *coord_vals: Any,
+            vname: str = var_name,
+            vdims: tuple = var.labels.dims,
+        ) -> LinearExpression | None:
             coord_dict = dict(zip(vdims, coord_vals))
             flat = var.labels.sel(**coord_dict).item()
             if flat == -1:
@@ -457,7 +466,7 @@ def _add_dual_objective(
         a primal objective constant excluded via include_objective_constant=False
         during model creation. Default is 0.0.
     """
-    dual_obj = 0
+    dual_obj = LinearExpression(None, m2)
     sense = "max" if m.objective.sense == "min" else "min"
 
     for name, con in m.constraints.items():
