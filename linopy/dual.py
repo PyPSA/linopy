@@ -131,7 +131,7 @@ def _con_lookup(m: Model) -> dict:
     return con_lookup
 
 
-def bounds_to_constraints(self) -> None:
+def bounds_to_constraints(m) -> None:
     """
     Add explicit bound constraints for variables with bounds set directly
     in the variable rather than via explicit constraints.
@@ -141,19 +141,24 @@ def bounds_to_constraints(self) -> None:
 
     Also resets variable bounds to [-inf, inf] after adding constraints,
     to avoid double-counting in the dual.
+
+    Parameters
+    ----------
+    m : Model
+        Linopy model to convert variable bounds to constraints. Mutates the model in-place.
     """
     logger.debug("Converting variable bounds to explicit constraints.")
     logger.debug("Relaxing variable bounds to [-inf, inf].")
-    for var_name, var in self.variables.items():
+    for var_name, var in m.variables.items():
         mask = var.labels != -1
         lb = var.lower
         ub = var.upper
 
         # lower bound
-        if f"{var_name}-bound-lower" not in self.constraints:
+        if f"{var_name}-bound-lower" not in m.constraints:
             has_finite_lb = np.isfinite(lb.values[mask.values]).any()
             if has_finite_lb:
-                self.add_constraints(
+                m.add_constraints(
                     var >= lb,
                     name=f"{var_name}-bound-lower",
                     mask=mask,
@@ -161,17 +166,17 @@ def bounds_to_constraints(self) -> None:
                 logger.debug(f"Added lower bound constraint for '{var_name}'.")
                 var.lower.values[mask.values] = -np.inf
                 # Remove bounds to avoid double-counting in the dual. Rely on the new constraints instead.
-                self.variables[var_name].lower.values[mask.values] = -np.inf
+                m.variables[var_name].lower.values[mask.values] = -np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite lower bound, skipping."
                 )
 
         # upper bound
-        if f"{var_name}-bound-upper" not in self.constraints:
+        if f"{var_name}-bound-upper" not in m.constraints:
             has_finite_ub = np.isfinite(ub.values[mask.values]).any()
             if has_finite_ub:
-                self.add_constraints(
+                m.add_constraints(
                     var <= ub,
                     name=f"{var_name}-bound-upper",
                     mask=mask,
@@ -179,7 +184,7 @@ def bounds_to_constraints(self) -> None:
                 logger.debug(f"Added upper bound constraint for '{var_name}'.")
                 var.upper.values[mask.values] = np.inf
                 # Remove bounds to avoid double-counting in the dual. Rely on the new constraints instead.
-                self.variables[var_name].upper.values[mask.values] = np.inf
+                m.variables[var_name].upper.values[mask.values] = np.inf
             else:
                 logger.debug(
                     f"Variable '{var_name}' has no finite upper bound, skipping."
@@ -303,7 +308,7 @@ def _build_dual_feas_terms(
     A = m.matrices.A
     if A is None:
         raise ValueError("Constraint matrix is None, model has no constraints.")
-    A_csc = m.matrices.A.tocsc()
+    A_csc = A.tocsc()
     c = m.matrices.c
     indptr = A_csc.indptr
     indices = A_csc.indices
@@ -466,7 +471,7 @@ def _add_dual_objective(
         a primal objective constant excluded via include_objective_constant=False
         during model creation. Default is 0.0.
     """
-    dual_obj = LinearExpression(None, m2)
+    dual_obj: LinearExpression = LinearExpression(None, m2)
     sense = "max" if m.objective.sense == "min" else "min"
 
     for name, con in m.constraints.items():
@@ -487,7 +492,7 @@ def _add_dual_objective(
 
 
 def dualize(
-    self,
+    m,
     add_objective_constant: float = 0.0,
 ) -> Model:
     """
@@ -521,6 +526,9 @@ def dualize(
 
     Parameters
     ----------
+    m : Model
+        Primal linopy model to dualize. Must have a linear objective and linear constraints.
+
     add_objective_constant : float, optional
         Constant term to add to the dual objective. Use this to pass through
         a primal objective constant. Default is 0.0.
@@ -539,7 +547,7 @@ def dualize(
     """
     from linopy.model import Model
 
-    m = self.copy()
+    m1 = m.copy()
     m2 = Model()
 
     if not m.variables or not m.constraints:
@@ -548,10 +556,12 @@ def dualize(
         )
         return m2
 
-    m.bounds_to_constraints()
-    var_lup = _var_lookup(m)
-    con_lup = _con_lookup(m)
-    dual_vars = _add_dual_variables(m, m2)
-    _add_dual_feasibility_constraints(m, m2, dual_vars, var_lup, con_lup)
-    _add_dual_objective(m, m2, dual_vars, add_objective_constant=add_objective_constant)
+    m1.bounds_to_constraints()
+    var_lup = _var_lookup(m1)
+    con_lup = _con_lookup(m1)
+    dual_vars = _add_dual_variables(m1, m2)
+    _add_dual_feasibility_constraints(m1, m2, dual_vars, var_lup, con_lup)
+    _add_dual_objective(
+        m1, m2, dual_vars, add_objective_constant=add_objective_constant
+    )
     return m2
