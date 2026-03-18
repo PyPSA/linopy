@@ -131,7 +131,7 @@ def _con_lookup(m: Model) -> dict:
     return con_lookup
 
 
-def bounds_to_constraints(m) -> None:
+def bounds_to_constraints(m: Model) -> None:
     """
     Add explicit bound constraints for variables with bounds set directly
     in the variable rather than via explicit constraints.
@@ -492,7 +492,7 @@ def _add_dual_objective(
 
 
 def dualize(
-    m,
+    m: Model,
     add_objective_constant: float = 0.0,
 ) -> Model:
     """
@@ -558,7 +558,7 @@ def dualize(
         )
         return m2
 
-    m1.bounds_to_constraints()
+    bounds_to_constraints(m1)
     var_lup = _var_lookup(m1)
     con_lup = _con_lookup(m1)
     dual_vars = _add_dual_variables(m1, m2)
