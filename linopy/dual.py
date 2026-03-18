@@ -227,6 +227,8 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
         Mapping from constraint name (str) to the corresponding dual
         variable (linopy.Variable) in m2.
     """
+    primal_is_min = m.objective.sense == "min"
+
     dual_vars = {}
     for name, con in m.constraints.items():
         sign_vals = con.sign.values.flatten()
@@ -244,19 +246,29 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
             lower, upper = -np.inf, np.inf
             var_type = "free"
         elif sign_vals[0] == "<=":
-            lower, upper = -np.inf, 0
-            var_type = "non-positive"
-        else:  # >=
-            lower, upper = 0, np.inf
-            var_type = "non-negative"
+            lower, upper = (-np.inf, 0) if primal_is_min else (0, np.inf)
+            var_type = "non-positive" if primal_is_min else "non-negative"
+        elif sign_vals[0] == ">=":
+            lower, upper = (0, np.inf) if primal_is_min else (-np.inf, 0)
+            var_type = "non-negative" if primal_is_min else "non-positive"
+        else:
+            logger.warning(
+                f"Constraint '{name}' has unrecognized sign '{sign_vals[0]}', skipping."
+            )
+            continue
 
         logger.debug(
             f"Adding {var_type} dual variable for constraint '{name}' with shape {con.shape} and dims {con.labels.dims}."
         )
+        coords = (
+            [con.labels.coords[dim] for dim in con.labels.dims]
+            if con.labels.dims
+            else None
+        )
         dual_vars[name] = m2.add_variables(
             lower=lower,
             upper=upper,
-            coords=list(con.coords.values()),
+            coords=coords,
             name=name,
             mask=mask,
         )
