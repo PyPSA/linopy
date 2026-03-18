@@ -603,6 +603,46 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
+    def to_matrix(self) -> tuple[scipy.sparse.csr_matrix, np.ndarray]:
+        """
+        Construct a CSR matrix representation of this constraint.
+
+        Returns
+        -------
+        matrix : scipy.sparse.csr_matrix
+            Shape (n_labels, model._xCounter). Rows correspond to individual
+            constraint labels, columns to variable labels. Missing entries
+            (labels or vars == -1) are excluded.
+        labels : np.ndarray
+            1D array of shape (n_labels,) mapping each row back to the
+            original constraint label.
+
+        Notes
+        -----
+        Assumes that constraint labels are monotonuously increasing!
+        """
+        coeffs_shape = self.coeffs.values.shape
+        broadcast_labels = np.ravel(
+            np.broadcast_to(self.labels.values[..., np.newaxis], coeffs_shape)
+        )
+        vars_flat = self.vars.values.ravel()
+        coeffs_flat = self.coeffs.values.ravel()
+
+        valid = (broadcast_labels != -1) & (vars_flat != -1)
+        broadcast_labels = broadcast_labels[valid]
+        vars_flat = vars_flat[valid]
+        coeffs_flat = coeffs_flat[valid]
+
+        changes = np.r_[True, broadcast_labels[1:] != broadcast_labels[:-1]]
+        con_labels = broadcast_labels[changes]
+        indptr = np.r_[np.nonzero(changes)[0], len(broadcast_labels)]
+
+        shape = (len(con_labels), self.model._xCounter)
+        # Note: duplicate (row, col) entries are not summed in CSR format.
+        # They will be summed automatically upon conversion to CSC or dense.
+        matrix = scipy.sparse.csr_matrix((coeffs_flat, vars_flat, indptr), shape=shape)
+        return matrix, con_labels
+
     def to_polars(self) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
@@ -1116,6 +1156,39 @@ class Constraints:
             return scipy.sparse.csc_matrix(
                 (cons.coeffs, (cons.labels, cons.vars)), shape=shape
             )
+
+    def to_matrix_via_csr(
+        self,
+    ) -> tuple[scipy.sparse.csc_matrix, np.ndarray, np.ndarray]:
+        """
+        Construct a constraint matrix in sparse format by stacking per-constraint CSR matrices.
+
+        Returns
+        -------
+        matrix : scipy.sparse.csc_matrix
+            Shape (n_con_labels, n_var_labels), containing only non-empty rows and columns.
+        con_labels : np.ndarray
+            Shape (n_con_labels,), maps each matrix row to the original constraint label.
+        var_labels : np.ndarray
+            Shape (n_var_labels,), maps each matrix column to the original variable label.
+        """
+        if not len(self):
+            raise ValueError("No constraints available to convert to matrix.")
+
+        matrices, con_labels_list = zip(*(c.to_matrix() for c in self.data.values()))
+        csc: scipy.sparse.csc_matrix = scipy.sparse.vstack(matrices).tocsc()
+        con_labels = np.concatenate(con_labels_list)
+
+        indptr = csc.indptr
+        nonempty_cols = indptr[1:] != indptr[:-1]
+        new_indptr = np.r_[0, indptr[1:][nonempty_cols]]
+        (var_labels,) = np.nonzero(nonempty_cols)
+
+        matrix = scipy.sparse.csc_matrix(
+            (csc.data, csc.indices, new_indptr),
+            shape=(csc.shape[0], len(var_labels)),
+        )
+        return matrix, con_labels, var_labels
 
     def reset_dual(self) -> None:
         """
