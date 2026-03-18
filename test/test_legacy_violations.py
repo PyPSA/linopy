@@ -290,20 +290,27 @@ class TestUserNaNSwallowed:
         assert result.coeffs.squeeze().sel(time=1).item() == 1.0
 
     @pytest.mark.v1_only
-    def test_add_nan_raises(self, x: Variable, nan_data: xr.DataArray) -> None:
-        """v1: NaN in user data raises ValueError."""
-        with pytest.raises(ValueError, match="NaN"):
-            x + nan_data
+    def test_add_nan_fills_zero(self, x: Variable, nan_data: xr.DataArray) -> None:
+        """v1: NaN in addend treated as 0 (additive identity)."""
+        result = x + nan_data
+        # NaN position gets 0 added → const unchanged from default
+        assert result.const.sel(time=1).item() == 0.0
+        # Non-NaN positions get correct const
+        assert result.const.sel(time=0).item() == 1.0
 
     @pytest.mark.v1_only
-    def test_mul_nan_raises(self, x: Variable, nan_data: xr.DataArray) -> None:
-        with pytest.raises(ValueError, match="NaN"):
-            x * nan_data
+    def test_mul_nan_masks(self, x: Variable, nan_data: xr.DataArray) -> None:
+        """v1: NaN in multiplier masks the affected position."""
+        result = x * nan_data
+        assert result.isnull().sel(time=1).item()
+        assert not result.isnull().sel(time=0).item()
 
     @pytest.mark.v1_only
-    def test_div_nan_raises(self, x: Variable, nan_data: xr.DataArray) -> None:
-        with pytest.raises(ValueError, match="NaN"):
-            x / nan_data
+    def test_div_nan_masks(self, x: Variable, nan_data: xr.DataArray) -> None:
+        """v1: NaN in divisor masks the affected position."""
+        result = x / nan_data
+        assert result.isnull().sel(time=1).item()
+        assert not result.isnull().sel(time=0).item()
 
     @pytest.mark.legacy_only
     def test_nan_fill_inconsistency(self, x: Variable, nan_data: xr.DataArray) -> None:

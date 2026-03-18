@@ -635,10 +635,8 @@ class BaseExpression(ABC):
         ) or join == "legacy"
         if np.isscalar(other) and join is None:
             if not is_legacy and np.isnan(other):
-                raise ValueError(
-                    "Constant contains NaN values. Use .fillna() to handle "
-                    "missing values before arithmetic operations."
-                )
+                # NaN additive constant → 0 (additive identity)
+                other = 0
             const = self.const.fillna(0) + other
             return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
@@ -650,11 +648,11 @@ class BaseExpression(ABC):
         self_const = self_const.fillna(0)
         if is_legacy:
             da = da.fillna(0)
-        elif da.isnull().any():
-            raise ValueError(
-                "Constant contains NaN values. Use .fillna() to handle "
-                "missing values before arithmetic operations."
-            )
+        else:
+            # NaN in additive constant → 0 (additive identity).
+            # This treats user-supplied NaN the same as absent-slot NaN:
+            # adding NaN contributes nothing.
+            da = da.fillna(0)
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             return self.__class__(
@@ -678,10 +676,8 @@ class BaseExpression(ABC):
         # Fast path for scalars: no dimensions to align
         if np.isscalar(other):
             if not is_legacy and np.isnan(other):
-                raise ValueError(
-                    "Factor contains NaN values. Use .fillna() to handle "
-                    "missing values before arithmetic operations."
-                )
+                # NaN scalar → entire expression becomes absent
+                return self.where(False)
             coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
             const = self.const.fillna(0) if is_legacy else self.const
             scalar = DataArray(other)
@@ -693,25 +689,35 @@ class BaseExpression(ABC):
         if is_legacy:
             factor = factor.fillna(fill_value)
             self_const = self_const.fillna(0)
-        elif factor.isnull().any():
-            raise ValueError(
-                "Factor contains NaN values. Use .fillna() to handle "
-                "missing values before arithmetic operations."
-            )
+        # In v1, NaN in factor acts as a mask: positions where factor is NaN
+        # become fully absent slots (vars=-1, coeffs=NaN, const=NaN).
+        nan_mask = factor.isnull() if not is_legacy else None
         if needs_data_reindex:
             fv = {**self._fill_value, "const": 0}
             data = self.data.reindex_like(self_const, fill_value=fv)
             coeffs = data.coeffs.fillna(0) if is_legacy else data.coeffs
+            new_coeffs = op(coeffs, factor)
+            new_const = op(self_const, factor)
+            new_vars = data.vars
+            if nan_mask is not None and nan_mask.any():
+                new_vars = new_vars.where(~nan_mask, -1)
+                new_const = new_const.where(~nan_mask, np.nan)
             return self.__class__(
                 assign_multiindex_safe(
-                    data,
-                    coeffs=op(coeffs, factor),
-                    const=op(self_const, factor),
+                    data, coeffs=new_coeffs, const=new_const, vars=new_vars
                 ),
                 self.model,
             )
         coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
-        return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
+        new_coeffs = op(coeffs, factor)
+        new_const = op(self_const, factor)
+        result = self.assign(coeffs=new_coeffs, const=new_const)
+        if nan_mask is not None and nan_mask.any():
+            new_vars = self.vars.where(~nan_mask, -1)
+            result = result.assign(
+                vars=new_vars, const=new_const.where(~nan_mask, np.nan)
+            )
+        return result
 
     def _multiply_by_constant(
         self: GenericExpression,
@@ -1283,14 +1289,8 @@ class BaseExpression(ABC):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
         if isinstance(rhs, DataArray):
-            is_legacy = (
-                join is None and options["arithmetic_convention"] == "legacy"
-            ) or join == "legacy"
-            if not is_legacy and rhs.isnull().any():
-                raise ValueError(
-                    "Constraint RHS contains NaN values. Use .fillna() and "
-                    "mask= to handle missing values explicitly."
-                )
+            # NaN in RHS → constraint is skipped at those positions
+            # (NaN propagates into the sign field, which linopy treats as absent)
             if effective_join == "override":
                 aligned_rhs = rhs.assign_coords(coords=self.const.coords)
                 expr_const = self.const

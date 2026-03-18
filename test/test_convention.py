@@ -218,13 +218,18 @@ class TestNaNEdgeCases:
         result = (1 * a) * const
         assert np.isinf(result.coeffs.squeeze().values[1])
 
-    def test_nan_mul_raises_v1(self, a: Variable) -> None:
-        """Under v1, NaN in mul should raise ValueError."""
+    def test_nan_mul_masks_v1(self, a: Variable) -> None:
+        """Under v1, NaN in mul masks the affected positions."""
         const = xr.DataArray(
             [1.0, np.nan, 3.0, 4.0, 5.0], dims=["i"], coords={"i": range(5)}
         )
-        with pytest.raises(ValueError, match="NaN"):
-            (1 * a) * const
+        result = (1 * a) * const
+        # i=1 has NaN factor → absent slot
+        assert result.isnull().sel(i=1).item()
+        # Other positions are valid
+        assert not result.isnull().sel(i=0).item()
+        assert result.coeffs.squeeze().sel(i=0).item() == 1.0
+        assert result.coeffs.squeeze().sel(i=2).item() == 3.0
 
 
 # ---------------------------------------------------------------------------

@@ -505,12 +505,14 @@ class TestFillValueParam:
         assert result.const.values[0] == 5
 
     @pytest.mark.v1_only
-    def test_mul_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
-        """In v1, mul with misaligned DataArray raises without explicit fill_value."""
+    def test_mul_misaligned_da_masks_without_fill_value(self, x: Variable) -> None:
+        """In v1, mul with misaligned DataArray masks terms where factor is NaN."""
         expr = 1 * x
         da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
-        with pytest.raises(ValueError, match="Factor contains NaN"):
-            expr.mul(da, join="left")
+        result = expr.mul(da, join="left")
+        # time=0 has NaN factor → absent; time=1 has factor 2 → coeff 2
+        assert result.isnull().sel(time=0).item()
+        assert result.coeffs.squeeze().sel(time=1).item() == pytest.approx(2.0)
 
     @pytest.mark.v1_only
     def test_mul_misaligned_da_with_fill_value(self, x: Variable) -> None:
@@ -521,12 +523,14 @@ class TestFillValueParam:
         assert not np.isnan(result.coeffs.values).all()
 
     @pytest.mark.v1_only
-    def test_div_misaligned_da_raises_without_fill_value(self, x: Variable) -> None:
-        """In v1, div with misaligned DataArray raises without explicit fill_value."""
+    def test_div_misaligned_da_masks_without_fill_value(self, x: Variable) -> None:
+        """In v1, div with misaligned DataArray masks terms where divisor is NaN."""
         expr = 1 * x
         da = xr.DataArray([2.0], dims="time", coords={"time": [1]})
-        with pytest.raises(ValueError, match="Factor contains NaN"):
-            expr.div(da, join="left")
+        result = expr.div(da, join="left")
+        # time=0 has NaN divisor → absent; time=1 has divisor 2 → coeff 0.5
+        assert result.isnull().sel(time=0).item()
+        assert result.coeffs.squeeze().sel(time=1).item() == pytest.approx(0.5)
 
     @pytest.mark.v1_only
     def test_div_misaligned_da_with_fill_value(self, x: Variable) -> None:
