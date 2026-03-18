@@ -4,6 +4,8 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add ``Solver.resolve()`` method for re-solving a modified native solver model without rebuilding the linopy model. Implemented for HiGHS, Gurobi, and Mosek.
+* Add ``Model.apply_result()`` to map a solver ``Result`` back onto model variables and constraints, enabling iterative solve workflows.
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
   - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords

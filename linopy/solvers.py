@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from collections import namedtuple
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -418,6 +418,31 @@ class Solver(ABC, Generic[EnvType]):
         else:
             msg = "No problem file or model specified."
             raise ValueError(msg)
+
+    def resolve(
+        self, solver_model: Any, sense: Literal["min", "max"] = "min"
+    ) -> Result:
+        """
+        Re-solve an existing native solver model and return a Result.
+
+        This enables iterative solve workflows: solve once via
+        ``Model.solve()``, modify the native ``solver_model`` (e.g. change
+        objective coefficients), then call ``resolve()`` followed by
+        ``Model.apply_result()``.
+
+        Parameters
+        ----------
+        solver_model : Any
+            The native solver object (e.g. ``highspy.Highs``, ``gurobipy.Model``).
+        sense : {{"min", "max"}}
+            Optimization sense.
+
+        Returns
+        -------
+        Result
+        """
+        msg = f"{type(self).__name__} does not support resolve()"
+        raise NotImplementedError(msg)
 
     @property
     def solver_name(self) -> SolverName:
@@ -920,6 +945,11 @@ class Highs(Solver[None]):
             sense=read_sense_from_problem_file(problem_fn),
         )
 
+    def resolve(
+        self, solver_model: highspy.Highs, sense: Literal["min", "max"] = "min"
+    ) -> Result:
+        return self._solve(solver_model, io_api="direct", sense=sense)
+
     def _set_solver_params(
         self,
         highs_solver: highspy.Highs,
@@ -1161,6 +1191,19 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 io_api=io_api,
                 sense=sense,
             )
+
+    def resolve(
+        self, solver_model: gurobipy.Model, sense: Literal["min", "max"] = "min"
+    ) -> Result:
+        return self._solve(
+            solver_model,
+            solution_fn=None,
+            log_fn=None,
+            warmstart_fn=None,
+            basis_fn=None,
+            io_api="direct",
+            sense=sense,
+        )
 
     def _solve(
         self,
@@ -2093,6 +2136,19 @@ class Mosek(Solver[None]):
                 io_api=io_api,
                 sense=sense,
             )
+
+    def resolve(
+        self, solver_model: mosek.Task, sense: Literal["min", "max"] = "min"
+    ) -> Result:
+        return self._solve(
+            solver_model,
+            solution_fn=None,
+            log_fn=None,
+            warmstart_fn=None,
+            basis_fn=None,
+            io_api="direct",
+            sense=sense,
+        )
 
     def _solve(
         self,
