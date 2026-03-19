@@ -24,7 +24,13 @@ from linopy.constants import (
     short_LESS_EQUAL,
     sign_replace_dict,
 )
-from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.constraints import (
+    AnonymousScalarConstraint,
+    Constraint,
+    ConstraintBase,
+    Constraints,
+    MutableConstraint,
+)
 
 
 @pytest.fixture
@@ -56,8 +62,23 @@ def test_constraint_repr(c: linopy.constraints.Constraint) -> None:
     c.__repr__()
 
 
+def test_constraint_repr_equivalent_to_mutable(
+    c: linopy.constraints.Constraint,
+) -> None:
+    """Constraint (CSR-backed) and MutableConstraint repr must be identical."""
+    frozen = c.freeze()
+    assert repr(frozen) == repr(c)
+
+
 def test_constraints_repr(m: Model) -> None:
     m.constraints.__repr__()
+
+
+def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
+    c = m.add_constraints(x >= 1, name="frozen_c", freeze=True)
+    assert isinstance(c, linopy.constraints.Constraint)
+    assert isinstance(m.constraints["frozen_c"], linopy.constraints.Constraint)
+    assert c.ncons == 10
 
 
 def test_constraint_name(c: linopy.constraints.Constraint) -> None:
@@ -228,7 +249,7 @@ def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> N
 def test_anonymous_constraint_sel(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
-    assert isinstance(con.sel(first=[1, 2]), Constraint)
+    assert isinstance(con.sel(first=[1, 2]), ConstraintBase)
 
 
 def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) -> None:
@@ -236,7 +257,7 @@ def test_anonymous_constraint_swap_dims(x: linopy.Variable, y: linopy.Variable) 
     con = expr <= 10
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.swap_dims({"second": "third"})
-    assert isinstance(con, Constraint)
+    assert isinstance(con, ConstraintBase)
     assert con.coord_dims == ("first", "third")
 
 
@@ -245,7 +266,7 @@ def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) 
     con = expr <= 10
     con = con.assign_coords({"third": ("second", con.indexes["second"] + 100)})
     con = con.set_index({"multi": ["second", "third"]})
-    assert isinstance(con, Constraint)
+    assert isinstance(con, ConstraintBase)
     assert con.coord_dims == (
         "first",
         "multi",
@@ -256,13 +277,13 @@ def test_anonymous_constraint_set_index(x: linopy.Variable, y: linopy.Variable) 
 def test_anonymous_constraint_loc(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
-    assert isinstance(con.loc[[1, 2]], Constraint)
+    assert isinstance(con.loc[[1, 2]], ConstraintBase)
 
 
 def test_anonymous_constraint_getitem(x: linopy.Variable, y: linopy.Variable) -> None:
     expr = 10 * x + y
     con = expr <= 10
-    assert isinstance(con[1], Constraint)
+    assert isinstance(con[1], ConstraintBase)
 
 
 def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) -> None:
@@ -270,8 +291,8 @@ def test_constraint_from_rule(m: Model, x: linopy.Variable, y: linopy.Variable) 
         return (i - 1) * x.at[i - 1] + y.at[j] >= 0 if i % 2 else i * x.at[i] >= 0
 
     coords = [x.coords["first"], y.coords["second"]]
-    con = Constraint.from_rule(m, bound, coords)
-    assert isinstance(con, Constraint)
+    con = MutableConstraint.from_rule(m, bound, coords)
+    assert isinstance(con, ConstraintBase)
     assert con.lhs.nterm == 2
     repr(con)  # test repr
 
@@ -285,8 +306,8 @@ def test_constraint_from_rule_with_none_return(
         return None
 
     coords = [x.coords["first"], y.coords["second"]]
-    con = Constraint.from_rule(m, bound, coords)
-    assert isinstance(con, Constraint)
+    con = MutableConstraint.from_rule(m, bound, coords)
+    assert isinstance(con, ConstraintBase)
     assert isinstance(con.lhs.vars, xr.DataArray)
     assert con.lhs.nterm == 2
     assert (con.lhs.vars.loc[0, :] == -1).all()
@@ -419,8 +440,8 @@ def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> N
 
 
 def test_constraint_sel(c: linopy.constraints.Constraint) -> None:
-    assert isinstance(c.sel(first=[1, 2]), Constraint)
-    assert isinstance(c.isel(first=[1, 2]), Constraint)
+    assert isinstance(c.sel(first=[1, 2]), ConstraintBase)
+    assert isinstance(c.isel(first=[1, 2]), ConstraintBase)
 
 
 def test_constraint_flat(c: linopy.constraints.Constraint) -> None:
@@ -429,7 +450,7 @@ def test_constraint_flat(c: linopy.constraints.Constraint) -> None:
 
 def test_iterate_slices(c: linopy.constraints.Constraint) -> None:
     for i in c.iterate_slices(slice_size=2):
-        assert isinstance(i, Constraint)
+        assert isinstance(i, ConstraintBase)
         assert c.coord_dims == i.coord_dims
 
 
@@ -581,7 +602,7 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
 
     data = xr.Dataset({"coeffs": coeffs, "vars": vars, "sign": sign, "rhs": rhs})
     assert set(HELPER_DIMS).intersection(set(data.coords))
-    con = Constraint(data, m, "c")
+    con = MutableConstraint(data, m, "c")
 
     expr = m.add_constraints(con)
     assert not set(HELPER_DIMS).intersection(set(expr.data.coords))

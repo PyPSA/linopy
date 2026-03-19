@@ -46,7 +46,12 @@ from linopy.constants import (
     ModelStatus,
     TerminationCondition,
 )
-from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.constraints import (
+    AnonymousScalarConstraint,
+    ConstraintBase,
+    Constraints,
+    MutableConstraint,
+)
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
@@ -726,7 +731,8 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
         mask: MaskLike | None = None,
-    ) -> Constraint:
+        freeze: bool = False,
+    ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -738,7 +744,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.Constraint/callable
+        lhs : linopy.LinearExpression/linopy.ConstraintBase/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -760,12 +766,14 @@ class Model:
             Boolean mask with False values for constraints which are skipped.
             The shape of the mask has to match the shape the added constraints.
             Default is None.
-
+        freeze : bool, optional
+            If True, convert the constraint to an immutable CSR-backed Constraint
+            before returning. Default is False.
 
         Returns
         -------
-        labels : linopy.model.Constraint
-            Array containing the labels of the added constraints.
+        constraint : linopy.ConstraintBase
+            The added constraint (MutableConstraint by default, or Constraint if freeze=True).
         """
 
         msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
@@ -801,12 +809,12 @@ class Model:
             rule = lhs
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
-            data = Constraint.from_rule(self, rule, coords).data
+            data = MutableConstraint.from_rule(self, rule, coords).data
         elif isinstance(lhs, AnonymousScalarConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.to_constraint().data
-        elif isinstance(lhs, Constraint):
+        elif isinstance(lhs, ConstraintBase):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.data
@@ -883,9 +891,8 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        self.constraints.add(constraint)
-        return constraint
+        constraint = MutableConstraint(data, name=name, model=self, skip_broadcast=True)
+        return self.constraints.add(constraint, freeze=freeze)
 
     def add_objective(
         self,

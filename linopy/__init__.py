@@ -14,8 +14,13 @@ __version__ = version("linopy")
 import linopy.monkey_patch_xarray  # noqa: F401
 from linopy.common import align
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
-from linopy.constraints import Constraint, Constraints
+from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, PerformanceWarning
+from linopy.constraints import (
+    Constraint,
+    ConstraintBase,
+    Constraints,
+    MutableConstraint,
+)
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
@@ -30,8 +35,11 @@ except ImportError:
 
 __all__ = (
     "Constraint",
+    "ConstraintBase",
     "Constraints",
+    "MutableConstraint",
     "EQUAL",
+    "PerformanceWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
     "LinearExpression",

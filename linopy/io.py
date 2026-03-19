@@ -1168,10 +1168,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m : linopy.Model
     """
     from linopy.model import (
-        Constraint,
         Constraints,
         LinearExpression,
         Model,
+        MutableConstraint,
         Variable,
         Variables,
     )
@@ -1224,7 +1224,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
-        constraints[name] = Constraint(get_prefix(ds, k), m, name)
+        constraints[name] = MutableConstraint(get_prefix(ds, k), m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")

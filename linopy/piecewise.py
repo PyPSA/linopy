@@ -40,7 +40,7 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import Constraint
+    from linopy.constraints import ConstraintBase
     from linopy.expressions import LinearExpression
     from linopy.model import Model
     from linopy.types import LinExprLike
@@ -686,7 +686,7 @@ def _add_pwl_lp(
     sign: str,
     x_points: DataArray,
     y_points: DataArray,
-) -> Constraint:
+) -> ConstraintBase:
     """Add pure LP tangent-line constraints."""
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
@@ -729,7 +729,7 @@ def _add_pwl_sos2_core(
     y_points: DataArray,
     lambda_mask: DataArray | None,
     active: LinearExpression | None = None,
-) -> Constraint:
+) -> ConstraintBase:
     """
     Core SOS2 formulation linking x_expr and target_expr via breakpoints.
 
@@ -780,7 +780,7 @@ def _add_pwl_incremental_core(
     y_points: DataArray,
     bp_mask: DataArray | None,
     active: LinearExpression | None = None,
-) -> Constraint:
+) -> ConstraintBase:
     """
     Core incremental formulation linking x_expr and target_expr.
 
@@ -846,7 +846,7 @@ def _add_pwl_incremental_core(
     model.add_constraints(delta_var <= binary_var, name=inc_link_name)
 
     # Order constraints: y_{i+1} ≤ δ_i for i = 0..n-2
-    fill_con: Constraint | None = None
+    fill_con: ConstraintBase | None = None
     if n_segments >= 2:
         delta_lo = delta_var.isel({LP_SEG_DIM: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({LP_SEG_DIM: slice(1, None)}, drop=True)
@@ -884,7 +884,7 @@ def _add_dpwl_sos2_core(
     y_points: DataArray,
     lambda_mask: DataArray | None,
     active: LinearExpression | None = None,
-) -> Constraint:
+) -> ConstraintBase:
     """
     Core disjunctive SOS2 formulation with separate x/y points.
 
@@ -948,11 +948,11 @@ def _add_dpwl_sos2_core(
 
 def add_piecewise_constraints(
     model: Model,
-    descriptor: PiecewiseConstraintDescriptor | Constraint,
+    descriptor: PiecewiseConstraintDescriptor | ConstraintBase,
     method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
     name: str | None = None,
     skip_nan_check: bool = False,
-) -> Constraint:
+) -> ConstraintBase:
     """
     Add a piecewise linear constraint from a :class:`PiecewiseConstraintDescriptor`.
 
@@ -975,7 +975,7 @@ def add_piecewise_constraints(
 
     Returns
     -------
-    Constraint
+    ConstraintBase
     """
     if not isinstance(descriptor, PiecewiseConstraintDescriptor):
         raise TypeError(
@@ -1064,7 +1064,7 @@ def _add_continuous(
     method: str,
     skip_nan_check: bool,
     active: LinearExpression | None = None,
-) -> Constraint:
+) -> ConstraintBase:
     """Handle continuous (non-disjunctive) piecewise constraints."""
     convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
 
@@ -1182,7 +1182,7 @@ def _add_disjunctive(
     mask: DataArray | None,
     method: str,
     active: LinearExpression | None = None,
-) -> Constraint:
+) -> ConstraintBase:
     """Handle disjunctive piecewise constraints."""
     if method == "lp":
         raise ValueError("Pure LP method is not supported for disjunctive constraints")

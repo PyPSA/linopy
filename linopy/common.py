@@ -40,7 +40,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import Constraint
+    from linopy.constraints import ConstraintBase
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
 
@@ -554,7 +554,7 @@ def fill_missing_coords(
     return ds
 
 
-T = TypeVar("T", Dataset, "Variable", "LinearExpression", "Constraint")
+T = TypeVar("T", Dataset, "Variable", "LinearExpression", "ConstraintBase")
 
 
 @overload
@@ -583,10 +583,10 @@ def iterate_slices(
 
 @overload
 def iterate_slices(
-    ds: Constraint,
+    ds: ConstraintBase,
     slice_size: int | None = 10_000,
     slice_dims: list | None = None,
-) -> Generator[Constraint, None, None]: ...
+) -> Generator[ConstraintBase, None, None]: ...
 
 
 def iterate_slices(
@@ -1306,7 +1306,7 @@ LocT = TypeVar(
     "Variable",
     "LinearExpression",
     "QuadraticExpression",
-    "Constraint",
+    "ConstraintBase",
 )
 
 

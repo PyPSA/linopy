@@ -18,6 +18,11 @@ EQUAL = "="
 GREATER_EQUAL = ">="
 LESS_EQUAL = "<="
 
+
+class PerformanceWarning(UserWarning):
+    """Warning raised when an operation triggers expensive Dataset reconstruction."""
+
+
 long_EQUAL = "=="
 short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"
