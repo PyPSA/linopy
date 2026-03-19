@@ -616,26 +616,24 @@ class Constraint:
         labels : np.ndarray
             1D array of shape (n_labels,) mapping each row back to the
             original constraint label.
-
-        Notes
-        -----
-        Assumes that constraint labels are monotonuously increasing!
         """
-        coeffs_shape = self.coeffs.values.shape
-        broadcast_labels = np.ravel(
-            np.broadcast_to(self.labels.values[..., np.newaxis], coeffs_shape)
-        )
-        vars_flat = self.vars.values.ravel()
+        vars = self.vars.values
+        labels_flat = self.labels.values.ravel()
+        vars_2d = vars.reshape(len(labels_flat), -1)
         coeffs_flat = self.coeffs.values.ravel()
 
-        valid = (broadcast_labels != -1) & (vars_flat != -1)
-        broadcast_labels = broadcast_labels[valid]
-        vars_flat = vars_flat[valid]
-        coeffs_flat = coeffs_flat[valid]
+        valid_vars = vars_2d != -1
+        labels_valid = (labels_flat != -1) & valid_vars.any(axis=1)
+        valid = (labels_valid[:, np.newaxis] & valid_vars).ravel()
 
-        changes = np.r_[True, broadcast_labels[1:] != broadcast_labels[:-1]]
-        con_labels = broadcast_labels[changes]
-        indptr = np.r_[np.nonzero(changes)[0], len(broadcast_labels)]
+        con_labels = labels_flat[labels_valid]
+        counts = valid_vars.sum(axis=1)[labels_valid]
+        indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
+        indptr[0] = 0
+        np.cumsum(counts, out=indptr[1:])
+
+        vars_flat = vars.ravel()[valid]
+        coeffs_flat = coeffs_flat[valid]
 
         shape = (len(con_labels), self.model._xCounter)
         # Note: duplicate (row, col) entries are not summed in CSR format.
