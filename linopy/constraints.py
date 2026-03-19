@@ -404,8 +404,6 @@ class ConstraintBase(ABC):
         np.cumsum(counts, out=indptr[1:])
 
         shape = (len(labels_flat), self.model._xCounter)
-        # Note: duplicate (row, col) entries are not summed in CSR format.
-        # They will be summed automatically upon conversion to CSC or dense.
         return scipy.sparse.csr_array((data, cols, indptr), shape=shape)
 
     def to_netcdf_ds(self) -> Dataset:
@@ -1516,75 +1514,66 @@ class Constraints:
         df["key"] = df.labels.map(map_labels)
         return df
 
-    def to_matrix(self, filter_missings: bool = True) -> scipy.sparse.csc_matrix:
-        """
-        Construct a constraint matrix in sparse format.
-
-        Missing values, i.e. -1 in labels and vars, are ignored filtered
-        out.
-        """
-        # TODO: rename "filter_missings" to "~labels_as_coordinates"
-        cons = self.flat
-
-        if not len(self):
-            raise ValueError("No constraints available to convert to matrix.")
-
-        if filter_missings:
-            vars = self.model.variables.flat
-            shape = (cons.key.max() + 1, vars.key.max() + 1)
-            cons["vars"] = cons.vars.map(vars.set_index("labels").key)
-            return scipy.sparse.csc_matrix(
-                (cons.coeffs, (cons.key, cons.vars)), shape=shape
-            )
-        else:
-            shape = self.model.shape
-            return scipy.sparse.csc_matrix(
-                (cons.coeffs, (cons.labels, cons.vars)), shape=shape
-            )
-
-    def to_matrix_via_csr(
-        self,
-    ) -> tuple[scipy.sparse.csc_array, np.ndarray, np.ndarray]:
+    def to_matrix(
+        self, filter_missings: bool = True
+    ) -> tuple[scipy.sparse.csc_array, np.ndarray, np.ndarray | None]:
         """
         Construct a constraint matrix in sparse format by stacking per-constraint CSR matrices.
+
+        Parameters
+        ----------
+        filter_missings : bool, default True
+            If True, also strip empty columns and return ``var_labels`` for
+            remapping columns back to original variable labels.
+            If False, return full-width CSC with shape
+            ``(n_active_cons, model._xCounter)`` and ``var_labels=None``.
+            ``con_labels`` is always returned.
 
         Returns
         -------
         matrix : scipy.sparse.csc_array
-            Shape (n_con_labels, n_var_labels), containing only non-empty rows and columns.
+            Shape ``(n_active_cons, n_active_vars)`` when
+            ``filter_missings=True``, or ``(n_active_cons,
+            model._xCounter)`` when ``filter_missings=False``.
         con_labels : np.ndarray
-            Shape (n_con_labels,), maps each matrix row to the original constraint label.
-        var_labels : np.ndarray
-            Shape (n_var_labels,), maps each matrix column to the original variable label.
+            Shape ``(n_active_cons,)``, maps each matrix row to the
+            original constraint label.
+        var_labels : np.ndarray or None
+            Shape ``(n_active_vars,)``, maps each matrix column to the
+            original variable label.  ``None`` when
+            ``filter_missings=False``.
         """
         if not len(self):
             raise ValueError("No constraints available to convert to matrix.")
 
-        matrices = []
+        active_csrs = []
         con_labels_list = []
         for c in self.data.values():
             csr = c.to_matrix()
-            matrices.append(csr)
             nonempty = np.diff(csr.indptr).astype(bool)
+            active_csrs.append(csr[nonempty])
             start = (
                 c._cindex
                 if isinstance(c, Constraint)
                 else c.data.attrs["label_range"][0]
             )
             con_labels_list.append(np.flatnonzero(nonempty) + start)
-        csc: scipy.sparse.csc_array = scipy.sparse.vstack(matrices).tocsc()
+        csc: scipy.sparse.csc_array = scipy.sparse.vstack(active_csrs).tocsc()
+        csc.sum_duplicates()
         con_labels = np.concatenate(con_labels_list)
 
-        indptr = csc.indptr
-        nonempty_cols = indptr[1:] != indptr[:-1]
-        new_indptr = np.r_[0, indptr[1:][nonempty_cols]]
-        (var_labels,) = np.nonzero(nonempty_cols)
-
-        matrix = scipy.sparse.csc_array(
-            (csc.data, csc.indices, new_indptr),
-            shape=(csc.shape[0], len(var_labels)),
-        )
-        return matrix, con_labels, var_labels
+        if filter_missings:
+            indptr = csc.indptr
+            nonempty_cols = indptr[1:] != indptr[:-1]
+            new_indptr = np.r_[0, indptr[1:][nonempty_cols]]
+            (var_labels,) = np.nonzero(nonempty_cols)
+            matrix = scipy.sparse.csc_array(
+                (csc.data, csc.indices, new_indptr),
+                shape=(csc.shape[0], len(var_labels)),
+            )
+            return matrix, con_labels, var_labels
+        else:
+            return csc, con_labels, None
 
     def reset_dual(self) -> None:
         """

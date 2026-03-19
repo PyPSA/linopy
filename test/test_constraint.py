@@ -609,8 +609,17 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
 
 
 def test_constraint_matrix(m: Model) -> None:
-    A = m.constraints.to_matrix()
-    assert A.shape == (10, 14)
+    # filter_missings=True: strips empty columns, returns labels for remapping
+    A, con_labels, var_labels = m.constraints.to_matrix()
+    assert A.shape == (10, 10)  # only x (10 vars) appears in constraints
+    assert con_labels is not None
+    assert var_labels is not None
+
+    # filter_missings=False: full width, con_labels always returned, var_labels=None
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (10, m.shape[1])  # all 14 vars as columns
+    assert len(con_labels) == 10
+    assert var_labels is None
 
 
 def test_constraint_matrix_masked_variables() -> None:
@@ -627,48 +636,59 @@ def test_constraint_matrix_masked_variables() -> None:
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
     m.add_constraints(x, EQUAL, 0)
-    A = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (5, 6)
-    assert A.shape == (m.ncons, m.nvars)
+    # filter_missings=True: only vars/cons that appear in constraints
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (m.ncons, 5)  # 5 active x vars; scalar var not in any constraint
+    assert len(con_labels) == m.ncons
+    assert len(var_labels) == 5
 
-    A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == m.shape
+    # filter_missings=False: full width, no remapping labels
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m.ncons, m.shape[1])
+    assert con_labels is not None
+    assert var_labels is None
 
 
 def test_constraint_matrix_masked_constraints() -> None:
     """
     Test constraint matrix with missing constraints.
     """
-    # now with missing variables
     m = Model()
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)])
     m.add_variables()
     m.add_constraints(x, EQUAL, 0, mask=mask)
-    A = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (5, 11)
-    assert A.shape == (m.ncons, m.nvars)
+    # filter_missings=True: only active cons and vars they reference
+    # active cons are indices 5-9, which reference vars 5-9 only
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (m.ncons, m.ncons)  # 5 active cons; 5 referenced vars
+    assert len(con_labels) == m.ncons
 
-    A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == m.shape
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m.ncons, m.shape[1])
+    assert con_labels is not None
+    assert var_labels is None
 
 
 def test_constraint_matrix_masked_constraints_and_variables() -> None:
     """
-    Test constraint matrix with missing constraints.
+    Test constraint matrix with missing constraints and variables.
     """
-    # now with missing variables
     m = Model()
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
     m.add_constraints(x, EQUAL, 0, mask=mask)
-    A = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (5, 6)
-    assert A.shape == (m.ncons, m.nvars)
+    # filter_missings=True: 5 active cons x 5 active vars
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
+    assert A.shape == (m.ncons, m.ncons)  # both masks align: 5x5
+    assert len(con_labels) == m.ncons
+    assert len(var_labels) == m.ncons
 
-    A = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == m.shape
+    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
+    assert A.shape == (m.ncons, m.shape[1])
+    assert con_labels is not None
+    assert var_labels is None
 
 
 def test_get_name_by_label() -> None:

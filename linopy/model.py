@@ -134,8 +134,6 @@ class Model:
     _chunk: T_Chunks
     _force_dim_names: bool
     _solver_dir: Path
-    matrices: MatrixAccessor
-
     __slots__ = (
         # containers
         "_variables",
@@ -161,7 +159,6 @@ class Model:
         "_solver_dir",
         "solver_model",
         "solver_name",
-        "matrices",
     )
 
     def __init__(
@@ -219,7 +216,10 @@ class Model:
             gettempdir() if solver_dir is None else solver_dir
         )
 
-        self.matrices: MatrixAccessor = MatrixAccessor(self)
+    @property
+    def matrices(self) -> MatrixAccessor:
+        """Matrix representation of the model, computed fresh on each access."""
+        return MatrixAccessor(self)
 
     @property
     def variables(self) -> Variables:
@@ -1397,9 +1397,6 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
-        # clear cached matrix properties potentially present from previous solve commands
-        self.matrices.clean_cached_properties()
-
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -1614,9 +1611,6 @@ class Model:
         sanitize_infinities: bool = True,
     ) -> tuple[str, str]:
         solver_name = "mock"
-
-        # clear cached matrix properties potentially present from previous solve commands
-        self.matrices.clean_cached_properties()
 
         logger.info(f" Solve problem using {solver_name.title()} solver")
         # reset result
