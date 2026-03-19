@@ -78,6 +78,23 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
+    from linopy.constraints import Constraint
+
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
+    m.add_constraints(x >= 1, name="c", freeze=True)
+
+    assert isinstance(m.constraints["c"], Constraint)
+
+    fn = tmp_path / "test_frozen.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.constraints["c"], Constraint)
+    assert_model_equal(m, p)
+
+
 def test_model_to_netcdf_with_sense(model: Model, tmp_path: Path) -> None:
     m = model
     m.objective.sense = "max"

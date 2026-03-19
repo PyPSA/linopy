@@ -1131,7 +1131,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         with_prefix(var.data, f"variables-{name}") for name, var in m.variables.items()
     ]
     cons = [
-        with_prefix(con.data, f"constraints-{name}")
+        with_prefix(con.to_netcdf_ds(), f"constraints-{name}")
         for name, con in m.constraints.items()
     ]
     objective = m.objective.data
@@ -1167,6 +1167,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     -------
     m : linopy.Model
     """
+    from linopy.constraints import Constraint
     from linopy.model import (
         Constraints,
         LinearExpression,
@@ -1224,7 +1225,11 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     constraints = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
-        constraints[name] = MutableConstraint(get_prefix(ds, k), m, name)
+        con_ds = get_prefix(ds, k)
+        if con_ds.attrs.get("_linopy_format") == "csr":
+            constraints[name] = Constraint.from_netcdf_ds(con_ds, m, name)
+        else:
+            constraints[name] = MutableConstraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")

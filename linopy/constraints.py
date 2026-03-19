@@ -408,6 +408,10 @@ class ConstraintBase(ABC):
         # They will be summed automatically upon conversion to CSC or dense.
         return scipy.sparse.csr_array((data, cols, indptr), shape=shape)
 
+    def to_netcdf_ds(self) -> Dataset:
+        """Return a Dataset representation suitable for netcdf serialization."""
+        return self.data
+
     iterate_slices = iterate_slices
 
 
@@ -763,6 +767,56 @@ class Constraint(ConstraintBase):
     def to_matrix(self) -> scipy.sparse.csr_array:
         """Return the stored CSR matrix directly (no reconstruction needed)."""
         return self._csr
+
+    def to_netcdf_ds(self) -> Dataset:
+        """Return a Dataset with raw CSR components for netcdf serialization."""
+        from xarray import DataArray
+
+        csr = self._csr
+        data_vars: dict[str, DataArray] = {
+            "indptr": DataArray(csr.indptr, dims=["_indptr"]),
+            "indices": DataArray(csr.indices, dims=["_nnz"]),
+            "data": DataArray(csr.data, dims=["_nnz"]),
+            "rhs": DataArray(self._rhs, dims=["_flat"]),
+        }
+        for c in self._coords:
+            data_vars[f"_coord_{c.name}"] = DataArray(
+                np.array(c), dims=[f"_coorddim_{c.name}"]
+            )
+        if self._dual is not None:
+            data_vars["dual"] = DataArray(self._dual, dims=["_flat"])
+        dim_names = [c.name for c in self._coords]
+        return Dataset(
+            data_vars,
+            attrs={
+                "_linopy_format": "csr",
+                "sign": self._sign,
+                "cindex": self._cindex if self._cindex is not None else -1,
+                "shape": list(csr.shape),
+                "coord_dims": dim_names,
+                "name": self._name,
+            },
+        )
+
+    @classmethod
+    def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> Constraint:
+        """Reconstruct a Constraint from a netcdf Dataset (CSR format)."""
+        attrs = ds.attrs
+        shape = tuple(attrs["shape"])
+        csr = scipy.sparse.csr_array(
+            (ds["data"].values, ds["indices"].values, ds["indptr"].values),
+            shape=shape,
+        )
+        rhs = ds["rhs"].values
+        sign = attrs["sign"]
+        cindex = int(attrs["cindex"])
+        cindex = cindex if cindex >= 0 else None
+        coord_dims = attrs["coord_dims"]
+        if isinstance(coord_dims, str):
+            coord_dims = [coord_dims]
+        coords = [pd.Index(ds[f"_coord_{d}"].values, name=d) for d in coord_dims]
+        dual = ds["dual"].values if "dual" in ds else None
+        return cls(csr, rhs, sign, coords, model, name, cindex=cindex, dual=dual)
 
     def freeze(self) -> Constraint:
         """Return self (already immutable)."""
