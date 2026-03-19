@@ -73,6 +73,125 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.model import Model
 
+
+def csr_to_constraint_dataset(
+    csr: scipy.sparse.csr_array,
+    con_labels: np.ndarray,
+    coords: list[pd.Index],
+    nterm: int,
+) -> Dataset:
+    """
+    Reconstruct a constraint Dataset (labels, coeffs, vars) from a CSR matrix.
+
+    Parameters
+    ----------
+    csr : scipy.sparse.csr_array
+        Shape (n_con_labels, n_vars). Rows correspond to non-masked constraints.
+    con_labels : np.ndarray
+        0-based flat indices into the constraint grid (*coord_dims) for each row.
+    coords : list of pd.Index
+        One pd.Index per coordinate dimension, defining the constraint grid shape.
+    nterm : int
+        Size of the term dimension in the reconstructed Dataset.
+
+    Returns
+    -------
+    Dataset with variables 'labels', 'coeffs', 'vars' and dimensions
+    (*coord_dims, _term).
+    """
+    shape = tuple(len(c) for c in coords)
+    n_total = int(np.prod(shape)) if shape else 1
+    dim_names = [c.name for c in coords]
+
+    labels_flat = np.full(n_total, -1, dtype=np.int64)
+    labels_flat[con_labels] = con_labels
+
+    coeffs_2d = np.zeros((n_total, nterm), dtype=csr.dtype)
+    vars_2d = np.full((n_total, nterm), -1, dtype=np.int64)
+
+    # For each entry in csr.data/indices, compute its (row_idx, term_col) position.
+    # term_col is the within-row offset (0, 1, 2, ...) for each entry.
+    counts = np.diff(csr.indptr)  # number of entries per CSR row
+    term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
+    row_indices = con_labels[np.repeat(np.arange(len(con_labels)), counts)]
+
+    vars_2d[row_indices, term_cols] = csr.indices
+    coeffs_2d[row_indices, term_cols] = csr.data
+
+    xr_coords = {c.name: c for c in coords}
+    labels_da = DataArray(labels_flat.reshape(shape), coords=xr_coords, dims=dim_names)
+    coeffs_da = DataArray(
+        coeffs_2d.reshape(shape + (nterm,)),
+        coords=xr_coords,
+        dims=dim_names + [TERM_DIM],
+    )
+    vars_da = DataArray(
+        vars_2d.reshape(shape + (nterm,)),
+        coords=xr_coords,
+        dims=dim_names + [TERM_DIM],
+    )
+
+    return Dataset({"labels": labels_da, "coeffs": coeffs_da, "vars": vars_da})
+
+
+def csr2_to_constraint_dataset(
+    csr: scipy.sparse.csr_array,
+    coords: list[pd.Index],
+    nterm: int,
+) -> Dataset:
+    """
+    Reconstruct a constraint Dataset (labels, coeffs, vars) from a CSR matrix
+    where all flat positions are rows (inverse of Constraint.to_matrix2).
+
+    Parameters
+    ----------
+    csr : scipy.sparse.csr_array
+        Shape (n_total, n_vars). Each row corresponds to a flat position in the
+        constraint grid, including masked (empty) positions.
+    coords : list of pd.Index
+        One pd.Index per coordinate dimension, defining the constraint grid shape.
+    nterm : int
+        Size of the term dimension in the reconstructed Dataset.
+
+    Returns
+    -------
+    Dataset with variables 'labels', 'coeffs', 'vars' and dimensions
+    (*coord_dims, _term).
+    """
+    shape = tuple(len(c) for c in coords)
+    n_total = csr.shape[0]
+    dim_names = [c.name for c in coords]
+
+    counts = np.diff(csr.indptr)
+    nonempty = counts > 0
+
+    labels_flat = np.where(nonempty, np.arange(n_total), -1)
+
+    coeffs_2d = np.zeros((n_total, nterm), dtype=csr.dtype)
+    vars_2d = np.full((n_total, nterm), -1, dtype=np.int64)
+
+    term_cols = np.arange(csr.nnz) - np.repeat(csr.indptr[:-1], counts)
+    row_indices = np.repeat(np.arange(n_total), counts)
+
+    vars_2d[row_indices, term_cols] = csr.indices
+    coeffs_2d[row_indices, term_cols] = csr.data
+
+    xr_coords = {c.name: c for c in coords}
+    labels_da = DataArray(labels_flat.reshape(shape), coords=xr_coords, dims=dim_names)
+    coeffs_da = DataArray(
+        coeffs_2d.reshape(shape + (nterm,)),
+        coords=xr_coords,
+        dims=dim_names + [TERM_DIM],
+    )
+    vars_da = DataArray(
+        vars_2d.reshape(shape + (nterm,)),
+        coords=xr_coords,
+        dims=dim_names + [TERM_DIM],
+    )
+
+    return Dataset({"labels": labels_da, "coeffs": coeffs_da, "vars": vars_da})
+
+
 FILL_VALUE = {"labels": -1, "rhs": np.nan, "coeffs": 0, "vars": -1, "sign": "="}
 
 
@@ -603,13 +722,13 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
-    def to_matrix(self) -> tuple[scipy.sparse.csr_matrix, np.ndarray]:
+    def to_matrix(self) -> tuple[scipy.sparse.csr_array, np.ndarray]:
         """
         Construct a CSR matrix representation of this constraint.
 
         Returns
         -------
-        matrix : scipy.sparse.csr_matrix
+        matrix : scipy.sparse.csr_array
             Shape (n_labels, model._xCounter). Rows correspond to individual
             constraint labels, columns to variable labels. Missing entries
             (labels or vars == -1) are excluded.
@@ -638,8 +757,39 @@ class Constraint:
         shape = (len(con_labels), self.model._xCounter)
         # Note: duplicate (row, col) entries are not summed in CSR format.
         # They will be summed automatically upon conversion to CSC or dense.
-        matrix = scipy.sparse.csr_matrix((coeffs_flat, vars_flat, indptr), shape=shape)
+        matrix = scipy.sparse.csr_array((coeffs_flat, vars_flat, indptr), shape=shape)
         return matrix, con_labels
+
+    def to_matrix2(self) -> scipy.sparse.csr_array:
+        """
+        Construct a CSR matrix representation of this constraint including masked rows.
+
+        Unlike to_matrix(), all flat positions in the constraint grid are included as
+        rows (masked entries become empty rows). Shape is
+        (len(labels_flat), model._xCounter).
+
+        Returns
+        -------
+        matrix : scipy.sparse.csr_array
+        """
+        vars = self.vars.values
+        labels_flat = self.labels.values.ravel()
+        vars_2d = vars.reshape(len(labels_flat), -1)
+        coeffs_flat = self.coeffs.values.ravel()
+
+        valid_2d = (labels_flat != -1)[:, np.newaxis] & (vars_2d != -1)
+        cols = vars_2d[valid_2d]
+        data = coeffs_flat.reshape(vars_2d.shape)[valid_2d]
+
+        counts = valid_2d.sum(axis=1)
+        indptr = np.empty(len(labels_flat) + 1, dtype=np.int32)
+        indptr[0] = 0
+        np.cumsum(counts, out=indptr[1:])
+
+        shape = (len(labels_flat), self.model._xCounter)
+        # Note: duplicate (row, col) entries are not summed in CSR format.
+        # They will be summed automatically upon conversion to CSC or dense.
+        return scipy.sparse.csr_array((data, cols, indptr), shape=shape)
 
     def to_polars(self) -> pl.DataFrame:
         """
@@ -1157,13 +1307,13 @@ class Constraints:
 
     def to_matrix_via_csr(
         self,
-    ) -> tuple[scipy.sparse.csc_matrix, np.ndarray, np.ndarray]:
+    ) -> tuple[scipy.sparse.csc_array, np.ndarray, np.ndarray]:
         """
         Construct a constraint matrix in sparse format by stacking per-constraint CSR matrices.
 
         Returns
         -------
-        matrix : scipy.sparse.csc_matrix
+        matrix : scipy.sparse.csc_array
             Shape (n_con_labels, n_var_labels), containing only non-empty rows and columns.
         con_labels : np.ndarray
             Shape (n_con_labels,), maps each matrix row to the original constraint label.
@@ -1174,7 +1324,7 @@ class Constraints:
             raise ValueError("No constraints available to convert to matrix.")
 
         matrices, con_labels_list = zip(*(c.to_matrix() for c in self.data.values()))
-        csc: scipy.sparse.csc_matrix = scipy.sparse.vstack(matrices).tocsc()
+        csc: scipy.sparse.csc_array = scipy.sparse.vstack(matrices).tocsc()
         con_labels = np.concatenate(con_labels_list)
 
         indptr = csc.indptr
@@ -1182,7 +1332,7 @@ class Constraints:
         new_indptr = np.r_[0, indptr[1:][nonempty_cols]]
         (var_labels,) = np.nonzero(nonempty_cols)
 
-        matrix = scipy.sparse.csc_matrix(
+        matrix = scipy.sparse.csc_array(
             (csc.data, csc.indices, new_indptr),
             shape=(csc.shape[0], len(var_labels)),
         )
