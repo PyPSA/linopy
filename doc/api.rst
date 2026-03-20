@@ -24,6 +24,7 @@ Creating a model
     piecewise.segments
     model.Model.linexpr
     model.Model.remove_constraints
+    model.Model.copy
 
 
 Classes under the hook

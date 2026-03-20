@@ -47,12 +47,16 @@ from linopy.constants import (
     TerminationCondition,
 )
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.dual import bounds_to_constraints, dualize
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
     ScalarLinearExpression,
 )
 from linopy.io import (
+    copy,
+    deepcopy,
+    shallowcopy,
     to_block_files,
     to_cupdlpx,
     to_file,
@@ -1877,6 +1881,12 @@ class Model:
         self.variables.reset_solution()
         self.constraints.reset_dual()
 
+    copy = copy
+
+    __copy__ = shallowcopy
+
+    __deepcopy__ = deepcopy
+
     to_netcdf = to_netcdf
 
     to_file = to_file
@@ -1890,3 +1900,7 @@ class Model:
     to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
+
+    bounds_to_constraints = bounds_to_constraints
+
+    dualize = dualize
