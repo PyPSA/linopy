@@ -1249,8 +1249,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     parameters, blocks, and scalar attributes are copied to a fully
     independent model. With ``deep=False``, returns a shallow copy.
 
-    :meth:`Model.copy` defaults to deep copy for workflow safety, while
-    Python's ``copy.copy(model)`` performs a shallow copy via ``__copy__``.
+    :meth:`Model.copy` defaults to deep copy for workflow safety.
+    In contrast, ``copy.copy(model)`` is shallow via ``__copy__``, and
+    ``copy.deepcopy(model)`` is deep via ``__deepcopy__``.
 
     Solver runtime metadata (for example, ``solver_name`` and
     ``solver_model``) is intentionally not copied. Solver backend state
@@ -1261,12 +1262,11 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     m : Model
         The model to copy.
     include_solution : bool, optional
-        Whether to include the current solution and dual values in the copy.
-        If False (default), the copy is returned in an initialized state:
-        solution and dual data are excluded, objective value is set to None,
-        and status is set to 'initialized'. If True, solution, dual values,
-        solve status, and objective value are also copied. If the model is
-        unsolved, this has no additional effect.
+        Whether to include solution and dual values in the copy.
+        If False (default), solve artifacts are excluded: solution/dual data,
+        objective value, and solve status are reset to initialized state.
+        If True, these values are copied when present. For unsolved models,
+        this has no additional effect.
     deep : bool, optional
         Whether to return a deep copy (default) or shallow copy. If False,
         the returned model uses independent wrapper objects that share
