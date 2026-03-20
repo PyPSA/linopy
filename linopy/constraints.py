@@ -404,7 +404,9 @@ class ConstraintBase(ABC):
         np.cumsum(counts, out=indptr[1:])
 
         shape = (len(labels_flat), self.model._xCounter)
-        return scipy.sparse.csr_array((data, cols, indptr), shape=shape)
+        csr = scipy.sparse.csr_array((data, cols, indptr), shape=shape)
+        csr.sum_duplicates()
+        return csr
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset representation suitable for netcdf serialization."""
@@ -1559,7 +1561,6 @@ class Constraints:
             )
             con_labels_list.append(np.flatnonzero(nonempty) + start)
         csc: scipy.sparse.csc_array = scipy.sparse.vstack(active_csrs).tocsc()
-        csc.sum_duplicates()
         con_labels = np.concatenate(con_labels_list)
 
         if filter_missings:
