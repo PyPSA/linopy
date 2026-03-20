@@ -1119,7 +1119,7 @@ def print_single_expression(
     return print_line(expr, const)
 
 
-def print_single_constraint(model: Any, label: int) -> str:
+def format_single_constraint(model: Any, label: int) -> str:
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 

@@ -37,6 +37,7 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_single_constraint,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -46,7 +47,6 @@ from linopy.common import (
     maybe_group_terms_polars,
     maybe_replace_signs,
     print_coord,
-    print_single_constraint,
     print_single_expression,
     replace_by_map,
     require_constant,
@@ -1039,7 +1039,7 @@ class Constraints:
         with options as opts:
             if display_max_terms is not None:
                 opts.set_value(display_max_terms=display_max_terms)
-            res = [print_single_constraint(self.model, v) for v in values]
+            res = [format_single_constraint(self.model, v) for v in values]
 
         return "\n".join(res)
 
