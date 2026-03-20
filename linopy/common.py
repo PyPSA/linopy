@@ -205,6 +205,9 @@ def numpy_to_dataarray(
         if isinstance(coords, list):
             coords = dict(zip(dims, coords[: arr.ndim]))
         elif is_dict_like(coords):
+            # Filter coords to matching dims — this is expected when a
+            # lower-dimensional constant is broadcast against an expression
+            # whose full coords are passed through as_dataarray.
             coords = {k: v for k, v in coords.items() if k in dims}
 
     return DataArray(arr, coords=coords, dims=dims, **kwargs)
@@ -1205,7 +1208,7 @@ def check_common_keys_values(list_of_dicts: list[dict[str, Any]]) -> bool:
 
 def align(
     *objects: LinearExpression | QuadraticExpression | Variable | T_Alignable,
-    join: JoinOptions = "inner",
+    join: JoinOptions | None = None,
     copy: bool = True,
     indexes: Any = None,
     exclude: str | Iterable[Hashable] = frozenset(),
@@ -1265,8 +1268,25 @@ def align(
 
 
     """
+    from linopy.config import options
     from linopy.expressions import LinearExpression, QuadraticExpression
     from linopy.variables import Variable
+
+    if join is None:
+        join = options["arithmetic_convention"]
+
+    if join == "legacy":
+        from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning
+
+        warn(
+            LEGACY_DEPRECATION_MESSAGE,
+            LinopyDeprecationWarning,
+            stacklevel=2,
+        )
+        join = "inner"
+
+    elif join == "v1":
+        join = "exact"
 
     finisher: list[partial[Any] | Callable[[Any], Any]] = []
     das: list[Any] = []

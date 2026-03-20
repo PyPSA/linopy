@@ -30,7 +30,14 @@ from scipy.sparse import csc_matrix
 from xarray import Coordinates, DataArray, Dataset, IndexVariable
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
+
+try:
+    from xarray.structure.alignment import AlignmentError
+except ImportError:
+    # Fallback for older xarray versions where this isn't a separate class
+    AlignmentError = ValueError  # type: ignore[assignment, misc]
 
 try:
     # resolve breaking change in xarray 2025.03.0
@@ -48,7 +55,6 @@ from linopy.common import (
     LocIndexer,
     as_dataarray,
     assign_multiindex_safe,
-    check_common_keys_values,
     check_has_nulls,
     check_has_nulls_polars,
     fill_missing_coords,
@@ -67,7 +73,7 @@ from linopy.common import (
     to_dataframe,
     to_polars,
 )
-from linopy.config import options
+from linopy.config import LEGACY_DEPRECATION_MESSAGE, LinopyDeprecationWarning, options
 from linopy.constants import (
     CV_DIM,
     EQUAL,
@@ -90,6 +96,8 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
     from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
@@ -548,7 +556,7 @@ class BaseExpression(ABC):
         self: GenericExpression,
         other: DataArray,
         fill_value: float = 0,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> tuple[DataArray, DataArray, bool]:
         """
         Align a constant DataArray with self.const.
@@ -560,7 +568,7 @@ class BaseExpression(ABC):
         fill_value : float, default: 0
             Fill value for missing coordinates.
         join : str, optional
-            Alignment method. If None, uses size-aware default behavior.
+            Alignment method. If None, uses ``options["arithmetic_convention"]``.
 
         Returns
         -------
@@ -572,6 +580,16 @@ class BaseExpression(ABC):
             Whether the expression's data needs reindexing.
         """
         if join is None:
+            join = options["arithmetic_convention"]
+
+        if join == "legacy":
+            # stacklevel=4: user code -> __add__/__mul__ -> _add_constant/_apply_constant_op -> _align_constant
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=4,
+            )
+            # Old behavior: override when same sizes, left join otherwise
             if other.sizes == self.const.sizes:
                 return self.const, other.assign_coords(coords=self.coords), False
             return (
@@ -579,33 +597,68 @@ class BaseExpression(ABC):
                 other.reindex_like(self.const, fill_value=fill_value),
                 False,
             )
-        elif join == "override":
+
+        elif join == "v1":
+            join = "exact"
+
+        if join == "override":
             return self.const, other.assign_coords(coords=self.coords), False
-        else:
-            self_const, aligned = xr.align(
+        elif join == "left":
+            return (
                 self.const,
-                other,
-                join=join,
-                fill_value=fill_value,  # type: ignore[call-overload]
+                other.reindex_like(self.const, fill_value=fill_value),
+                False,
             )
+        else:
+            try:
+                self_const, aligned = xr.align(
+                    self.const, other, join=join, fill_value=fill_value
+                )
+            except ValueError as e:
+                if "exact" in str(e):
+                    raise ValueError(
+                        f"{e}\n"
+                        "Use .add()/.sub()/.mul()/.div() with an explicit join= parameter:\n"
+                        '  .add(other, join="inner")   # intersection of coordinates\n'
+                        '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                        '  .add(other, join="left")    # keep left operand\'s coordinates\n'
+                        '  .add(other, join="override") # positional alignment'
+                    ) from None
+                raise
             return self_const, aligned, True
 
     def _add_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression, other: ConstantLike, join: JoinOptions | None = None
     ) -> GenericExpression:
-        # NaN values in self.const or other are filled with 0 (additive identity)
-        # so that missing data does not silently propagate through arithmetic.
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
         if np.isscalar(other) and join is None:
-            return self.assign(const=self.const.fillna(0) + other)
+            if not is_legacy and np.isnan(other):
+                raise ValueError(
+                    "Constant contains NaN values. Use .fillna() to handle "
+                    "missing values before arithmetic operations."
+                )
+            const = self.const.fillna(0) + other
+            return self.assign(const=const)
         da = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, da, needs_data_reindex = self._align_constant(
             da, fill_value=0, join=join
         )
-        da = da.fillna(0)
+        # Always fill self_const with 0 (additive identity) to stay
+        # consistent with merge() and preserve associativity.
         self_const = self_const.fillna(0)
+        if is_legacy:
+            da = da.fillna(0)
+        elif da.isnull().any():
+            raise ValueError(
+                "Constant contains NaN values. Use .fillna() to handle "
+                "missing values before arithmetic operations."
+            )
         if needs_data_reindex:
+            fv = {**self._fill_value, "const": 0}
             return self.__class__(
-                self.data.reindex_like(self_const, fill_value=self._fill_value).assign(
+                self.data.reindex_like(self_const, fill_value=fv).assign(
                     const=self_const + da
                 ),
                 self.model,
@@ -617,49 +670,81 @@ class BaseExpression(ABC):
         other: ConstantLike,
         op: Callable[[DataArray, DataArray], DataArray],
         fill_value: float,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression:
-        """
-        Apply a constant operation (mul, div, etc.) to this expression with a scalar or array.
-
-        NaN values are filled with neutral elements before the operation:
-        - factor (other) is filled with fill_value (0 for mul, 1 for div)
-        - coeffs and const are filled with 0 (additive identity)
-        """
+        is_legacy = (
+            join is None and options["arithmetic_convention"] == "legacy"
+        ) or join == "legacy"
+        # Fast path for scalars: no dimensions to align
+        if np.isscalar(other):
+            if not is_legacy and np.isnan(other):
+                raise ValueError(
+                    "Factor contains NaN values. Use .fillna() to handle "
+                    "missing values before arithmetic operations."
+                )
+            coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
+            const = self.const.fillna(0) if is_legacy else self.const
+            scalar = DataArray(other)
+            return self.assign(coeffs=op(coeffs, scalar), const=op(const, scalar))
         factor = as_dataarray(other, coords=self.coords, dims=self.coord_dims)
         self_const, factor, needs_data_reindex = self._align_constant(
             factor, fill_value=fill_value, join=join
         )
-        factor = factor.fillna(fill_value)
-        self_const = self_const.fillna(0)
+        if is_legacy:
+            factor = factor.fillna(fill_value)
+            self_const = self_const.fillna(0)
+        elif factor.isnull().any():
+            raise ValueError(
+                "Factor contains NaN values. Use .fillna() to handle "
+                "missing values before arithmetic operations."
+            )
         if needs_data_reindex:
-            data = self.data.reindex_like(self_const, fill_value=self._fill_value)
-            coeffs = data.coeffs.fillna(0)
+            fv = {**self._fill_value, "const": 0}
+            data = self.data.reindex_like(self_const, fill_value=fv)
+            coeffs = data.coeffs.fillna(0) if is_legacy else data.coeffs
             return self.__class__(
                 assign_multiindex_safe(
-                    data, coeffs=op(coeffs, factor), const=op(self_const, factor)
+                    data,
+                    coeffs=op(coeffs, factor),
+                    const=op(self_const, factor),
                 ),
                 self.model,
             )
-        coeffs = self.coeffs.fillna(0)
+        coeffs = self.coeffs.fillna(0) if is_legacy else self.coeffs
         return self.assign(coeffs=op(coeffs, factor), const=op(self_const, factor))
 
     def _multiply_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression:
-        return self._apply_constant_op(other, operator.mul, fill_value=0, join=join)
+        if fill_value is None:
+            is_legacy = options["arithmetic_convention"] == "legacy" or join == "legacy"
+            fill_value = 0 if is_legacy else np.nan
+        return self._apply_constant_op(
+            other, operator.mul, fill_value=fill_value, join=join
+        )
 
     def _divide_by_constant(
-        self: GenericExpression, other: ConstantLike, join: str | None = None
+        self: GenericExpression,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression:
-        return self._apply_constant_op(other, operator.truediv, fill_value=1, join=join)
+        if fill_value is None:
+            is_legacy = options["arithmetic_convention"] == "legacy" or join == "legacy"
+            fill_value = 1 if is_legacy else np.nan
+        return self._apply_constant_op(
+            other, operator.truediv, fill_value=fill_value, join=join
+        )
 
     def __div__(self: GenericExpression, other: SideLike) -> GenericExpression:
         try:
             if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
                 raise TypeError(
                     "unsupported operand type(s) for /: "
-                    f"{type(self)} and {type(other)}"
+                    f"{type(self)} and {type(other)}. "
                     "Non-linear expressions are not yet supported."
                 )
             return self._divide_by_constant(other)
@@ -718,7 +803,7 @@ class BaseExpression(ABC):
     def add(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Add an expression to others.
@@ -746,7 +831,7 @@ class BaseExpression(ABC):
     def sub(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Subtract others from expression.
@@ -765,7 +850,8 @@ class BaseExpression(ABC):
     def mul(
         self: GenericExpression,
         other: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Multiply the expr by a factor.
@@ -778,19 +864,30 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the factor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 0.
         """
-        if join is None:
-            return self.__mul__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-            raise TypeError(
-                "join parameter is not supported for expression-expression multiplication"
-            )
-        return self._multiply_by_constant(other, join=join)
+            if join is not None:
+                raise TypeError(
+                    "join parameter is not supported for expression-expression multiplication"
+                )
+            if fill_value is not None:
+                raise TypeError(
+                    "fill_value parameter is not supported for expression-expression multiplication"
+                )
+            return self.__mul__(other)
+        if join is None and fill_value is None:
+            return self.__mul__(other)
+        return self._multiply_by_constant(other, join=join, fill_value=fill_value)
 
     def div(
         self: GenericExpression,
         other: VariableLike | ConstantLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> GenericExpression | QuadraticExpression:
         """
         Divide the expr by a factor.
@@ -803,21 +900,31 @@ class BaseExpression(ABC):
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the divisor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 1.
         """
-        if join is None:
-            return self.__div__(other)
         if isinstance(other, SUPPORTED_EXPRESSION_TYPES):
-            raise TypeError(
-                "unsupported operand type(s) for /: "
-                f"{type(self)} and {type(other)}. "
-                "Non-linear expressions are not yet supported."
-            )
-        return self._divide_by_constant(other, join=join)
+            if join is not None:
+                raise TypeError(
+                    "unsupported operand type(s) for /: "
+                    f"{type(self)} and {type(other)}. "
+                    "Non-linear expressions are not yet supported."
+                )
+            if fill_value is not None:
+                raise TypeError(
+                    "fill_value parameter is not supported for expression-expression division"
+                )
+            return self.__div__(other)
+        if join is None and fill_value is None:
+            return self.__div__(other)
+        return self._divide_by_constant(other, join=join, fill_value=fill_value)
 
     def le(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Less than or equal constraint.
@@ -836,7 +943,7 @@ class BaseExpression(ABC):
     def ge(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Greater than or equal constraint.
@@ -855,7 +962,7 @@ class BaseExpression(ABC):
     def eq(
         self: GenericExpression,
         rhs: SideLike,
-        join: str | None = None,
+        join: JoinOptions | None = None,
     ) -> Constraint:
         """
         Equality constraint.
@@ -1111,7 +1218,7 @@ class BaseExpression(ABC):
         return self.rolling(dim=dim_dict).sum(keep_attrs=keep_attrs, skipna=skipna)
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         """
         Convert a linear expression to a constraint.
@@ -1141,33 +1248,84 @@ class BaseExpression(ABC):
                 f"Both sides of the constraint are constant. At least one side must contain variables. {self} {rhs}"
             )
 
-        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+        effective_join = join if join is not None else options["arithmetic_convention"]
+
+        if effective_join == "legacy":
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=3,
+            )
+            # Old behavior: convert to DataArray, warn about extra dims,
+            # reindex_like (left join), then sub
+            if isinstance(rhs, SUPPORTED_CONSTANT_TYPES):
+                rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
+                extra_dims = set(rhs.dims) - set(self.coord_dims)
+                if extra_dims:
+                    logger.warning(
+                        f"Constant RHS contains dimensions {extra_dims} not present "
+                        f"in the expression, which might lead to inefficiencies. "
+                        f"Consider collapsing the dimensions by taking min/max."
+                    )
+                rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                # Alignment already done — compute constraint directly
+                constraint_rhs = rhs - self.const
+                data = assign_multiindex_safe(
+                    self.data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+                )
+                return constraints.Constraint(data, model=self.model)
+            # Non-constant rhs (Variable/Expression) — fall through to sub path
+
+        if effective_join == "v1":
+            effective_join = "exact"
+
+        if isinstance(rhs, SUPPORTED_CONSTANT_TYPES) and not isinstance(rhs, DataArray):
             rhs = as_dataarray(rhs, coords=self.coords, dims=self.coord_dims)
 
-            extra_dims = set(rhs.dims) - set(self.coord_dims)
-            if extra_dims:
-                logger.warning(
-                    f"Constant RHS contains dimensions {extra_dims} not present "
-                    f"in the expression, which might lead to inefficiencies. "
-                    f"Consider collapsing the dimensions by taking min/max."
-                )
-            rhs = rhs.reindex_like(self.const, fill_value=np.nan)
-
-        # Remember where RHS is NaN (meaning "no constraint") before the
-        # subtraction, which may fill NaN with 0 as part of normal
-        # expression arithmetic.
         if isinstance(rhs, DataArray):
-            rhs_nan_mask = rhs.isnull()
-        else:
-            rhs_nan_mask = None
+            is_legacy = (
+                join is None and options["arithmetic_convention"] == "legacy"
+            ) or join == "legacy"
+            if not is_legacy and rhs.isnull().any():
+                raise ValueError(
+                    "Constraint RHS contains NaN values. Use .fillna() and "
+                    "mask= to handle missing values explicitly."
+                )
+            if effective_join == "override":
+                aligned_rhs = rhs.assign_coords(coords=self.const.coords)
+                expr_const = self.const
+                expr_data = self.data
+            elif effective_join == "left":
+                aligned_rhs = rhs.reindex_like(self.const, fill_value=np.nan)
+                expr_const = self.const
+                expr_data = self.data
+            else:
+                try:
+                    expr_const_aligned, aligned_rhs = xr.align(
+                        self.const, rhs, join=effective_join, fill_value=np.nan
+                    )
+                except ValueError as e:
+                    if "exact" in str(e):
+                        raise ValueError(
+                            f"{e}\n"
+                            "Use .le()/.ge()/.eq() with an explicit join= parameter:\n"
+                            '  .le(rhs, join="inner")   # intersection of coordinates\n'
+                            '  .le(rhs, join="left")    # keep expression coordinates (NaN fill)\n'
+                            '  .le(rhs, join="override") # positional alignment'
+                        ) from None
+                    raise
+                expr_const = expr_const_aligned.fillna(0)
+                expr_data = self.data.reindex_like(
+                    expr_const_aligned, fill_value=self._fill_value
+                )
+            constraint_rhs = aligned_rhs - expr_const
+            data = assign_multiindex_safe(
+                expr_data[["coeffs", "vars"]], sign=sign, rhs=constraint_rhs
+            )
+            return constraints.Constraint(data, model=self.model)
 
         all_to_lhs = self.sub(rhs, join=join).data
         computed_rhs = -all_to_lhs.const
-
-        # Restore NaN at positions where the original constant RHS had no
-        # value so that downstream code still treats them as unconstrained.
-        if rhs_nan_mask is not None and rhs_nan_mask.any():
-            computed_rhs = xr.where(rhs_nan_mask, np.nan, computed_rhs)
 
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
@@ -1517,9 +1675,47 @@ class BaseExpression(ABC):
 
     set_index = exprwrap(Dataset.set_index)
 
-    reindex = exprwrap(Dataset.reindex, fill_value=_fill_value)
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        fill_value: float = np.nan,
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """
+        Reindex the expression.
 
-    reindex_like = exprwrap(Dataset.reindex_like, fill_value=_fill_value)
+        ``fill_value`` sets the constant for missing coordinates (default NaN).
+        Variable labels and coefficients always use sentinel values
+        (vars=-1, coeffs=NaN).
+        """
+        fv = {**self._fill_value, "const": fill_value}
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=fv, **indexers_kwargs), self.model
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        fill_value: float = np.nan,
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Reindex like another object.
+
+        ``fill_value`` sets the constant for missing coordinates (default NaN).
+        Variable labels and coefficients always use sentinel values.
+        """
+        fv = {**self._fill_value, "const": fill_value}
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
+        return self.__class__(
+            self.data.reindex_like(ref, fill_value=fv, **kwargs),
+            self.model,
+        )
 
     rename = exprwrap(Dataset.rename)
 
@@ -2208,7 +2404,7 @@ class QuadraticExpression(BaseExpression):
         return sol.rename("solution")
 
     def to_constraint(
-        self, sign: SignLike, rhs: SideLike, join: str | None = None
+        self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> NotImplementedType:
         raise NotImplementedError(
             "Quadratic expressions cannot be used in constraints."
@@ -2341,17 +2537,29 @@ def merge(
     ],
     dim: str = TERM_DIM,
     cls: type[GenericExpression] = None,  # type: ignore
-    join: str | None = None,
+    join: JoinOptions | None = None,
     **kwargs: Any,
 ) -> GenericExpression:
     """
-    Merge multiple expression together.
+    Merge multiple expressions together.
 
-    This function is a bit faster than summing over multiple linear expressions.
-    In case a list of LinearExpression with exactly the same shape is passed
-    and the dimension to concatenate on is TERM_DIM, the concatenation uses
-    the coordinates of the first object as a basis which overrides the
-    coordinates of the consecutive objects.
+    Concatenates expressions along a given dimension (default: ``_term``).
+    Faster than summing expressions individually.
+
+    Join behavior by convention (when ``join=None``):
+
+    - **v1**: Enforces exact match on shared user-dimension coordinates.
+      Helper dims (``_term``, ``_factor``) and the concat dim are excluded
+      from this check. Raises ``ValueError`` on mismatch. The actual
+      ``xr.concat`` uses ``join="outer"`` since helper dims legitimately
+      differ between expressions.
+    - **legacy**: Uses ``join="override"`` (positional alignment) when all
+      shared user dims have matching sizes, ``join="outer"`` otherwise.
+    - **explicit** (e.g. ``join="inner"``): Passed through to ``xr.concat``.
+
+    Internal callers that bypass the convention:
+
+    - ``.add(join=X)``: passes explicit join through.
 
     Parameters
     ----------
@@ -2360,21 +2568,20 @@ def merge(
     dim : str
         Dimension along which the expressions should be concatenated.
     cls : type
-        Explicitly set the type of the resulting expression (So that the type checker will know the return type)
+        Explicitly set the type of the resulting expression (So that the
+        type checker will know the return type)
     join : str, optional
         How to align coordinates. One of "outer", "inner", "left", "right",
-        "exact", "override". When None (default), auto-detects based on
-        expression shapes.
+        "exact", "override". When None (default), uses the current
+        arithmetic convention.
     **kwargs
-        Additional keyword arguments passed to xarray.concat. Defaults to
-        {coords: "minimal", compat: "override"} or, in the special case described
-        above, to {coords: "minimal", compat: "override", "join": "override"}.
+        Additional keyword arguments passed to xarray.concat.
 
     Returns
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if not isinstance(exprs, list) and len(add_exprs):
+    if not isinstance(exprs, list) and len(add_exprs) > 0:
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
@@ -2399,16 +2606,6 @@ def merge(
 
     model = exprs[0].model
 
-    if join is not None:
-        override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
-        coord_dims = [
-            {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
-        ]
-        override = check_common_keys_values(coord_dims)  # type: ignore
-    else:
-        override = False
-
     data = [e.data if isinstance(e, linopy_types) else e for e in exprs]
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
@@ -2422,17 +2619,69 @@ def merge(
         elif cls == variables.Variable:
             kwargs["fill_value"] = variables.FILL_VALUE
 
-        if join is not None:
-            kwargs["join"] = join
-        elif override:
-            kwargs["join"] = "override"
+        effective_join = join if join is not None else options["arithmetic_convention"]
+
+        if effective_join == "legacy":
+            warn(
+                LEGACY_DEPRECATION_MESSAGE,
+                LinopyDeprecationWarning,
+                stacklevel=2,
+            )
+            # Reproduce old behavior: override when all shared dims have
+            # matching sizes, outer otherwise.
+            if cls in linopy_types and dim in HELPER_DIMS:
+                coord_dims = [
+                    {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS}
+                    for e in exprs
+                ]
+                common_keys = set.intersection(*(set(d.keys()) for d in coord_dims))
+                override = all(
+                    len({d[k] for d in coord_dims if k in d}) == 1 for k in common_keys
+                )
+            else:
+                override = False
+
+            kwargs["join"] = "override" if override else "outer"
+        elif effective_join == "v1":
+            # Enforce exact alignment on user dims only. Helper dims
+            # (_term, _factor) legitimately differ between expressions,
+            # so we can't pass join="exact" to xr.concat directly.
+            # Instead: pre-validate user dims, then concat with outer.
+            # Check only dimension-coordinates (not scalar coords left
+            # from .sel()), excluding helper dims and the concat dim.
+            skip_dims = set(HELPER_DIMS) | {dim}
+            user_coords = [
+                {k: d.coords[k] for k in d.dims if k not in skip_dims} for d in data
+            ]
+            # Only check dims shared by all datasets (broadcasting is OK)
+            shared_dims = set.intersection(*(set(c.keys()) for c in user_coords))
+            for d_name in shared_dims:
+                ref = user_coords[0][d_name]
+                for i, uc in enumerate(user_coords[1:], 1):
+                    if not ref.equals(uc[d_name]):
+                        raise ValueError(
+                            f"Coordinate mismatch on dimension '{d_name}'.\n"
+                            "Use .add()/.sub() with an explicit join= parameter:\n"
+                            '  .add(other, join="inner")   # intersection of coordinates\n'
+                            '  .add(other, join="outer")   # union of coordinates (with fill)\n'
+                            '  .add(other, join="left")    # keep left operand\'s coordinates'
+                        )
+            kwargs["join"] = "outer"
         else:
-            kwargs.setdefault("join", "outer")
+            # Explicit join passed through (e.g., from .add(join="inner"))
+            kwargs["join"] = effective_join
 
     if dim == TERM_DIM:
         ds = xr.concat([d[["coeffs", "vars"]] for d in data], dim, **kwargs)
+        # Concat without fill to detect where all constants were NaN
+        raw_consts = xr.concat([d["const"] for d in data], dim, **kwargs)
+        all_const_nan = raw_consts.isnull().all(TERM_DIM)
+        # Sum with fill_value=0 so valid NaN + valid 5 = 5 (not NaN)
         subkwargs = {**kwargs, "fill_value": 0}
         const = xr.concat([d["const"] for d in data], dim, **subkwargs).sum(TERM_DIM)
+        # Restore NaN where all input constants were NaN (all terms absent)
+        if all_const_nan.any():
+            const = const.where(~all_const_nan)
         ds = assign_multiindex_safe(ds, const=const)
     elif dim == FACTOR_DIM:
         ds = xr.concat([d[["vars"]] for d in data], dim, **kwargs)

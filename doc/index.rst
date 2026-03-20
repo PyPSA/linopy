@@ -108,10 +108,10 @@ This package is published under MIT license.
    :caption: User Guide
 
    user-guide
+   arithmetic-convention
    creating-variables
    creating-expressions
    creating-constraints
-   coordinate-alignment
    sos-constraints
    piecewise-linear-constraints
    piecewise-linear-constraints-tutorial

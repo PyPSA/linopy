@@ -182,7 +182,8 @@ def reformulate_sos2(
     added_constraints = [first_name]
 
     model.add_constraints(
-        x_expr.isel({sos_dim: 0}) <= M.isel({sos_dim: 0}) * z_expr.isel({sos_dim: 0}),
+        x_expr.isel({sos_dim: 0}, drop=True)
+        <= M.isel({sos_dim: 0}, drop=True) * z_expr.isel({sos_dim: 0}, drop=True),
         name=first_name,
     )
 
@@ -208,8 +209,9 @@ def reformulate_sos2(
         added_constraints.append(mid_name)
 
     model.add_constraints(
-        x_expr.isel({sos_dim: n - 1})
-        <= M.isel({sos_dim: n - 1}) * z_expr.isel({sos_dim: n - 2}),
+        x_expr.isel({sos_dim: n - 1}, drop=True)
+        <= M.isel({sos_dim: n - 1}, drop=True)
+        * z_expr.isel({sos_dim: n - 2}, drop=True),
         name=last_name,
     )
     added_constraints.extend([last_name, card_name])
