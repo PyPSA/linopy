@@ -1241,29 +1241,38 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     return m
 
 
-def copy(src: Model, include_solution: bool = False) -> Model:
+def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     """
-    Return a deep copy of this model.
+    Return a copy of this model.
 
-    Copies variables, constraints, objective, parameters, blocks, and all
-    scalar attributes (counters, flags). The copy is fully independent:
-    modifying one does not affect the other.
+    With ``deep=True`` (default), variables, constraints, objective,
+    parameters, blocks, and scalar attributes are copied to a fully
+    independent model. With ``deep=False``, returns a shallow copy.
+
+    Solver runtime metadata (for example, ``solver_name`` and
+    ``solver_model``) is intentionally not copied. Solver backend state
+    is recreated on ``solve()``.
 
     Parameters
     ----------
-    src : Model
+    m : Model
         The model to copy.
     include_solution : bool, optional
         Whether to include the current solution and dual values in the copy.
         If False (default), the copy is returned in an initialized state:
         solution and dual data are excluded, objective value is set to None,
         and status is set to 'initialized'. If True, solution, dual values,
-        solve status, and objective value are also copied.
+        solve status, and objective value are also copied. If the model is
+        unsolved, this has no additional effect.
+    deep : bool, optional
+        Whether to return a deep copy (default) or shallow copy. If False,
+        the returned model uses independent wrapper objects that share
+        underlying data buffers with the source model.
 
     Returns
     -------
     Model
-        A deep copy of the model.
+        A deep or shallow copy of the model.
     """
     from linopy.model import (
         Constraint,
@@ -1277,50 +1286,74 @@ def copy(src: Model, include_solution: bool = False) -> Model:
 
     SOLVE_STATE_ATTRS = {"status", "termination_condition"}
 
-    m = Model(
-        chunk=src._chunk,
-        force_dim_names=src._force_dim_names,
-        auto_mask=src._auto_mask,
-        solver_dir=str(src._solver_dir),
+    new_model = Model(
+        chunk=m._chunk,
+        force_dim_names=m._force_dim_names,
+        auto_mask=m._auto_mask,
+        solver_dir=str(m._solver_dir),
     )
 
-    m._variables = Variables(
+    new_model._variables = Variables(
         {
             name: Variable(
-                var.data.copy(deep=True)
+                var.data.copy(deep=deep)
                 if include_solution
-                else var.data[src.variables.dataset_attrs].copy(deep=True),
-                m,
+                else var.data[m.variables.dataset_attrs].copy(deep=deep),
+                new_model,
                 name,
             )
-            for name, var in src.variables.items()
+            for name, var in m.variables.items()
         },
-        m,
+        new_model,
     )
 
-    m._constraints = Constraints(
+    new_model._constraints = Constraints(
         {
             name: Constraint(
-                con.data.copy(deep=True)
+                con.data.copy(deep=deep)
                 if include_solution
-                else con.data[src.constraints.dataset_attrs].copy(deep=True),
-                m,
+                else con.data[m.constraints.dataset_attrs].copy(deep=deep),
+                new_model,
                 name,
             )
-            for name, con in src.constraints.items()
+            for name, con in m.constraints.items()
         },
-        m,
+        new_model,
     )
 
-    obj_expr = LinearExpression(src.objective.expression.data.copy(deep=True), m)
-    m._objective = Objective(obj_expr, m, src.objective.sense)
-    m._objective._value = src.objective.value if include_solution else None
+    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    new_model._objective._value = m.objective.value if include_solution else None
 
-    m._parameters = src._parameters.copy(deep=True)
-    m._blocks = src._blocks.copy(deep=True) if src._blocks is not None else None
+    new_model._parameters = m._parameters.copy(deep=deep)
+    new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
 
-    for attr in src.scalar_attrs:
+    for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
-            setattr(m, attr, getattr(src, attr))
+            setattr(new_model, attr, getattr(m, attr))
 
-    return m
+    return new_model
+
+
+def shallowcopy(m: Model) -> Model:
+    """
+    Support Python's ``copy.copy`` protocol for ``Model``.
+
+    Returns a shallow copy with independent wrapper objects that share
+    underlying array buffers with ``m``. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    return copy(m, include_solution=False, deep=False)
+
+
+def deepcopy(m: Model, memo: dict[int, Any]) -> Model:
+    """
+    Support Python's ``copy.deepcopy`` protocol for ``Model``.
+
+    Returns a deep, structurally independent copy and records it in ``memo``
+    as required by Python's copy protocol. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    new_model = copy(m, include_solution=False, deep=True)
+    memo[id(m)] = new_model
+    return new_model
