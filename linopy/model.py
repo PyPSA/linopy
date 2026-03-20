@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, Literal, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -1825,9 +1826,9 @@ class Model:
 
         return miisrow
 
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+    def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
-        Print a list of infeasible constraints.
+        Return a string representation of infeasible constraints.
 
         This function requires that the model was solved using `gurobi` or `xpress`
         and the termination condition was infeasible.
@@ -1835,20 +1836,35 @@ class Model:
         Parameters
         ----------
         display_max_terms : int, optional
-            The maximum number of infeasible terms to display. If `None`,
-            all infeasible terms will be displayed.
+            The maximum number of infeasible terms to display. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
 
         Returns
         -------
-        None
-            This function does not return anything. It simply prints the
-            infeasible constraints.
+        str
+            String representation of the infeasible constraints.
         """
         labels = self.compute_infeasibilities()
-        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+        return self.constraints.format_labels(
+            labels, display_max_terms=display_max_terms
+        )
+
+    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+        """
+        Print a list of infeasible constraints.
+
+        .. deprecated::
+            Use :meth:`format_infeasibilities` instead.
+        """
+        warn(
+            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_infeasibilities(display_max_terms=display_max_terms))
 
     @deprecated(
-        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
     )
     def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
