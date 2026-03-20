@@ -55,6 +55,8 @@ from linopy.expressions import (
 )
 from linopy.io import (
     copy,
+    deepcopy,
+    shallowcopy,
     to_block_files,
     to_cupdlpx,
     to_file,
@@ -1880,6 +1882,10 @@ class Model:
         self.constraints.reset_dual()
 
     copy = copy
+
+    __copy__ = shallowcopy
+
+    __deepcopy__ = deepcopy
 
     to_netcdf = to_netcdf
 
