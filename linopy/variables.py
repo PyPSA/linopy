@@ -38,14 +38,14 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
+    format_single_variable,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    print_coord,
-    print_single_variable,
     require_constant,
     save_join,
     set_int_index,
@@ -352,9 +352,9 @@ class Variable:
                     ]
                     label = self.labels.values[indices]
                     line = (
-                        print_coord(coord)
+                        format_coord(coord)
                         + ": "
-                        + print_single_variable(self.model, label)
+                        + format_single_variable(self.model, label)
                     )
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
@@ -369,7 +369,7 @@ class Variable:
             )
         else:
             lines.append(
-                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{format_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -1669,7 +1669,7 @@ class Variables:
         str
             String representation of the selected variables.
         """
-        res = [print_single_variable(self.model, v) for v in values]
+        res = [format_single_variable(self.model, v) for v in values]
         return "\n".join(res)
 
     def print_labels(self, values: list[int]) -> None:
@@ -1753,7 +1753,7 @@ class ScalarVariable:
         if self.label == -1:
             return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
-        coord_string = print_coord(coord)
+        coord_string = format_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
 
     @property

@@ -37,7 +37,9 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
     format_single_constraint,
+    format_single_expression,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -46,8 +48,6 @@ from linopy.common import (
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_signs,
-    print_coord,
-    print_single_expression,
     replace_by_map,
     require_constant,
     save_join,
@@ -305,7 +305,7 @@ class Constraint:
                         for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
-                        expr = print_single_expression(
+                        expr = format_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
                             0,
@@ -313,9 +313,9 @@ class Constraint:
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = print_coord(coord) + f": {expr} {sign} {rhs}"
+                        line = format_coord(coord) + f": {expr} {sign} {rhs}"
                     else:
-                        line = print_coord(coord) + ": None"
+                        line = format_coord(coord) + ": None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
@@ -324,7 +324,7 @@ class Constraint:
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(
+            expr = format_single_expression(
                 self.coeffs.values, self.vars.values, 0, self.model
             )
             lines.append(
@@ -1176,7 +1176,7 @@ class AnonymousScalarConstraint:
         """
         Get the representation of the AnonymousScalarConstraint.
         """
-        expr_string = print_single_expression(
+        expr_string = format_single_expression(
             np.array(self.lhs.coeffs), np.array(self.lhs.vars), 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
