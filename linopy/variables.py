@@ -33,6 +33,7 @@ import linopy.expressions as expressions
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
+    VariableLabelIndex,
     as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
@@ -1327,6 +1328,7 @@ class Variables:
     data: dict[str, Variable]
     model: Model
     _label_position_index: LabelPositionIndex | None = None
+    _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1436,6 +1438,15 @@ class Variables:
         """Invalidate the label position index cache."""
         if self._label_position_index is not None:
             self._label_position_index.invalidate()
+        if self._variable_label_index is not None:
+            self._variable_label_index.invalidate()
+
+    @property
+    def label_index(self) -> VariableLabelIndex:
+        """Index for O(1) label->position mapping and compact vlabels array."""
+        if self._variable_label_index is None:
+            self._variable_label_index = VariableLabelIndex(self)
+        return self._variable_label_index
 
     @property
     def attrs(self) -> dict[Any, Any]:

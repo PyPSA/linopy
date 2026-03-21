@@ -10,7 +10,7 @@ from __future__ import annotations
 import operator
 import os
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
-from functools import partial, reduce, wraps
+from functools import cached_property, partial, reduce, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 from warnings import warn
@@ -937,6 +937,49 @@ def _get_label_position_linear(
         return [[find_single(v) for v in _] for _ in values.T]
     else:
         raise ValueError("Array's with more than two dimensions is not supported")
+
+
+class VariableLabelIndex:
+    """
+    Index for O(1) mapping between variable labels and dense positions.
+
+    Both arrays are computed lazily and cached:
+    - ``vlabels``: active variable labels in encounter order, shape (n_active_vars,)
+    - ``label_to_pos``: derived from vlabels; size _xCounter, maps label -> position (-1 if masked)
+
+    Invalidated by clearing the instance ``__dict__`` when variables are added or removed.
+    """
+
+    def __init__(self, variables: Any) -> None:
+        self._variables = variables
+
+    @cached_property
+    def vlabels(self) -> np.ndarray:
+        label_lists = []
+        for _, var in self._variables.items():
+            labels = var.labels.values.ravel()
+            mask = labels != -1
+            label_lists.append(labels[mask])
+        return (
+            np.concatenate(label_lists) if label_lists else np.array([], dtype=np.intp)
+        )
+
+    @cached_property
+    def label_to_pos(self) -> np.ndarray:
+        vlabels = self.vlabels
+        n = self._variables.model._xCounter
+        label_to_pos = np.full(n, -1, dtype=np.intp)
+        label_to_pos[vlabels] = np.arange(len(vlabels), dtype=np.intp)
+        return label_to_pos
+
+    @property
+    def n_active_vars(self) -> int:
+        return len(self.vlabels)
+
+    def invalidate(self) -> None:
+        """Clear cached arrays so they are recomputed on next access."""
+        self.__dict__.pop("vlabels", None)
+        self.__dict__.pop("label_to_pos", None)
 
 
 def get_label_position(
