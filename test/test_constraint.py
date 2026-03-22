@@ -58,6 +58,11 @@ def c(m: Model) -> linopy.constraints.Constraint:
     return m.constraints["c"]
 
 
+@pytest.fixture
+def mc(m: Model) -> linopy.constraints.MutableConstraint:
+    return m.constraints["c"].mutable()
+
+
 def test_constraint_repr(c: linopy.constraints.Constraint) -> None:
     c.__repr__()
 
@@ -316,13 +321,13 @@ def test_constraint_from_rule_with_none_return(
 
 
 def test_constraint_vars_getter(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    assert_equal(c.vars.squeeze(), x.labels)
+    assert_equal(mc.vars.squeeze(), x.labels)
 
 
-def test_constraint_coeffs_getter(c: linopy.constraints.Constraint) -> None:
-    assert (c.coeffs == 1).all()
+def test_constraint_coeffs_getter(mc: linopy.constraints.MutableConstraint) -> None:
+    assert (mc.coeffs == 1).all()
 
 
 def test_constraint_sign_getter(c: linopy.constraints.Constraint) -> None:
@@ -334,124 +339,130 @@ def test_constraint_rhs_getter(c: linopy.constraints.Constraint) -> None:
 
 
 def test_constraint_vars_setter(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    c.vars = x
-    assert_equal(c.vars, x.labels)
+    mc.vars = x
+    assert_equal(mc.vars, x.labels)
 
 
 def test_constraint_vars_setter_with_array(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    c.vars = x.labels
-    assert_equal(c.vars, x.labels)
+    mc.vars = x.labels
+    assert_equal(mc.vars, x.labels)
 
 
 def test_constraint_vars_setter_invalid(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
     with pytest.raises(TypeError):
-        c.vars = pd.DataFrame(x.labels)
+        mc.vars = pd.DataFrame(x.labels)
 
 
-def test_constraint_coeffs_setter(c: linopy.constraints.Constraint) -> None:
-    c.coeffs = 3
-    assert (c.coeffs == 3).all()
+def test_constraint_coeffs_setter(mc: linopy.constraints.MutableConstraint) -> None:
+    mc.coeffs = 3
+    assert (mc.coeffs == 3).all()
 
 
 def test_constraint_lhs_setter(
-    c: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    c.lhs = x + y
-    assert c.lhs.nterm == 2
-    assert c.vars.notnull().all().item()
-    assert c.coeffs.notnull().all().item()
+    mc.lhs = x + y
+    assert mc.lhs.nterm == 2
+    assert mc.vars.notnull().all().item()
+    assert mc.coeffs.notnull().all().item()
 
 
 def test_constraint_lhs_setter_with_variable(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    c.lhs = x
-    assert c.lhs.nterm == 1
+    mc.lhs = x
+    assert mc.lhs.nterm == 1
 
 
-def test_constraint_lhs_setter_with_constant(c: linopy.constraints.Constraint) -> None:
-    sizes = c.sizes
-    c.lhs = 10
-    assert (c.rhs == -10).all()
-    assert c.lhs.nterm == 0
-    assert c.sizes["first"] == sizes["first"]
+def test_constraint_lhs_setter_with_constant(
+    mc: linopy.constraints.MutableConstraint,
+) -> None:
+    sizes = mc.sizes
+    mc.lhs = 10
+    assert (mc.rhs == -10).all()
+    assert mc.lhs.nterm == 0
+    assert mc.sizes["first"] == sizes["first"]
 
 
-def test_constraint_sign_setter(c: linopy.constraints.Constraint) -> None:
-    c.sign = EQUAL
-    assert (c.sign == EQUAL).all()
+def test_constraint_sign_setter(mc: linopy.constraints.MutableConstraint) -> None:
+    mc.sign = EQUAL
+    assert (mc.sign == EQUAL).all()
 
 
-def test_constraint_sign_setter_alternative(c: linopy.constraints.Constraint) -> None:
-    c.sign = long_EQUAL
-    assert (c.sign == EQUAL).all()
+def test_constraint_sign_setter_alternative(
+    mc: linopy.constraints.MutableConstraint,
+) -> None:
+    mc.sign = long_EQUAL
+    assert (mc.sign == EQUAL).all()
 
 
-def test_constraint_sign_setter_invalid(c: linopy.constraints.Constraint) -> None:
+def test_constraint_sign_setter_invalid(
+    mc: linopy.constraints.MutableConstraint,
+) -> None:
     # Test that assigning lhs with other type that LinearExpression raises TypeError
     with pytest.raises(ValueError):
-        c.sign = "asd"
+        mc.sign = "asd"
 
 
-def test_constraint_rhs_setter(c: linopy.constraints.Constraint) -> None:
-    sizes = c.sizes
-    c.rhs = 2  # type: ignore
-    assert (c.rhs == 2).all()
-    assert c.sizes == sizes
+def test_constraint_rhs_setter(mc: linopy.constraints.MutableConstraint) -> None:
+    sizes = mc.sizes
+    mc.rhs = 2  # type: ignore
+    assert (mc.rhs == 2).all()
+    assert mc.sizes == sizes
 
 
 def test_constraint_rhs_setter_with_variable(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    c.rhs = x  # type: ignore
-    assert (c.rhs == 0).all()
-    assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
-    assert c.lhs.nterm == 2
+    mc.rhs = x  # type: ignore
+    assert (mc.rhs == 0).all()
+    assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
+    assert mc.lhs.nterm == 2
 
 
 def test_constraint_rhs_setter_with_expression(
-    c: linopy.constraints.Constraint, x: linopy.Variable, y: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable, y: linopy.Variable
 ) -> None:
-    c.rhs = x + y
-    assert (c.rhs == 0).all()
-    assert (c.coeffs.isel({c.term_dim: -1}) == -1).all()
-    assert c.lhs.nterm == 3
+    mc.rhs = x + y
+    assert (mc.rhs == 0).all()
+    assert (mc.coeffs.isel({mc.term_dim: -1}) == -1).all()
+    assert mc.lhs.nterm == 3
 
 
 def test_constraint_rhs_setter_with_expression_and_constant(
-    c: linopy.constraints.Constraint, x: linopy.Variable
+    mc: linopy.constraints.MutableConstraint, x: linopy.Variable
 ) -> None:
-    c.rhs = x + 1
-    assert (c.rhs == 1).all()
-    assert (c.coeffs.sum(c.term_dim) == 0).all()
-    assert c.lhs.nterm == 2
+    mc.rhs = x + 1
+    assert (mc.rhs == 1).all()
+    assert (mc.coeffs.sum(mc.term_dim) == 0).all()
+    assert mc.lhs.nterm == 2
 
 
 def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
-    # Test that assigning labels raises FrozenInstanceError
+    # Test that assigning labels raises AttributeError (Constraint is frozen)
     with pytest.raises(AttributeError):
         c.labels = c.labels  # type: ignore
 
 
 def test_constraint_sel(c: linopy.constraints.Constraint) -> None:
-    assert isinstance(c.sel(first=[1, 2]), ConstraintBase)
-    assert isinstance(c.isel(first=[1, 2]), ConstraintBase)
+    assert isinstance(c.mutable().sel(first=[1, 2]), ConstraintBase)
+    assert isinstance(c.mutable().isel(first=[1, 2]), ConstraintBase)
 
 
 def test_constraint_flat(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.flat, pd.DataFrame)
 
 
-def test_iterate_slices(c: linopy.constraints.Constraint) -> None:
-    for i in c.iterate_slices(slice_size=2):
+def test_iterate_slices(mc: linopy.constraints.MutableConstraint) -> None:
+    for i in mc.iterate_slices(slice_size=2):
         assert isinstance(i, ConstraintBase)
-        assert c.coord_dims == i.coord_dims
+        assert mc.coord_dims == i.coord_dims
 
 
 def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
@@ -460,9 +471,8 @@ def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
 
 def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     """Test to_polars when a constraint has mixed sign values across dims."""
-    # Create a constraint, then manually patch the sign to have mixed values
-    m.add_constraints(x >= 0, name="mixed")
-    con = m.constraints["mixed"]
+    # Use MutableConstraint so sign data can be patched
+    con = m.add_constraints(x >= 0, name="mixed", freeze=False)
     # Replace sign data with mixed signs across the first dimension
     n = con.data.sizes["first"]
     signs = np.array(["<=" if i % 2 == 0 else ">=" for i in range(n)])
@@ -485,8 +495,12 @@ def test_constraint_assignment_sanitize_zeros(
 ) -> None:
     m.add_constraints(0 * x + y == 0, name="c2")
     m.constraints.sanitize_zeros()
-    assert m.constraints["c2"].vars[0, 0, 0].item() == -1
-    assert np.isnan(m.constraints["c2"].coeffs[0, 0, 0].item())
+    c2 = m.constraints["c2"]
+    assert c2.nterm == 1
+    assert c2.has_variable(y)
+    assert not c2.has_variable(x)
+    csr, _ = c2.to_matrix()
+    assert (csr.data == 1).all()
 
 
 def test_constraint_assignment_with_args(
@@ -609,17 +623,11 @@ def test_constraint_with_helper_dims_as_coords(m: Model) -> None:
 
 
 def test_constraint_matrix(m: Model) -> None:
-    # filter_missings=True: strips empty columns, returns labels for remapping
-    A, con_labels, var_labels = m.constraints.to_matrix()
-    assert A.shape == (10, 10)  # only x (10 vars) appears in constraints
-    assert con_labels is not None
-    assert var_labels is not None
-
-    # filter_missings=False: full width, con_labels always returned, var_labels=None
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (10, m.shape[1])  # all 14 vars as columns
+    # Returns (csr_array, con_labels) — dense: active rows and active-var columns
+    A, con_labels = m.constraints.to_matrix()
+    n_active_vars = len(m.variables.label_index.vlabels)
+    assert A.shape == (10, n_active_vars)
     assert len(con_labels) == 10
-    assert var_labels is None
 
 
 def test_constraint_matrix_masked_variables() -> None:
@@ -630,23 +638,16 @@ def test_constraint_matrix_masked_variables() -> None:
     missing. The matrix shoud not be built for constraints which have
     variables which are missing.
     """
-    # now with missing variables
     m = Model()
     mask = pd.Series([False] * 5 + [True] * 5)
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
     m.add_constraints(x, EQUAL, 0)
-    # filter_missings=True: only vars/cons that appear in constraints
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (m.ncons, 5)  # 5 active x vars; scalar var not in any constraint
+    # Returns dense matrix: active rows only, all active-var columns
+    A, con_labels = m.constraints.to_matrix()
+    n_active_vars = len(m.variables.label_index.vlabels)
+    assert A.shape == (m.ncons, n_active_vars)
     assert len(con_labels) == m.ncons
-    assert len(var_labels) == 5
-
-    # filter_missings=False: full width, no remapping labels
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m.ncons, m.shape[1])
-    assert con_labels is not None
-    assert var_labels is None
 
 
 def test_constraint_matrix_masked_constraints() -> None:
@@ -658,16 +659,11 @@ def test_constraint_matrix_masked_constraints() -> None:
     x = m.add_variables(coords=[range(10)])
     m.add_variables()
     m.add_constraints(x, EQUAL, 0, mask=mask)
-    # filter_missings=True: only active cons and vars they reference
-    # active cons are indices 5-9, which reference vars 5-9 only
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (m.ncons, m.ncons)  # 5 active cons; 5 referenced vars
+    # active cons are indices 5-9, which reference vars 5-9 only (all active)
+    A, con_labels = m.constraints.to_matrix()
+    n_active_vars = len(m.variables.label_index.vlabels)
+    assert A.shape == (m.ncons, n_active_vars)
     assert len(con_labels) == m.ncons
-
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m.ncons, m.shape[1])
-    assert con_labels is not None
-    assert var_labels is None
 
 
 def test_constraint_matrix_masked_constraints_and_variables() -> None:
@@ -679,16 +675,11 @@ def test_constraint_matrix_masked_constraints_and_variables() -> None:
     x = m.add_variables(coords=[range(10)], mask=mask)
     m.add_variables()
     m.add_constraints(x, EQUAL, 0, mask=mask)
-    # filter_missings=True: 5 active cons x 5 active vars
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=True)
-    assert A.shape == (m.ncons, m.ncons)  # both masks align: 5x5
+    # both masks align: 5 active cons x all active vars (5 x + 1 scalar)
+    A, con_labels = m.constraints.to_matrix()
+    n_active_vars = len(m.variables.label_index.vlabels)
+    assert A.shape == (m.ncons, n_active_vars)
     assert len(con_labels) == m.ncons
-    assert len(var_labels) == m.ncons
-
-    A, con_labels, var_labels = m.constraints.to_matrix(filter_missings=False)
-    assert A.shape == (m.ncons, m.shape[1])
-    assert con_labels is not None
-    assert var_labels is None
 
 
 def test_get_name_by_label() -> None:

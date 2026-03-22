@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import scipy.sparse
 from numpy import ndarray
-from scipy.sparse._csc import csc_matrix
 
 from linopy import expressions
 from linopy.constraints import Constraint
@@ -36,8 +36,9 @@ class MatrixAccessor:
 
     def _build_vars(self) -> None:
         m = self._parent
+        label_index = m.variables.label_index
+        self.vlabels: ndarray = label_index.vlabels
 
-        labels_list = []
         lb_list = []
         ub_list = []
         vtypes_list = []
@@ -45,7 +46,6 @@ class MatrixAccessor:
         for name, var in m.variables.items():
             labels = var.labels.values.ravel()
             mask = labels != -1
-            active_labels = labels[mask]
 
             if name in m.binaries:
                 vtype = "B"
@@ -56,20 +56,15 @@ class MatrixAccessor:
             else:
                 vtype = "C"
 
-            labels_list.append(active_labels)
             lb_list.append(var.lower.values.ravel()[mask])
             ub_list.append(var.upper.values.ravel()[mask])
             vtypes_list.append(np.full(mask.sum(), vtype))
 
-        if labels_list:
-            vlabels = np.concatenate(labels_list)
-            order = np.argsort(vlabels)
-            self.vlabels: ndarray = vlabels[order]
-            self.lb: ndarray = np.concatenate(lb_list)[order]
-            self.ub: ndarray = np.concatenate(ub_list)[order]
-            self.vtypes: ndarray = np.concatenate(vtypes_list)[order]
+        if lb_list:
+            self.lb: ndarray = np.concatenate(lb_list)
+            self.ub: ndarray = np.concatenate(ub_list)
+            self.vtypes: ndarray = np.concatenate(vtypes_list)
         else:
-            self.vlabels = np.array([], dtype=np.intp)
             self.lb = np.array([])
             self.ub = np.array([])
             self.vtypes = np.array([], dtype=object)
@@ -81,28 +76,23 @@ class MatrixAccessor:
             self.clabels: ndarray = np.array([], dtype=np.intp)
             self.b: ndarray = np.array([])
             self.sense: ndarray = np.array([], dtype=object)
-            self.A: csc_matrix | None = None
+            self.A: scipy.sparse.csr_array | None = None
             return
 
-        A_full, clabels, _ = m.constraints.to_matrix(filter_missings=False)
-        self.A = A_full[:, self.vlabels]
-        self.clabels = clabels
-
+        label_index = m.variables.label_index
+        csrs = []
+        clabels_list = []
         b_list = []
         sense_list = []
         for c in m.constraints.data.values():
-            csr = c.to_matrix()
-            nonempty = np.diff(csr.indptr).astype(bool)
-            active_rows = np.flatnonzero(nonempty)
+            csr, con_labels, b, sense = c.to_matrix_with_rhs(label_index)
+            csrs.append(csr)
+            clabels_list.append(con_labels)
+            b_list.append(b)
+            sense_list.append(sense)
 
-            if isinstance(c, Constraint):
-                b_list.append(c._rhs[active_rows])
-                sense_list.append(np.full(len(active_rows), c._sign[0]))
-            else:
-                b_list.append(c.rhs.values.ravel()[active_rows])
-                sign_flat = c.sign.values.ravel()[active_rows]
-                sense_list.append(np.array([s[0] for s in sign_flat]))
-
+        self.A = scipy.sparse.vstack(csrs, format="csr")
+        self.clabels = np.concatenate(clabels_list)
         self.b = np.concatenate(b_list) if b_list else np.array([])
         self.sense = (
             np.concatenate(sense_list) if sense_list else np.array([], dtype=object)
@@ -114,24 +104,27 @@ class MatrixAccessor:
         m = self._parent
         result = np.zeros(len(self.vlabels))
 
-        ds = m.objective.flat
-        if isinstance(m.objective.expression, expressions.QuadraticExpression):
-            ds = ds[(ds.vars1 == -1) | (ds.vars2 == -1)].copy()
-            ds["vars"] = ds.vars1.where(ds.vars1 != -1, ds.vars2)
+        label_index = m.variables.label_index
+        label_to_pos = label_index.label_to_pos
+        expr = m.objective.expression
+        if isinstance(expr, expressions.QuadraticExpression):
+            # vars has shape (_factor=2, _term); linear terms have one factor == -1
+            vars_2d = expr.data.vars.values  # shape (2, n_term)
+            coeffs_all = expr.data.coeffs.values.ravel()
+            vars1, vars2 = vars_2d[0], vars_2d[1]
+            linear = (vars1 == -1) | (vars2 == -1)
+            var_labels = np.where(vars1[linear] != -1, vars1[linear], vars2[linear])
+            coeffs = coeffs_all[linear]
+        else:
+            var_labels = expr.data.vars.values.ravel()
+            coeffs = expr.data.coeffs.values.ravel()
 
-        var_labels = ds.vars.values
-        coeffs = ds.coeffs.values
         mask = var_labels != -1
-        active_labels = var_labels[mask]
-        positions = np.searchsorted(self.vlabels, active_labels)
-        valid = (positions < len(self.vlabels)) & (
-            self.vlabels[positions] == active_labels
-        )
-        np.add.at(result, positions[valid], coeffs[mask][valid])
+        np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
         return result
 
     @property
-    def Q(self) -> csc_matrix | None:
+    def Q(self) -> scipy.sparse.csc_matrix | None:
         """Quadratic objective matrix, shape (n_active_vars, n_active_vars)."""
         m = self._parent
         expr = m.objective.expression
@@ -146,11 +139,12 @@ class MatrixAccessor:
             raise ValueError("Model is not optimized.")
         m = self._parent
         result = np.full(len(self.vlabels), np.nan)
+        label_index = m.variables.label_index
+        label_to_pos = label_index.label_to_pos
         for _, var in m.variables.items():
             labels = var.labels.values.ravel()
             mask = labels != -1
-            active_labels = labels[mask]
-            positions = np.searchsorted(self.vlabels, active_labels)
+            positions = label_to_pos[labels[mask]]
             result[positions] = var.solution.values.ravel()[mask]
         return result
 
@@ -160,19 +154,21 @@ class MatrixAccessor:
         if not self._parent.status == "ok":
             raise ValueError("Model is not optimized.")
         m = self._parent
+        label_index = m.variables.label_index
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
-            csr = c.to_matrix()
-            nonempty = np.diff(csr.indptr).astype(bool)
-            active_rows = np.flatnonzero(nonempty)
             if isinstance(c, Constraint):
+                # _dual is active-only
                 if c._dual is not None:
-                    dual_list.append(c._dual[active_rows])
+                    dual_list.append(c._dual)
                     has_dual = True
                 else:
-                    dual_list.append(np.full(len(active_rows), np.nan))
+                    dual_list.append(np.full(len(c._con_labels), np.nan))
             else:
+                csr, _ = c.to_matrix(label_index)
+                nonempty = np.diff(csr.indptr).astype(bool)
+                active_rows = np.flatnonzero(nonempty)
                 if "dual" in c.data:
                     dual_list.append(c.dual.values.ravel()[active_rows])
                     has_dual = True

@@ -1401,6 +1401,60 @@ class EmptyDeprecationWrapper:
         return self.value
 
 
+def coords_to_dataset_vars(coords: list[pd.Index]) -> dict[str, DataArray]:
+    """
+    Serialize a list of pd.Index (including MultiIndex) to a DataArray dict.
+
+    Suitable for embedding coordinate metadata as plain data variables in a
+    Dataset that has its own unrelated dimensions (e.g. CSR netcdf format).
+    Reconstruct with :func:`coords_from_dataset`.
+    """
+    data_vars: dict[str, DataArray] = {}
+    for c in coords:
+        if isinstance(c, pd.MultiIndex):
+            for level_name, level_values in zip(c.names, c.levels):
+                data_vars[f"_coord_{c.name}_level_{level_name}"] = DataArray(
+                    np.array(level_values),
+                    dims=[f"_coorddim_{c.name}_level_{level_name}"],
+                )
+            data_vars[f"_coord_{c.name}_codes"] = DataArray(
+                np.array(c.codes).T,
+                dims=[f"_coorddim_{c.name}", f"_coorddim_{c.name}_nlevels"],
+            )
+        else:
+            data_vars[f"_coord_{c.name}"] = DataArray(
+                np.array(c), dims=[f"_coorddim_{c.name}"]
+            )
+    return data_vars
+
+
+def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
+    """
+    Deserialize a list of pd.Index (including MultiIndex) from a Dataset.
+
+    Reconstructs coordinates previously serialized by :func:`coords_to_dataset_vars`.
+    """
+    coords = []
+    for d in coord_dims:
+        if f"_coord_{d}_codes" in ds:
+            codes_2d = ds[f"_coord_{d}_codes"].values.T
+            level_names = [
+                k[len(f"_coord_{d}_level_") :]
+                for k in ds
+                if k.startswith(f"_coord_{d}_level_")
+            ]
+            arrays = [
+                ds[f"_coord_{d}_level_{ln}"].values[codes_2d[i]]
+                for i, ln in enumerate(level_names)
+            ]
+            mi = pd.MultiIndex.from_arrays(arrays, names=level_names)
+            mi.name = d
+            coords.append(mi)
+        else:
+            coords.append(pd.Index(ds[f"_coord_{d}"].values, name=d))
+    return coords
+
+
 def is_constant(x: SideLike) -> bool:
     """
     Check if the given object is a constant type or an expression type without

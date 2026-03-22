@@ -104,10 +104,11 @@ def test_remove_variable() -> None:
 
     assert "x" in m.variables
 
-    m.remove_variables("x")
+    with pytest.warns(UserWarning, match="con0"):
+        m.remove_variables("x")
     assert "x" not in m.variables
 
-    assert not m.constraints.con0.vars.isin(x.labels).any()
+    assert "con0" not in m.constraints
 
     assert not m.objective.vars.isin(x.labels).any()
 

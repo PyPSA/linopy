@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -731,7 +732,7 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
         mask: MaskLike | None = None,
-        freeze: bool = False,
+        freeze: bool = True,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -768,7 +769,7 @@ class Model:
             Default is None.
         freeze : bool, optional
             If True, convert the constraint to an immutable CSR-backed Constraint
-            before returning. Default is False.
+            before returning. Default is True.
 
         Returns
         -------
@@ -889,6 +890,8 @@ class Model:
         data = data.assign_attrs(label_range=(start, end), name=name)
 
         if self.chunk:
+            if freeze:
+                raise ValueError("Chunked constraints cannot be frozen")
             data = data.chunk(self.chunk)
 
         constraint = MutableConstraint(data, name=name, model=self, skip_broadcast=True)
@@ -944,18 +947,26 @@ class Model:
         -------
         None.
         """
-        labels = self.variables[name].labels
+        variable = self.variables[name]
+
+        to_remove = [
+            k for k, con in self.constraints.items() if con.has_variable(variable)
+        ]
+
+        if to_remove:
+            warnings.warn(
+                f"Removing variable '{name}' also removes constraints {to_remove} "
+                "because they reference this variable.",
+                UserWarning,
+                stacklevel=2,
+            )
+            for k in to_remove:
+                self.constraints.remove(k)
+
         self.variables.remove(name)
 
-        for k in list(self.constraints):
-            vars = self.constraints[k].data["vars"]
-            vars = vars.where(~vars.isin(labels), -1)
-            self.constraints[k]._data = assign_multiindex_safe(
-                self.constraints[k].data, vars=vars
-            )
-
         self.objective = self.objective.sel(
-            {TERM_DIM: ~self.objective.vars.isin(labels)}
+            {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
         )
 
     def remove_constraints(self, name: str | list[str]) -> None:

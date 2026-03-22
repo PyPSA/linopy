@@ -298,7 +298,7 @@ def modified_model() -> Model:
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    c = m.add_constraints(x + y, GREATER_EQUAL, 10)
+    c = m.add_constraints(x + y, GREATER_EQUAL, 10, freeze=False)
 
     y.lower = 9
     c.lhs = 2 * x + y
