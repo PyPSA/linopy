@@ -116,9 +116,7 @@ def test_constraint_assignment_chunked() -> None:
     lower = pd.DataFrame(np.zeros((10, 10)))
     upper = pd.Series(np.ones(10))
     x = m.add_variables(lower, upper)
-    with pytest.raises(ValueError, match="Chunked constraints cannot be frozen"):
-        m.add_constraints(x, GREATER_EQUAL, 0, name="c")
-    m.add_constraints(x, GREATER_EQUAL, 0, name="c", freeze=False)
+    m.add_constraints(x, GREATER_EQUAL, 0, name="c")
     assert m.constraints.coeffs.c.data.shape == (
         10,
         10,

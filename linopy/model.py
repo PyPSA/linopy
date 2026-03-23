@@ -890,12 +890,10 @@ class Model:
         data = data.assign_attrs(label_range=(start, end), name=name)
 
         if self.chunk:
-            if freeze:
-                raise ValueError("Chunked constraints cannot be frozen")
             data = data.chunk(self.chunk)
 
         constraint = MutableConstraint(data, name=name, model=self, skip_broadcast=True)
-        return self.constraints.add(constraint, freeze=freeze)
+        return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(
         self,
