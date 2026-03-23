@@ -390,3 +390,30 @@ def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
     assert "<=" in content
     assert ">=" in content
     assert "=" in content
+
+
+def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
+    """Test that frozen and mutable constraints produce identical LP output."""
+    m_frozen = Model()
+    N = np.arange(5)
+    x = m_frozen.add_variables(coords=[N], name="x")
+    y = m_frozen.add_variables(coords=[N], name="y")
+    m_frozen.add_constraints(x + y <= 10, name="upper")
+    m_frozen.add_constraints(x >= 1, name="lower")
+    m_frozen.add_constraints(2 * x + y == 8, name="eq")
+    m_frozen.add_objective(x.sum() + 2 * y.sum())
+
+    m_mutable = Model()
+    x2 = m_mutable.add_variables(coords=[N], name="x")
+    y2 = m_mutable.add_variables(coords=[N], name="y")
+    m_mutable.add_constraints(x2 + y2 <= 10, name="upper", freeze=False)
+    m_mutable.add_constraints(x2 >= 1, name="lower", freeze=False)
+    m_mutable.add_constraints(2 * x2 + y2 == 8, name="eq", freeze=False)
+    m_mutable.add_objective(x2.sum() + 2 * y2.sum())
+
+    fn_frozen = tmp_path / "frozen.lp"
+    fn_mutable = tmp_path / "mutable.lp"
+    m_frozen.to_file(fn_frozen)
+    m_mutable.to_file(fn_mutable)
+
+    assert fn_frozen.read_text() == fn_mutable.read_text()

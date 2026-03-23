@@ -892,9 +892,65 @@ class Constraint(ConstraintBase):
         """Convert to a MutableConstraint."""
         return MutableConstraint(self.data, self._model, self._name)
 
-    def to_polars(self) -> Any:
-        """Convert to polars DataFrame — delegates to mutable()."""
-        return self.mutable().to_polars()
+    def to_polars(self) -> pl.DataFrame:
+        """Convert frozen constraint to polars DataFrame directly from CSR."""
+        csr = self._csr
+        if csr.nnz == 0:
+            return pl.DataFrame(
+                schema={
+                    "labels": pl.Int64,
+                    "coeffs": pl.Float64,
+                    "vars": pl.Int64,
+                    "sign": pl.Enum(["=", "<=", ">="]),
+                    "rhs": pl.Float64,
+                }
+            )
+
+        rows = np.repeat(np.arange(csr.shape[0]), np.diff(csr.indptr))
+        vlabels = self._model.variables.label_index.vlabels
+
+        return pl.DataFrame(
+            {
+                "labels": self._con_labels[rows],
+                "coeffs": csr.data,
+                "vars": vlabels[csr.indices],
+                "rhs": self._rhs[rows],
+            }
+        ).with_columns(
+            pl.lit(self._sign).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
+        )[["labels", "coeffs", "vars", "sign", "rhs"]]
+
+    def iterate_slices(
+        self,
+        slice_size: int | None = 2_000_000,
+        slice_dims: list | None = None,
+    ) -> Iterator[Constraint]:
+        """Yield row-batched sub-Constraints without Dataset reconstruction."""
+        nnz = self._csr.nnz
+        if slice_size is None or nnz <= slice_size:
+            yield self
+            return
+
+        n = self._csr.shape[0]
+        cumulative = np.cumsum(np.diff(self._csr.indptr))
+        batch_start = 0
+        for batch_end_nnz in range(slice_size, nnz + slice_size, slice_size):
+            batch_end = int(np.searchsorted(cumulative, batch_end_nnz, side="right"))
+            batch_end = max(batch_end, batch_start + 1)
+            if batch_end >= n:
+                batch_end = n
+            yield Constraint(
+                csr=self._csr[batch_start:batch_end],
+                con_labels=self._con_labels[batch_start:batch_end],
+                rhs=self._rhs[batch_start:batch_end],
+                sign=self._sign,
+                coords=self._coords,
+                model=self._model,
+                name=self._name,
+            )
+            batch_start = batch_end
+            if batch_start >= n:
+                break
 
     @classmethod
     def from_mutable(
@@ -913,6 +969,7 @@ class Constraint(ConstraintBase):
         """
         label_index = con.model.variables.label_index
         csr, con_labels = con.to_matrix(label_index)
+        csr.eliminate_zeros()
         coords = [con.indexes[d] for d in con.coord_dims]
         # Build active_mask aligned with con_labels (rows in csr)
         # Use same filter as to_matrix: label != -1 AND at least one var != -1
