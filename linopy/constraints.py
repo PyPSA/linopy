@@ -541,11 +541,19 @@ class Constraint(ConstraintBase):
         return self._cindex is not None
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        return tuple(len(c) for c in self._coords)
+
+    @property
+    def full_size(self) -> int:
+        return int(np.prod(shape)) if (shape := self.shape) else 1
+
+    @property
     def range(self) -> tuple[int, int]:
         """Return the (start, end) label range of the constraint."""
         if self._cindex is None:
             raise AttributeError("Constraint has not been assigned labels yet.")
-        return (self._cindex, self._cindex + self._csr.shape[0])
+        return (self._cindex, self._cindex + self.full_size)
 
     @property
     def ncons(self) -> int:
@@ -555,7 +563,7 @@ class Constraint(ConstraintBase):
     def attrs(self) -> dict[str, Any]:
         d: dict[str, Any] = {"name": self._name}
         if self._cindex is not None:
-            d["label_range"] = (self._cindex, self._cindex + self._csr.shape[0])
+            d["label_range"] = (self._cindex, self._cindex + self.full_size)
         return d
 
     @property
@@ -592,17 +600,11 @@ class Constraint(ConstraintBase):
         """Get labels DataArray, shape (*coord_dims)."""
         if self._cindex is None:
             return DataArray([])
-        shape = tuple(len(c) for c in self._coords)
-        full_size = int(np.prod(shape)) if shape else 1
+        shape = self.shape
+        full_size = self.full_size
         labels_flat = np.full(full_size, -1, dtype=np.int64)
         labels_flat[self.active_positions] = self._con_labels
-        dim_names = [c.name for c in self._coords]
-        xr_coords = {c.name: c for c in self._coords}
-        return DataArray(
-            labels_flat.reshape(shape),
-            coords=xr_coords,
-            dims=dim_names,
-        )
+        return DataArray(labels_flat.reshape(shape), coords=self._coords)
 
     @property
     def coeffs(self) -> DataArray:
@@ -629,29 +631,15 @@ class Constraint(ConstraintBase):
     @property
     def sign(self) -> DataArray:
         """Get sign DataArray (scalar, same sign for all entries)."""
-        shape = tuple(len(c) for c in self._coords)
-        dim_names = [c.name for c in self._coords]
-        xr_coords = {c.name: c for c in self._coords}
-        return DataArray(
-            np.full(shape, self._sign) if shape else np.array(self._sign),
-            coords=xr_coords,
-            dims=dim_names,
-        )
+        return DataArray(np.full(self.shape, self._sign), coords=self._coords)
 
     @property
     def rhs(self) -> DataArray:
         """Get RHS DataArray, shape (*coord_dims)."""
-        shape = tuple(len(c) for c in self._coords)
-        dim_names = [c.name for c in self._coords]
-        xr_coords = {c.name: c for c in self._coords}
-        full_size = int(np.prod(shape)) if shape else 1
-        rhs_full = np.full(full_size, np.nan)
+        shape = self.shape
+        rhs_full = np.full(self.full_size, np.nan)
         rhs_full[self.active_positions] = self._rhs
-        return DataArray(
-            rhs_full.reshape(shape) if shape else rhs_full.reshape(()),
-            coords=xr_coords,
-            dims=dim_names,
-        )
+        return DataArray(rhs_full.reshape(shape), coords=self._coords)
 
     @property
     @has_optimized_model
@@ -661,17 +649,9 @@ class Constraint(ConstraintBase):
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
-        shape = tuple(len(c) for c in self._coords)
-        dim_names = [c.name for c in self._coords]
-        xr_coords = {c.name: c for c in self._coords}
-        full_size = int(np.prod(shape)) if shape else 1
-        dual_full = np.full(full_size, np.nan)
+        dual_full = np.full(self.full_size, np.nan)
         dual_full[self.active_positions] = self._dual
-        return DataArray(
-            dual_full.reshape(shape) if shape else dual_full.reshape(()),
-            coords=xr_coords,
-            dims=dim_names,
-        )
+        return DataArray(dual_full.reshape(self.shape), coords=self._coords)
 
     @dual.setter
     def dual(self, value: DataArray) -> None:
@@ -693,10 +673,9 @@ class Constraint(ConstraintBase):
         Dataset with variables ``labels``, ``coeffs``, ``vars``.
         """
         csr = self._csr
-        n_active = csr.shape[0]  # active rows only (no masked rows in CSR)
         counts = np.diff(csr.indptr)
-        shape = tuple(len(c) for c in self._coords)
-        full_size = int(np.prod(shape)) if shape else n_active
+        shape = self.shape
+        full_size = self.full_size
 
         # Map active row i -> flat position in full shape via con_labels
         active_positions = self.active_positions
@@ -710,7 +689,7 @@ class Constraint(ConstraintBase):
             vars_2d[row_indices, term_cols] = vlabels[csr.indices]
             coeffs_2d[row_indices, term_cols] = csr.data
 
-        dim_names = [c.name for c in self._coords]
+        dim_names = self.coord_names
         xr_coords = {c.name: c for c in self._coords}
         dims_with_term = dim_names + [TERM_DIM]
         coeffs_da = DataArray(
@@ -727,60 +706,39 @@ class Constraint(ConstraintBase):
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=np.int64)
             labels_flat[active_positions] = self._con_labels
-            ds["labels"] = DataArray(
-                labels_flat.reshape(shape),
-                coords=xr_coords,
-                dims=dim_names,
-            )
+            ds["labels"] = DataArray(labels_flat.reshape(shape), coords=self._coords)
         return ds
 
     @property
     def data(self) -> Dataset:
         """Reconstruct the xarray Dataset from the CSR representation."""
         ds = self._to_dataset(self.nterm)
-        shape = tuple(len(c) for c in self._coords)
-        dim_names = [c.name for c in self._coords]
-        xr_coords = {c.name: c for c in self._coords}
-        full_size = int(np.prod(shape)) if shape else 1
+        shape = self.shape
         active_pos = self.active_positions
-        rhs_full = np.full(full_size, np.nan)
+        rhs_full = np.full(self.full_size, np.nan)
         rhs_full[active_pos] = self._rhs
         ds = ds.assign(
-            sign=DataArray(
-                np.full(shape, self._sign),
-                coords=xr_coords,
-                dims=dim_names,
-            ),
-            rhs=DataArray(
-                rhs_full.reshape(shape) if shape else rhs_full.reshape(()),
-                coords=xr_coords,
-                dims=dim_names,
-            ),
+            sign=DataArray(np.full(shape, self._sign), coords=self._coords),
+            rhs=DataArray(rhs_full.reshape(shape), coords=self._coords),
         )
         if self._dual is not None:
-            dual_full = np.full(full_size, np.nan)
+            dual_full = np.full(self.full_size, np.nan)
             dual_full[active_pos] = self._dual
             ds = ds.assign(
-                dual=DataArray(
-                    dual_full.reshape(shape) if shape else dual_full.reshape(()),
-                    coords=xr_coords,
-                    dims=dim_names,
-                )
+                dual=DataArray(dual_full.reshape(shape), coords=self._coords)
             )
         attrs: dict[str, Any] = {"name": self._name}
         if self._cindex is not None:
-            n_flat = int(np.prod(shape)) if shape else 1
-            attrs["label_range"] = (self._cindex, self._cindex + n_flat)
+            attrs["label_range"] = (self._cindex, self._cindex + self.full_size)
         return ds.assign_attrs(attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
         max_lines = options["display_max_rows"]
         coords = self._coords
-        shape = tuple(len(c) for c in coords)
-        dim_names = [c.name for c in coords]
-        dim_sizes = list(shape)
-        size = int(np.prod(shape)) if shape else 1
+        shape = self.shape
+        dim_names = self.coord_names
+        size = self.full_size
         # Map active rows (CSR is active-only) back to full flat positions
         csr = self._csr
         nterm = self.nterm
@@ -803,19 +761,19 @@ class Constraint(ConstraintBase):
             coeffs_row[: end - start] = csr.data[start:end]
             return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[self._sign]} {self._rhs[row]}"
 
-        if size > 1 or len(dim_sizes) > 0:
-            for indices in generate_indices_for_printout(dim_sizes, max_lines):
+        if size > 1:
+            for indices in generate_indices_for_printout(shape, max_lines):
                 if indices is None:
                     lines.append("\t\t...")
                 else:
                     coord = [coords[i][int(ind)] for i, ind in enumerate(indices)]
-                    flat_idx = int(np.ravel_multi_index(indices, shape)) if shape else 0
+                    flat_idx = int(np.ravel_multi_index(indices, shape))
                     row = pos_to_row[flat_idx]
                     body = row_expr(row) if row >= 0 else "None"
                     lines.append(print_coord(coord) + f": {body}")
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
-            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
+            shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, shape))
             mask_str = f" - {masked_entries} masked entries" if masked_entries else ""
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
