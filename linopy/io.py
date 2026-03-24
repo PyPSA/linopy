@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -1144,6 +1145,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1237,6 +1240,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))
+
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
 
     return m
 
