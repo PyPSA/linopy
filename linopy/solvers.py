@@ -54,7 +54,7 @@ NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
-available_solvers = []
+available_solvers: list[str] = []
 
 which = "where" if os.name == "nt" else "which"
 

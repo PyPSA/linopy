@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from xarray.testing import assert_equal
 
-from linopy.constraints import Constraint, _con_unwrap
+from linopy.constraints import ConstraintBase, _con_unwrap
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
@@ -29,7 +29,7 @@ def assert_quadequal(
     return assert_equal(_expr_unwrap(a), _expr_unwrap(b))
 
 
-def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
+def assert_conequal(a: ConstraintBase, b: ConstraintBase, strict: bool = True) -> None:
     """
     Assert that two constraints are equal.
 

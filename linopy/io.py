@@ -1167,15 +1167,15 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     -------
     m : linopy.Model
     """
-    from linopy.constraints import Constraint
-    from linopy.model import (
+    from linopy.constraints import (
+        Constraint,
+        ConstraintBase,
         Constraints,
-        LinearExpression,
-        Model,
         MutableConstraint,
-        Variable,
-        Variables,
     )
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model
+    from linopy.variables import Variable, Variables
 
     if isinstance(path, str):
         path = Path(path)
@@ -1222,7 +1222,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     cons = [str(k) for k in ds if str(k).startswith("constraints")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
-    constraints = {}
+    constraints: dict[str, ConstraintBase] = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)

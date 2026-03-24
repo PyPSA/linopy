@@ -7,7 +7,7 @@ Created on Mon Oct 10 13:33:55 2022.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import scipy.sparse
@@ -91,7 +91,7 @@ class MatrixAccessor:
             b_list.append(b)
             sense_list.append(sense)
 
-        self.A = scipy.sparse.vstack(csrs, format="csr")
+        self.A = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
         self.clabels = np.concatenate(clabels_list)
         self.b = np.concatenate(b_list) if b_list else np.array([])
         self.sense = (

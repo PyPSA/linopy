@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import arange, signedinteger
+from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
@@ -327,7 +328,7 @@ def check_has_nulls(df: pd.DataFrame, name: str) -> None:
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
 
 
-def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
+def infer_schema_polars(ds: Dataset) -> dict[str, DataTypeClass]:
     """
     Infer the polars data schema from a xarray dataset.
 
@@ -339,21 +340,22 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     -------
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
-    schema = {}
+    schema: dict[str, DataTypeClass] = {}
     np_major_version = int(np.__version__.split(".")[0])
     use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
+        name = str(name)
         if np.issubdtype(array.dtype, np.integer):
             schema[name] = pl.Int32 if use_int32 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
-            schema[name] = pl.Float64  # type: ignore
+            schema[name] = pl.Float64
         elif np.issubdtype(array.dtype, np.bool_):
-            schema[name] = pl.Boolean  # type: ignore
+            schema[name] = pl.Boolean
         elif np.issubdtype(array.dtype, np.object_):
-            schema[name] = pl.Object  # type: ignore
+            schema[name] = pl.Object
         else:
-            schema[name] = pl.Utf8  # type: ignore
-    return schema  # type: ignore
+            schema[name] = pl.Utf8
+    return schema
 
 
 def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
@@ -429,7 +431,7 @@ def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
     if "labels" in df.columns:
         cond.append(pl.col("labels").ne(-1))
 
-    cond = reduce(operator.and_, cond)  # type: ignore
+    cond = reduce(operator.and_, cond)  # type: ignore[arg-type]
     return df.filter(cond)
 
 
@@ -655,7 +657,7 @@ def iterate_slices(
         start = i * chunk_size
         end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)
+        yield ds.isel(slice_dict)  # type: ignore[attr-defined]
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
@@ -1367,7 +1369,7 @@ class LocIndexer(Generic[LocT]):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
-        return self.object.sel(key)
+        return self.object.sel(key)  # type: ignore[attr-defined]
 
 
 class EmptyDeprecationWrapper:
@@ -1439,9 +1441,9 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
         if f"_coord_{d}_codes" in ds:
             codes_2d = ds[f"_coord_{d}_codes"].values.T
             level_names = [
-                k[len(f"_coord_{d}_level_") :]
+                str(k)[len(f"_coord_{d}_level_") :]
                 for k in ds
-                if k.startswith(f"_coord_{d}_level_")
+                if str(k).startswith(f"_coord_{d}_level_")
             ]
             arrays = [
                 ds[f"_coord_{d}_level_{ln}"].values[codes_2d[i]]

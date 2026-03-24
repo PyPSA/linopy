@@ -1311,7 +1311,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler = None,  # type: ignore
+        remote: RemoteHandler | OetcHandler | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,

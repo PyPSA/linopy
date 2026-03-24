@@ -169,6 +169,11 @@ class ConstraintBase(ABC):
     def dual(self) -> DataArray:
         """Get the dual values DataArray."""
 
+    @dual.setter
+    @abstractmethod
+    def dual(self, value: DataArray) -> None:
+        """Set the dual values DataArray."""
+
     @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
         """Check if the constraint references any of the given variable labels."""
@@ -184,6 +189,18 @@ class ConstraintBase(ABC):
     @abstractmethod
     def sanitize_infinities(self) -> ConstraintBase:
         """Mask out rows with invalid infinite RHS values."""
+
+    @abstractmethod
+    def to_polars(self) -> pl.DataFrame:
+        """Convert constraint to a polars DataFrame."""
+
+    @abstractmethod
+    def freeze(self) -> Constraint:
+        """Return an immutable Constraint (CSR-backed)."""
+
+    @abstractmethod
+    def mutable(self) -> MutableConstraint:
+        """Return a mutable MutableConstraint."""
 
     @abstractmethod
     def to_matrix_with_rhs(
@@ -298,7 +315,8 @@ class ConstraintBase(ABC):
         (True) and disabled (False).
         """
         if self.is_assigned:
-            return (self.labels != FILL_VALUE["labels"]).astype(bool)
+            result: DataArray = self.labels != FILL_VALUE["labels"]  # type: ignore[assignment]
+            return result.astype(bool)
         return None
 
     @property
@@ -391,7 +409,7 @@ class ConstraintBase(ABC):
         """
         ds = self.data
 
-        def mask_func(data: pd.DataFrame) -> pd.Series:
+        def mask_func(data: dict) -> pd.Series:
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
             if "labels" in data:
                 mask &= data["labels"] != -1
@@ -593,7 +611,7 @@ class Constraint(ConstraintBase):
 
     @property
     def coord_names(self) -> list[str]:
-        return [c.name for c in self._coords]
+        return [str(c.name) for c in self._coords]
 
     @property
     def labels(self) -> DataArray:
@@ -828,8 +846,8 @@ class Constraint(ConstraintBase):
         )
         rhs = ds["rhs"].values
         sign = attrs["sign"]
-        cindex = int(attrs["cindex"])
-        cindex = cindex if cindex >= 0 else None
+        _cindex_raw = int(attrs["cindex"])
+        cindex: int | None = _cindex_raw if _cindex_raw >= 0 else None
         coord_dims = attrs["coord_dims"]
         if isinstance(coord_dims, str):
             coord_dims = [coord_dims]
@@ -892,7 +910,7 @@ class Constraint(ConstraintBase):
         """Convert to a MutableConstraint."""
         return MutableConstraint(self.data, self._model, self._name)
 
-    def to_polars(self) -> Any:
+    def to_polars(self) -> pl.DataFrame:
         """Convert to polars DataFrame — delegates to mutable()."""
         return self.mutable().to_polars()
 
@@ -1598,6 +1616,8 @@ class Constraints:
         N = block_map.max()
 
         for name, constraint in self.items():
+            if not isinstance(constraint, MutableConstraint):
+                self.data[name] = constraint = constraint.mutable()
             res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
             entries = replace_by_map(constraint.vars, block_map)
 
@@ -1679,9 +1699,12 @@ class Constraints:
                         cindex=c._cindex,
                         dual=None,
                     )
-            else:
+            elif isinstance(c, MutableConstraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")
+            else:
+                msg = f"reset_dual encountered an unknown constraint type: {type(c)}"
+                raise NotImplementedError(msg)
 
 
 class AnonymousScalarConstraint:

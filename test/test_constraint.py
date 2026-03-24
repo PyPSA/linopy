@@ -26,7 +26,6 @@ from linopy.constants import (
 )
 from linopy.constraints import (
     AnonymousScalarConstraint,
-    Constraint,
     ConstraintBase,
     Constraints,
     MutableConstraint,
@@ -54,7 +53,7 @@ def y(m: Model) -> linopy.Variable:
 
 
 @pytest.fixture
-def c(m: Model) -> linopy.constraints.Constraint:
+def c(m: Model) -> linopy.constraints.ConstraintBase:
     return m.constraints["c"]
 
 
@@ -227,7 +226,7 @@ def test_constraint_inherited_properties(
 
 
 def test_constraint_wrapped_methods(x: linopy.Variable, y: linopy.Variable) -> None:
-    con: Constraint = 10 * x + y <= 10
+    con: MutableConstraint = 10 * x + y <= 10
 
     # Test wrapped methods
     con.assign({"new_var": xr.DataArray(np.zeros((2, 2)), coords=[range(2), range(2)])})
