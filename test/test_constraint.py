@@ -705,3 +705,84 @@ def test_constraints_inequalities(m: Model) -> None:
 
 def test_constraints_equalities(m: Model) -> None:
     assert isinstance(m.constraints.equalities, Constraints)
+
+
+def test_freeze_mutable_roundtrip(m: Model) -> None:
+    frozen = m.constraints["c"]
+    assert isinstance(frozen, Constraint)
+    mc = frozen.mutable()
+    assert isinstance(mc, MutableConstraint)
+    refrozen = Constraint.from_mutable(mc, frozen._cindex)
+    assert_equal(frozen.labels, refrozen.labels)
+    assert_equal(frozen.rhs, refrozen.rhs)
+    assert_equal(frozen.sign, refrozen.sign)
+    np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
+    np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
+
+
+def test_freeze_mutable_roundtrip_with_masking() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
+    mask = xr.DataArray([True, False, True, False, True], dims=["i"])
+    m.add_constraints(x.where(mask) >= 0, name="c")
+    frozen = m.constraints["c"]
+    mc = frozen.mutable()
+    refrozen = Constraint.from_mutable(mc, frozen._cindex)
+    assert_equal(frozen.labels, refrozen.labels)
+    assert_equal(frozen.rhs, refrozen.rhs)
+    assert frozen.ncons == refrozen.ncons == 3
+
+
+def test_from_mutable_mixed_signs_raises() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    m.add_constraints(x >= 0, name="mixed", freeze=False)
+    mc = m.constraints["mixed"]
+    assert isinstance(mc, MutableConstraint)
+    mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
+    with pytest.raises(ValueError, match="per-element signs"):
+        Constraint.from_mutable(mc)
+
+
+def test_variable_label_index(m: Model) -> None:
+    li = m.variables.label_index
+    assert li.n_active_vars > 0
+    assert len(li.vlabels) == li.n_active_vars
+    assert li.label_to_pos.shape[0] == m._xCounter
+    for lbl in li.vlabels:
+        assert li.label_to_pos[lbl] >= 0
+    assert (li.label_to_pos[li.vlabels] == np.arange(li.n_active_vars)).all()
+
+
+def test_variable_label_index_invalidation(m: Model) -> None:
+    li = m.variables.label_index
+    old_vlabels = li.vlabels.copy()
+    m.add_variables(name="w")
+    li.invalidate()
+    assert len(li.vlabels) > len(old_vlabels)
+
+
+def test_to_matrix_with_rhs(m: Model) -> None:
+    c = m.constraints["c"]
+    li = m.variables.label_index
+    csr, con_labels, b, sense = c.to_matrix_with_rhs(li)
+    assert csr.shape[0] == len(con_labels)
+    assert csr.shape[0] == len(b)
+    assert csr.shape[0] == len(sense)
+    assert all(s in ("<", ">", "=") for s in sense)
+    np.testing.assert_array_equal(b, c._rhs)
+
+
+def test_to_matrix_with_rhs_mutable(m: Model) -> None:
+    mc = m.constraints["c"].mutable()
+    li = m.variables.label_index
+    csr, con_labels, b, sense = mc.to_matrix_with_rhs(li)
+    assert csr.shape[0] == len(con_labels)
+    assert csr.shape[0] == len(b)
+    assert csr.shape[0] == len(sense)
+
+
+def test_constraint_repr_shows_variable_names(m: Model) -> None:
+    c = m.constraints["c"]
+    r = repr(c)
+    assert "x" in r

@@ -613,16 +613,19 @@ class Constraint(ConstraintBase):
     def coord_names(self) -> list[str]:
         return [str(c.name) for c in self._coords]
 
+    def _active_to_dataarray(
+        self, active_values: np.ndarray, fill: float | int = -1
+    ) -> DataArray:
+        full = np.full(self.full_size, fill, dtype=active_values.dtype)
+        full[self.active_positions] = active_values
+        return DataArray(full.reshape(self.shape), coords=self._coords)
+
     @property
     def labels(self) -> DataArray:
         """Get labels DataArray, shape (*coord_dims)."""
         if self._cindex is None:
             return DataArray([])
-        shape = self.shape
-        full_size = self.full_size
-        labels_flat = np.full(full_size, -1, dtype=np.int64)
-        labels_flat[self.active_positions] = self._con_labels
-        return DataArray(labels_flat.reshape(shape), coords=self._coords)
+        return self._active_to_dataarray(self._con_labels, fill=-1)
 
     @property
     def coeffs(self) -> DataArray:
@@ -654,10 +657,7 @@ class Constraint(ConstraintBase):
     @property
     def rhs(self) -> DataArray:
         """Get RHS DataArray, shape (*coord_dims)."""
-        shape = self.shape
-        rhs_full = np.full(self.full_size, np.nan)
-        rhs_full[self.active_positions] = self._rhs
-        return DataArray(rhs_full.reshape(shape), coords=self._coords)
+        return self._active_to_dataarray(self._rhs, fill=np.nan)
 
     @property
     @has_optimized_model
@@ -667,9 +667,7 @@ class Constraint(ConstraintBase):
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
-        dual_full = np.full(self.full_size, np.nan)
-        dual_full[self.active_positions] = self._dual
-        return DataArray(dual_full.reshape(self.shape), coords=self._coords)
+        return self._active_to_dataarray(self._dual, fill=np.nan)
 
     @dual.setter
     def dual(self, value: DataArray) -> None:
@@ -731,24 +729,10 @@ class Constraint(ConstraintBase):
     def data(self) -> Dataset:
         """Reconstruct the xarray Dataset from the CSR representation."""
         ds = self._to_dataset(self.nterm)
-        shape = self.shape
-        active_pos = self.active_positions
-        rhs_full = np.full(self.full_size, np.nan)
-        rhs_full[active_pos] = self._rhs
-        ds = ds.assign(
-            sign=DataArray(np.full(shape, self._sign), coords=self._coords),
-            rhs=DataArray(rhs_full.reshape(shape), coords=self._coords),
-        )
+        ds = ds.assign(sign=self.sign, rhs=self.rhs)
         if self._dual is not None:
-            dual_full = np.full(self.full_size, np.nan)
-            dual_full[active_pos] = self._dual
-            ds = ds.assign(
-                dual=DataArray(dual_full.reshape(shape), coords=self._coords)
-            )
-        attrs: dict[str, Any] = {"name": self._name}
-        if self._cindex is not None:
-            attrs["label_range"] = (self._cindex, self._cindex + self.full_size)
-        return ds.assign_attrs(attrs)
+            ds = ds.assign(dual=self._active_to_dataarray(self._dual, fill=np.nan))
+        return ds.assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
@@ -771,11 +755,13 @@ class Constraint(ConstraintBase):
         header_string = f"{self.type} `{self._name}`" if self._name else f"{self.type}"
         lines = []
 
+        vlabels = self._model.variables.label_index.vlabels
+
         def row_expr(row: int) -> str:
             start, end = int(csr.indptr[row]), int(csr.indptr[row + 1])
             vars_row = np.full(nterm, -1, dtype=np.int64)
             coeffs_row = np.zeros(nterm, dtype=csr.dtype)
-            vars_row[: end - start] = csr.indices[start:end]
+            vars_row[: end - start] = vlabels[csr.indices[start:end]]
             coeffs_row[: end - start] = csr.data[start:end]
             return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[self._sign]} {self._rhs[row]}"
 
@@ -1630,7 +1616,12 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
+            if isinstance(constraint, MutableConstraint):
+                constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
+            else:
+                mc = constraint.mutable()
+                mc._data = assign_multiindex_safe(mc.data, blocks=res)
+                self.data[name] = Constraint.from_mutable(mc, constraint._cindex)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1687,18 +1678,7 @@ class Constraints:
         """
         for k, c in self.items():
             if isinstance(c, Constraint):
-                if c._dual is not None:
-                    self.data[k] = Constraint(
-                        c._csr,
-                        c._con_labels,
-                        c._rhs,
-                        c._sign,
-                        c._coords,
-                        c._model,
-                        c._name,
-                        cindex=c._cindex,
-                        dual=None,
-                    )
+                c._dual = None
             elif isinstance(c, MutableConstraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")
