@@ -939,7 +939,7 @@ class Model:
         -------
         None.
         """
-        from linopy.variables import FIX_CONSTRAINT_PREFIX
+        from linopy.constants import FIX_CONSTRAINT_PREFIX
 
         # Clean up fix constraint if present
         fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"

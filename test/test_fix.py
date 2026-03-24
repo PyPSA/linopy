@@ -8,7 +8,7 @@ import pytest
 from xarray import DataArray
 
 from linopy import Model
-from linopy.variables import FIX_CONSTRAINT_PREFIX
+from linopy.constants import FIX_CONSTRAINT_PREFIX
 
 
 @pytest.fixture
@@ -65,22 +65,36 @@ class TestVariableFix:
         con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
         np.testing.assert_almost_equal(con.rhs.item(), 3.1416, decimal=4)
 
-    def test_fix_clips_to_upper_bound(self, model_with_solution: Model) -> None:
+    def test_fix_raises_above_upper_bound(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables["x"].fix(value=10.0000001)
+        with pytest.raises(ValueError, match="outside the variable bounds"):
+            m.variables["x"].fix(value=11.0)
+
+    def test_fix_raises_below_lower_bound(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        with pytest.raises(ValueError, match="outside the variable bounds"):
+            m.variables["x"].fix(value=-1.0)
+
+    def test_fix_small_overshoot_rounded_within_bounds(
+        self, model_with_solution: Model
+    ) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=10.0000000001)
         con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
         np.testing.assert_almost_equal(con.rhs.item(), 10.0)
 
-    def test_fix_clips_to_lower_bound(self, model_with_solution: Model) -> None:
-        m = model_with_solution
-        m.variables["x"].fix(value=-0.0000001)
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 0.0)
-
-    def test_fix_overwrites_existing(self, model_with_solution: Model) -> None:
+    def test_fix_raises_if_already_fixed_no_overwrite(
+        self, model_with_solution: Model
+    ) -> None:
         m = model_with_solution
         m.variables["x"].fix(value=3.0)
-        m.variables["x"].fix(value=5.0)
+        with pytest.raises(ValueError, match="already fixed"):
+            m.variables["x"].fix(value=5.0, overwrite=False)
+
+    def test_fix_overwrite_replaces_existing(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=3.0)
+        m.variables["x"].fix(value=5.0, overwrite=True)
         con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
         np.testing.assert_almost_equal(con.rhs.item(), 5.0)
 

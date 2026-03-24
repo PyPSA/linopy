@@ -53,7 +53,13 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, SOS_DIM_ATTR, SOS_TYPE_ATTR, TERM_DIM
+from linopy.constants import (
+    FIX_CONSTRAINT_PREFIX,
+    HELPER_DIMS,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+    TERM_DIM,
+)
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
@@ -78,8 +84,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 FILL_VALUE = {"labels": -1, "lower": np.nan, "upper": np.nan}
-
-FIX_CONSTRAINT_PREFIX = "__fix__"
 
 
 def varwrap(
@@ -1296,6 +1300,7 @@ class Variable:
         value: ConstantLike | None = None,
         decimals: int = 8,
         relax: bool = False,
+        overwrite: bool = True,
     ) -> None:
         """
         Fix the variable to a given value by adding an equality constraint.
@@ -1315,31 +1320,40 @@ class Variable:
             temporarily treating them as continuous. The original type is stored
             in the model's ``_relaxed_registry`` and restored by ``unfix()``.
             Default is False.
+        overwrite : bool, optional
+            If True, overwrite an existing fix constraint for this variable.
+            If False (default), raise an error if the variable is already fixed.
         """
         if value is None:
             value = self.solution
 
-        value = DataArray(value).broadcast_like(self.labels)
+        value = as_dataarray(value).broadcast_like(self.labels)
 
-        # Round: integers/binaries to 0 decimals, continuous to `decimals`
         if self.attrs.get("integer") or self.attrs.get("binary"):
             value = value.round(0)
         else:
             value = value.round(decimals)
 
-        # Clip to bounds
-        value = value.clip(min=self.lower, max=self.upper)
+        if (value < self.lower).any() or (value > self.upper).any():
+            msg = (
+                f"Fix values for variable '{self.name}' are outside the "
+                f"variable bounds."
+            )
+            raise ValueError(msg)
 
         constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
 
-        # Remove existing fix constraint if present
         if constraint_name in self.model.constraints:
+            if not overwrite:
+                msg = (
+                    f"Variable '{self.name}' is already fixed. Use "
+                    f"overwrite=True to replace the existing fix constraint."
+                )
+                raise ValueError(msg)
             self.model.remove_constraints(constraint_name)
 
-        # Add equality constraint: 1 * var == value
         self.model.add_constraints(1 * self, "=", value, name=constraint_name)
 
-        # Handle integrality relaxation
         if relax and (self.attrs.get("integer") or self.attrs.get("binary")):
             original_type = "binary" if self.attrs.get("binary") else "integer"
             self.model._relaxed_registry[self.name] = original_type
@@ -1357,7 +1371,6 @@ class Variable:
         if constraint_name in self.model.constraints:
             self.model.remove_constraints(constraint_name)
 
-        # Restore integrality if it was relaxed
         registry = self.model._relaxed_registry
         if self.name in registry:
             original_type = registry.pop(self.name)
@@ -1653,6 +1666,7 @@ class Variables:
         value: int | float | None = None,
         decimals: int = 8,
         relax: bool = False,
+        overwrite: bool = True,
     ) -> None:
         """
         Fix all variables in this container to their solution or a scalar value.
@@ -1670,6 +1684,8 @@ class Variables:
             Number of decimal places to round continuous variables to.
         relax : bool, optional
             If True, relax integrality of integer/binary variables.
+        overwrite : bool, optional
+            If True, overwrite existing fix constraints.
 
         Note
         ----
@@ -1685,7 +1701,7 @@ class Variables:
             m.variables[names].unfix()
         """
         for var in self.data.values():
-            var.fix(value=value, decimals=decimals, relax=relax)
+            var.fix(value=value, decimals=decimals, relax=relax, overwrite=overwrite)
 
     def unfix(self) -> None:
         """
