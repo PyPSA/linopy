@@ -1747,7 +1747,7 @@ class Xpress(Solver[None]):
         return Result(status, solution, m)
 
 
-KnitroResult = namedtuple("KnitroResult", "knitro_context reported_runtime")
+KnitroResult = namedtuple("KnitroResult", "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error", )
 
 
 class Knitro(Solver[None]):
@@ -1938,15 +1938,31 @@ class Knitro(Solver[None]):
                 solution_fn.parent.mkdir(exist_ok=True)
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
-            return Result(
-                status,
-                solution,
-                KnitroResult(knitro_context=kc, reported_runtime=reported_runtime),
-            )
+            mip_relaxation_bnd = knitro.KN_get_mip_relaxation_bnd(kc)
+            mip_number_nodes = knitro.KN_get_mip_number_nodes(kc)
+            mip_number_solves = knitro.KN_get_mip_number_solves(kc)
+            mip_rel_gap = knitro.KN_get_mip_rel_gap(kc)
+            mip_abs_gap = knitro.KN_get_mip_abs_gap(kc)
+            abs_feas_error = knitro.KN_get_abs_feas_error(kc)
+            rel_feas_error = knitro.KN_get_rel_feas_error(kc)
+            abs_opt_error = knitro.KN_get_abs_opt_error(kc)
+            rel_opt_error = knitro.KN_get_rel_opt_error(kc)
 
+            return Result(
+                status, solution, KnitroResult(reported_runtime=reported_runtime,
+                                               mip_relaxation_bnd=mip_relaxation_bnd,
+                                               mip_number_nodes=mip_number_nodes,
+                                               mip_number_solves=mip_number_solves,
+                                               mip_rel_gap=mip_rel_gap,
+                                               mip_abs_gap=mip_abs_gap,
+                                               abs_feas_error=abs_feas_error,
+                                               rel_feas_error=rel_feas_error,
+                                               abs_opt_error=abs_opt_error,
+                                               rel_opt_error=rel_opt_error)
+            )
         finally:
-            # Intentionally keep the Knitro context alive; do not free `kc` here.
-            pass
+            with contextlib.suppress(Exception):
+                knitro.KN_free(kc)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
