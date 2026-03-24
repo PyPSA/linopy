@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias, Union
 
 import numpy
 import polars as pl
@@ -43,14 +43,23 @@ ConstantLike: TypeAlias = (
     | pl.Series
 )
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
-VariableLike: TypeAlias = ScalarVariable | Variable
-ExpressionLike: TypeAlias = (
-    ScalarLinearExpression | LinearExpression | QuadraticExpression
-)
-ConstraintLike: TypeAlias = (
-    ConstraintBase | AnonymousScalarConstraint | PiecewiseConstraintDescriptor
-)
-LinExprLike: TypeAlias = Variable | LinearExpression
 MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
-SideLike: TypeAlias = ConstantLike | VariableLike | ExpressionLike
 PathLike: TypeAlias = str | Path
+
+# These reference types only available under TYPE_CHECKING, so use Union with strings
+VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
+ExpressionLike: TypeAlias = Union[
+    "ScalarLinearExpression", "LinearExpression", "QuadraticExpression"
+]
+ConstraintLike: TypeAlias = Union[
+    "ConstraintBase", "AnonymousScalarConstraint", "PiecewiseConstraintDescriptor"
+]
+LinExprLike: TypeAlias = Union["Variable", "LinearExpression"]
+SideLike: TypeAlias = Union[
+    ConstantLike,
+    "ScalarVariable",
+    "Variable",
+    "ScalarLinearExpression",
+    "LinearExpression",
+    "QuadraticExpression",
+]
