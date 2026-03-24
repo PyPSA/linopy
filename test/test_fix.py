@@ -31,32 +31,56 @@ def model_with_solution() -> Model:
     return m
 
 
+SCALAR_VALUES: list = [
+    pytest.param(5, id="int"),
+    pytest.param(5.0, id="float"),
+    pytest.param(np.float64(5.0), id="np.float64"),
+    pytest.param(np.int64(5), id="np.int64"),
+    pytest.param(np.array(5.0), id="np.0d-array"),
+    pytest.param(DataArray(5.0), id="DataArray"),
+]
+
+ARRAY_VALUES: list = [
+    pytest.param([2.5, -1.5], id="list"),
+    pytest.param(np.array([2.5, -1.5]), id="np.array"),
+    pytest.param(DataArray([2.5, -1.5], dims="dim_0"), id="DataArray"),
+    pytest.param(pd.Series([2.5, -1.5]), id="pd.Series"),
+]
+
+
 class TestVariableFix:
+    @pytest.mark.parametrize("value", SCALAR_VALUES)
+    def test_fix_scalar_dtypes(self, model_with_solution: Model, value: object) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=value)
+        assert m.variables["x"].fixed
+        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
+        np.testing.assert_almost_equal(con.rhs.item(), 5.0)
+
+    @pytest.mark.parametrize("value", ARRAY_VALUES)
+    def test_fix_array_dtypes(self, model_with_solution: Model, value: object) -> None:
+        m = model_with_solution
+        m.variables["y"].fix(value=value)
+        assert m.variables["y"].fixed
+        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}y"]
+        np.testing.assert_array_almost_equal(con.rhs.values, [2.5, -1.5])
+
     def test_fix_uses_solution(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["x"].fix()
         assert m.variables["x"].fixed
         assert f"{FIX_CONSTRAINT_PREFIX}x" in m.constraints
 
-    def test_fix_with_explicit_value(self, model_with_solution: Model) -> None:
-        m = model_with_solution
-        m.variables["x"].fix(value=5.0)
-        assert m.variables["x"].fixed
-        con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}x"]
-        np.testing.assert_almost_equal(con.rhs.item(), 5.0)
-
     def test_fix_rounds_binary(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["z"].fix()
         con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}z"]
-        # 0.9999999997 should be rounded to 1.0
         np.testing.assert_equal(con.rhs.item(), 1.0)
 
     def test_fix_rounds_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["w"].fix()
         con = m.constraints[f"{FIX_CONSTRAINT_PREFIX}w"]
-        # 41.9999999998 should be rounded to 42.0
         np.testing.assert_equal(con.rhs.item(), 42.0)
 
     def test_fix_rounds_continuous(self, model_with_solution: Model) -> None:
