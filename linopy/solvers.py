@@ -1895,8 +1895,26 @@ class Knitro(Solver[None]):
             ret = int(knitro.KN_solve(kc))
 
             reported_runtime: float | None = None
+            mip_relaxation_bnd: float | None = None
+            mip_number_nodes: int | None = None
+            mip_number_solves: int | None = None
+            mip_rel_gap: float | None = None
+            mip_abs_gap: float | None = None
+            abs_feas_error: float | None = None
+            rel_feas_error: float | None = None
+            abs_opt_error: float | None = None
+            rel_opt_error: float | None = None
             with contextlib.suppress(Exception):
                 reported_runtime = float(knitro.KN_get_solve_time_real(kc))
+                mip_relaxation_bnd = float(knitro.KN_get_mip_relaxation_bnd(kc))
+                mip_number_nodes = int(knitro.KN_get_mip_number_nodes(kc))
+                mip_number_solves = int(knitro.KN_get_mip_number_solves(kc))
+                mip_rel_gap = float(knitro.KN_get_mip_rel_gap(kc))
+                mip_abs_gap = float(knitro.KN_get_mip_abs_gap(kc))
+                abs_feas_error = float(knitro.KN_get_abs_feas_error(kc))
+                rel_feas_error = float(knitro.KN_get_rel_feas_error(kc))
+                abs_opt_error = float(knitro.KN_get_abs_opt_error(kc))
+                rel_opt_error = float(knitro.KN_get_rel_opt_error(kc))
 
             if ret in CONDITION_MAP:
                 termination_condition = CONDITION_MAP[ret]
@@ -1937,16 +1955,6 @@ class Knitro(Solver[None]):
             if solution_fn is not None:
                 solution_fn.parent.mkdir(exist_ok=True)
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
-
-            mip_relaxation_bnd = knitro.KN_get_mip_relaxation_bnd(kc)
-            mip_number_nodes = knitro.KN_get_mip_number_nodes(kc)
-            mip_number_solves = knitro.KN_get_mip_number_solves(kc)
-            mip_rel_gap = knitro.KN_get_mip_rel_gap(kc)
-            mip_abs_gap = knitro.KN_get_mip_abs_gap(kc)
-            abs_feas_error = knitro.KN_get_abs_feas_error(kc)
-            rel_feas_error = knitro.KN_get_rel_feas_error(kc)
-            abs_opt_error = knitro.KN_get_abs_opt_error(kc)
-            rel_opt_error = knitro.KN_get_rel_opt_error(kc)
 
             return Result(
                 status, solution, KnitroResult(reported_runtime=reported_runtime,
