@@ -1747,7 +1747,10 @@ class Xpress(Solver[None]):
         return Result(status, solution, m)
 
 
-KnitroResult = namedtuple("KnitroResult", "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error", )
+KnitroResult = namedtuple(
+    "KnitroResult",
+    "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error",
+)
 
 
 class Knitro(Solver[None]):
@@ -1957,16 +1960,20 @@ class Knitro(Solver[None]):
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
             return Result(
-                status, solution, KnitroResult(reported_runtime=reported_runtime,
-                                               mip_relaxation_bnd=mip_relaxation_bnd,
-                                               mip_number_nodes=mip_number_nodes,
-                                               mip_number_solves=mip_number_solves,
-                                               mip_rel_gap=mip_rel_gap,
-                                               mip_abs_gap=mip_abs_gap,
-                                               abs_feas_error=abs_feas_error,
-                                               rel_feas_error=rel_feas_error,
-                                               abs_opt_error=abs_opt_error,
-                                               rel_opt_error=rel_opt_error)
+                status,
+                solution,
+                KnitroResult(
+                    reported_runtime=reported_runtime,
+                    mip_relaxation_bnd=mip_relaxation_bnd,
+                    mip_number_nodes=mip_number_nodes,
+                    mip_number_solves=mip_number_solves,
+                    mip_rel_gap=mip_rel_gap,
+                    mip_abs_gap=mip_abs_gap,
+                    abs_feas_error=abs_feas_error,
+                    rel_feas_error=rel_feas_error,
+                    abs_opt_error=abs_opt_error,
+                    rel_opt_error=rel_opt_error,
+                ),
             )
         finally:
             with contextlib.suppress(Exception):
