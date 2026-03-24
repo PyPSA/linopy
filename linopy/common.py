@@ -957,6 +957,7 @@ class VariableLabelIndex:
 
     @cached_property
     def vlabels(self) -> np.ndarray:
+        """Active variable labels in encounter order, shape (n_active_vars,)."""
         label_lists = []
         for _, var in self._variables.items():
             labels = var.labels.values.ravel()
@@ -968,6 +969,12 @@ class VariableLabelIndex:
 
     @cached_property
     def label_to_pos(self) -> np.ndarray:
+        """
+        Mapping from variable label to dense position, shape (_xCounter,).
+
+        Position i in the active variable array corresponds to label vlabels[i].
+        Masked or unused labels map to -1.
+        """
         vlabels = self.vlabels
         n = self._variables.model._xCounter
         label_to_pos = np.full(n, -1, dtype=np.intp)
@@ -976,6 +983,7 @@ class VariableLabelIndex:
 
     @property
     def n_active_vars(self) -> int:
+        """Number of active (non-masked) variables."""
         return len(self.vlabels)
 
     def invalidate(self) -> None:
