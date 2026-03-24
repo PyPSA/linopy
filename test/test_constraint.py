@@ -498,7 +498,7 @@ def test_constraint_assignment_sanitize_zeros(
     assert c2.nterm == 1
     assert c2.has_variable(y)
     assert not c2.has_variable(x)
-    csr, _ = c2.to_matrix()
+    csr, _ = c2.to_matrix(m.variables.label_index)
     assert (csr.data == 1).all()
 
 

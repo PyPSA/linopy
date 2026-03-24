@@ -49,6 +49,7 @@ from linopy.constants import (
 )
 from linopy.constraints import (
     AnonymousScalarConstraint,
+    Constraint,
     ConstraintBase,
     Constraints,
     MutableConstraint,
@@ -719,6 +720,38 @@ class Model:
         variable.attrs.update(attrs_update)
 
     add_piecewise_constraints = add_piecewise_constraints
+
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[True] = ...,
+    ) -> Constraint: ...
+
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[False] = ...,
+    ) -> MutableConstraint: ...
 
     def add_constraints(
         self,
