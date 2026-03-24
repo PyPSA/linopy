@@ -38,6 +38,8 @@ sign_replace_dict: dict[str, str] = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
+FIX_CONSTRAINT_PREFIX = "__fix__"
+
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
 
