@@ -24,6 +24,7 @@ Upcoming Version
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
+* Free the knitro context and compute necessary quantities within linopy. Knitro context is not exposed anymore.
 
 
 Version 0.6.5
