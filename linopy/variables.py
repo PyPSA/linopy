@@ -1295,11 +1295,61 @@ class Variable:
 
     iterate_slices = iterate_slices
 
+    def relax(self) -> None:
+        """
+        Relax the integrality of this variable.
+
+        Converts binary or integer variables to continuous. The original type
+        is stored in the model's ``_relaxed_registry`` so that
+        :meth:`unrelax` can restore it.
+
+        Semi-continuous variables are not supported and will raise a
+        ``NotImplementedError``.
+
+        For binary variables, the existing [0, 1] bounds are preserved,
+        which is the correct LP relaxation. For integer variables, the
+        existing bounds are preserved as-is.
+        """
+        if self.attrs.get("semi_continuous"):
+            msg = (
+                f"Relaxation of semi-continuous variable '{self.name}' is not "
+                f"supported. The LP relaxation of a semi-continuous variable "
+                f"requires changing bounds, which is not handled by relax()."
+            )
+            raise NotImplementedError(msg)
+
+        if self.attrs.get("binary") or self.attrs.get("integer"):
+            original_type = "binary" if self.attrs.get("binary") else "integer"
+            self.model._relaxed_registry[self.name] = original_type
+            self.attrs["binary"] = False
+            self.attrs["integer"] = False
+
+    def unrelax(self) -> None:
+        """
+        Restore the original integrality type of a relaxed variable.
+
+        Reverses the effect of :meth:`relax`. If the variable was not
+        previously relaxed, this is a no-op.
+        """
+        registry = self.model._relaxed_registry
+        if self.name in registry:
+            original_type = registry.pop(self.name)
+            if original_type == "binary":
+                self.attrs["binary"] = True
+            elif original_type == "integer":
+                self.attrs["integer"] = True
+
+    @property
+    def relaxed(self) -> bool:
+        """
+        Return whether the variable is currently relaxed.
+        """
+        return self.name in self.model._relaxed_registry
+
     def fix(
         self,
         value: ConstantLike | None = None,
         decimals: int = 8,
-        relax: bool = False,
         overwrite: bool = True,
     ) -> None:
         """
@@ -1315,11 +1365,6 @@ class Variable:
             Number of decimal places to round continuous variables to.
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
-        relax : bool, optional
-            If True, relax the integrality of integer/binary variables by
-            temporarily treating them as continuous. The original type is stored
-            in the model's ``_relaxed_registry`` and restored by ``unfix()``.
-            Default is False.
         overwrite : bool, optional
             If True, overwrite an existing fix constraint for this variable.
             If False (default), raise an error if the variable is already fixed.
@@ -1354,30 +1399,18 @@ class Variable:
 
         self.model.add_constraints(1 * self, "=", value, name=constraint_name)
 
-        if relax and (self.attrs.get("integer") or self.attrs.get("binary")):
-            original_type = "binary" if self.attrs.get("binary") else "integer"
-            self.model._relaxed_registry[self.name] = original_type
-            self.attrs["integer"] = False
-            self.attrs["binary"] = False
-
     def unfix(self) -> None:
         """
         Remove the fix constraint for this variable.
 
-        If the variable was relaxed during ``fix(relax=True)``, the original
-        integrality type (integer or binary) is restored.
+        If the variable was previously relaxed via :meth:`relax`, the original
+        integrality type is also restored.
         """
         constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
         if constraint_name in self.model.constraints:
             self.model.remove_constraints(constraint_name)
 
-        registry = self.model._relaxed_registry
-        if self.name in registry:
-            original_type = registry.pop(self.name)
-            if original_type == "binary":
-                self.attrs["binary"] = True
-            elif original_type == "integer":
-                self.attrs["integer"] = True
+        self.unrelax()
 
     @property
     def fixed(self) -> bool:
@@ -1665,7 +1698,6 @@ class Variables:
         self,
         value: int | float | None = None,
         decimals: int = 8,
-        relax: bool = False,
         overwrite: bool = True,
     ) -> None:
         """
@@ -1682,26 +1714,11 @@ class Variables:
             variables. If None, each variable is fixed to its current solution.
         decimals : int, optional
             Number of decimal places to round continuous variables to.
-        relax : bool, optional
-            If True, relax integrality of integer/binary variables.
         overwrite : bool, optional
             If True, overwrite existing fix constraints.
-
-        Note
-        ----
-        When using ``relax=True`` on a filtered view like
-        ``m.variables.integers``, the variables will no longer appear in that
-        view after relaxation. Call ``m.variables.unfix()`` to restore all
-        fixed variables. If other variables are also fixed and should stay
-        fixed, save the names before fixing to selectively unfix::
-
-            names = list(m.variables.integers)
-            m.variables.integers.fix(relax=True)
-            ...
-            m.variables[names].unfix()
         """
         for var in self.data.values():
-            var.fix(value=value, decimals=decimals, relax=relax, overwrite=overwrite)
+            var.fix(value=value, decimals=decimals, overwrite=overwrite)
 
     def unfix(self) -> None:
         """
@@ -1718,6 +1735,33 @@ class Variables:
         Return a dict mapping variable names to whether they are fixed.
         """
         return {name: var.fixed for name, var in self.items()}
+
+    def relax(self) -> None:
+        """
+        Relax integrality of all integer/binary variables in this container.
+
+        Delegates to each variable's :meth:`Variable.relax` method.
+        Semi-continuous variables will raise ``NotImplementedError``.
+        """
+        for var in self.data.values():
+            var.relax()
+
+    def unrelax(self) -> None:
+        """
+        Restore integrality of all previously relaxed variables in this
+        container.
+
+        Delegates to each variable's :meth:`Variable.unrelax` method.
+        """
+        for var in self.data.values():
+            var.unrelax()
+
+    @property
+    def relaxed(self) -> dict[str, bool]:
+        """
+        Return a dict mapping variable names to whether they are relaxed.
+        """
+        return {name: var.relaxed for name, var in self.items()}
 
     @property
     def solution(self) -> Dataset:

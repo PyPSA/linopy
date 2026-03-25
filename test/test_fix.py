@@ -145,43 +145,42 @@ class TestVariableUnfix:
         assert not m.variables["x"].fixed
 
 
-class TestVariableFixRelax:
-    def test_fix_relax_binary(self, model_with_solution: Model) -> None:
+class TestFixThenRelax:
+    """Test the combined fix() + relax() workflow (fix first, then relax)."""
+
+    def test_fix_then_relax_binary(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables["z"].fix(relax=True)
-        # Should be relaxed to continuous
+        m.variables["z"].fix()
+        m.variables["z"].relax()
         assert not m.variables["z"].attrs["binary"]
-        assert not m.variables["z"].attrs["integer"]
-        assert "z" in m._relaxed_registry
-        assert m._relaxed_registry["z"] == "binary"
+        assert m.variables["z"].fixed
+        assert m.variables["z"].relaxed
 
-    def test_fix_relax_integer(self, model_with_solution: Model) -> None:
+    def test_unfix_restores_relaxed_binary(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables["w"].fix(relax=True)
-        assert not m.variables["w"].attrs["integer"]
-        assert not m.variables["w"].attrs["binary"]
-        assert "w" in m._relaxed_registry
-        assert m._relaxed_registry["w"] == "integer"
-
-    def test_unfix_restores_binary(self, model_with_solution: Model) -> None:
-        m = model_with_solution
-        m.variables["z"].fix(relax=True)
+        m.variables["z"].fix()
+        m.variables["z"].relax()
         m.variables["z"].unfix()
         assert m.variables["z"].attrs["binary"]
-        assert "z" not in m._relaxed_registry
+        assert not m.variables["z"].fixed
+        assert not m.variables["z"].relaxed
 
-    def test_unfix_restores_integer(self, model_with_solution: Model) -> None:
+    def test_fix_then_relax_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables["w"].fix(relax=True)
+        m.variables["w"].fix()
+        m.variables["w"].relax()
+        assert not m.variables["w"].attrs["integer"]
+        assert m.variables["w"].fixed
+        assert m.variables["w"].relaxed
+
+    def test_unfix_restores_relaxed_integer(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["w"].fix()
+        m.variables["w"].relax()
         m.variables["w"].unfix()
         assert m.variables["w"].attrs["integer"]
-        assert "w" not in m._relaxed_registry
-
-    def test_fix_relax_continuous_noop(self, model_with_solution: Model) -> None:
-        m = model_with_solution
-        m.variables["x"].fix(relax=True)
-        # Continuous variable should not be in registry
-        assert "x" not in m._relaxed_registry
+        assert not m.variables["w"].fixed
+        assert not m.variables["w"].relaxed
 
 
 class TestVariableFixed:
@@ -235,17 +234,131 @@ class TestVariablesContainerFixUnfix:
         assert result["x"] is True
         assert result["y"] is False
 
-    def test_fix_relax_integers(self, model_with_solution: Model) -> None:
+    def test_fix_then_relax_integers(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables.integers.fix(relax=True)
+        m.variables.integers.fix()
+        m.variables.integers.relax()
         assert not m.variables["w"].attrs["integer"]
-        m.variables.integers.unfix()
-        # After unfix from the integers view, the variable should be restored
-        # but we need to unfix from the actual variable since integers view
-        # won't contain it anymore after relaxation
-        # Let's unfix via the model variables directly
+        assert m.variables["w"].fixed
         m.variables["w"].unfix()
         assert m.variables["w"].attrs["integer"]
+
+
+class TestVariableRelax:
+    def test_relax_binary(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        assert not m.variables["z"].attrs["binary"]
+        assert not m.variables["z"].attrs["integer"]
+        assert m.variables["z"].relaxed
+        assert m._relaxed_registry["z"] == "binary"
+
+    def test_relax_integer(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["w"].relax()
+        assert not m.variables["w"].attrs["integer"]
+        assert not m.variables["w"].attrs["binary"]
+        assert m.variables["w"].relaxed
+        assert m._relaxed_registry["w"] == "integer"
+
+    def test_relax_continuous_noop(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["x"].relax()
+        assert "x" not in m._relaxed_registry
+        assert not m.variables["x"].relaxed
+
+    def test_relax_semi_continuous_raises(self) -> None:
+        m = Model()
+        m.add_variables(lower=1, upper=10, semi_continuous=True, name="sc")
+        with pytest.raises(NotImplementedError, match="semi-continuous"):
+            m.variables["sc"].relax()
+
+    def test_unrelax_binary(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        m.variables["z"].unrelax()
+        assert m.variables["z"].attrs["binary"]
+        assert not m.variables["z"].relaxed
+        assert "z" not in m._relaxed_registry
+
+    def test_unrelax_integer(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["w"].relax()
+        m.variables["w"].unrelax()
+        assert m.variables["w"].attrs["integer"]
+        assert not m.variables["w"].relaxed
+        assert "w" not in m._relaxed_registry
+
+    def test_unrelax_noop_if_not_relaxed(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["x"].unrelax()
+        assert not m.variables["x"].relaxed
+
+    def test_relax_preserves_binary_bounds(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        assert float(m.variables["z"].lower) == 0.0
+        assert float(m.variables["z"].upper) == 1.0
+
+    def test_relax_preserves_integer_bounds(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["w"].relax()
+        assert float(m.variables["w"].lower) == 0.0
+        assert float(m.variables["w"].upper) == 100.0
+
+
+class TestVariablesContainerRelax:
+    def test_relax_all(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables.relax()
+        assert not m.variables["z"].attrs["binary"]
+        assert not m.variables["w"].attrs["integer"]
+        assert m.variables["z"].relaxed
+        assert m.variables["w"].relaxed
+        # Continuous variables unaffected
+        assert not m.variables["x"].relaxed
+
+    def test_unrelax_all(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables.relax()
+        m.variables.unrelax()
+        assert m.variables["z"].attrs["binary"]
+        assert m.variables["w"].attrs["integer"]
+        assert not m.variables["z"].relaxed
+        assert not m.variables["w"].relaxed
+
+    def test_relax_integers_only(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables.integers.relax()
+        assert not m.variables["w"].attrs["integer"]
+        assert m.variables["w"].relaxed
+        # Binary should be untouched
+        assert m.variables["z"].attrs["binary"]
+        assert not m.variables["z"].relaxed
+
+    def test_relax_binaries_only(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables.binaries.relax()
+        assert not m.variables["z"].attrs["binary"]
+        assert m.variables["z"].relaxed
+        # Integer should be untouched
+        assert m.variables["w"].attrs["integer"]
+        assert not m.variables["w"].relaxed
+
+    def test_relaxed_returns_dict(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        result = m.variables.relaxed
+        assert isinstance(result, dict)
+        assert result["z"] is True
+        assert result["x"] is False
+
+    def test_relax_with_semi_continuous_raises(self) -> None:
+        m = Model()
+        m.add_variables(lower=0, upper=10, name="x")
+        m.add_variables(lower=1, upper=10, semi_continuous=True, name="sc")
+        with pytest.raises(NotImplementedError, match="semi-continuous"):
+            m.variables.relax()
 
 
 class TestRemoveVariablesCleansUpFix:
@@ -257,7 +370,8 @@ class TestRemoveVariablesCleansUpFix:
 
     def test_remove_relaxed_variable(self, model_with_solution: Model) -> None:
         m = model_with_solution
-        m.variables["z"].fix(relax=True)
+        m.variables["z"].fix()
+        m.variables["z"].relax()
         m.remove_variables("z")
         assert "z" not in m._relaxed_registry
         assert f"{FIX_CONSTRAINT_PREFIX}z" not in m.constraints
@@ -268,8 +382,10 @@ class TestFixIO:
         self, model_with_solution: Model, tmp_path: Path
     ) -> None:
         m = model_with_solution
-        m.variables["z"].fix(relax=True)
-        m.variables["w"].fix(relax=True)
+        m.variables["z"].fix()
+        m.variables["z"].relax()
+        m.variables["w"].fix()
+        m.variables["w"].relax()
 
         path = tmp_path / "model.nc"
         m.to_netcdf(path)
@@ -294,11 +410,11 @@ class TestFixIO:
         m2 = read_netcdf(path)
         assert m2._relaxed_registry == {}
 
-    def test_unfix_after_roundtrip(
+    def test_unrelax_after_roundtrip(
         self, model_with_solution: Model, tmp_path: Path
     ) -> None:
         m = model_with_solution
-        m.variables["z"].fix(relax=True)
+        m.variables["z"].relax()
 
         path = tmp_path / "model.nc"
         m.to_netcdf(path)
@@ -306,7 +422,6 @@ class TestFixIO:
         from linopy.io import read_netcdf
 
         m2 = read_netcdf(path)
-        m2.variables["z"].unfix()
+        m2.variables["z"].unrelax()
         assert m2.variables["z"].attrs["binary"]
         assert "z" not in m2._relaxed_registry
-        assert f"{FIX_CONSTRAINT_PREFIX}z" not in m2.constraints
