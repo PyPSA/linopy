@@ -360,6 +360,14 @@ class TestVariablesContainerRelax:
         with pytest.raises(NotImplementedError, match="semi-continuous"):
             m.variables.relax()
 
+    def test_relax_all_converts_milp_to_lp(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        assert m.type == "MILP"
+        m.variables.relax()
+        assert m.type == "LP"
+        m.variables.unrelax()
+        assert m.type == "MILP"
+
 
 class TestRemoveVariablesCleansUpFix:
     def test_remove_fixed_variable(self, model_with_solution: Model) -> None:
