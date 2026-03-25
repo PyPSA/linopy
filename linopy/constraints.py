@@ -497,9 +497,9 @@ class Constraint(ConstraintBase):
         constraint grid (including masked/empty rows).
     rhs : np.ndarray
         Shape (n_flat,). Right-hand-side values.
-    sign : str
-        Constraint sign: one of '=', '<=', '>='.
-        Note: per-element signs are not supported (documented regression vs MutableConstraint).
+    sign : str or np.ndarray
+        Constraint sign. Either a single str ('=', '<=', '>=') for uniform
+        signs, or a per-row np.ndarray of sign strings for mixed signs.
     coords : list of pd.Index
         One index per coordinate dimension defining the constraint grid.
     model : Model
@@ -781,13 +781,11 @@ class Constraint(ConstraintBase):
         header_string = f"{self.type} `{self._name}`" if self._name else f"{self.type}"
         lines = []
 
-        vlabels = self._model.variables.label_index.vlabels
-
         def row_expr(row: int) -> str:
             start, end = int(csr.indptr[row]), int(csr.indptr[row + 1])
             vars_row = np.full(nterm, -1, dtype=np.int64)
             coeffs_row = np.zeros(nterm, dtype=csr.dtype)
-            vars_row[: end - start] = vlabels[csr.indices[start:end]]
+            vars_row[: end - start] = csr.indices[start:end]
             coeffs_row[: end - start] = csr.data[start:end]
             sign = self._sign if isinstance(self._sign, str) else self._sign[row]
             return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
@@ -859,9 +857,7 @@ class Constraint(ConstraintBase):
             shape=shape,
         )
         rhs = ds["rhs"].values
-        sign: str | np.ndarray = (
-            ds["_sign"].values if "_sign" in ds else attrs["sign"]
-        )
+        sign: str | np.ndarray = ds["_sign"].values if "_sign" in ds else attrs["sign"]
         _cindex_raw = int(attrs["cindex"])
         cindex: int | None = _cindex_raw if _cindex_raw >= 0 else None
         coord_dims = attrs["coord_dims"]
@@ -1657,12 +1653,7 @@ class Constraints:
 
             res = res.where(not_missing.any(constraint.term_dim), -1)
             res = res.where(not_zero.any(constraint.term_dim), 0)
-            if isinstance(constraint, MutableConstraint):
-                constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
-            else:
-                mc = constraint.mutable()
-                mc._data = assign_multiindex_safe(mc.data, blocks=res)
-                self.data[name] = Constraint.from_mutable(mc, constraint._cindex)
+            constraint._data = assign_multiindex_safe(constraint.data, blocks=res)
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1719,7 +1710,18 @@ class Constraints:
         """
         for k, c in self.items():
             if isinstance(c, Constraint):
-                c._dual = None
+                if c._dual is not None:
+                    self.data[k] = Constraint(
+                        c._csr,
+                        c._con_labels,
+                        c._rhs,
+                        c._sign,
+                        c._coords,
+                        c._model,
+                        c._name,
+                        cindex=c._cindex,
+                        dual=None,
+                    )
             elif isinstance(c, MutableConstraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")

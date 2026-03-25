@@ -709,10 +709,10 @@ def test_constraints_equalities(m: Model) -> None:
 
 def test_freeze_mutable_roundtrip(m: Model) -> None:
     frozen = m.constraints["c"]
-    assert isinstance(frozen, Constraint)
+    assert isinstance(frozen, linopy.constraints.Constraint)
     mc = frozen.mutable()
     assert isinstance(mc, MutableConstraint)
-    refrozen = Constraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
@@ -727,7 +727,7 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     m.add_constraints(x.where(mask) >= 0, name="c")
     frozen = m.constraints["c"]
     mc = frozen.mutable()
-    refrozen = Constraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert frozen.ncons == refrozen.ncons == 3
@@ -740,7 +740,7 @@ def test_from_mutable_mixed_signs() -> None:
     mc = m.constraints["mixed"]
     assert isinstance(mc, MutableConstraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    frozen = Constraint.from_mutable(mc)
+    frozen = linopy.constraints.Constraint.from_mutable(mc)
     assert isinstance(frozen._sign, np.ndarray)
     assert list(frozen._sign) == ["<=", ">=", "<="]
     assert_equal(frozen.sign, mc.sign)
@@ -801,7 +801,7 @@ def test_freeze_mixed_signs_from_rule() -> None:
         return x.at[i] == 0.0
 
     con = m.add_constraints(bound, coords=coords, name="mixed_rule")
-    assert isinstance(con, Constraint)
+    assert isinstance(con, linopy.constraints.Constraint)
     assert isinstance(con._sign, np.ndarray)
     assert con.ncons == 4
     expected_signs = ["=", ">=", "=", ">="]
@@ -814,7 +814,7 @@ def test_frozen_rhs_setter() -> None:
     time = pd.RangeIndex(5, name="t")
     x = m.add_variables(lower=0, coords=[time], name="x")
     con = m.add_constraints(x >= 1, name="c")
-    assert isinstance(con, Constraint)
+    assert isinstance(con, linopy.constraints.Constraint)
     con.rhs = 10
     np.testing.assert_array_equal(con._rhs, np.full(5, 10.0))
     factor = pd.Series(range(5), index=time)
@@ -828,7 +828,7 @@ def test_frozen_lhs_setter() -> None:
     x = m.add_variables(lower=0, coords=[time], name="x")
     y = m.add_variables(lower=0, coords=[time], name="y")
     con = m.add_constraints(x >= 0, name="c")
-    assert isinstance(con, Constraint)
+    assert isinstance(con, linopy.constraints.Constraint)
     con.lhs = 3 * x + 2 * y
     lhs = con.mutable().lhs
     assert lhs.nterm == 2
