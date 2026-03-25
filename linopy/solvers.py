@@ -1925,9 +1925,10 @@ class Knitro(Solver[None]):
                 n_vars = int(knitro.KN_get_number_vars(kc))
                 n_cons = int(knitro.KN_get_number_cons(kc))
                 var_types = list(knitro.KN_get_var_types(kc))
-                n_integer_vars = int(var_types.count(
-                    knitro.KN_VARTYPE_INTEGER
-                ) + var_types.count(knitro.KN_VARTYPE_BINARY))
+                n_integer_vars = int(
+                    var_types.count(knitro.KN_VARTYPE_INTEGER)
+                    + var_types.count(knitro.KN_VARTYPE_BINARY)
+                )
                 n_continuous_vars = int(var_types.count(knitro.KN_VARTYPE_CONTINUOUS))
 
             if ret in CONDITION_MAP:
