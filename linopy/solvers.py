@@ -1749,7 +1749,7 @@ class Xpress(Solver[None]):
 
 KnitroResult = namedtuple(
     "KnitroResult",
-    "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error",
+    "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error n_vars n_cons n_integer_vars n_continuous_vars",
 )
 
 
@@ -1907,6 +1907,10 @@ class Knitro(Solver[None]):
             rel_feas_error: float | None = None
             abs_opt_error: float | None = None
             rel_opt_error: float | None = None
+            n_vars: int | None = None
+            n_cons: int | None = None
+            n_integer_vars: int | None = None
+            n_continuous_vars: int | None = None
             with contextlib.suppress(Exception):
                 reported_runtime = float(knitro.KN_get_solve_time_real(kc))
                 mip_relaxation_bnd = float(knitro.KN_get_mip_relaxation_bnd(kc))
@@ -1918,6 +1922,13 @@ class Knitro(Solver[None]):
                 rel_feas_error = float(knitro.KN_get_rel_feas_error(kc))
                 abs_opt_error = float(knitro.KN_get_abs_opt_error(kc))
                 rel_opt_error = float(knitro.KN_get_rel_opt_error(kc))
+                n_vars = int(knitro.KN_get_number_vars(kc))
+                n_cons = int(knitro.KN_get_number_cons(kc))
+                var_types = list(knitro.KN_get_var_types(kc))
+                n_integer_vars = var_types.count(
+                    knitro.KN_VARTYPE_INTEGER
+                ) + var_types.count(knitro.KN_VARTYPE_BINARY)
+                n_continuous_vars = var_types.count(knitro.KN_VARTYPE_CONTINUOUS)
 
             if ret in CONDITION_MAP:
                 termination_condition = CONDITION_MAP[ret]
@@ -1973,6 +1984,10 @@ class Knitro(Solver[None]):
                     rel_feas_error=rel_feas_error,
                     abs_opt_error=abs_opt_error,
                     rel_opt_error=rel_opt_error,
+                    n_vars=n_vars,
+                    n_cons=n_cons,
+                    n_integer_vars=n_integer_vars,
+                    n_continuous_vars=n_continuous_vars,
                 ),
             )
         finally:
