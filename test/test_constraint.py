@@ -705,3 +705,185 @@ def test_constraints_inequalities(m: Model) -> None:
 
 def test_constraints_equalities(m: Model) -> None:
     assert isinstance(m.constraints.equalities, Constraints)
+
+
+def test_freeze_mutable_roundtrip(m: Model) -> None:
+    frozen = m.constraints["c"]
+    assert isinstance(frozen, linopy.constraints.Constraint)
+    mc = frozen.mutable()
+    assert isinstance(mc, MutableConstraint)
+    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
+    assert_equal(frozen.labels, refrozen.labels)
+    assert_equal(frozen.rhs, refrozen.rhs)
+    assert_equal(frozen.sign, refrozen.sign)
+    np.testing.assert_array_equal(frozen._csr.toarray(), refrozen._csr.toarray())
+    np.testing.assert_array_equal(frozen._con_labels, refrozen._con_labels)
+
+
+def test_freeze_mutable_roundtrip_with_masking() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
+    mask = xr.DataArray([True, False, True, False, True], dims=["i"])
+    m.add_constraints(x.where(mask) >= 0, name="c")
+    frozen = m.constraints["c"]
+    mc = frozen.mutable()
+    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
+    assert_equal(frozen.labels, refrozen.labels)
+    assert_equal(frozen.rhs, refrozen.rhs)
+    assert frozen.ncons == refrozen.ncons == 3
+
+
+def test_from_mutable_mixed_signs() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    m.add_constraints(x >= 0, name="mixed", freeze=False)
+    mc = m.constraints["mixed"]
+    assert isinstance(mc, MutableConstraint)
+    mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
+    frozen = linopy.constraints.Constraint.from_mutable(mc)
+    assert isinstance(frozen._sign, np.ndarray)
+    assert list(frozen._sign) == ["<=", ">=", "<="]
+    assert_equal(frozen.sign, mc.sign)
+
+
+def test_variable_label_index(m: Model) -> None:
+    li = m.variables.label_index
+    assert li.n_active_vars > 0
+    assert len(li.vlabels) == li.n_active_vars
+    assert li.label_to_pos.shape[0] == m._xCounter
+    for lbl in li.vlabels:
+        assert li.label_to_pos[lbl] >= 0
+    assert (li.label_to_pos[li.vlabels] == np.arange(li.n_active_vars)).all()
+
+
+def test_variable_label_index_invalidation(m: Model) -> None:
+    li = m.variables.label_index
+    old_vlabels = li.vlabels.copy()
+    m.add_variables(name="w")
+    li.invalidate()
+    assert len(li.vlabels) > len(old_vlabels)
+
+
+def test_to_matrix_with_rhs(m: Model) -> None:
+    c = m.constraints["c"]
+    li = m.variables.label_index
+    csr, con_labels, b, sense = c.to_matrix_with_rhs(li)
+    assert csr.shape[0] == len(con_labels)
+    assert csr.shape[0] == len(b)
+    assert csr.shape[0] == len(sense)
+    assert all(s in ("<", ">", "=") for s in sense)
+    np.testing.assert_array_equal(b, c._rhs)
+
+
+def test_to_matrix_with_rhs_mutable(m: Model) -> None:
+    mc = m.constraints["c"].mutable()
+    li = m.variables.label_index
+    csr, con_labels, b, sense = mc.to_matrix_with_rhs(li)
+    assert csr.shape[0] == len(con_labels)
+    assert csr.shape[0] == len(b)
+    assert csr.shape[0] == len(sense)
+
+
+def test_constraint_repr_shows_variable_names(m: Model) -> None:
+    c = m.constraints["c"]
+    r = repr(c)
+    assert "x" in r
+
+
+def test_freeze_mixed_signs_from_rule() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="mixed_rule")
+    assert isinstance(con, linopy.constraints.Constraint)
+    assert isinstance(con._sign, np.ndarray)
+    assert con.ncons == 4
+    expected_signs = ["=", ">=", "=", ">="]
+    assert list(con._sign) == expected_signs
+    np.testing.assert_array_equal(con.sign.values, expected_signs)
+
+
+def test_frozen_rhs_setter() -> None:
+    m = Model()
+    time = pd.RangeIndex(5, name="t")
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    con = m.add_constraints(x >= 1, name="c")
+    assert isinstance(con, linopy.constraints.Constraint)
+    con.rhs = 10
+    np.testing.assert_array_equal(con._rhs, np.full(5, 10.0))
+    factor = pd.Series(range(5), index=time)
+    con.rhs = 2 * factor
+    np.testing.assert_array_equal(con._rhs, 2 * np.arange(5, dtype=float))
+
+
+def test_frozen_lhs_setter() -> None:
+    m = Model()
+    time = pd.RangeIndex(5, name="t")
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    y = m.add_variables(lower=0, coords=[time], name="y")
+    con = m.add_constraints(x >= 0, name="c")
+    assert isinstance(con, linopy.constraints.Constraint)
+    con.lhs = 3 * x + 2 * y
+    lhs = con.mutable().lhs
+    assert lhs.nterm == 2
+
+
+def test_frozen_setter_invalidates_dual() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = m.add_constraints(x >= 0, name="c")
+    con._dual = np.array([1.0, 2.0, 3.0])
+    con.rhs = 10
+    assert con._dual is None
+
+
+def test_mixed_sign_to_matrix_with_rhs() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="c")
+    li = m.variables.label_index
+    csr, con_labels, b, sense = con.to_matrix_with_rhs(li)
+    assert len(sense) == 4
+    assert list(sense) == ["=", ">", "=", ">"]
+
+
+def test_mixed_sign_sanitize_infinities() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    m.add_constraints(x >= 0, name="c", freeze=False)
+    mc = m.constraints["c"]
+    mc._data["sign"] = xr.DataArray(["<=", ">=", "<=", ">="], dims=["i"])
+    mc._data["rhs"] = xr.DataArray([np.inf, -np.inf, 1.0, 2.0], dims=["i"])
+    frozen = mc.freeze()
+    frozen.sanitize_infinities()
+    assert frozen.ncons == 2
+    np.testing.assert_array_equal(frozen._rhs, [1.0, 2.0])
+
+
+def test_mixed_sign_repr() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="c")
+    r = repr(con)
+    assert "≥" in r
+    assert "=" in r
