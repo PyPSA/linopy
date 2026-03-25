@@ -24,6 +24,7 @@ Upcoming Version
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
+* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding and optional integrality relaxation (``relax=True``) for MILP dual extraction.
 * Free the knitro context and compute necessary quantities within linopy. Knitro context is not exposed anymore.
 
 
