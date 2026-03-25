@@ -733,15 +733,17 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     assert frozen.ncons == refrozen.ncons == 3
 
 
-def test_from_mutable_mixed_signs_raises() -> None:
+def test_from_mutable_mixed_signs() -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
     m.add_constraints(x >= 0, name="mixed", freeze=False)
     mc = m.constraints["mixed"]
     assert isinstance(mc, MutableConstraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    with pytest.raises(ValueError, match="per-element signs"):
-        Constraint.from_mutable(mc)
+    frozen = Constraint.from_mutable(mc)
+    assert isinstance(frozen._sign, np.ndarray)
+    assert list(frozen._sign) == ["<=", ">=", "<="]
+    assert_equal(frozen.sign, mc.sign)
 
 
 def test_variable_label_index(m: Model) -> None:
@@ -786,3 +788,102 @@ def test_constraint_repr_shows_variable_names(m: Model) -> None:
     c = m.constraints["c"]
     r = repr(c)
     assert "x" in r
+
+
+def test_freeze_mixed_signs_from_rule() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="mixed_rule")
+    assert isinstance(con, Constraint)
+    assert isinstance(con._sign, np.ndarray)
+    assert con.ncons == 4
+    expected_signs = ["=", ">=", "=", ">="]
+    assert list(con._sign) == expected_signs
+    np.testing.assert_array_equal(con.sign.values, expected_signs)
+
+
+def test_frozen_rhs_setter() -> None:
+    m = Model()
+    time = pd.RangeIndex(5, name="t")
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    con = m.add_constraints(x >= 1, name="c")
+    assert isinstance(con, Constraint)
+    con.rhs = 10
+    np.testing.assert_array_equal(con._rhs, np.full(5, 10.0))
+    factor = pd.Series(range(5), index=time)
+    con.rhs = 2 * factor
+    np.testing.assert_array_equal(con._rhs, 2 * np.arange(5, dtype=float))
+
+
+def test_frozen_lhs_setter() -> None:
+    m = Model()
+    time = pd.RangeIndex(5, name="t")
+    x = m.add_variables(lower=0, coords=[time], name="x")
+    y = m.add_variables(lower=0, coords=[time], name="y")
+    con = m.add_constraints(x >= 0, name="c")
+    assert isinstance(con, Constraint)
+    con.lhs = 3 * x + 2 * y
+    lhs = con.mutable().lhs
+    assert lhs.nterm == 2
+
+
+def test_frozen_setter_invalidates_dual() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = m.add_constraints(x >= 0, name="c")
+    con._dual = np.array([1.0, 2.0, 3.0])
+    con.rhs = 10
+    assert con._dual is None
+
+
+def test_mixed_sign_to_matrix_with_rhs() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="c")
+    li = m.variables.label_index
+    csr, con_labels, b, sense = con.to_matrix_with_rhs(li)
+    assert len(sense) == 4
+    assert list(sense) == ["=", ">", "=", ">"]
+
+
+def test_mixed_sign_sanitize_infinities() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    m.add_constraints(x >= 0, name="c", freeze=False)
+    mc = m.constraints["c"]
+    mc._data["sign"] = xr.DataArray(["<=", ">=", "<=", ">="], dims=["i"])
+    mc._data["rhs"] = xr.DataArray([np.inf, -np.inf, 1.0, 2.0], dims=["i"])
+    frozen = mc.freeze()
+    frozen.sanitize_infinities()
+    assert frozen.ncons == 2
+    np.testing.assert_array_equal(frozen._rhs, [1.0, 2.0])
+
+
+def test_mixed_sign_repr() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    coords = [pd.RangeIndex(4, name="i")]
+
+    def bound(m, i):
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    con = m.add_constraints(bound, coords=coords, name="c")
+    r = repr(con)
+    assert "≥" in r
+    assert "=" in r

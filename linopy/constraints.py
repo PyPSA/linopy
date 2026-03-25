@@ -529,7 +529,7 @@ class Constraint(ConstraintBase):
         csr: scipy.sparse.csr_array,
         con_labels: np.ndarray,
         rhs: np.ndarray,
-        sign: str,
+        sign: str | np.ndarray,
         coords: list[pd.Index],
         model: Model,
         name: str = "",
@@ -614,7 +614,7 @@ class Constraint(ConstraintBase):
         return [str(c.name) for c in self._coords]
 
     def _active_to_dataarray(
-        self, active_values: np.ndarray, fill: float | int = -1
+        self, active_values: np.ndarray, fill: float | int | str = -1
     ) -> DataArray:
         full = np.full(self.full_size, fill, dtype=active_values.dtype)
         full[self.active_positions] = active_values
@@ -651,13 +651,39 @@ class Constraint(ConstraintBase):
 
     @property
     def sign(self) -> DataArray:
-        """Get sign DataArray (scalar, same sign for all entries)."""
-        return DataArray(np.full(self.shape, self._sign), coords=self._coords)
+        """Get sign DataArray."""
+        if isinstance(self._sign, str):
+            return DataArray(np.full(self.shape, self._sign), coords=self._coords)
+        return self._active_to_dataarray(self._sign, fill="")
 
     @property
     def rhs(self) -> DataArray:
         """Get RHS DataArray, shape (*coord_dims)."""
         return self._active_to_dataarray(self._rhs, fill=np.nan)
+
+    @rhs.setter
+    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
+        self._refreeze_after(lambda mc: setattr(mc, "rhs", value))
+
+    @property
+    def lhs(self) -> expressions.LinearExpression:
+        """Get LHS as LinearExpression (triggers Dataset reconstruction)."""
+        return self.mutable().lhs
+
+    @lhs.setter
+    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
+        self._refreeze_after(lambda mc: setattr(mc, "lhs", value))
+
+    def _refreeze_after(self, mutate: Callable[[MutableConstraint], None]) -> None:
+        mc = self.mutable()
+        mutate(mc)
+        refrozen = Constraint.from_mutable(mc, self._cindex)
+        self._csr = refrozen._csr
+        self._con_labels = refrozen._con_labels
+        self._rhs = refrozen._rhs
+        self._sign = refrozen._sign
+        self._coords = refrozen._coords
+        self._dual = None
 
     @property
     @has_optimized_model
@@ -763,7 +789,8 @@ class Constraint(ConstraintBase):
             coeffs_row = np.zeros(nterm, dtype=csr.dtype)
             vars_row[: end - start] = vlabels[csr.indices[start:end]]
             coeffs_row[: end - start] = csr.data[start:end]
-            return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[self._sign]} {self._rhs[row]}"
+            sign = self._sign if isinstance(self._sign, str) else self._sign[row]
+            return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
 
         if size > 1:
             for indices in generate_indices_for_printout(shape, max_lines):
@@ -805,21 +832,22 @@ class Constraint(ConstraintBase):
             "rhs": DataArray(self._rhs, dims=["_flat"]),
             "_con_labels": DataArray(self._con_labels, dims=["_flat"]),
         }
+        if isinstance(self._sign, np.ndarray):
+            data_vars["_sign"] = DataArray(self._sign, dims=["_flat"])
         data_vars.update(coords_to_dataset_vars(self._coords))
         if self._dual is not None:
             data_vars["dual"] = DataArray(self._dual, dims=["_flat"])
         dim_names = [c.name for c in self._coords]
-        return Dataset(
-            data_vars,
-            attrs={
-                "_linopy_format": "csr",
-                "sign": self._sign,
-                "cindex": self._cindex if self._cindex is not None else -1,
-                "shape": list(csr.shape),
-                "coord_dims": dim_names,
-                "name": self._name,
-            },
-        )
+        attrs: dict[str, Any] = {
+            "_linopy_format": "csr",
+            "cindex": self._cindex if self._cindex is not None else -1,
+            "shape": list(csr.shape),
+            "coord_dims": dim_names,
+            "name": self._name,
+        }
+        if isinstance(self._sign, str):
+            attrs["sign"] = self._sign
+        return Dataset(data_vars, attrs=attrs)
 
     @classmethod
     def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> Constraint:
@@ -831,7 +859,9 @@ class Constraint(ConstraintBase):
             shape=shape,
         )
         rhs = ds["rhs"].values
-        sign = attrs["sign"]
+        sign: str | np.ndarray = (
+            ds["_sign"].values if "_sign" in ds else attrs["sign"]
+        )
         _cindex_raw = int(attrs["cindex"])
         cindex: int | None = _cindex_raw if _cindex_raw >= 0 else None
         coord_dims = attrs["coord_dims"]
@@ -859,7 +889,10 @@ class Constraint(ConstraintBase):
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) — all pre-stored, no recomputation."""
-        sense = np.full(len(self._rhs), self._sign[0])
+        if isinstance(self._sign, str):
+            sense = np.full(len(self._rhs), self._sign[0])
+        else:
+            sense = np.array([s[0] for s in self._sign])
         return self._csr, self._con_labels, self._rhs, sense
 
     def sanitize_zeros(self) -> Constraint:
@@ -874,18 +907,25 @@ class Constraint(ConstraintBase):
 
     def sanitize_infinities(self) -> Constraint:
         """Mask out rows with invalid infinite RHS values (mutates in-place)."""
-        if self._sign == LESS_EQUAL:
-            invalid = self._rhs == np.inf
-        elif self._sign == GREATER_EQUAL:
-            invalid = self._rhs == -np.inf
+        if isinstance(self._sign, str):
+            if self._sign == LESS_EQUAL:
+                invalid = self._rhs == np.inf
+            elif self._sign == GREATER_EQUAL:
+                invalid = self._rhs == -np.inf
+            else:
+                return self
         else:
-            return self
+            invalid = ((self._sign == LESS_EQUAL) & (self._rhs == np.inf)) | (
+                (self._sign == GREATER_EQUAL) & (self._rhs == -np.inf)
+            )
         if not invalid.any():
             return self
         keep = ~invalid
         self._csr = self._csr[keep]
         self._con_labels = self._con_labels[keep]
         self._rhs = self._rhs[keep]
+        if not isinstance(self._sign, str):
+            self._sign = self._sign[keep]
         return self
 
     def freeze(self) -> Constraint:
@@ -925,13 +965,14 @@ class Constraint(ConstraintBase):
         active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
         rhs = con.rhs.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
-        unique_signs = np.unique(sign_vals[active_mask])
-        if len(unique_signs) > 1:
-            raise ValueError(
-                "Constraint has per-element signs; cannot freeze to immutable Constraint. "
-                "This is a known limitation — use MutableConstraint instead."
-            )
-        sign = str(unique_signs[0]) if len(unique_signs) == 1 else "="
+        active_signs = sign_vals[active_mask]
+        unique_signs = np.unique(active_signs)
+        if len(unique_signs) == 0:
+            sign: str | np.ndarray = "="
+        elif len(unique_signs) == 1:
+            sign = str(unique_signs[0])
+        else:
+            sign = active_signs
         dual = (
             con.data["dual"].values.ravel()[active_mask] if "dual" in con.data else None
         )
