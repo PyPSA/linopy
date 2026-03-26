@@ -1,6 +1,12 @@
 Release Notes
 =============
 
+Version 0.6.6
+-------------
+
+* Free the knitro context and compute necessary quantities within linopy. Knitro context is not exposed anymore.
+
+
 Version 0.6.5
 -------------
 
