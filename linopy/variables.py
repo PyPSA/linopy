@@ -853,6 +853,8 @@ class Variable:
             return "Integer Variable"
         elif self.attrs["binary"]:
             return "Binary Variable"
+        elif self.attrs.get("semi_continuous"):
+            return "Semi-continuous Variable"
         else:
             return "Continuous Variable"
 

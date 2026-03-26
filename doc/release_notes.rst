@@ -27,6 +27,12 @@ Upcoming Version
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding and optional integrality relaxation (``relax=True``) for MILP dual extraction.
 
 
+Version 0.6.6
+-------------
+
+* Free the knitro context and compute necessary quantities within linopy. Knitro context is not exposed anymore.
+
+
 Version 0.6.5
 -------------
 
