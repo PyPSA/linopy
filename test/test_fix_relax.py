@@ -250,13 +250,12 @@ class TestVariablesContainerFixUnfix:
         assert m.variables["z"].fixed
         assert not m.variables["x"].fixed
 
-    def test_fixed_returns_dict(self, model_with_solution: Model) -> None:
+    def test_fixed_returns_container(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["x"].fix(value=5.0)
         result = m.variables.fixed
-        assert isinstance(result, dict)
-        assert result["x"] is True
-        assert result["y"] is False
+        assert "x" in result
+        assert "y" not in result
 
     def test_fix_then_relax_integers(self, model_with_solution: Model) -> None:
         m = model_with_solution
@@ -371,13 +370,12 @@ class TestVariablesContainerRelax:
         assert m.variables["w"].attrs["integer"]
         assert not m.variables["w"].relaxed
 
-    def test_relaxed_returns_dict(self, model_with_solution: Model) -> None:
+    def test_relaxed_returns_container(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["z"].relax()
         result = m.variables.relaxed
-        assert isinstance(result, dict)
-        assert result["z"] is True
-        assert result["x"] is False
+        assert "z" in result
+        assert "x" not in result
 
     def test_relax_with_semi_continuous_raises(self) -> None:
         m = Model()

@@ -1733,11 +1733,14 @@ class Variables:
             var.unfix()
 
     @property
-    def fixed(self) -> dict[str, bool]:
+    def fixed(self) -> Variables:
         """
-        Return a dict mapping variable names to whether they are fixed.
+        Get all currently fixed variables.
         """
-        return {name: var.fixed for name, var in self.items()}
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].fixed},
+            self.model,
+        )
 
     def relax(self) -> None:
         """
@@ -1760,11 +1763,14 @@ class Variables:
             var.unrelax()
 
     @property
-    def relaxed(self) -> dict[str, bool]:
+    def relaxed(self) -> Variables:
         """
-        Return a dict mapping variable names to whether they are relaxed.
+        Get all currently relaxed variables.
         """
-        return {name: var.relaxed for name, var in self.items()}
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].relaxed},
+            self.model,
+        )
 
     @property
     def solution(self) -> Dataset:
