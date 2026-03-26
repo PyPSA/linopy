@@ -1354,6 +1354,7 @@ class Model:
         solver_name: str | None = None,
         io_api: str | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool | None = None,
         problem_fn: str | Path | None = None,
         solution_fn: str | Path | None = None,
         log_fn: str | Path | None = None,
@@ -1393,6 +1394,11 @@ class Model:
             this option allows to keep the variable and constraint names in the
             lp file. This may lead to slower run times.
             The default is set to False.
+        set_names : bool, optional
+            Whether to set variable and constraint names when using the direct
+            solver API (io_api='direct'). Setting to False can significantly
+            speed up model export. If None, uses the global
+            ``linopy.options["set_names_in_solver_io"]`` setting (default True).
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -1581,6 +1587,8 @@ class Model:
                 **solver_options,
             )
             if io_api == "direct":
+                if set_names is None:
+                    set_names = options["set_names_in_solver_io"]
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,
@@ -1590,6 +1598,7 @@ class Model:
                     basis_fn=to_path(basis_fn),
                     env=env,
                     explicit_coordinate_names=explicit_coordinate_names,
+                    set_names=set_names,
                 )
             else:
                 if (

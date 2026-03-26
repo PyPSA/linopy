@@ -346,6 +346,7 @@ class Solver(ABC, Generic[EnvType]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a model.
@@ -449,6 +450,7 @@ class CBC(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
@@ -635,6 +637,7 @@ class GLPK(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for GLPK"
         raise NotImplementedError(msg)
@@ -815,6 +818,7 @@ class Highs(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the HiGHS solver.
@@ -838,6 +842,9 @@ class Highs(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -857,7 +864,10 @@ class Highs(Solver[None]):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = model.to_highspy(
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
         self._set_solver_params(h, log_fn)
 
         return self._solve(
@@ -1056,6 +1066,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         basis_fn: Path | None = None,
         env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Gurobi solver.
@@ -1078,6 +1089,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             Gurobi environment for the solver, pass env directly or kwargs for creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -1092,7 +1106,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 env_ = env
 
             m = model.to_gurobipy(
-                env=env_, explicit_coordinate_names=explicit_coordinate_names
+                env=env_,
+                explicit_coordinate_names=explicit_coordinate_names,
+                set_names=set_names,
             )
 
             return self._solve(
@@ -1295,6 +1311,7 @@ class Cplex(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Cplex"
         raise NotImplementedError(msg)
@@ -1449,6 +1466,7 @@ class SCIP(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for SCIP"
         raise NotImplementedError(msg)
@@ -1605,6 +1623,7 @@ class Xpress(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Xpress"
         raise NotImplementedError(msg)
@@ -1784,6 +1803,7 @@ class Knitro(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Knitro"
         raise NotImplementedError(msg)
@@ -2037,6 +2057,7 @@ class Mosek(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the MOSEK solver.
@@ -2058,6 +2079,9 @@ class Mosek(Solver[None]):
             environment automatically. Will be removed in a future version.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -2073,7 +2097,11 @@ class Mosek(Solver[None]):
                 stacklevel=2,
             )
         with mosek.Task() as m:
-            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
+            m = model.to_mosek(
+                m,
+                explicit_coordinate_names=explicit_coordinate_names,
+                set_names=set_names,
+            )
 
             return self._solve(
                 m,
@@ -2371,6 +2399,7 @@ class COPT(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for COPT"
         raise NotImplementedError(msg)
@@ -2512,6 +2541,7 @@ class MindOpt(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for MindOpt"
         raise NotImplementedError(msg)
@@ -2731,6 +2761,7 @@ class cuPDLPx(Solver[None]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the solver cuPDLPx.
@@ -2753,6 +2784,8 @@ class cuPDLPx(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Ignored. cuPDLPx does not support named variables/constraints.
 
         Returns
         -------

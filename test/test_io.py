@@ -241,9 +241,61 @@ def test_to_gurobipy(model: Model) -> None:
     model.to_gurobipy()
 
 
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_gurobipy_no_names(model: Model) -> None:
+    m_with = model.to_gurobipy(set_names=True)
+    m_without = model.to_gurobipy(set_names=False)
+    names_with = [v.VarName for v in m_with.getVars()]
+    names_without = [v.VarName for v in m_without.getVars()]
+    assert names_with != names_without
+
+
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
     model.to_highspy()
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_highspy_no_names(model: Model) -> None:
+    h = model.to_highspy(set_names=False)
+    col_names = h.getLp().col_names_
+    assert len(col_names) == 0
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_highspy_set_names_with_explicit_coordinate_names(model: Model) -> None:
+    model.to_highspy(set_names=False, explicit_coordinate_names=True)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_solve_direct_no_names(model: Model) -> None:
+    status, condition = model.solve(
+        solver_name="highs", io_api="direct", set_names=False
+    )
+    assert status == "ok"
+
+
+def test_set_names_in_solver_io_option_default() -> None:
+    from linopy.config import options
+
+    assert options["set_names_in_solver_io"] is True
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_set_names_in_solver_io_option(model: Model) -> None:
+    from linopy.config import options
+
+    model.solve(solver_name="highs", io_api="direct")
+    expected_obj = model.objective.value
+
+    original = options["set_names_in_solver_io"]
+    try:
+        options["set_names_in_solver_io"] = False
+        status, condition = model.solve(solver_name="highs", io_api="direct")
+        assert status == "ok"
+        assert model.objective.value == pytest.approx(expected_obj)
+    finally:
+        options["set_names_in_solver_io"] = original
 
 
 def test_to_blocks(tmp_path: Path) -> None:

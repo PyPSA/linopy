@@ -58,5 +58,8 @@ class OptionSettings:
 
 
 options = OptionSettings(
-    display_max_rows=14, display_max_terms=6, freeze_constraints=False
+    display_max_rows=14,
+    display_max_terms=6,
+    freeze_constraints=False,
+    set_names_in_solver_io=True,
 )

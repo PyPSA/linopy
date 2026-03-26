@@ -100,29 +100,42 @@ def format_coord(coord: str) -> str:
 def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
-    """Get printer functions for scalar values (non-polars)."""
+    """
+    Get batch printer functions for numpy label arrays (non-polars).
+
+    Returns two callables that take an int64 numpy array of labels and return
+    an object array of name strings.
+    """
     if explicit_coordinate_names:
 
-        def print_variable(var: Any) -> str:
+        def _fmt_var(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
             return f"{name}{format_coord(coord)}#{var}"
 
-        def print_constraint(cons: Any) -> str:
+        def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
             return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
-        return print_variable, print_constraint
+        def print_variables(labels: np.ndarray) -> np.ndarray:
+            return np.vectorize(_fmt_var)(labels)
+
+        def print_constraints(labels: np.ndarray) -> np.ndarray:
+            return np.vectorize(_fmt_con)(labels)
+
+        return print_variables, print_constraints
     else:
 
-        def print_variable(var: Any) -> str:
-            return f"x{var}"
+        def print_variables(labels: np.ndarray) -> np.ndarray:
+            s = pl.Series(labels)
+            return ("x" + s.cast(pl.String)).to_numpy(allow_copy=True)
 
-        def print_constraint(cons: Any) -> str:
-            return f"c{cons}"
+        def print_constraints(labels: np.ndarray) -> np.ndarray:
+            s = pl.Series(labels)
+            return ("c" + s.cast(pl.String)).to_numpy(allow_copy=True)
 
-        return print_variable, print_constraint
+        return print_variables, print_constraints
 
 
 def get_printers(
@@ -625,7 +638,10 @@ def to_file(
 
 
 def to_mosek(
-    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    task: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
     """
     Export model to MOSEK.
@@ -636,6 +652,11 @@ def to_mosek(
     ----------
     m : linopy.Model
     task : empty MOSEK task
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -652,10 +673,6 @@ def to_mosek(
 
     import mosek
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
     if task is None:
         task = mosek.Task()
 
@@ -663,13 +680,15 @@ def to_mosek(
     task.appendcons(m.ncons)
 
     M = m.matrices
-    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
-    #    task.putvarname(j, n)
 
-    labels = np.vectorize(print_variable)(M.vlabels).astype(object)
-    task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
-    )
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        labels = print_variables(M.vlabels).astype(object)
+        task.generatevarnames(
+            np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+        )
 
     ## Variables
 
@@ -705,9 +724,10 @@ def to_mosek(
     ## Constraints
 
     if len(m.constraints) > 0:
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        for i, n in enumerate(names):
-            task.putconname(i, n)
+        if set_names:
+            names = print_constraints(M.clabels).astype(object)
+            for i, n in enumerate(names):
+                task.putconname(i, n)
         bkc = [
             (
                 (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
@@ -745,7 +765,10 @@ def to_mosek(
 
 
 def to_gurobipy(
-    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    env: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
     """
     Export the model to gurobipy.
@@ -758,6 +781,11 @@ def to_gurobipy(
     ----------
     m : linopy.Model
     env : gurobipy.Env
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -765,24 +793,24 @@ def to_gurobipy(
     """
     import gurobipy
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
     m.constraints.sanitize_missings()
     model = gurobipy.Model(env=env)
 
     M = m.matrices
 
-    names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        kwargs["name"] = list(print_variables(M.vlabels).astype(object))
     if (
         len(m.binaries.labels)
         + len(m.integers.labels)
         + len(list(m.variables.semi_continuous))
     ):
         kwargs["vtype"] = M.vtypes
-    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
+    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
 
     if m.is_quadratic:
         model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
@@ -793,9 +821,10 @@ def to_gurobipy(
         model.ModelSense = -1
 
     if len(m.constraints):
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
-        c.setAttr("ConstrName", list(names))  # type: ignore
+        if set_names:
+            names = print_constraints(M.clabels).astype(object)
+            c.setAttr("ConstrName", list(names))  # type: ignore
 
     if m.variables.sos:
         for var_name in m.variables.sos:
@@ -821,18 +850,25 @@ def to_gurobipy(
     return model
 
 
-def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
+def to_highspy(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Highs:
     """
     Export the model to highspy.
 
     This function does not write the model to intermediate files but directly
     passes it to highspy.
 
-    Note, this function does not track variable and constraint labels.
-
     Parameters
     ----------
     m : linopy.Model
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -845,10 +881,6 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         )
 
     import highspy
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
 
     M = m.matrices
     h = highspy.Highs()
@@ -881,11 +913,15 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         upper = np.where(M.sense != ">", M.b, np.inf)
         h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
 
-    lp = h.getLp()
-    lp.col_names_ = np.vectorize(print_variable)(M.vlabels).astype(object)
-    if len(M.clabels):
-        lp.row_names_ = np.vectorize(print_constraint)(M.clabels).astype(object)
-    h.passModel(lp)
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        lp = h.getLp()
+        lp.col_names_ = print_variables(M.vlabels).astype(object)
+        if len(M.clabels):
+            lp.row_names_ = print_constraints(M.clabels).astype(object)
+        h.passModel(lp)
 
     # quadrative objective
     Q = M.Q
@@ -902,7 +938,11 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     return h
 
 
-def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxModel:
+def to_cupdlpx(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> cupdlpxModel:
     """
     Export the model to cupdlpx.
 
@@ -910,12 +950,14 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     passes it to cupdlpx.
 
     cuPDLPx does not support named variables and constraints, so the
-    `explicit_coordinate_names` parameter is ignored.
+    `explicit_coordinate_names` and `set_names` parameters are ignored.
 
     Parameters
     ----------
     m : linopy.Model
     explicit_coordinate_names : bool, optional
+        Ignored. cuPDLPx does not support named variables/constraints.
+    set_names : bool, optional
         Ignored. cuPDLPx does not support named variables/constraints.
 
     Returns
