@@ -38,14 +38,14 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
+    format_single_variable,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    print_coord,
-    print_single_variable,
     require_constant,
     save_join,
     set_int_index,
@@ -358,9 +358,9 @@ class Variable:
                     ]
                     label = self.labels.values[indices]
                     line = (
-                        print_coord(coord)
+                        format_coord(coord)
                         + ": "
-                        + print_single_variable(self.model, label)
+                        + format_single_variable(self.model, label)
                     )
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
@@ -375,7 +375,7 @@ class Variable:
             )
         else:
             lines.append(
-                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{format_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -1866,17 +1866,36 @@ class Variables:
             self._label_position_index = LabelPositionIndex(self)
         return self._label_position_index.find_single_with_index(label)
 
-    def print_labels(self, values: list[int]) -> None:
+    def format_labels(self, values: list[int]) -> str:
         """
-        Print a selection of labels of the variables.
+        Get a string representation of a selection of variable labels.
 
         Parameters
         ----------
         values : list, array-like
-            One dimensional array of constraint labels.
+            One dimensional array of variable labels.
+
+        Returns
+        -------
+        str
+            String representation of the selected variables.
         """
-        res = [print_single_variable(self.model, v) for v in values]
-        print("\n".join(res))
+        res = [format_single_variable(self.model, v) for v in values]
+        return "\n".join(res)
+
+    def print_labels(self, values: list[int]) -> None:
+        """
+        Print a selection of labels of the variables.
+
+        .. deprecated::
+            Use :meth:`format_labels` instead.
+        """
+        warn(
+            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1945,7 +1964,7 @@ class ScalarVariable:
         if self.label == -1:
             return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
-        coord_string = print_coord(coord)
+        coord_string = format_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
 
     @property

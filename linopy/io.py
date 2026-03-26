@@ -90,10 +90,10 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     )
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def format_coord(coord: str) -> str:
+    from linopy.common import format_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
+    coord = format_coord(coord).translate(coord_sanitizer)
     return coord
 
 
@@ -106,12 +106,12 @@ def get_printers_scalar(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         return print_variable, print_constraint
     else:
@@ -134,12 +134,12 @@ def get_printers(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
