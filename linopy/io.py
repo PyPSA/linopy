@@ -1171,10 +1171,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m : linopy.Model
     """
     from linopy.constraints import (
+        Constraint,
         ConstraintBase,
         Constraints,
         CSRConstraint,
-        MutableConstraint,
     )
     from linopy.expressions import LinearExpression
     from linopy.model import Model
@@ -1232,7 +1232,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         if con_ds.attrs.get("_linopy_format") == "csr":
             constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
         else:
-            constraints[name] = MutableConstraint(con_ds, m, name)
+            constraints[name] = Constraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1288,7 +1288,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     Model
         A deep or shallow copy of the model.
     """
-    from linopy.constraints import Constraints, MutableConstraint
+    from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model, Objective
     from linopy.variables import Variable, Variables
@@ -1318,7 +1318,7 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
 
     new_model._constraints = Constraints(
         {
-            name: MutableConstraint(
+            name: Constraint(
                 con.mutable().data.copy(deep=deep)
                 if include_solution
                 else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),

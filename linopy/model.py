@@ -49,10 +49,10 @@ from linopy.constants import (
 )
 from linopy.constraints import (
     AnonymousScalarConstraint,
+    Constraint,
     ConstraintBase,
     Constraints,
     CSRConstraint,
-    MutableConstraint,
 )
 from linopy.expressions import (
     LinearExpression,
@@ -756,7 +756,7 @@ class Model:
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[False] = ...,
-    ) -> MutableConstraint: ...
+    ) -> Constraint: ...
 
     def add_constraints(
         self,
@@ -848,7 +848,7 @@ class Model:
             rule = lhs
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
-            data = MutableConstraint.from_rule(self, rule, coords).data
+            data = Constraint.from_rule(self, rule, coords).data
         elif isinstance(lhs, AnonymousScalarConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
@@ -930,7 +930,7 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        constraint = MutableConstraint(data, name=name, model=self, skip_broadcast=True)
+        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(

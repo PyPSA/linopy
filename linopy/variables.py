@@ -72,7 +72,7 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import AnonymousScalarConstraint, MutableConstraint
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         GenericExpression,
         LinearExpression,
@@ -543,33 +543,27 @@ class Variable:
     def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __le__(self, other: SideLike) -> MutableConstraint: ...
+    def __le__(self, other: SideLike) -> Constraint: ...
 
-    def __le__(
-        self, other: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__le__(other)
 
     @overload
     def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __ge__(self, other: SideLike) -> MutableConstraint: ...
+    def __ge__(self, other: SideLike) -> Constraint: ...
 
-    def __ge__(
-        self, other: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__ge__(other)
 
     @overload  # type: ignore[override]
     def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __eq__(self, other: SideLike) -> MutableConstraint: ...
+    def __eq__(self, other: SideLike) -> Constraint: ...
 
-    def __eq__(
-        self, other: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -653,7 +647,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
-    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> MutableConstraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -668,7 +662,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> MutableConstraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -683,7 +677,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> MutableConstraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 

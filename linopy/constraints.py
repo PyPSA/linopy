@@ -87,9 +87,7 @@ def conwrap(
     method: Callable, *default_args: Any, **new_default_kwargs: Any
 ) -> Callable:
     @functools.wraps(method)
-    def _conwrap(
-        con: MutableConstraint, *args: Any, **kwargs: Any
-    ) -> MutableConstraint:
+    def _conwrap(con: Constraint, *args: Any, **kwargs: Any) -> Constraint:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return con.__class__(
@@ -199,7 +197,7 @@ class ConstraintBase(ABC):
         """Return an immutable Constraint (CSR-backed)."""
 
     @abstractmethod
-    def mutable(self) -> MutableConstraint:
+    def mutable(self) -> Constraint:
         """Return a mutable MutableConstraint."""
 
     @abstractmethod
@@ -215,7 +213,7 @@ class ConstraintBase(ABC):
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Get selection from the constraint.
         Returns a MutableConstraint with the selected data.
@@ -223,7 +221,7 @@ class ConstraintBase(ABC):
         data = Dataset(
             {k: self.data[k][selector] for k in self.data}, attrs=self.data.attrs
         )
-        return MutableConstraint(data, self.model, self.name)
+        return Constraint(data, self.model, self.name)
 
     @property
     def attrs(self) -> dict[str, Any]:
@@ -674,7 +672,7 @@ class CSRConstraint(ConstraintBase):
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
         self._refreeze_after(lambda mc: setattr(mc, "lhs", value))
 
-    def _refreeze_after(self, mutate: Callable[[MutableConstraint], None]) -> None:
+    def _refreeze_after(self, mutate: Callable[[Constraint], None]) -> None:
         mc = self.mutable()
         mutate(mc)
         refrozen = CSRConstraint.from_mutable(mc, self._cindex)
@@ -928,9 +926,9 @@ class CSRConstraint(ConstraintBase):
         """Return self (already immutable)."""
         return self
 
-    def mutable(self) -> MutableConstraint:
+    def mutable(self) -> Constraint:
         """Convert to a MutableConstraint."""
-        return MutableConstraint(self.data, self._model, self._name)
+        return Constraint(self.data, self._model, self._name)
 
     def to_polars(self) -> pl.DataFrame:
         """Convert to polars DataFrame — delegates to mutable()."""
@@ -939,7 +937,7 @@ class CSRConstraint(ConstraintBase):
     @classmethod
     def from_mutable(
         cls,
-        con: MutableConstraint,
+        con: Constraint,
         cindex: int | None = None,
     ) -> CSRConstraint:
         """
@@ -985,7 +983,7 @@ class CSRConstraint(ConstraintBase):
         )
 
 
-class MutableConstraint(ConstraintBase):
+class Constraint(ConstraintBase):
     """
     Mutable constraint backed by an xarray Dataset.
 
@@ -1139,21 +1137,21 @@ class MutableConstraint(ConstraintBase):
         sense = np.array([s[0] for s in sign_flat])
         return csr, con_labels, b, sense
 
-    def sanitize_zeros(self) -> MutableConstraint:
+    def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
         self.vars = self.vars.where(not_zero, -1)
         self.coeffs = self.coeffs.where(not_zero)
         return self
 
-    def sanitize_missings(self) -> MutableConstraint:
+    def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""
         contains_non_missing = (self.vars != -1).any(self.term_dim)
         labels = self.labels.where(contains_non_missing, -1)
         self._data = assign_multiindex_safe(self.data, labels=labels)
         return self
 
-    def sanitize_infinities(self) -> MutableConstraint:
+    def sanitize_infinities(self) -> Constraint:
         """Mask out rows with invalid infinite RHS values."""
         valid_infinity_values = ((self.sign == LESS_EQUAL) & (self.rhs == np.inf)) | (
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
@@ -1171,14 +1169,12 @@ class MutableConstraint(ConstraintBase):
         )
         return CSRConstraint.from_mutable(self, cindex=cindex)
 
-    def mutable(self) -> MutableConstraint:
+    def mutable(self) -> Constraint:
         """Return self (already mutable)."""
         return self
 
     @classmethod
-    def from_rule(
-        cls, model: Model, rule: Callable, coords: CoordsLike
-    ) -> MutableConstraint:
+    def from_rule(cls, model: Model, rule: Callable, coords: CoordsLike) -> Constraint:
         """
         Create a constraint from a rule and a set of coordinates.
 
@@ -1422,7 +1418,7 @@ class Constraints:
         """
         Add a constraint to the constraints container.
         """
-        if freeze and isinstance(constraint, MutableConstraint):
+        if freeze and isinstance(constraint, Constraint):
             constraint = constraint.freeze()
         self.data[constraint.name] = constraint
         self._invalidate_label_position_index()
@@ -1639,7 +1635,7 @@ class Constraints:
         N = block_map.max()
 
         for name, constraint in self.items():
-            if not isinstance(constraint, MutableConstraint):
+            if not isinstance(constraint, Constraint):
                 self.data[name] = constraint = constraint.mutable()
             res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
             entries = replace_by_map(constraint.vars, block_map)
@@ -1722,7 +1718,7 @@ class Constraints:
                         cindex=c._cindex,
                         dual=None,
                     )
-            elif isinstance(c, MutableConstraint):
+            elif isinstance(c, Constraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")
             else:
@@ -1787,6 +1783,6 @@ class AnonymousScalarConstraint:
         """
         return self._rhs
 
-    def to_constraint(self) -> MutableConstraint:
+    def to_constraint(self) -> Constraint:
         data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
-        return MutableConstraint(data=data, model=self.lhs.model)
+        return Constraint(data=data, model=self.lhs.model)

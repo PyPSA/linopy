@@ -16,10 +16,10 @@ from linopy.common import align
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, PerformanceWarning
 from linopy.constraints import (
+    Constraint,
     ConstraintBase,
     Constraints,
     CSRConstraint,
-    MutableConstraint,
 )
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
@@ -37,7 +37,7 @@ __all__ = (
     "CSRConstraint",
     "ConstraintBase",
     "Constraints",
-    "MutableConstraint",
+    "Constraint",
     "EQUAL",
     "PerformanceWarning",
     "GREATER_EQUAL",

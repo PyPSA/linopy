@@ -6,7 +6,7 @@ import pytest
 import xarray as xr
 
 from linopy import Model, options
-from linopy.constraints import MutableConstraint
+from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression
 from linopy.variables import Variable
 
@@ -139,7 +139,7 @@ def test_single_array_linear_repr(var: Variable) -> None:
 
 
 @pytest.mark.parametrize("con", anonymous_constraints)
-def test_anonymous_constraint_repr(con: MutableConstraint) -> None:
+def test_anonymous_constraint_repr(con: Constraint) -> None:
     repr(con)
 
 
@@ -162,7 +162,7 @@ def test_single_array_constraint_repr(var: Variable) -> None:
 
 
 @pytest.mark.parametrize("con", constraints)
-def test_constraint_repr(con: MutableConstraint) -> None:
+def test_constraint_repr(con: Constraint) -> None:
     repr(con)
 
 
@@ -173,7 +173,7 @@ def test_empty_repr() -> None:
 
 
 @pytest.mark.parametrize("obj", [v, lv, cv_, cv])
-def test_print_options(obj: Variable | LinearExpression | MutableConstraint) -> None:
+def test_print_options(obj: Variable | LinearExpression | Constraint) -> None:
     default_repr = repr(obj)
     with options as opts:
         opts.set_value(display_max_rows=20)

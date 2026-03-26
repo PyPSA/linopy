@@ -93,7 +93,7 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import (
         AnonymousScalarConstraint,
-        MutableConstraint,
+        Constraint,
     )
     from linopy.model import Model
     from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
@@ -679,11 +679,9 @@ class BaseExpression(ABC):
     def __le__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __le__(self, rhs: SideLike) -> MutableConstraint: ...
+    def __le__(self, rhs: SideLike) -> Constraint: ...
 
-    def __le__(
-        self, rhs: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
         if descriptor is not None:
             return descriptor
@@ -693,11 +691,9 @@ class BaseExpression(ABC):
     def __ge__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __ge__(self, rhs: SideLike) -> MutableConstraint: ...
+    def __ge__(self, rhs: SideLike) -> Constraint: ...
 
-    def __ge__(
-        self, rhs: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
         if descriptor is not None:
             return descriptor
@@ -707,11 +703,9 @@ class BaseExpression(ABC):
     def __eq__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
 
     @overload
-    def __eq__(self, rhs: SideLike) -> MutableConstraint: ...
+    def __eq__(self, rhs: SideLike) -> Constraint: ...
 
-    def __eq__(
-        self, rhs: SideLike
-    ) -> MutableConstraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
         descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
         if descriptor is not None:
             return descriptor
@@ -830,7 +824,7 @@ class BaseExpression(ABC):
         self: GenericExpression,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -849,7 +843,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -868,7 +862,7 @@ class BaseExpression(ABC):
         self,
         rhs: SideLike,
         join: JoinOptions | None = None,
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Equality constraint.
 
@@ -1124,7 +1118,7 @@ class BaseExpression(ABC):
 
     def to_constraint(
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Convert a linear expression to a constraint.
 
@@ -1184,7 +1178,7 @@ class BaseExpression(ABC):
         data = assign_multiindex_safe(
             all_to_lhs[["coeffs", "vars"]], sign=sign, rhs=computed_rhs
         )
-        return constraints.MutableConstraint(data, model=self.model)
+        return constraints.Constraint(data, model=self.model)
 
     def reset_const(self: GenericExpression) -> GenericExpression:
         """
