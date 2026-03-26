@@ -746,17 +746,20 @@ class CSRConstraint(ConstraintBase):
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=np.int64)
             labels_flat[active_positions] = self._con_labels
-            ds["labels"] = DataArray(labels_flat.reshape(shape), coords=self._coords)
+            ds = assign_multiindex_safe(
+                ds,
+                labels=DataArray(labels_flat.reshape(shape), coords=self._coords),
+            )
         return ds
 
     @property
     def data(self) -> Dataset:
         """Reconstruct the xarray Dataset from the CSR representation."""
         ds = self._to_dataset(self.nterm)
-        ds = ds.assign(sign=self.sign, rhs=self.rhs)
+        extra = {"sign": self.sign, "rhs": self.rhs}
         if self._dual is not None:
-            ds = ds.assign(dual=self._active_to_dataarray(self._dual, fill=np.nan))
-        return ds.assign_attrs(self.attrs)
+            extra["dual"] = self._active_to_dataarray(self._dual, fill=np.nan)
+        return assign_multiindex_safe(ds, **extra).assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
