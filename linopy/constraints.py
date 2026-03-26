@@ -109,10 +109,10 @@ def _con_unwrap(con: ConstraintBase | Dataset) -> Dataset:
 
 class ConstraintBase(ABC):
     """
-    Abstract base class for Constraint and MutableConstraint.
+    Abstract base class for Constraint and CSRConstraint.
 
-    Provides all read-only properties and methods shared by both the immutable
-    Constraint (CSR-backed) and the mutable MutableConstraint (Dataset-backed).
+    Provides all read-only properties and methods shared by both the frozen
+    Constraint (CSR-backed) and the standard Constraint (Dataset-backed).
     """
 
     _fill_value = FILL_VALUE
@@ -198,7 +198,7 @@ class ConstraintBase(ABC):
 
     @abstractmethod
     def mutable(self) -> Constraint:
-        """Return a mutable MutableConstraint."""
+        """Return a mutable Constraint."""
 
     @abstractmethod
     def to_matrix_with_rhs(
@@ -216,7 +216,7 @@ class ConstraintBase(ABC):
     ) -> Constraint:
         """
         Get selection from the constraint.
-        Returns a MutableConstraint with the selected data.
+        Returns a Constraint with the selected data.
         """
         data = Dataset(
             {k: self.data[k][selector] for k in self.data}, attrs=self.data.attrs
@@ -930,7 +930,7 @@ class CSRConstraint(ConstraintBase):
         return self
 
     def mutable(self) -> Constraint:
-        """Convert to a MutableConstraint."""
+        """Convert to a Constraint."""
         return Constraint(self.data, self._model, self._name)
 
     def to_polars(self) -> pl.DataFrame:
@@ -944,11 +944,11 @@ class CSRConstraint(ConstraintBase):
         cindex: int | None = None,
     ) -> CSRConstraint:
         """
-        Create a Constraint from a MutableConstraint.
+        Create a CSRConstraint from a Constraint.
 
         Parameters
         ----------
-        con : MutableConstraint
+        con : Constraint
         cindex : int or None
             Starting label index, if assigned.
         """
@@ -988,9 +988,8 @@ class CSRConstraint(ConstraintBase):
 
 class Constraint(ConstraintBase):
     """
-    Mutable constraint backed by an xarray Dataset.
+    Constraint backed by an xarray Dataset.
 
-    This is the original Constraint implementation, renamed to MutableConstraint.
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
@@ -1203,11 +1202,11 @@ class Constraint(ConstraintBase):
 
         Returns
         -------
-        linopy.MutableConstraint
+        linopy.Constraint
 
         Examples
         --------
-        >>> from linopy import Model, LinearExpression, MutableConstraint
+        >>> from linopy import Model, LinearExpression, Constraint
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> x = m.add_variables(0, 100, coords)
@@ -1217,7 +1216,7 @@ class Constraint(ConstraintBase):
         ...     else:
         ...         return i * x.at[i, j] >= 0
         ...
-        >>> con = MutableConstraint.from_rule(m, bound, coords)
+        >>> con = Constraint.from_rule(m, bound, coords)
         >>> con = m.add_constraints(con)
         """
         if not isinstance(coords, DataArrayCoordinates):
@@ -1293,7 +1292,7 @@ class Constraint(ConstraintBase):
         df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
-    # Wrapped xarray methods — only available on MutableConstraint
+    # Wrapped xarray methods — only available on Constraint
     assign = conwrap(Dataset.assign)
     assign_multiindex_safe = conwrap(assign_multiindex_safe)
     assign_attrs = conwrap(Dataset.assign_attrs)

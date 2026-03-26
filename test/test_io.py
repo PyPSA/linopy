@@ -106,7 +106,7 @@ def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
             return x.at[i] >= i
         return x.at[i] == 0.0
 
-    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c")
+    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c", freeze=True)
     assert isinstance(m.constraints["c"], CSRConstraint)
 
     fn = tmp_path / "test_mixed_sign.nc"

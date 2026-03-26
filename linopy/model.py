@@ -36,6 +36,7 @@ from linopy.common import (
     set_int_index,
     to_path,
 )
+from linopy.config import options
 from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -739,8 +740,8 @@ class Model:
         name: str | None = ...,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
         mask: MaskLike | None = ...,
-        freeze: Literal[True] = ...,
-    ) -> CSRConstraint: ...
+        freeze: Literal[False] = ...,
+    ) -> Constraint: ...
 
     @overload
     def add_constraints(
@@ -755,8 +756,8 @@ class Model:
         name: str | None = ...,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
         mask: MaskLike | None = ...,
-        freeze: Literal[False] = ...,
-    ) -> Constraint: ...
+        freeze: Literal[True] = ...,
+    ) -> CSRConstraint: ...
 
     def add_constraints(
         self,
@@ -770,7 +771,7 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
         mask: MaskLike | None = None,
-        freeze: bool = True,
+        freeze: bool | None = None,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -806,13 +807,14 @@ class Model:
             The shape of the mask has to match the shape the added constraints.
             Default is None.
         freeze : bool, optional
-            If True, convert the constraint to an immutable CSR-backed Constraint
-            before returning. Default is True.
+            If True, convert the constraint to an immutable CSR-backed CSRConstraint
+            for better memory efficiency. If None, uses the global
+            ``linopy.options["freeze_constraints"]`` setting (default False).
 
         Returns
         -------
         constraint : linopy.ConstraintBase
-            The added constraint (MutableConstraint by default, or Constraint if freeze=True).
+            The added constraint (Constraint by default, or CSRConstraint if freeze=True).
         """
 
         msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
@@ -931,6 +933,8 @@ class Model:
             data = data.chunk(self.chunk)
 
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
+        if freeze is None:
+            freeze = options["freeze_constraints"]
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(
