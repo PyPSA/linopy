@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
   - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
@@ -18,10 +19,20 @@ Upcoming Version
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
+* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
+* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
 * Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
+* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
+* Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
+
+
+Version 0.6.6
+-------------
+
+* Free the knitro context and compute necessary quantities within linopy. Knitro context is not exposed anymore.
 
 
 Version 0.6.5
