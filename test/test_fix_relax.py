@@ -384,6 +384,31 @@ class TestVariablesContainerRelax:
         with pytest.raises(NotImplementedError, match="semi-continuous"):
             m.variables.relax()
 
+    def test_relaxed_view_unrelax(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables.relax()
+        assert len(m.variables.relaxed) == 2
+        m.variables.relaxed.unrelax()
+        assert len(m.variables.relaxed) == 0
+        assert m.variables["z"].attrs["binary"]
+        assert m.variables["w"].attrs["integer"]
+
+    def test_fixed_view_unfix(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["x"].fix(value=5.0)
+        m.variables["z"].fix()
+        assert len(m.variables.fixed) == 2
+        m.variables.fixed.unfix()
+        assert len(m.variables.fixed) == 0
+
+    def test_double_relax_is_idempotent(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        m.variables["z"].relax()
+        assert m._relaxed_registry["z"] == "binary"
+        m.variables["z"].unrelax()
+        assert m.variables["z"].attrs["binary"]
+
     def test_relax_all_converts_milp_to_lp(self, model_with_solution: Model) -> None:
         m = model_with_solution
         assert m.type == "MILP"
