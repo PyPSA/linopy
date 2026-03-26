@@ -145,6 +145,25 @@ class TestVariableUnfix:
         assert not m.variables["x"].fixed
 
 
+class TestFixNoSolution:
+    def test_fix_without_solution_raises(self) -> None:
+        m = Model()
+        m.add_variables(lower=0, upper=10, name="x")
+        with pytest.raises(ValueError, match="no solution value available"):
+            m.variables["x"].fix()
+
+
+class TestUnfixDoesNotUnrelaxIndependently:
+    def test_unfix_on_relaxed_only_variable(self, model_with_solution: Model) -> None:
+        m = model_with_solution
+        m.variables["z"].relax()
+        # unfix should be a no-op — no fix constraint exists
+        m.variables["z"].unfix()
+        # relaxation should still be in effect
+        assert m.variables["z"].relaxed
+        assert not m.variables["z"].attrs["binary"]
+
+
 class TestFixThenRelax:
     """Test the combined fix() + relax() workflow (fix first, then relax)."""
 
@@ -156,13 +175,18 @@ class TestFixThenRelax:
         assert m.variables["z"].fixed
         assert m.variables["z"].relaxed
 
-    def test_unfix_restores_relaxed_binary(self, model_with_solution: Model) -> None:
+    def test_unfix_does_not_unrelax(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["z"].fix()
         m.variables["z"].relax()
         m.variables["z"].unfix()
-        assert m.variables["z"].attrs["binary"]
         assert not m.variables["z"].fixed
+        # relaxation is independent — still in effect
+        assert m.variables["z"].relaxed
+        assert not m.variables["z"].attrs["binary"]
+        # explicit unrelax needed
+        m.variables["z"].unrelax()
+        assert m.variables["z"].attrs["binary"]
         assert not m.variables["z"].relaxed
 
     def test_fix_then_relax_integer(self, model_with_solution: Model) -> None:
@@ -173,14 +197,14 @@ class TestFixThenRelax:
         assert m.variables["w"].fixed
         assert m.variables["w"].relaxed
 
-    def test_unfix_restores_relaxed_integer(self, model_with_solution: Model) -> None:
+    def test_unfix_does_not_unrelax_integer(self, model_with_solution: Model) -> None:
         m = model_with_solution
         m.variables["w"].fix()
         m.variables["w"].relax()
         m.variables["w"].unfix()
-        assert m.variables["w"].attrs["integer"]
         assert not m.variables["w"].fixed
-        assert not m.variables["w"].relaxed
+        assert m.variables["w"].relaxed
+        assert not m.variables["w"].attrs["integer"]
 
 
 class TestVariableFixed:
@@ -241,6 +265,8 @@ class TestVariablesContainerFixUnfix:
         assert not m.variables["w"].attrs["integer"]
         assert m.variables["w"].fixed
         m.variables["w"].unfix()
+        assert not m.variables["w"].attrs["integer"]  # still relaxed
+        m.variables["w"].unrelax()
         assert m.variables["w"].attrs["integer"]
 
 

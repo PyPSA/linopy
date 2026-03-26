@@ -1309,20 +1309,26 @@ class Variable:
         For binary variables, the existing [0, 1] bounds are preserved,
         which is the correct LP relaxation. For integer variables, the
         existing bounds are preserved as-is.
+
+        If the variable is already continuous, this method is a no-op.
         """
-        if self.attrs.get("semi_continuous"):
+        attrs = self.attrs
+        if attrs.get("semi_continuous"):
             msg = (
                 f"Relaxation of semi-continuous variable '{self.name}' is not "
-                f"supported. The LP relaxation of a semi-continuous variable "
-                f"requires changing bounds, which is not handled by relax()."
+                "supported. The LP relaxation of a semi-continuous variable "
+                "requires changing bounds, which is not handled by relax()."
             )
             raise NotImplementedError(msg)
 
-        if self.attrs.get("binary") or self.attrs.get("integer"):
-            original_type = "binary" if self.attrs.get("binary") else "integer"
-            self.model._relaxed_registry[self.name] = original_type
-            self.attrs["binary"] = False
-            self.attrs["integer"] = False
+        is_binary = attrs.get("binary")
+        is_integer = attrs.get("integer")
+        if is_binary or is_integer:
+            self.model._relaxed_registry[self.name] = (
+                "binary" if is_binary else "integer"
+            )
+            attrs["binary"] = False
+            attrs["integer"] = False
 
     def unrelax(self) -> None:
         """
@@ -1366,11 +1372,19 @@ class Variable:
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
         overwrite : bool, optional
-            If True, overwrite an existing fix constraint for this variable.
-            If False (default), raise an error if the variable is already fixed.
+            If True (default), overwrite an existing fix constraint for this
+            variable. If False, raise an error if the variable is already fixed.
         """
         if value is None:
-            value = self.solution
+            try:
+                value = self.solution
+            except AttributeError:
+                msg = (
+                    f"Cannot fix variable '{self.name}': no solution value "
+                    "available. Solve the model first or provide an explicit "
+                    "value."
+                )
+                raise ValueError(msg) from None
 
         value = as_dataarray(value).broadcast_like(self.labels)
 
@@ -1382,7 +1396,7 @@ class Variable:
         if (value < self.lower).any() or (value > self.upper).any():
             msg = (
                 f"Fix values for variable '{self.name}' are outside the "
-                f"variable bounds."
+                "variable bounds."
             )
             raise ValueError(msg)
 
@@ -1392,25 +1406,20 @@ class Variable:
             if not overwrite:
                 msg = (
                     f"Variable '{self.name}' is already fixed. Use "
-                    f"overwrite=True to replace the existing fix constraint."
+                    "overwrite=True to replace the existing fix constraint."
                 )
                 raise ValueError(msg)
             self.model.remove_constraints(constraint_name)
 
-        self.model.add_constraints(1 * self, "=", value, name=constraint_name)
+        self.model.add_constraints(self, "=", value, name=constraint_name)
 
     def unfix(self) -> None:
         """
         Remove the fix constraint for this variable.
-
-        If the variable was previously relaxed via :meth:`relax`, the original
-        integrality type is also restored.
         """
         constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
         if constraint_name in self.model.constraints:
             self.model.remove_constraints(constraint_name)
-
-        self.unrelax()
 
     @property
     def fixed(self) -> bool:
