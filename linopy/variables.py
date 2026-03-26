@@ -1321,14 +1321,11 @@ class Variable:
             )
             raise NotImplementedError(msg)
 
-        is_binary = attrs.get("binary")
-        is_integer = attrs.get("integer")
-        if is_binary or is_integer:
-            self.model._relaxed_registry[self.name] = (
-                "binary" if is_binary else "integer"
-            )
-            attrs["binary"] = False
-            attrs["integer"] = False
+        for attr in ("binary", "integer"):
+            if attrs.get(attr):
+                self.model._relaxed_registry[self.name] = attr
+                attrs[attr] = False
+                return
 
     def unrelax(self) -> None:
         """
@@ -1338,12 +1335,9 @@ class Variable:
         previously relaxed, this is a no-op.
         """
         registry = self.model._relaxed_registry
-        if self.name in registry:
-            original_type = registry.pop(self.name)
-            if original_type == "binary":
-                self.attrs["binary"] = True
-            elif original_type == "integer":
-                self.attrs["integer"] = True
+        original_type = registry.pop(self.name, None)
+        if original_type is not None:
+            self.attrs[original_type] = True
 
     @property
     def relaxed(self) -> bool:
