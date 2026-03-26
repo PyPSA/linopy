@@ -1721,20 +1721,23 @@ class Xpress(Solver[None]):
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                try:  # Try new API first
-                    _dual = m.getDuals()
-                except AttributeError:  # Fallback to old API
-                    _dual = m.getDual()
+                if m.attributes.rows == 0:
+                    dual = pd.Series(dtype=float)
+                else:
+                    try:  # Try new API first
+                        _dual = m.getDuals()
+                    except AttributeError:  # Fallback to old API
+                        _dual = m.getDual()
 
-                try:  # Try new API first
-                    constraints = m.getNameList(
-                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                    )
-                except AttributeError:  # Fallback to old API
-                    constraints = m.getnamelist(
-                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                    )
-                dual = pd.Series(_dual, index=constraints, dtype=float)
+                    try:  # Try new API first
+                        constraints = m.getNameList(
+                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                        )
+                    except AttributeError:  # Fallback to old API
+                        constraints = m.getnamelist(
+                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                        )
+                    dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)

@@ -1009,7 +1009,7 @@ class Model:
             for k in to_remove:
                 self.constraints.remove(k)
 
-            self.variables.remove(name)
+        self.variables.remove(name)
 
         self.objective = self.objective.sel(
             {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
