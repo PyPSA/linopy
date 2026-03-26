@@ -54,6 +54,21 @@ def test_variable_inherited_properties(x: linopy.Variable) -> None:
     assert isinstance(x.ndim, int)
 
 
+def test_variable_type() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, name="x")
+    assert x.type == "Continuous Variable"
+
+    b = m.add_variables(binary=True, name="b")
+    assert b.type == "Binary Variable"
+
+    i = m.add_variables(lower=0, upper=10, integer=True, name="i")
+    assert i.type == "Integer Variable"
+
+    sc = m.add_variables(lower=1, upper=10, semi_continuous=True, name="sc")
+    assert sc.type == "Semi-continuous Variable"
+
+
 def test_variable_labels(x: linopy.Variable) -> None:
     isinstance(x.labels, xr.DataArray)
 
