@@ -4,6 +4,13 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
+* Harmonize coordinate alignment for operations with subset/superset objects:
+  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
+  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
+  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
+  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
+  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
 * Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
 * Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
@@ -11,8 +18,14 @@ Upcoming Version
 * Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
+* Add semi-continous variables for solvers that support them
+* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
+* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
 * Add unified ``SolverMetrics`` dataclass accessible via ``Model.solver_metrics`` after solving. Provides ``solver_name``, ``solve_time``, ``objective_value``, ``dual_bound``, and ``dual_bound`` in a solver-independent way. All solvers populate solver-specific fields where available.
+* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding and optional integrality relaxation (``relax=True``) for MILP dual extraction.
 
 
 Version 0.6.5

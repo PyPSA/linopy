@@ -53,7 +53,13 @@ from linopy.common import (
     to_polars,
 )
 from linopy.config import options
-from linopy.constants import HELPER_DIMS, SOS_DIM_ATTR, SOS_TYPE_ATTR, TERM_DIM
+from linopy.constants import (
+    FIX_CONSTRAINT_PREFIX,
+    HELPER_DIMS,
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
+    TERM_DIM,
+)
 from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
@@ -292,9 +298,15 @@ class Variable:
 
     @property
     def loc(self) -> LocIndexer:
+        """
+        Indexing the variable using coordinates.
+        """
         return LocIndexer(self)
 
     def to_pandas(self) -> pd.Series:
+        """
+        Convert the variable labels to a pandas Series.
+        """
         return self.labels.to_pandas()
 
     def to_linexpr(
@@ -316,6 +328,8 @@ class Variable:
             Linear expression with the variables and coefficients.
         """
         coefficient = as_dataarray(coefficient, coords=self.coords, dims=self.dims)
+        coefficient = coefficient.reindex_like(self.labels, fill_value=0)
+        coefficient = coefficient.fillna(0)
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
@@ -444,7 +458,7 @@ class Variable:
         return self.to_linexpr() @ other
 
     def __div__(
-        self, other: float | int | LinearExpression | Variable
+        self, other: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         Divide variables with a coefficient.
@@ -455,10 +469,10 @@ class Variable:
                 f"{type(self)} and {type(other)}. "
                 "Non-linear expressions are not yet supported."
             )
-        return self.to_linexpr(1 / other)
+        return self.to_linexpr()._divide_by_constant(other)
 
     def __truediv__(
-        self, coefficient: float | int | LinearExpression | Variable
+        self, coefficient: ConstantLike | LinearExpression | Variable
     ) -> LinearExpression:
         """
         True divide variables with a coefficient.
@@ -563,29 +577,118 @@ class Variable:
     def __contains__(self, value: str) -> bool:
         return self.data.__contains__(value)
 
-    def add(self, other: Variable) -> LinearExpression:
+    def add(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
-        """
-        return self.__add__(other)
 
-    def sub(self, other: Variable) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to add.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().add(other, join=join)
+
+    def sub(
+        self, other: SideLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
-        """
-        return self.__sub__(other)
 
-    def mul(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : expression-like
+            The expression to subtract.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().sub(other, join=join)
+
+    def mul(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
-        """
-        return self.__mul__(other)
 
-    def div(self, other: int) -> LinearExpression:
+        Parameters
+        ----------
+        other : constant-like
+            The coefficient to multiply by.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().mul(other, join=join)
+
+    def div(
+        self, other: ConstantLike, join: str | None = None
+    ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
+
+        Parameters
+        ----------
+        other : constant-like
+            The divisor.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
         """
-        return self.__div__(other)
+        return self.to_linexpr().div(other, join=join)
+
+    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Less than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().le(rhs, join=join)
+
+    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Greater than or equal constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().ge(rhs, join=join)
+
+    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+        """
+        Equality constraint.
+
+        Parameters
+        ----------
+        rhs : expression-like
+            Right-hand side of the constraint.
+        join : str, optional
+            How to align coordinates. One of "outer", "inner", "left",
+            "right", "exact", "override". When None (default), uses the
+            current default behavior.
+        """
+        return self.to_linexpr().eq(rhs, join=join)
 
     def pow(self, other: int) -> QuadraticExpression:
         """
@@ -748,15 +851,23 @@ class Variable:
             return "Integer Variable"
         elif self.attrs["binary"]:
             return "Binary Variable"
+        elif self.attrs.get("semi_continuous"):
+            return "Semi-continuous Variable"
         else:
             return "Continuous Variable"
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
+        """
+        Get the coordinate dimensions of the variable.
+        """
         return tuple(k for k in self.dims if k not in HELPER_DIMS)
 
     @property
     def coord_sizes(self) -> dict[Hashable, int]:
+        """
+        Get the coordinate sizes of the variable.
+        """
         return {k: v for k, v in self.sizes.items() if k not in HELPER_DIMS}
 
     @property
@@ -1130,6 +1241,19 @@ class Variable:
         return self
 
     def equals(self, other: Variable) -> bool:
+        """
+        Check if this Variable is equal to another.
+
+        Parameters
+        ----------
+        other : Variable
+            The Variable to compare with.
+
+        Returns
+        -------
+        bool
+            True if the variables have equal labels, False otherwise.
+        """
         return self.labels.equals(other.labels)
 
     # Wrapped function which would convert variable to dataarray
@@ -1172,6 +1296,98 @@ class Variable:
     unstack = varwrap(Dataset.unstack)
 
     iterate_slices = iterate_slices
+
+    def fix(
+        self,
+        value: ConstantLike | None = None,
+        decimals: int = 8,
+        relax: bool = False,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix the variable to a given value by adding an equality constraint.
+
+        If no value is given, the current solution value is used.
+
+        Parameters
+        ----------
+        value : float/array_like, optional
+            Value to fix the variable to. If None, the current solution is used.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+            Integer and binary variables are always rounded to 0 decimal places.
+            Default is 8.
+        relax : bool, optional
+            If True, relax the integrality of integer/binary variables by
+            temporarily treating them as continuous. The original type is stored
+            in the model's ``_relaxed_registry`` and restored by ``unfix()``.
+            Default is False.
+        overwrite : bool, optional
+            If True, overwrite an existing fix constraint for this variable.
+            If False (default), raise an error if the variable is already fixed.
+        """
+        if value is None:
+            value = self.solution
+
+        value = as_dataarray(value).broadcast_like(self.labels)
+
+        if self.attrs.get("integer") or self.attrs.get("binary"):
+            value = value.round(0)
+        else:
+            value = value.round(decimals)
+
+        if (value < self.lower).any() or (value > self.upper).any():
+            msg = (
+                f"Fix values for variable '{self.name}' are outside the "
+                f"variable bounds."
+            )
+            raise ValueError(msg)
+
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+
+        if constraint_name in self.model.constraints:
+            if not overwrite:
+                msg = (
+                    f"Variable '{self.name}' is already fixed. Use "
+                    f"overwrite=True to replace the existing fix constraint."
+                )
+                raise ValueError(msg)
+            self.model.remove_constraints(constraint_name)
+
+        self.model.add_constraints(1 * self, "=", value, name=constraint_name)
+
+        if relax and (self.attrs.get("integer") or self.attrs.get("binary")):
+            original_type = "binary" if self.attrs.get("binary") else "integer"
+            self.model._relaxed_registry[self.name] = original_type
+            self.attrs["integer"] = False
+            self.attrs["binary"] = False
+
+    def unfix(self) -> None:
+        """
+        Remove the fix constraint for this variable.
+
+        If the variable was relaxed during ``fix(relax=True)``, the original
+        integrality type (integer or binary) is restored.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        if constraint_name in self.model.constraints:
+            self.model.remove_constraints(constraint_name)
+
+        registry = self.model._relaxed_registry
+        if self.name in registry:
+            original_type = registry.pop(self.name)
+            if original_type == "binary":
+                self.attrs["binary"] = True
+            elif original_type == "integer":
+                self.attrs["integer"] = True
+
+    @property
+    def fixed(self) -> bool:
+        """
+        Return whether the variable is currently fixed.
+        """
+        constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
+        return constraint_name in self.model.constraints
 
 
 class AtIndexer:
@@ -1270,6 +1486,8 @@ class Variables:
                 sos_dim := ds.attrs.get(SOS_DIM_ATTR)
             ):
                 coords += f" - sos{sos_type} on {sos_dim}"
+            if ds.attrs.get("semi_continuous", False):
+                coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
         if not len(list(self)):
             r += "<empty>\n"
@@ -1409,7 +1627,23 @@ class Variables:
             {
                 name: self.data[name]
                 for name in self
-                if not self[name].attrs["integer"] and not self[name].attrs["binary"]
+                if not self[name].attrs["integer"]
+                and not self[name].attrs["binary"]
+                and not self[name].attrs.get("semi_continuous", False)
+            },
+            self.model,
+        )
+
+    @property
+    def semi_continuous(self) -> Variables:
+        """
+        Get all semi-continuous variables.
+        """
+        return self.__class__(
+            {
+                name: self.data[name]
+                for name in self
+                if self[name].attrs.get("semi_continuous", False)
             },
             self.model,
         )
@@ -1428,6 +1662,64 @@ class Variables:
             },
             self.model,
         )
+
+    def fix(
+        self,
+        value: int | float | None = None,
+        decimals: int = 8,
+        relax: bool = False,
+        overwrite: bool = True,
+    ) -> None:
+        """
+        Fix all variables in this container to their solution or a scalar value.
+
+        Delegates to each variable's ``fix()`` method. See
+        :meth:`Variable.fix` for details.
+
+        Parameters
+        ----------
+        value : int/float, optional
+            Scalar value to fix all variables to. Only scalar values are
+            accepted to avoid shape mismatches across differently-shaped
+            variables. If None, each variable is fixed to its current solution.
+        decimals : int, optional
+            Number of decimal places to round continuous variables to.
+        relax : bool, optional
+            If True, relax integrality of integer/binary variables.
+        overwrite : bool, optional
+            If True, overwrite existing fix constraints.
+
+        Note
+        ----
+        When using ``relax=True`` on a filtered view like
+        ``m.variables.integers``, the variables will no longer appear in that
+        view after relaxation. Call ``m.variables.unfix()`` to restore all
+        fixed variables. If other variables are also fixed and should stay
+        fixed, save the names before fixing to selectively unfix::
+
+            names = list(m.variables.integers)
+            m.variables.integers.fix(relax=True)
+            ...
+            m.variables[names].unfix()
+        """
+        for var in self.data.values():
+            var.fix(value=value, decimals=decimals, relax=relax, overwrite=overwrite)
+
+    def unfix(self) -> None:
+        """
+        Unfix all variables in this container.
+
+        Delegates to each variable's ``unfix()`` method.
+        """
+        for var in self.data.values():
+            var.unfix()
+
+    @property
+    def fixed(self) -> dict[str, bool]:
+        """
+        Return a dict mapping variable names to whether they are fixed.
+        """
+        return {name: var.fixed for name, var in self.items()}
 
     @property
     def solution(self) -> Dataset:

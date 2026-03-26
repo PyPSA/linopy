@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -234,7 +235,11 @@ def bounds_to_file(
     """
     Write out variables of a model to a lp file.
     """
-    names = list(m.variables.continuous) + list(m.variables.integers)
+    names = (
+        list(m.variables.continuous)
+        + list(m.variables.integers)
+        + list(m.variables.semi_continuous)
+    )
     if not len(list(names)):
         return
 
@@ -289,6 +294,44 @@ def binaries_to_file(
         names = tqdm(
             list(names),
             desc="Writing binary variables.",
+            colour=TQDM_COLOR,
+        )
+
+    for name in names:
+        var = m.variables[name]
+        for var_slice in var.iterate_slices(slice_size):
+            df = var_slice.to_polars()
+
+            columns = [
+                *print_variable(pl.col("labels")),
+            ]
+
+            _format_and_write(df, columns, f)
+
+
+def semi_continuous_to_file(
+    m: Model,
+    f: BufferedWriter,
+    progress: bool = False,
+    slice_size: int = 2_000_000,
+    explicit_coordinate_names: bool = False,
+) -> None:
+    """
+    Write out semi-continuous variables of a model to a lp file.
+    """
+    names = m.variables.semi_continuous
+    if not len(list(names)):
+        return
+
+    print_variable, _ = get_printers(
+        m, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    f.write(b"\n\nsemi-continuous\n\n")
+    if progress:
+        names = tqdm(
+            list(names),
+            desc="Writing semi-continuous variables.",
             colour=TQDM_COLOR,
         )
 
@@ -509,6 +552,13 @@ def to_lp_file(
             slice_size=slice_size,
             explicit_coordinate_names=explicit_coordinate_names,
         )
+        semi_continuous_to_file(
+            m,
+            f=f,
+            progress=progress,
+            slice_size=slice_size,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
         sos_to_file(
             m,
             f=f,
@@ -593,6 +643,12 @@ def to_mosek(
     """
     if m.variables.sos:
         raise NotImplementedError("SOS constraints are not supported by MOSEK.")
+
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by MOSEK. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
 
     import mosek
 
@@ -720,7 +776,11 @@ def to_gurobipy(
 
     names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
-    if len(m.binaries.labels) + len(m.integers.labels):
+    if (
+        len(m.binaries.labels)
+        + len(m.integers.labels)
+        + len(list(m.variables.semi_continuous))
+    ):
         kwargs["vtype"] = M.vtypes
     x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
 
@@ -793,11 +853,17 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     M = m.matrices
     h = highspy.Highs()
     h.addVars(len(M.vlabels), M.lb, M.ub)
-    if len(m.binaries) + len(m.integers):
+    if len(m.binaries) + len(m.integers) + len(list(m.variables.semi_continuous)):
         vtypes = M.vtypes
-        labels = np.arange(len(vtypes))[(vtypes == "B") | (vtypes == "I")]
-        n = len(labels)
-        h.changeColsIntegrality(n, labels, ones_like(labels))
+        # Map linopy vtypes to HiGHS integrality values:
+        # 0 = continuous, 1 = integer, 2 = semi-continuous
+        integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+        int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+        labels = np.arange(len(vtypes))[int_mask]
+        integrality = np.array(
+            [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+        )
+        h.changeColsIntegrality(len(labels), labels, integrality)
         if len(m.binaries):
             labels = np.arange(len(vtypes))[vtypes == "B"]
             n = len(labels)
@@ -856,6 +922,12 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     -------
     model : cupdlpx.Model
     """
+    if m.variables.semi_continuous:
+        raise NotImplementedError(
+            "Semi-continuous variables are not supported by cuPDLPx. "
+            "Use a solver that supports them (gurobi, cplex, highs)."
+        )
+
     import cupdlpx
 
     if explicit_coordinate_names:
@@ -1073,6 +1145,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1167,4 +1241,128 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))
 
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
+
     return m
+
+
+def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
+    """
+    Return a copy of this model.
+
+    With ``deep=True`` (default), variables, constraints, objective,
+    parameters, blocks, and scalar attributes are copied to a fully
+    independent model. With ``deep=False``, returns a shallow copy.
+
+    :meth:`Model.copy` defaults to deep copy for workflow safety.
+    In contrast, ``copy.copy(model)`` is shallow via ``__copy__``, and
+    ``copy.deepcopy(model)`` is deep via ``__deepcopy__``.
+
+    Solver runtime metadata (for example, ``solver_name`` and
+    ``solver_model``) is intentionally not copied. Solver backend state
+    is recreated on ``solve()``.
+
+    Parameters
+    ----------
+    m : Model
+        The model to copy.
+    include_solution : bool, optional
+        Whether to include solution and dual values in the copy.
+        If False (default), solve artifacts are excluded: solution/dual data,
+        objective value, and solve status are reset to initialized state.
+        If True, these values are copied when present. For unsolved models,
+        this has no additional effect.
+    deep : bool, optional
+        Whether to return a deep copy (default) or shallow copy. If False,
+        the returned model uses independent wrapper objects that share
+        underlying data buffers with the source model.
+
+    Returns
+    -------
+    Model
+        A deep or shallow copy of the model.
+    """
+    from linopy.model import (
+        Constraint,
+        Constraints,
+        LinearExpression,
+        Model,
+        Objective,
+        Variable,
+        Variables,
+    )
+
+    SOLVE_STATE_ATTRS = {"status", "termination_condition"}
+
+    new_model = Model(
+        chunk=m._chunk,
+        force_dim_names=m._force_dim_names,
+        auto_mask=m._auto_mask,
+        solver_dir=str(m._solver_dir),
+    )
+
+    new_model._variables = Variables(
+        {
+            name: Variable(
+                var.data.copy(deep=deep)
+                if include_solution
+                else var.data[m.variables.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, var in m.variables.items()
+        },
+        new_model,
+    )
+
+    new_model._constraints = Constraints(
+        {
+            name: Constraint(
+                con.data.copy(deep=deep)
+                if include_solution
+                else con.data[m.constraints.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, con in m.constraints.items()
+        },
+        new_model,
+    )
+
+    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    new_model._objective._value = m.objective.value if include_solution else None
+
+    new_model._parameters = m._parameters.copy(deep=deep)
+    new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
+
+    for attr in m.scalar_attrs:
+        if include_solution or attr not in SOLVE_STATE_ATTRS:
+            setattr(new_model, attr, getattr(m, attr))
+
+    return new_model
+
+
+def shallowcopy(m: Model) -> Model:
+    """
+    Support Python's ``copy.copy`` protocol for ``Model``.
+
+    Returns a shallow copy with independent wrapper objects that share
+    underlying array buffers with ``m``. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    return copy(m, include_solution=False, deep=False)
+
+
+def deepcopy(m: Model, memo: dict[int, Any]) -> Model:
+    """
+    Support Python's ``copy.deepcopy`` protocol for ``Model``.
+
+    Returns a deep, structurally independent copy and records it in ``memo``
+    as required by Python's copy protocol. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    new_model = copy(m, include_solution=False, deep=True)
+    memo[id(m)] = new_model
+    return new_model
