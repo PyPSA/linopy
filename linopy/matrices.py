@@ -14,7 +14,7 @@ import scipy.sparse
 from numpy import ndarray
 
 from linopy import expressions
-from linopy.constraints import Constraint
+from linopy.constraints import CSRConstraint
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -158,7 +158,7 @@ class MatrixAccessor:
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
-            if isinstance(c, Constraint):
+            if isinstance(c, CSRConstraint):
                 # _dual is active-only
                 if c._dual is not None:
                     dual_list.append(c._dual)

@@ -195,7 +195,7 @@ class ConstraintBase(ABC):
         """Convert constraint to a polars DataFrame."""
 
     @abstractmethod
-    def freeze(self) -> Constraint:
+    def freeze(self) -> CSRConstraint:
         """Return an immutable Constraint (CSR-backed)."""
 
     @abstractmethod
@@ -486,9 +486,9 @@ class ConstraintBase(ABC):
     iterate_slices = iterate_slices
 
 
-class Constraint(ConstraintBase):
+class CSRConstraint(ConstraintBase):
     """
-    Immutable constraint backed by a CSR sparse matrix.
+    Frozen constraint backed by a CSR sparse matrix.
 
     Parameters
     ----------
@@ -677,7 +677,7 @@ class Constraint(ConstraintBase):
     def _refreeze_after(self, mutate: Callable[[MutableConstraint], None]) -> None:
         mc = self.mutable()
         mutate(mc)
-        refrozen = Constraint.from_mutable(mc, self._cindex)
+        refrozen = CSRConstraint.from_mutable(mc, self._cindex)
         self._csr = refrozen._csr
         self._con_labels = refrozen._con_labels
         self._rhs = refrozen._rhs
@@ -848,7 +848,7 @@ class Constraint(ConstraintBase):
         return Dataset(data_vars, attrs=attrs)
 
     @classmethod
-    def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> Constraint:
+    def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> CSRConstraint:
         """Reconstruct a Constraint from a netcdf Dataset (CSR format)."""
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
@@ -891,17 +891,17 @@ class Constraint(ConstraintBase):
             sense = np.array([s[0] for s in self._sign])
         return self._csr, self._con_labels, self._rhs, sense
 
-    def sanitize_zeros(self) -> Constraint:
+    def sanitize_zeros(self) -> CSRConstraint:
         """Remove terms with zero or near-zero coefficients (mutates in-place)."""
         self._csr.data[np.abs(self._csr.data) <= 1e-10] = 0
         self._csr.eliminate_zeros()
         return self
 
-    def sanitize_missings(self) -> Constraint:
+    def sanitize_missings(self) -> CSRConstraint:
         """No-op: missing rows are already excluded during freezing."""
         return self
 
-    def sanitize_infinities(self) -> Constraint:
+    def sanitize_infinities(self) -> CSRConstraint:
         """Mask out rows with invalid infinite RHS values (mutates in-place)."""
         if isinstance(self._sign, str):
             if self._sign == LESS_EQUAL:
@@ -924,7 +924,7 @@ class Constraint(ConstraintBase):
             self._sign = self._sign[keep]
         return self
 
-    def freeze(self) -> Constraint:
+    def freeze(self) -> CSRConstraint:
         """Return self (already immutable)."""
         return self
 
@@ -941,7 +941,7 @@ class Constraint(ConstraintBase):
         cls,
         con: MutableConstraint,
         cindex: int | None = None,
-    ) -> Constraint:
+    ) -> CSRConstraint:
         """
         Create a Constraint from a MutableConstraint.
 
@@ -1162,14 +1162,14 @@ class MutableConstraint(ConstraintBase):
         self._data = assign_multiindex_safe(self.data, labels=labels)
         return self
 
-    def freeze(self) -> Constraint:
+    def freeze(self) -> CSRConstraint:
         """Convert to an immutable Constraint."""
         cindex = (
             int(self.data.attrs["label_range"][0])
             if "label_range" in self.data.attrs
             else None
         )
-        return Constraint.from_mutable(self, cindex=cindex)
+        return CSRConstraint.from_mutable(self, cindex=cindex)
 
     def mutable(self) -> MutableConstraint:
         """Return self (already mutable)."""
@@ -1709,9 +1709,9 @@ class Constraints:
         Reset the stored solution of variables.
         """
         for k, c in self.items():
-            if isinstance(c, Constraint):
+            if isinstance(c, CSRConstraint):
                 if c._dual is not None:
-                    self.data[k] = Constraint(
+                    self.data[k] = CSRConstraint(
                         c._csr,
                         c._con_labels,
                         c._rhs,

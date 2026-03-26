@@ -62,12 +62,12 @@ def mc(m: Model) -> linopy.constraints.MutableConstraint:
     return m.constraints["c"].mutable()
 
 
-def test_constraint_repr(c: linopy.constraints.Constraint) -> None:
+def test_constraint_repr(c: linopy.constraints.CSRConstraint) -> None:
     c.__repr__()
 
 
 def test_constraint_repr_equivalent_to_mutable(
-    c: linopy.constraints.Constraint,
+    c: linopy.constraints.CSRConstraint,
 ) -> None:
     """Constraint (CSR-backed) and MutableConstraint repr must be identical."""
     frozen = c.freeze()
@@ -80,12 +80,12 @@ def test_constraints_repr(m: Model) -> None:
 
 def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     c = m.add_constraints(x >= 1, name="frozen_c", freeze=True)
-    assert isinstance(c, linopy.constraints.Constraint)
-    assert isinstance(m.constraints["frozen_c"], linopy.constraints.Constraint)
+    assert isinstance(c, linopy.constraints.CSRConstraint)
+    assert isinstance(m.constraints["frozen_c"], linopy.constraints.CSRConstraint)
     assert c.ncons == 10
 
 
-def test_constraint_name(c: linopy.constraints.Constraint) -> None:
+def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
     assert c.name == "c"
 
 
@@ -100,7 +100,7 @@ def test_cannot_create_constraint_without_variable() -> None:
         _ = linopy.LinearExpression(12, model) == linopy.LinearExpression(13, model)
 
 
-def test_constraints_getter(m: Model, c: linopy.constraints.Constraint) -> None:
+def test_constraints_getter(m: Model, c: linopy.constraints.CSRConstraint) -> None:
     assert c.shape == (10,)
     assert isinstance(m.constraints[["c"]], Constraints)
 
@@ -329,11 +329,11 @@ def test_constraint_coeffs_getter(mc: linopy.constraints.MutableConstraint) -> N
     assert (mc.coeffs == 1).all()
 
 
-def test_constraint_sign_getter(c: linopy.constraints.Constraint) -> None:
+def test_constraint_sign_getter(c: linopy.constraints.CSRConstraint) -> None:
     assert (c.sign == GREATER_EQUAL).all()
 
 
-def test_constraint_rhs_getter(c: linopy.constraints.Constraint) -> None:
+def test_constraint_rhs_getter(c: linopy.constraints.CSRConstraint) -> None:
     assert (c.rhs == 0).all()
 
 
@@ -443,18 +443,18 @@ def test_constraint_rhs_setter_with_expression_and_constant(
     assert mc.lhs.nterm == 2
 
 
-def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
+def test_constraint_labels_setter_invalid(c: linopy.constraints.CSRConstraint) -> None:
     # Test that assigning labels raises AttributeError (Constraint is frozen)
     with pytest.raises(AttributeError):
         c.labels = c.labels  # type: ignore
 
 
-def test_constraint_sel(c: linopy.constraints.Constraint) -> None:
+def test_constraint_sel(c: linopy.constraints.CSRConstraint) -> None:
     assert isinstance(c.mutable().sel(first=[1, 2]), ConstraintBase)
     assert isinstance(c.mutable().isel(first=[1, 2]), ConstraintBase)
 
 
-def test_constraint_flat(c: linopy.constraints.Constraint) -> None:
+def test_constraint_flat(c: linopy.constraints.CSRConstraint) -> None:
     assert isinstance(c.flat, pd.DataFrame)
 
 
@@ -464,7 +464,7 @@ def test_iterate_slices(mc: linopy.constraints.MutableConstraint) -> None:
         assert mc.coord_dims == i.coord_dims
 
 
-def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
+def test_constraint_to_polars(c: linopy.constraints.CSRConstraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
@@ -709,10 +709,10 @@ def test_constraints_equalities(m: Model) -> None:
 
 def test_freeze_mutable_roundtrip(m: Model) -> None:
     frozen = m.constraints["c"]
-    assert isinstance(frozen, linopy.constraints.Constraint)
+    assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
     assert isinstance(mc, MutableConstraint)
-    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert_equal(frozen.sign, refrozen.sign)
@@ -727,7 +727,7 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     m.add_constraints(x.where(mask) >= 0, name="c")
     frozen = m.constraints["c"]
     mc = frozen.mutable()
-    refrozen = linopy.constraints.Constraint.from_mutable(mc, frozen._cindex)
+    refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
     assert_equal(frozen.rhs, refrozen.rhs)
     assert frozen.ncons == refrozen.ncons == 3
@@ -740,7 +740,7 @@ def test_from_mutable_mixed_signs() -> None:
     mc = m.constraints["mixed"]
     assert isinstance(mc, MutableConstraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<="], dims=["i"])
-    frozen = linopy.constraints.Constraint.from_mutable(mc)
+    frozen = linopy.constraints.CSRConstraint.from_mutable(mc)
     assert isinstance(frozen._sign, np.ndarray)
     assert list(frozen._sign) == ["<=", ">=", "<="]
     assert_equal(frozen.sign, mc.sign)
@@ -801,7 +801,7 @@ def test_freeze_mixed_signs_from_rule() -> None:
         return x.at[i] == 0.0
 
     con = m.add_constraints(bound, coords=coords, name="mixed_rule")
-    assert isinstance(con, linopy.constraints.Constraint)
+    assert isinstance(con, linopy.constraints.CSRConstraint)
     assert isinstance(con._sign, np.ndarray)
     assert con.ncons == 4
     expected_signs = ["=", ">=", "=", ">="]
@@ -814,7 +814,7 @@ def test_frozen_rhs_setter() -> None:
     time = pd.RangeIndex(5, name="t")
     x = m.add_variables(lower=0, coords=[time], name="x")
     con = m.add_constraints(x >= 1, name="c")
-    assert isinstance(con, linopy.constraints.Constraint)
+    assert isinstance(con, linopy.constraints.CSRConstraint)
     con.rhs = 10
     np.testing.assert_array_equal(con._rhs, np.full(5, 10.0))
     factor = pd.Series(range(5), index=time)
@@ -828,7 +828,7 @@ def test_frozen_lhs_setter() -> None:
     x = m.add_variables(lower=0, coords=[time], name="x")
     y = m.add_variables(lower=0, coords=[time], name="y")
     con = m.add_constraints(x >= 0, name="c")
-    assert isinstance(con, linopy.constraints.Constraint)
+    assert isinstance(con, linopy.constraints.CSRConstraint)
     con.lhs = 3 * x + 2 * y
     lhs = con.mutable().lhs
     assert lhs.nterm == 2

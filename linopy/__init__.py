@@ -16,9 +16,9 @@ from linopy.common import align
 from linopy.config import options
 from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL, PerformanceWarning
 from linopy.constraints import (
-    Constraint,
     ConstraintBase,
     Constraints,
+    CSRConstraint,
     MutableConstraint,
 )
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
@@ -34,7 +34,7 @@ except ImportError:
     pass
 
 __all__ = (
-    "Constraint",
+    "CSRConstraint",
     "ConstraintBase",
     "Constraints",
     "MutableConstraint",

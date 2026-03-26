@@ -79,24 +79,24 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
 
 
 def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import Constraint
+    from linopy.constraints import CSRConstraint
 
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
     m.add_constraints(x >= 1, name="c", freeze=True)
 
-    assert isinstance(m.constraints["c"], Constraint)
+    assert isinstance(m.constraints["c"], CSRConstraint)
 
     fn = tmp_path / "test_frozen.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert isinstance(p.constraints["c"], Constraint)
+    assert isinstance(p.constraints["c"], CSRConstraint)
     assert_model_equal(m, p)
 
 
 def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import Constraint
+    from linopy.constraints import CSRConstraint
 
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
@@ -107,13 +107,13 @@ def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
         return x.at[i] == 0.0
 
     m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c")
-    assert isinstance(m.constraints["c"], Constraint)
+    assert isinstance(m.constraints["c"], CSRConstraint)
 
     fn = tmp_path / "test_mixed_sign.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert isinstance(p.constraints["c"], Constraint)
+    assert isinstance(p.constraints["c"], CSRConstraint)
     import numpy as np
 
     np.testing.assert_array_equal(m.constraints["c"]._sign, p.constraints["c"]._sign)

@@ -49,9 +49,9 @@ from linopy.constants import (
 )
 from linopy.constraints import (
     AnonymousScalarConstraint,
-    Constraint,
     ConstraintBase,
     Constraints,
+    CSRConstraint,
     MutableConstraint,
 )
 from linopy.expressions import (
@@ -740,7 +740,7 @@ class Model:
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
         mask: MaskLike | None = ...,
         freeze: Literal[True] = ...,
-    ) -> Constraint: ...
+    ) -> CSRConstraint: ...
 
     @overload
     def add_constraints(

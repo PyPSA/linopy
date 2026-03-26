@@ -1171,9 +1171,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m : linopy.Model
     """
     from linopy.constraints import (
-        Constraint,
         ConstraintBase,
         Constraints,
+        CSRConstraint,
         MutableConstraint,
     )
     from linopy.expressions import LinearExpression
@@ -1230,7 +1230,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)
         if con_ds.attrs.get("_linopy_format") == "csr":
-            constraints[name] = Constraint.from_netcdf_ds(con_ds, m, name)
+            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
         else:
             constraints[name] = MutableConstraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
