@@ -17,6 +17,7 @@ from typing import (
     Any,
     overload,
 )
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,9 @@ from linopy.common import (
     coords_from_dataset,
     coords_to_dataset_vars,
     filter_nulls_polars,
+    format_coord,
+    format_single_constraint,
+    format_single_expression,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -49,9 +53,6 @@ from linopy.common import (
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_signs,
-    print_coord,
-    print_single_constraint,
-    print_single_expression,
     replace_by_map,
     require_constant,
     save_join,
@@ -349,7 +350,7 @@ class ConstraintBase(ABC):
                         for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
-                        expr = print_single_expression(
+                        expr = format_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
                             0,
@@ -357,9 +358,9 @@ class ConstraintBase(ABC):
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = print_coord(coord) + f": {expr} {sign} {rhs}"
+                        line = format_coord(coord) + f": {expr} {sign} {rhs}"
                     else:
-                        line = print_coord(coord) + ": None"
+                        line = format_coord(coord) + ": None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
@@ -368,7 +369,7 @@ class ConstraintBase(ABC):
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(
+            expr = format_single_expression(
                 self.coeffs.values, self.vars.values, 0, self.model
             )
             lines.append(
@@ -1597,29 +1598,47 @@ class Constraints:
             self._label_position_index = LabelPositionIndex(self)
         return get_label_position(self, values, self._label_position_index)
 
+    def format_labels(
+        self, values: Sequence[int], display_max_terms: int | None = None
+    ) -> str:
+        """
+        Get a string representation of a selection of constraint labels.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        display_max_terms : int, optional
+            Maximum number of terms to display per constraint. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
+
+        Returns
+        -------
+        str
+            String representation of the selected constraints.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [format_single_constraint(self.model, v) for v in values]
+
+        return "\n".join(res)
+
     def print_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
     ) -> None:
         """
         Print a selection of labels of the constraints.
 
-        Parameters
-        ----------
-        values : list, array-like
-            One dimensional array of constraint labels.
+        .. deprecated::
+            Use :meth:`format_labels` instead.
         """
-        with options as opts:
-            if display_max_terms is not None:
-                opts.set_value(display_max_terms=display_max_terms)
-            res = [print_single_constraint(self.model, v) for v in values]
-
-        output = "\n".join(res)
-        try:
-            print(output)
-        except UnicodeEncodeError:
-            # Replace Unicode math symbols with ASCII equivalents for Windows console
-            output = output.replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
-            print(output)
+        warn(
+            "`Constraints.print_labels` is deprecated. Use `Constraints.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values, display_max_terms=display_max_terms))
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
@@ -1759,7 +1778,7 @@ class AnonymousScalarConstraint:
         """
         Get the representation of the AnonymousScalarConstraint.
         """
-        expr_string = print_single_expression(
+        expr_string = format_single_expression(
             np.array(self.lhs.coeffs), np.array(self.lhs.vars), 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"

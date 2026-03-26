@@ -1039,7 +1039,7 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
+def format_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     """
     Format coordinates into a string representation.
 
@@ -1052,11 +1052,11 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
         with nested coordinates grouped in parentheses.
 
     Examples:
-        >>> print_coord({"x": 1, "y": 2})
+        >>> format_coord({"x": 1, "y": 2})
         '[1, 2]'
-        >>> print_coord([1, 2, 3])
+        >>> format_coord([1, 2, 3])
         '[1, 2, 3]'
-        >>> print_coord([(1, 2), (3, 4)])
+        >>> format_coord([(1, 2), (3, 4)])
         '[(1, 2), (3, 4)]'
     """
     # Handle empty input
@@ -1077,7 +1077,7 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     return f"[{', '.join(formatted)}]"
 
 
-def print_single_variable(model: Any, label: int) -> str:
+def format_single_variable(model: Any, label: int) -> str:
     if label == -1:
         return "None"
 
@@ -1096,10 +1096,10 @@ def print_single_variable(model: Any, label: int) -> str:
     else:
         bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
 
-    return f"{name}{print_coord(coord)}{bounds}"
+    return f"{name}{format_coord(coord)}{bounds}"
 
 
-def print_single_expression(
+def format_single_expression(
     c: np.ndarray,
     v: np.ndarray,
     const: float,
@@ -1111,7 +1111,7 @@ def print_single_expression(
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
-    def print_line(
+    def format_line(
         expr: list[tuple[float, tuple[str, Any] | list[tuple[str, Any]]]], const: float
     ) -> str:
         res = []
@@ -1125,11 +1125,11 @@ def print_single_expression(
                 var_string = ""
                 for name, coords in var:
                     if name is not None:
-                        coord_string = print_coord(coords)
+                        coord_string = format_coord(coords)
                         var_string += f" {name}{coord_string}"
             else:
                 name, coords = var
-                coord_string = print_coord(coords)
+                coord_string = format_coord(coords)
                 var_string = f" {name}{coord_string}"
 
             res.append(f"{coeff_string}{var_string}")
@@ -1156,7 +1156,7 @@ def print_single_expression(
         truncate = max_terms // 2
         positions = model.variables.get_label_position(v[..., :truncate])
         expr = list(zip(c[:truncate], positions))
-        res = print_line(expr, const)
+        res = format_line(expr, const)
         res += " ... "
         expr = list(
             zip(
@@ -1164,15 +1164,15 @@ def print_single_expression(
                 model.variables.get_label_position(v[-truncate:]),
             )
         )
-        residual = print_line(expr, const)
+        residual = format_line(expr, const)
         if residual != " None":
             res += residual
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
-    return print_line(expr, const)
+    return format_line(expr, const)
 
 
-def print_single_constraint(model: Any, label: int) -> str:
+def format_single_constraint(model: Any, label: int) -> str:
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -1181,10 +1181,10 @@ def print_single_constraint(model: Any, label: int) -> str:
     sign = model.constraints[name].sign.sel(coord).item()
     rhs = model.constraints[name].rhs.sel(coord).item()
 
-    expr = print_single_expression(coeffs, vars, 0, model)
+    expr = format_single_expression(coeffs, vars, 0, model)
     sign = SIGNS_pretty[sign]
 
-    return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
+    return f"{name}{format_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
 def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:

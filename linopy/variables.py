@@ -40,14 +40,14 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     filter_nulls_polars,
+    format_coord,
+    format_single_variable,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
     get_label_position,
     has_optimized_model,
     iterate_slices,
-    print_coord,
-    print_single_variable,
     require_constant,
     save_join,
     set_int_index,
@@ -360,9 +360,9 @@ class Variable:
                     ]
                     label = self.labels.values[indices]
                     line = (
-                        print_coord(coord)
+                        format_coord(coord)
                         + ": "
-                        + print_single_variable(self.model, label)
+                        + format_single_variable(self.model, label)
                     )
                     lines.append(line)
             # lines = align_lines_by_delimiter(lines, "∈")
@@ -377,7 +377,7 @@ class Variable:
             )
         else:
             lines.append(
-                f"Variable\n{'-' * 8}\n{print_single_variable(self.model, self.labels.item())}"
+                f"Variable\n{'-' * 8}\n{format_single_variable(self.model, self.labels.item())}"
             )
 
         return "\n".join(lines)
@@ -1299,11 +1299,61 @@ class Variable:
 
     iterate_slices = iterate_slices
 
+    def relax(self) -> None:
+        """
+        Relax the integrality of this variable.
+
+        Converts binary or integer variables to continuous. The original type
+        is stored in the model's ``_relaxed_registry`` so that
+        :meth:`unrelax` can restore it.
+
+        Semi-continuous variables are not supported and will raise a
+        ``NotImplementedError``.
+
+        For binary variables, the existing [0, 1] bounds are preserved,
+        which is the correct LP relaxation. For integer variables, the
+        existing bounds are preserved as-is.
+
+        If the variable is already continuous, this method is a no-op.
+        """
+        attrs = self.attrs
+        if attrs.get("semi_continuous"):
+            msg = (
+                f"Relaxation of semi-continuous variable '{self.name}' is not "
+                "supported. The LP relaxation of a semi-continuous variable "
+                "requires changing bounds, which is not handled by relax()."
+            )
+            raise NotImplementedError(msg)
+
+        for attr in ("binary", "integer"):
+            if attrs.get(attr):
+                self.model._relaxed_registry[self.name] = attr
+                attrs[attr] = False
+                return
+
+    def unrelax(self) -> None:
+        """
+        Restore the original integrality type of a relaxed variable.
+
+        Reverses the effect of :meth:`relax`. If the variable was not
+        previously relaxed, this is a no-op.
+        """
+        registry = self.model._relaxed_registry
+        original_type = registry.pop(self.name, None)
+        if original_type is not None:
+            self.attrs[original_type] = True
+
+    @property
+    def relaxed(self) -> bool:
+        """
+        Return whether the variable is currently relaxed.
+        """
+        return self.name in self.model._relaxed_registry
+
     def fix(
         self,
         value: ConstantLike | None = None,
         decimals: int = 8,
-        relax: bool = False,
         overwrite: bool = True,
     ) -> None:
         """
@@ -1319,17 +1369,20 @@ class Variable:
             Number of decimal places to round continuous variables to.
             Integer and binary variables are always rounded to 0 decimal places.
             Default is 8.
-        relax : bool, optional
-            If True, relax the integrality of integer/binary variables by
-            temporarily treating them as continuous. The original type is stored
-            in the model's ``_relaxed_registry`` and restored by ``unfix()``.
-            Default is False.
         overwrite : bool, optional
-            If True, overwrite an existing fix constraint for this variable.
-            If False (default), raise an error if the variable is already fixed.
+            If True (default), overwrite an existing fix constraint for this
+            variable. If False, raise an error if the variable is already fixed.
         """
         if value is None:
-            value = self.solution
+            try:
+                value = self.solution
+            except AttributeError:
+                msg = (
+                    f"Cannot fix variable '{self.name}': no solution value "
+                    "available. Solve the model first or provide an explicit "
+                    "value."
+                )
+                raise ValueError(msg) from None
 
         value = as_dataarray(value).broadcast_like(self.labels)
 
@@ -1341,7 +1394,7 @@ class Variable:
         if (value < self.lower).any() or (value > self.upper).any():
             msg = (
                 f"Fix values for variable '{self.name}' are outside the "
-                f"variable bounds."
+                "variable bounds."
             )
             raise ValueError(msg)
 
@@ -1351,37 +1404,20 @@ class Variable:
             if not overwrite:
                 msg = (
                     f"Variable '{self.name}' is already fixed. Use "
-                    f"overwrite=True to replace the existing fix constraint."
+                    "overwrite=True to replace the existing fix constraint."
                 )
                 raise ValueError(msg)
             self.model.remove_constraints(constraint_name)
 
-        self.model.add_constraints(1 * self, "=", value, name=constraint_name)
-
-        if relax and (self.attrs.get("integer") or self.attrs.get("binary")):
-            original_type = "binary" if self.attrs.get("binary") else "integer"
-            self.model._relaxed_registry[self.name] = original_type
-            self.attrs["integer"] = False
-            self.attrs["binary"] = False
+        self.model.add_constraints(self, "=", value, name=constraint_name)
 
     def unfix(self) -> None:
         """
         Remove the fix constraint for this variable.
-
-        If the variable was relaxed during ``fix(relax=True)``, the original
-        integrality type (integer or binary) is restored.
         """
         constraint_name = f"{FIX_CONSTRAINT_PREFIX}{self.name}"
         if constraint_name in self.model.constraints:
             self.model.remove_constraints(constraint_name)
-
-        registry = self.model._relaxed_registry
-        if self.name in registry:
-            original_type = registry.pop(self.name)
-            if original_type == "binary":
-                self.attrs["binary"] = True
-            elif original_type == "integer":
-                self.attrs["integer"] = True
 
     @property
     def fixed(self) -> bool:
@@ -1679,7 +1715,6 @@ class Variables:
         self,
         value: int | float | None = None,
         decimals: int = 8,
-        relax: bool = False,
         overwrite: bool = True,
     ) -> None:
         """
@@ -1696,26 +1731,11 @@ class Variables:
             variables. If None, each variable is fixed to its current solution.
         decimals : int, optional
             Number of decimal places to round continuous variables to.
-        relax : bool, optional
-            If True, relax integrality of integer/binary variables.
         overwrite : bool, optional
             If True, overwrite existing fix constraints.
-
-        Note
-        ----
-        When using ``relax=True`` on a filtered view like
-        ``m.variables.integers``, the variables will no longer appear in that
-        view after relaxation. Call ``m.variables.unfix()`` to restore all
-        fixed variables. If other variables are also fixed and should stay
-        fixed, save the names before fixing to selectively unfix::
-
-            names = list(m.variables.integers)
-            m.variables.integers.fix(relax=True)
-            ...
-            m.variables[names].unfix()
         """
         for var in self.data.values():
-            var.fix(value=value, decimals=decimals, relax=relax, overwrite=overwrite)
+            var.fix(value=value, decimals=decimals, overwrite=overwrite)
 
     def unfix(self) -> None:
         """
@@ -1727,11 +1747,44 @@ class Variables:
             var.unfix()
 
     @property
-    def fixed(self) -> dict[str, bool]:
+    def fixed(self) -> Variables:
         """
-        Return a dict mapping variable names to whether they are fixed.
+        Get all currently fixed variables.
         """
-        return {name: var.fixed for name, var in self.items()}
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].fixed},
+            self.model,
+        )
+
+    def relax(self) -> None:
+        """
+        Relax integrality of all integer/binary variables in this container.
+
+        Delegates to each variable's :meth:`Variable.relax` method.
+        Semi-continuous variables will raise ``NotImplementedError``.
+        """
+        for var in self.data.values():
+            var.relax()
+
+    def unrelax(self) -> None:
+        """
+        Restore integrality of all previously relaxed variables in this
+        container.
+
+        Delegates to each variable's :meth:`Variable.unrelax` method.
+        """
+        for var in self.data.values():
+            var.unrelax()
+
+    @property
+    def relaxed(self) -> Variables:
+        """
+        Get all currently relaxed variables.
+        """
+        return self.__class__(
+            {name: self.data[name] for name in self if self[name].relaxed},
+            self.model,
+        )
 
     @property
     def solution(self) -> Dataset:
@@ -1825,17 +1878,36 @@ class Variables:
             self._label_position_index = LabelPositionIndex(self)
         return self._label_position_index.find_single_with_index(label)
 
-    def print_labels(self, values: list[int]) -> None:
+    def format_labels(self, values: list[int]) -> str:
         """
-        Print a selection of labels of the variables.
+        Get a string representation of a selection of variable labels.
 
         Parameters
         ----------
         values : list, array-like
-            One dimensional array of constraint labels.
+            One dimensional array of variable labels.
+
+        Returns
+        -------
+        str
+            String representation of the selected variables.
         """
-        res = [print_single_variable(self.model, v) for v in values]
-        print("\n".join(res))
+        res = [format_single_variable(self.model, v) for v in values]
+        return "\n".join(res)
+
+    def print_labels(self, values: list[int]) -> None:
+        """
+        Print a selection of labels of the variables.
+
+        .. deprecated::
+            Use :meth:`format_labels` instead.
+        """
+        warn(
+            "`Variables.print_labels` is deprecated. Use `Variables.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values))
 
     @property
     def flat(self) -> pd.DataFrame:
@@ -1904,7 +1976,7 @@ class ScalarVariable:
         if self.label == -1:
             return "ScalarVariable: None"
         name, coord = self.model.variables.get_label_position(self.label)
-        coord_string = print_coord(coord)
+        coord_string = format_coord(coord)
         return f"ScalarVariable: {name}{coord_string}"
 
     @property
