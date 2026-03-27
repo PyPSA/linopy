@@ -822,7 +822,7 @@ def to_gurobipy(
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         if set_names:
             names = print_constraints(M.clabels)
-            c.setAttr("ConstrName", names)  # type: ignore
+            c.setAttr("ConstrName", names)
 
     if m.variables.sos:
         for var_name in m.variables.sos:
