@@ -726,6 +726,7 @@ def test_freeze_mutable_roundtrip_with_masking() -> None:
     mask = xr.DataArray([True, False, True, False, True], dims=["i"])
     m.add_constraints(x.where(mask) >= 0, name="c", freeze=True)
     frozen = m.constraints["c"]
+    assert isinstance(frozen, linopy.constraints.CSRConstraint)
     mc = frozen.mutable()
     refrozen = linopy.constraints.CSRConstraint.from_mutable(mc, frozen._cindex)
     assert_equal(frozen.labels, refrozen.labels)
@@ -766,6 +767,7 @@ def test_variable_label_index_invalidation(m: Model) -> None:
 
 def test_to_matrix_with_rhs(m: Model) -> None:
     c = m.constraints["c"]
+    assert isinstance(c, linopy.constraints.CSRConstraint)
     li = m.variables.label_index
     csr, con_labels, b, sense = c.to_matrix_with_rhs(li)
     assert csr.shape[0] == len(con_labels)
@@ -795,7 +797,7 @@ def test_freeze_mixed_signs_from_rule() -> None:
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     coords = [pd.RangeIndex(4, name="i")]
 
-    def bound(m, i):
+    def bound(m: Model, i: int) -> AnonymousScalarConstraint:
         if i % 2:
             return x.at[i] >= i
         return x.at[i] == 0.0
@@ -848,7 +850,7 @@ def test_mixed_sign_to_matrix_with_rhs() -> None:
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     coords = [pd.RangeIndex(4, name="i")]
 
-    def bound(m, i):
+    def bound(m: Model, i: int) -> AnonymousScalarConstraint:
         if i % 2:
             return x.at[i] >= i
         return x.at[i] == 0.0
@@ -865,6 +867,7 @@ def test_mixed_sign_sanitize_infinities() -> None:
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     m.add_constraints(x >= 0, name="c", freeze=False)
     mc = m.constraints["c"]
+    assert isinstance(mc, Constraint)
     mc._data["sign"] = xr.DataArray(["<=", ">=", "<=", ">="], dims=["i"])
     mc._data["rhs"] = xr.DataArray([np.inf, -np.inf, 1.0, 2.0], dims=["i"])
     frozen = mc.freeze()
@@ -878,7 +881,7 @@ def test_mixed_sign_repr() -> None:
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
     coords = [pd.RangeIndex(4, name="i")]
 
-    def bound(m, i):
+    def bound(m: Model, i: int) -> AnonymousScalarConstraint:
         if i % 2:
             return x.at[i] >= i
         return x.at[i] == 0.0

@@ -101,7 +101,7 @@ def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
 
-    def bound(m, i):
+    def bound(m: Model, i: int) -> object:
         if i % 2:
             return x.at[i] >= i
         return x.at[i] == 0.0
