@@ -672,7 +672,9 @@ def test_infeasible_model(
         with pytest.warns(DeprecationWarning):
             model.compute_set_of_infeasible_constraints()
         model.compute_infeasibilities()
-        model.print_infeasibilities()
+        formatted = model.format_infeasibilities()
+        assert isinstance(formatted, str)
+        assert formatted
     else:
         with pytest.raises((NotImplementedError, ImportError)):
             model.compute_infeasibilities()
