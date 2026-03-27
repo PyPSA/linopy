@@ -900,7 +900,8 @@ def to_highspy(
             h.changeColsBounds(n, labels, zeros_like(labels), ones_like(labels))
 
     # linear objective
-    h.changeColsCost(len(M.c), np.arange(len(M.c), dtype=np.int32), M.c)
+    c = M.c
+    h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
 
     # linear constraints
     A = M.A

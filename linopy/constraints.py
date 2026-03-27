@@ -108,6 +108,35 @@ def _con_unwrap(con: ConstraintBase | Dataset) -> Dataset:
     return con.data if isinstance(con, ConstraintBase) else con
 
 
+def _matrix_export_data(
+    con: ConstraintBase, label_index: VariableLabelIndex
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    label_to_pos = label_index.label_to_pos
+    labels_flat = con.labels.values.ravel()
+    vars_vals = con.vars.values
+    n_rows = len(labels_flat)
+    vars_2d = (
+        vars_vals.reshape(n_rows, -1)
+        if n_rows > 0
+        else vars_vals.reshape(0, max(1, vars_vals.size))
+    )
+
+    row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+    con_labels = labels_flat[row_mask]
+    vars_final = vars_2d[row_mask]
+    valid_final = vars_final != -1
+
+    coeffs_final = con.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
+    cols = label_to_pos[vars_final[valid_final]]
+    data = coeffs_final[valid_final]
+
+    counts = valid_final.sum(axis=1)
+    indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
+    indptr[0] = 0
+    np.cumsum(counts, out=indptr[1:])
+    return con_labels, row_mask, cols, data, indptr
+
+
 class ConstraintBase(ABC):
     """
     Abstract base class for Constraint and CSRConstraint.
@@ -445,35 +474,9 @@ class ConstraintBase(ABC):
         con_labels : np.ndarray
             Active constraint labels in row order.
         """
-        label_to_pos = label_index.label_to_pos
-        labels_flat = self.labels.values.ravel()
-        vars_vals = self.vars.values
-        n_rows = len(labels_flat)
-        vars_2d = (
-            vars_vals.reshape(n_rows, -1)
-            if n_rows > 0
-            else vars_vals.reshape(0, max(1, vars_vals.size))
-        )
-
-        # Single boolean mask combining both filter conditions
-        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
-        con_labels = labels_flat[row_mask]
-        vars_final = vars_2d[row_mask]
-        valid_final = vars_final != -1
-
-        coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
-
-        cols = label_to_pos[vars_final[valid_final]]
-        data = coeffs_final[valid_final]
-
-        counts = valid_final.sum(axis=1)
-        n_active_cons = len(con_labels)
-        indptr = np.empty(n_active_cons + 1, dtype=np.int32)
-        indptr[0] = 0
-        np.cumsum(counts, out=indptr[1:])
-
+        con_labels, _, cols, data, indptr = _matrix_export_data(self, label_index)
         csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(n_active_cons, label_index.n_active_vars)
+            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
         )
         csr.sum_duplicates()
         return csr, con_labels
@@ -1132,12 +1135,21 @@ class Constraint(ConstraintBase):
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) in one pass."""
-        csr, con_labels = self.to_matrix(label_index)
-        nonempty = np.diff(csr.indptr).astype(bool)
-        active_rows = np.flatnonzero(nonempty)
-        b = self.rhs.values.ravel()[active_rows]
-        sign_flat = self.sign.values.ravel()[active_rows]
-        sense = np.array([s[0] for s in sign_flat])
+        con_labels, row_mask, cols, data, indptr = _matrix_export_data(
+            self, label_index
+        )
+        csr = scipy.sparse.csr_array(
+            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        )
+        csr.sum_duplicates()
+
+        b = self.rhs.values.ravel()[row_mask]
+        sign_flat = self.sign.values.ravel()[row_mask]
+        unique_signs = np.unique(sign_flat)
+        if len(unique_signs) == 1:
+            sense = np.full(len(con_labels), str(unique_signs[0])[0], dtype="U1")
+        else:
+            sense = sign_flat.astype("U1")
         return csr, con_labels, b, sense
 
     def sanitize_zeros(self) -> Constraint:
