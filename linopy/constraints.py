@@ -790,7 +790,7 @@ class CSRConstraint(ConstraintBase):
             vars_row[: end - start] = csr.indices[start:end]
             coeffs_row[: end - start] = csr.data[start:end]
             sign = self._sign if isinstance(self._sign, str) else self._sign[row]
-            return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
+            return f"{format_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
 
         if size > 1:
             for indices in generate_indices_for_printout(shape, max_lines):
@@ -801,7 +801,7 @@ class CSRConstraint(ConstraintBase):
                     flat_idx = int(np.ravel_multi_index(indices, shape))
                     row = pos_to_row[flat_idx]
                     body = row_expr(row) if row >= 0 else "None"
-                    lines.append(print_coord(coord) + f": {body}")
+                    lines.append(format_coord(coord) + f": {body}")
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, shape))

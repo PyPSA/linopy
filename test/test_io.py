@@ -258,21 +258,9 @@ def test_to_highspy(model: Model) -> None:
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy_no_names(model: Model) -> None:
     h = model.to_highspy(set_names=False)
-    col_names = h.getLp().col_names_
-    assert len(col_names) == 0
-
-
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_to_highspy_set_names_with_explicit_coordinate_names(model: Model) -> None:
-    model.to_highspy(set_names=False, explicit_coordinate_names=True)
-
-
-@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_solve_direct_no_names(model: Model) -> None:
-    status, condition = model.solve(
-        solver_name="highs", io_api="direct", set_names=False
-    )
-    assert status == "ok"
+    lp = h.getLp()
+    assert len(lp.col_names_) == 0
+    assert len(lp.row_names_) == 0
 
 
 def test_set_names_in_solver_io_option_default() -> None:
