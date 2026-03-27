@@ -1265,6 +1265,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         return Result(status, solution, m)
 
+CplexResult = namedtuple("CplexResult", ["model", "reported_runtime"])
 
 class Cplex(Solver[None]):
     """
@@ -1375,8 +1376,12 @@ class Cplex(Solver[None]):
 
         is_lp = m.problem_type[m.get_problem_type()] == "LP"
 
+        reported_runtime = None
+
         with contextlib.suppress(cplex.exceptions.errors.CplexSolverError):
+            start_time = m.get_time()
             m.solve()
+            reported_runtime = m.get_time() - start_time
 
         if solution_fn is not None:
             try:
@@ -1421,7 +1426,7 @@ class Cplex(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        return Result(status, solution, CplexResult(m, reported_runtime))
 
 
 class SCIP(Solver[None]):
