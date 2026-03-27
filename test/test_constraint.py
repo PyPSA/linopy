@@ -85,6 +85,16 @@ def test_add_constraints_freeze(m: Model, x: linopy.Variable) -> None:
     assert c.ncons == 10
 
 
+def test_add_constraints_uses_model_freeze_default() -> None:
+    m = Model(freeze_constraints=True)
+    x = m.add_variables(coords=[pd.RangeIndex(10, name="first")], name="x")
+    c = m.add_constraints(x >= 1, name="frozen_by_default")
+    assert isinstance(c, linopy.constraints.CSRConstraint)
+    assert isinstance(
+        m.constraints["frozen_by_default"], linopy.constraints.CSRConstraint
+    )
+
+
 def test_constraint_name(c: linopy.constraints.CSRConstraint) -> None:
     assert c.name == "c"
 

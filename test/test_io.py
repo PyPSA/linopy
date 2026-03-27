@@ -263,27 +263,19 @@ def test_to_highspy_no_names(model: Model) -> None:
     assert len(lp.row_names_) == 0
 
 
-def test_set_names_in_solver_io_option_default() -> None:
-    from linopy.config import options
-
-    assert options["set_names_in_solver_io"] is True
+def test_model_set_names_in_solver_io_default() -> None:
+    assert Model().set_names_in_solver_io is True
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
-def test_set_names_in_solver_io_option(model: Model) -> None:
-    from linopy.config import options
-
+def test_model_set_names_in_solver_io(model: Model) -> None:
     model.solve(solver_name="highs", io_api="direct")
     expected_obj = model.objective.value
 
-    original = options["set_names_in_solver_io"]
-    try:
-        options["set_names_in_solver_io"] = False
-        status, condition = model.solve(solver_name="highs", io_api="direct")
-        assert status == "ok"
-        assert model.objective.value == pytest.approx(expected_obj)
-    finally:
-        options["set_names_in_solver_io"] = original
+    model.set_names_in_solver_io = False
+    status, _ = model.solve(solver_name="highs", io_api="direct")
+    assert status == "ok"
+    assert model.objective.value == pytest.approx(expected_obj)
 
 
 def test_to_blocks(tmp_path: Path) -> None:

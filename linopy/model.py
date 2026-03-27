@@ -37,7 +37,6 @@ from linopy.common import (
     set_int_index,
     to_path,
 )
-from linopy.config import options
 from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -140,6 +139,8 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
+    _freeze_constraints: bool
+    _set_names_in_solver_io: bool
     _solver_dir: Path
     __slots__ = (
         # containers
@@ -163,6 +164,8 @@ class Model:
         "_chunk",
         "_force_dim_names",
         "_auto_mask",
+        "_freeze_constraints",
+        "_set_names_in_solver_io",
         "_solver_dir",
         "_relaxed_registry",
         "solver_model",
@@ -175,6 +178,8 @@ class Model:
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
         auto_mask: bool = False,
+        freeze_constraints: bool = False,
+        set_names_in_solver_io: bool = True,
     ) -> None:
         """
         Initialize the linopy model.
@@ -198,6 +203,12 @@ class Model:
             Whether to automatically mask variables and constraints where
             bounds, coefficients, or RHS values contain NaN. The default is
             False.
+        freeze_constraints : bool
+            Whether constraints added to the model should be frozen to the
+            CSR-backed representation by default. The default is False.
+        set_names_in_solver_io : bool
+            Whether direct solver exports should include variable and
+            constraint names by default. The default is True.
 
         Returns
         -------
@@ -220,6 +231,8 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._freeze_constraints: bool = bool(freeze_constraints)
+        self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
@@ -395,6 +408,24 @@ class Model:
         self._auto_mask = bool(value)
 
     @property
+    def freeze_constraints(self) -> bool:
+        """Whether constraints are frozen to CSR by default when added."""
+        return self._freeze_constraints
+
+    @freeze_constraints.setter
+    def freeze_constraints(self, value: bool) -> None:
+        self._freeze_constraints = bool(value)
+
+    @property
+    def set_names_in_solver_io(self) -> bool:
+        """Whether direct solver exports include names by default."""
+        return self._set_names_in_solver_io
+
+    @set_names_in_solver_io.setter
+    def set_names_in_solver_io(self, value: bool) -> None:
+        self._set_names_in_solver_io = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -426,6 +457,8 @@ class Model:
             "_pwlCounter",
             "force_dim_names",
             "auto_mask",
+            "freeze_constraints",
+            "set_names_in_solver_io",
         ]
 
     def __repr__(self) -> str:
@@ -809,8 +842,8 @@ class Model:
             Default is None.
         freeze : bool, optional
             If True, convert the constraint to an immutable CSR-backed CSRConstraint
-            for better memory efficiency. If None, uses the global
-            ``linopy.options["freeze_constraints"]`` setting (default False).
+            for better memory efficiency. If None, uses the model default
+            ``Model.freeze_constraints`` setting (default False).
 
         Returns
         -------
@@ -935,7 +968,7 @@ class Model:
 
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
         if freeze is None:
-            freeze = options["freeze_constraints"]
+            freeze = self.freeze_constraints
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(
@@ -1397,8 +1430,8 @@ class Model:
         set_names : bool, optional
             Whether to set variable and constraint names when using the direct
             solver API (io_api='direct'). Setting to False can significantly
-            speed up model export. If None, uses the global
-            ``linopy.options["set_names_in_solver_io"]`` setting (default True).
+            speed up model export. If None, uses the model default
+            ``Model.set_names_in_solver_io`` setting (default True).
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -1588,7 +1621,7 @@ class Model:
             )
             if io_api == "direct":
                 if set_names is None:
-                    set_names = options["set_names_in_solver_io"]
+                    set_names = self.set_names_in_solver_io
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,

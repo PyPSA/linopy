@@ -1284,7 +1284,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = get_prefix(ds, "parameters")
 
     for k in m.scalar_attrs:
-        setattr(m, k, ds.attrs.get(k))
+        if k in ds.attrs:
+            setattr(m, k, ds.attrs[k])
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
@@ -1339,6 +1340,8 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
         chunk=m._chunk,
         force_dim_names=m._force_dim_names,
         auto_mask=m._auto_mask,
+        freeze_constraints=m.freeze_constraints,
+        set_names_in_solver_io=m.set_names_in_solver_io,
         solver_dir=str(m._solver_dir),
     )
 
