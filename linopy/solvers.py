@@ -1265,7 +1265,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         return Result(status, solution, m)
 
+
 CplexResult = namedtuple("CplexResult", ["model", "reported_runtime"])
+
 
 class Cplex(Solver[None]):
     """
