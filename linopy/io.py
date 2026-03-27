@@ -104,7 +104,7 @@ def get_printers_scalar(
     Get batch printer functions for numpy label arrays (non-polars).
 
     Returns two callables that take an int64 numpy array of labels and return
-    an object array of name strings.
+    a list of name strings.
     """
     if explicit_coordinate_names:
 
@@ -118,22 +118,20 @@ def get_printers_scalar(
             name = clean_name(name)  # type: ignore
             return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
-        def print_variables(labels: np.ndarray) -> np.ndarray:
-            return np.vectorize(_fmt_var)(labels)
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_var)(labels).tolist()
 
-        def print_constraints(labels: np.ndarray) -> np.ndarray:
-            return np.vectorize(_fmt_con)(labels)
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_con)(labels).tolist()
 
         return print_variables, print_constraints
     else:
 
-        def print_variables(labels: np.ndarray) -> np.ndarray:
-            s = pl.Series(labels)
-            return ("x" + s.cast(pl.String)).to_numpy(allow_copy=True)
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return ("x" + pl.Series(labels).cast(pl.String)).to_list()
 
-        def print_constraints(labels: np.ndarray) -> np.ndarray:
-            s = pl.Series(labels)
-            return ("c" + s.cast(pl.String)).to_numpy(allow_copy=True)
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return ("c" + pl.Series(labels).cast(pl.String)).to_list()
 
         return print_variables, print_constraints
 
@@ -685,9 +683,9 @@ def to_mosek(
         print_variables, print_constraints = get_printers_scalar(
             m, explicit_coordinate_names=explicit_coordinate_names
         )
-        labels = print_variables(M.vlabels).astype(object)
+        labels = print_variables(M.vlabels)
         task.generatevarnames(
-            np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
+            np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
         )
 
     ## Variables
@@ -725,7 +723,7 @@ def to_mosek(
 
     if len(m.constraints) > 0:
         if set_names:
-            names = print_constraints(M.clabels).astype(object)
+            names = print_constraints(M.clabels)
             for i, n in enumerate(names):
                 task.putconname(i, n)
         bkc = [
@@ -803,7 +801,7 @@ def to_gurobipy(
         print_variables, print_constraints = get_printers_scalar(
             m, explicit_coordinate_names=explicit_coordinate_names
         )
-        kwargs["name"] = list(print_variables(M.vlabels).astype(object))
+        kwargs["name"] = print_variables(M.vlabels)
     if (
         len(m.binaries.labels)
         + len(m.integers.labels)
@@ -823,8 +821,8 @@ def to_gurobipy(
     if len(m.constraints):
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
         if set_names:
-            names = print_constraints(M.clabels).astype(object)
-            c.setAttr("ConstrName", list(names))  # type: ignore
+            names = print_constraints(M.clabels)
+            c.setAttr("ConstrName", names)  # type: ignore
 
     if m.variables.sos:
         for var_name in m.variables.sos:
@@ -918,9 +916,9 @@ def to_highspy(
             m, explicit_coordinate_names=explicit_coordinate_names
         )
         lp = h.getLp()
-        lp.col_names_ = print_variables(M.vlabels).astype(object)
+        lp.col_names_ = print_variables(M.vlabels)
         if len(M.clabels):
-            lp.row_names_ = print_constraints(M.clabels).astype(object)
+            lp.row_names_ = print_constraints(M.clabels)
         h.passModel(lp)
 
     # quadrative objective
