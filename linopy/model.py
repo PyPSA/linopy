@@ -100,6 +100,73 @@ from linopy.variables import ScalarVariable, Variable, Variables
 logger = logging.getLogger(__name__)
 
 
+def _coords_to_dict(
+    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
+) -> dict[str, Any]:
+    """Normalize coords to a dict mapping dim names to coordinate values."""
+    if isinstance(coords, Mapping):
+        return dict(coords)
+    # Sequence of indexes
+    result: dict[str, Any] = {}
+    for c in coords:
+        if isinstance(c, pd.Index) and c.name:
+            result[c.name] = c
+    return result
+
+
+def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
+    """
+    Validate and expand DataArray bounds against explicit coords.
+
+    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
+    will handle conversion). For DataArray inputs:
+
+    - Raises ``ValueError`` if the array has dimensions not in coords.
+    - Raises ``ValueError`` if shared dimension coordinates don't match.
+    - Expands missing dimensions via ``expand_dims``.
+    """
+    if not isinstance(arr, DataArray):
+        return arr
+
+    expected = _coords_to_dict(coords)
+    if not expected:
+        return arr
+
+    extra = set(arr.dims) - set(expected)
+    if extra:
+        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+
+    for dim, coord_values in expected.items():
+        if dim not in arr.dims:
+            continue
+        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+            continue
+        expected_idx = (
+            coord_values
+            if isinstance(coord_values, pd.Index)
+            else pd.Index(coord_values)
+        )
+        actual_idx = arr.coords[dim].to_index()
+        if not actual_idx.equals(expected_idx):
+            # Same values, different order → reindex to match expected order
+            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
+                expected_idx
+            ):
+                arr = arr.reindex({dim: expected_idx})
+            else:
+                raise ValueError(
+                    f"Coordinates for dimension '{dim}' do not match: "
+                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
+                )
+
+    # Expand missing dimensions
+    expand = {k: v for k, v in expected.items() if k not in arr.dims}
+    if expand:
+        arr = arr.expand_dims(expand)
+
+    return arr
+
+
 class Model:
     """
     Linear optimization model.
@@ -610,6 +677,10 @@ class Model:
                 raise ValueError(
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
+
+        if coords is not None:
+            lower = _validate_dataarray_bounds(lower, coords)
+            upper = _validate_dataarray_bounds(upper, coords)
 
         data = Dataset(
             {
