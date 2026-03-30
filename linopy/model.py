@@ -31,8 +31,10 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
+    lookup_vals,
     maybe_replace_signs,
     replace_by_map,
+    series_to_lookup_array,
     set_int_index,
     to_path,
 )
@@ -1591,19 +1593,10 @@ class Model:
             sol = set_int_index(sol)
             sol.loc[-1] = nan
 
-            # Convert to numpy array for fast label-based lookup.
-            # Labels are integers; build a dense lookup array so each
-            # variable can index directly without pandas overhead.
-            sol_max_idx = max(sol.index.max(), 0)
-            sol_arr = np.full(sol_max_idx + 1, nan)
-            sol_arr[sol.index[sol.index >= 0]] = sol.values[sol.index >= 0]
+            sol_arr = series_to_lookup_array(sol)
 
-            for name, var in self.variables.items():
-                idx = np.ravel(var.labels)
-                # Use numpy indexing: labels ≥ 0 map to sol_arr, -1 maps to NaN
-                safe_idx = np.clip(idx, 0, sol_max_idx)
-                vals = sol_arr[safe_idx]
-                vals[idx < 0] = nan
+            for _, var in self.variables.items():
+                vals = lookup_vals(sol_arr, np.ravel(var.labels))
                 var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
             if not result.solution.dual.empty:
@@ -1611,15 +1604,10 @@ class Model:
                 dual = set_int_index(dual)
                 dual.loc[-1] = nan
 
-                dual_max_idx = max(dual.index.max(), 0)
-                dual_arr = np.full(dual_max_idx + 1, nan)
-                dual_arr[dual.index[dual.index >= 0]] = dual.values[dual.index >= 0]
+                dual_arr = series_to_lookup_array(dual)
 
-                for name, con in self.constraints.items():
-                    idx = np.ravel(con.labels)
-                    safe_idx = np.clip(idx, 0, dual_max_idx)
-                    vals = dual_arr[safe_idx]
-                    vals[idx < 0] = nan
+                for _, con in self.constraints.items():
+                    vals = lookup_vals(dual_arr, np.ravel(con.labels))
                     con.dual = xr.DataArray(
                         vals.reshape(con.labels.shape), con.labels.coords
                     )
