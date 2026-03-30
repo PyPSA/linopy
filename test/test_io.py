@@ -474,3 +474,36 @@ def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
     m_mutable.to_file(fn_mutable)
 
     assert fn_frozen.read_text() == fn_mutable.read_text()
+
+
+def test_to_file_lp_frozen_mixed_sign(tmp_path: Path) -> None:
+    """Test LP writing for frozen constraint with per-row signs."""
+    m_frozen = Model()
+    N = pd.RangeIndex(4, name="i")
+    x = m_frozen.add_variables(coords=[N], name="x")
+
+    def bound(m: Model, i: int) -> object:
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] <= 10
+
+    m_frozen.add_constraints(bound, coords=[N], name="mixed", freeze=True)
+    m_frozen.add_objective(x.sum())
+
+    m_mutable = Model()
+    x2 = m_mutable.add_variables(coords=[N], name="x")
+
+    def bound2(m: Model, i: int) -> object:
+        if i % 2:
+            return x2.at[i] >= i
+        return x2.at[i] <= 10
+
+    m_mutable.add_constraints(bound2, coords=[N], name="mixed", freeze=False)
+    m_mutable.add_objective(x2.sum())
+
+    fn_frozen = tmp_path / "frozen_mixed.lp"
+    fn_mutable = tmp_path / "mutable_mixed.lp"
+    m_frozen.to_file(fn_frozen)
+    m_mutable.to_file(fn_mutable)
+
+    assert fn_frozen.read_text() == fn_mutable.read_text()

@@ -937,13 +937,14 @@ class CSRConstraint(ConstraintBase):
     def to_polars(self) -> pl.DataFrame:
         """Convert frozen constraint to polars DataFrame directly from CSR."""
         csr = self._csr
+        sign_dtype = pl.Enum(["=", "<=", ">="])
         if csr.nnz == 0:
             return pl.DataFrame(
                 schema={
                     "labels": pl.Int64,
                     "coeffs": pl.Float64,
                     "vars": pl.Int64,
-                    "sign": pl.Enum(["=", "<=", ">="]),
+                    "sign": sign_dtype,
                     "rhs": pl.Float64,
                 }
             )
@@ -951,22 +952,25 @@ class CSRConstraint(ConstraintBase):
         rows = np.repeat(np.arange(csr.shape[0]), np.diff(csr.indptr))
         vlabels = self._model.variables.label_index.vlabels
 
-        return pl.DataFrame(
-            {
-                "labels": self._con_labels[rows],
-                "coeffs": csr.data,
-                "vars": vlabels[csr.indices],
-                "rhs": self._rhs[rows],
-            }
-        ).with_columns(
-            pl.lit(self._sign).cast(pl.Enum(["=", "<=", ">="])).alias("sign")
-        )[["labels", "coeffs", "vars", "sign", "rhs"]]
+        data: dict[str, Any] = {
+            "labels": self._con_labels[rows],
+            "coeffs": csr.data,
+            "vars": vlabels[csr.indices],
+            "rhs": self._rhs[rows],
+        }
+        if isinstance(self._sign, str):
+            data["sign"] = pl.Series(
+                "sign", [self._sign], dtype=sign_dtype
+            ).new_from_index(0, len(rows))
+        else:
+            data["sign"] = pl.Series("sign", self._sign[rows], dtype=sign_dtype)
+        return pl.DataFrame(data)[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     def iterate_slices(
         self,
         slice_size: int | None = 2_000_000,
         slice_dims: list | None = None,
-    ) -> Iterator[Constraint]:
+    ) -> Iterator[CSRConstraint]:
         """Yield row-batched sub-Constraints without Dataset reconstruction."""
         nnz = self._csr.nnz
         if slice_size is None or nnz <= slice_size:
@@ -981,11 +985,16 @@ class CSRConstraint(ConstraintBase):
             batch_end = max(batch_end, batch_start + 1)
             if batch_end >= n:
                 batch_end = n
-            yield Constraint(
+            sign = (
+                self._sign
+                if isinstance(self._sign, str)
+                else self._sign[batch_start:batch_end]
+            )
+            yield CSRConstraint(
                 csr=self._csr[batch_start:batch_end],
                 con_labels=self._con_labels[batch_start:batch_end],
                 rhs=self._rhs[batch_start:batch_end],
-                sign=self._sign,
+                sign=sign,
                 coords=self._coords,
                 model=self._model,
                 name=self._name,
