@@ -9,7 +9,7 @@ from __future__ import annotations
 import functools
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, ItemsView, Iterator, Sequence
+from collections.abc import Callable, Generator, Hashable, ItemsView, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -973,7 +973,7 @@ class CSRConstraint(ConstraintBase):
         self,
         slice_size: int | None = 2_000_000,
         slice_dims: list | None = None,
-    ) -> Iterator[CSRConstraint]:
+    ) -> Generator[CSRConstraint, None, None]:
         """Yield row-batched sub-Constraints without Dataset reconstruction."""
         nnz = self._csr.nnz
         if slice_size is None or nnz <= slice_size:
