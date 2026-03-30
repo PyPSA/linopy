@@ -18,7 +18,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import polars as pl
-from numpy import arange, signedinteger
+from numpy import arange, nan, signedinteger
 from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
@@ -192,6 +192,8 @@ def numpy_to_dataarray(
     """
     # fallback case for zero dim arrays
     if arr.ndim == 0:
+        if dims is None and is_dict_like(coords):
+            dims = list(coords.keys())
         return DataArray(arr.item(), coords=coords, dims=dims, **kwargs)
 
     if isinstance(dims, Iterable | Sequence):
@@ -243,8 +245,12 @@ def as_dataarray(
     elif isinstance(arr, pl.Series):
         arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, np.number):
+        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
+            dims = list(coords.keys())
         arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, int | float | str | bool | list):
+        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
+            dims = list(coords.keys())
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
@@ -1500,3 +1506,51 @@ def is_constant(x: SideLike) -> bool:
         "Expected a constant, variable, or expression on the constraint side, "
         f"got {type(x)}."
     )
+
+
+def series_to_lookup_array(s: pd.Series) -> np.ndarray:
+    """
+    Convert an integer-indexed Series to a dense numpy lookup array.
+
+    Non-negative indices are placed at their corresponding positions;
+    negative indices are ignored. Gaps are filled with NaN.
+
+    Parameters
+    ----------
+    s : pd.Series
+        Series with an integer index.
+
+    Returns
+    -------
+    np.ndarray
+        Dense array of length ``max(index) + 1``.
+    """
+    max_idx = max(int(s.index.max()), 0)
+    arr = np.full(max_idx + 1, nan)
+    mask = s.index >= 0
+    arr[s.index[mask]] = s.values[mask]
+    return arr
+
+
+def lookup_vals(arr: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    """
+    Look up values from a dense array by integer labels.
+
+    Negative labels and labels beyond the array length map to NaN.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        Dense lookup array (e.g. from :func:`series_to_lookup_array`).
+    idx : np.ndarray
+        Integer label indices.
+
+    Returns
+    -------
+    np.ndarray
+        Array of looked-up values with the same shape as *idx*.
+    """
+    valid = (idx >= 0) & (idx < len(arr))
+    vals = np.full(idx.shape, nan)
+    vals[valid] = arr[idx[valid]]
+    return vals
