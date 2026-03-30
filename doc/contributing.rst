@@ -68,6 +68,30 @@ GPU tests are automatically detected based on solver capabilities - no manual ma
 
 See the :doc:`gpu-acceleration` guide for more information about GPU solver setup and usage.
 
+Performance Benchmarks
+======================
+
+When working on performance-sensitive code, use the internal benchmark suite in ``benchmarks/`` to check for regressions.
+
+.. code-block:: bash
+
+    # Install benchmark dependencies
+    pip install -e ".[benchmarks]"
+
+    # Quick timing benchmarks
+    pytest benchmarks/ --quick
+
+    # Compare timing between branches
+    pytest benchmarks/test_build.py --benchmark-save=master
+    pytest benchmarks/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
+
+    # Compare peak memory between branches
+    python benchmarks/memory.py save master --quick
+    python benchmarks/memory.py save my-feature --quick
+    python benchmarks/memory.py compare master my-feature
+
+See ``benchmarks/README.md`` for full details on models, phases, and usage.
+
 Contributing examples
 =====================
 
