@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from numpy import arange, signedinteger
+from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
@@ -327,7 +328,7 @@ def check_has_nulls(df: pd.DataFrame, name: str) -> None:
         raise ValueError(f"Fields {name} contains nan's in field(s) {fields}")
 
 
-def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
+def infer_schema_polars(ds: Dataset) -> dict[str, DataTypeClass]:
     """
     Infer the polars data schema from a xarray dataset.
 
@@ -339,21 +340,22 @@ def infer_schema_polars(ds: Dataset) -> dict[Hashable, pl.DataType]:
     -------
         dict: A dictionary mapping column names to their corresponding Polars data types.
     """
-    schema = {}
+    schema: dict[str, DataTypeClass] = {}
     np_major_version = int(np.__version__.split(".")[0])
     use_int32 = os.name == "nt" and np_major_version < 2
     for name, array in ds.items():
+        name = str(name)
         if np.issubdtype(array.dtype, np.integer):
             schema[name] = pl.Int32 if use_int32 else pl.Int64
         elif np.issubdtype(array.dtype, np.floating):
-            schema[name] = pl.Float64  # type: ignore
+            schema[name] = pl.Float64
         elif np.issubdtype(array.dtype, np.bool_):
-            schema[name] = pl.Boolean  # type: ignore
+            schema[name] = pl.Boolean
         elif np.issubdtype(array.dtype, np.object_):
-            schema[name] = pl.Object  # type: ignore
+            schema[name] = pl.Object
         else:
-            schema[name] = pl.Utf8  # type: ignore
-    return schema  # type: ignore
+            schema[name] = pl.Utf8
+    return schema
 
 
 def to_polars(ds: Dataset, **kwargs: Any) -> pl.DataFrame:
@@ -429,7 +431,7 @@ def filter_nulls_polars(df: pl.DataFrame) -> pl.DataFrame:
     if "labels" in df.columns:
         cond.append(pl.col("labels").ne(-1))
 
-    cond = reduce(operator.and_, cond)  # type: ignore
+    cond = reduce(operator.and_, cond)  # type: ignore[arg-type]
     return df.filter(cond)
 
 
@@ -655,7 +657,7 @@ def iterate_slices(
         start = i * chunk_size
         end = min(start + chunk_size, size_of_leading_dim)
         slice_dict = {leading_dim: slice(start, end)}
-        yield ds.isel(slice_dict)
+        yield ds.isel(slice_dict)  # type: ignore[attr-defined]
 
 
 def _remap(array: np.ndarray, mapping: np.ndarray) -> np.ndarray:
@@ -955,6 +957,7 @@ class VariableLabelIndex:
 
     @cached_property
     def vlabels(self) -> np.ndarray:
+        """Active variable labels in encounter order, shape (n_active_vars,)."""
         label_lists = []
         for _, var in self._variables.items():
             labels = var.labels.values.ravel()
@@ -966,6 +969,12 @@ class VariableLabelIndex:
 
     @cached_property
     def label_to_pos(self) -> np.ndarray:
+        """
+        Mapping from variable label to dense position, shape (_xCounter,).
+
+        Position i in the active variable array corresponds to label vlabels[i].
+        Masked or unused labels map to -1.
+        """
         vlabels = self.vlabels
         n = self._variables.model._xCounter
         label_to_pos = np.full(n, -1, dtype=np.intp)
@@ -974,6 +983,7 @@ class VariableLabelIndex:
 
     @property
     def n_active_vars(self) -> int:
+        """Number of active (non-masked) variables."""
         return len(self.vlabels)
 
     def invalidate(self) -> None:
@@ -1029,7 +1039,7 @@ def get_label_position(
         raise ValueError("Array's with more than two dimensions is not supported")
 
 
-def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
+def format_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     """
     Format coordinates into a string representation.
 
@@ -1042,11 +1052,11 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
         with nested coordinates grouped in parentheses.
 
     Examples:
-        >>> print_coord({"x": 1, "y": 2})
+        >>> format_coord({"x": 1, "y": 2})
         '[1, 2]'
-        >>> print_coord([1, 2, 3])
+        >>> format_coord([1, 2, 3])
         '[1, 2, 3]'
-        >>> print_coord([(1, 2), (3, 4)])
+        >>> format_coord([(1, 2), (3, 4)])
         '[(1, 2), (3, 4)]'
     """
     # Handle empty input
@@ -1067,7 +1077,7 @@ def print_coord(coord: dict[str, Any] | Iterable[Any]) -> str:
     return f"[{', '.join(formatted)}]"
 
 
-def print_single_variable(model: Any, label: int) -> str:
+def format_single_variable(model: Any, label: int) -> str:
     if label == -1:
         return "None"
 
@@ -1086,10 +1096,10 @@ def print_single_variable(model: Any, label: int) -> str:
     else:
         bounds = f" ∈ [{lower:.4g}, {upper:.4g}]"
 
-    return f"{name}{print_coord(coord)}{bounds}"
+    return f"{name}{format_coord(coord)}{bounds}"
 
 
-def print_single_expression(
+def format_single_expression(
     c: np.ndarray,
     v: np.ndarray,
     const: float,
@@ -1101,7 +1111,7 @@ def print_single_expression(
     c, v = np.atleast_1d(c), np.atleast_1d(v)
 
     # catch case that to many terms would be printed
-    def print_line(
+    def format_line(
         expr: list[tuple[float, tuple[str, Any] | list[tuple[str, Any]]]], const: float
     ) -> str:
         res = []
@@ -1115,11 +1125,11 @@ def print_single_expression(
                 var_string = ""
                 for name, coords in var:
                     if name is not None:
-                        coord_string = print_coord(coords)
+                        coord_string = format_coord(coords)
                         var_string += f" {name}{coord_string}"
             else:
                 name, coords = var
-                coord_string = print_coord(coords)
+                coord_string = format_coord(coords)
                 var_string = f" {name}{coord_string}"
 
             res.append(f"{coeff_string}{var_string}")
@@ -1146,7 +1156,7 @@ def print_single_expression(
         truncate = max_terms // 2
         positions = model.variables.get_label_position(v[..., :truncate])
         expr = list(zip(c[:truncate], positions))
-        res = print_line(expr, const)
+        res = format_line(expr, const)
         res += " ... "
         expr = list(
             zip(
@@ -1154,15 +1164,15 @@ def print_single_expression(
                 model.variables.get_label_position(v[-truncate:]),
             )
         )
-        residual = print_line(expr, const)
+        residual = format_line(expr, const)
         if residual != " None":
             res += residual
         return res
     expr = list(zip(c, model.variables.get_label_position(v)))
-    return print_line(expr, const)
+    return format_line(expr, const)
 
 
-def print_single_constraint(model: Any, label: int) -> str:
+def format_single_constraint(model: Any, label: int) -> str:
     constraints = model.constraints
     name, coord = constraints.get_label_position(label)
 
@@ -1171,10 +1181,10 @@ def print_single_constraint(model: Any, label: int) -> str:
     sign = model.constraints[name].sign.sel(coord).item()
     rhs = model.constraints[name].rhs.sel(coord).item()
 
-    expr = print_single_expression(coeffs, vars, 0, model)
+    expr = format_single_expression(coeffs, vars, 0, model)
     sign = SIGNS_pretty[sign]
 
-    return f"{name}{print_coord(coord)}: {expr} {sign} {rhs:.12g}"
+    return f"{name}{format_coord(coord)}: {expr} {sign} {rhs:.12g}"
 
 
 def has_optimized_model(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -1367,7 +1377,7 @@ class LocIndexer(Generic[LocT]):
             # expand the indexer so we can handle Ellipsis
             labels = indexing.expanded_indexer(key, self.object.ndim)
             key = dict(zip(self.object.dims, labels))
-        return self.object.sel(key)
+        return self.object.sel(key)  # type: ignore[attr-defined]
 
 
 class EmptyDeprecationWrapper:
@@ -1439,9 +1449,9 @@ def coords_from_dataset(ds: Dataset, coord_dims: list[str]) -> list[pd.Index]:
         if f"_coord_{d}_codes" in ds:
             codes_2d = ds[f"_coord_{d}_codes"].values.T
             level_names = [
-                k[len(f"_coord_{d}_level_") :]
+                str(k)[len(f"_coord_{d}_level_") :]
                 for k in ds
-                if k.startswith(f"_coord_{d}_level_")
+                if str(k).startswith(f"_coord_{d}_level_")
             ]
             arrays = [
                 ds[f"_coord_{d}_level_{ln}"].values[codes_2d[i]]

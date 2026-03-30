@@ -17,6 +17,7 @@ from typing import (
     Any,
     overload,
 )
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,9 @@ from linopy.common import (
     coords_from_dataset,
     coords_to_dataset_vars,
     filter_nulls_polars,
+    format_coord,
+    format_single_constraint,
+    format_single_expression,
     format_string_as_variable_name,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -49,9 +53,6 @@ from linopy.common import (
     iterate_slices,
     maybe_group_terms_polars,
     maybe_replace_signs,
-    print_coord,
-    print_single_constraint,
-    print_single_expression,
     replace_by_map,
     require_constant,
     save_join,
@@ -87,9 +88,7 @@ def conwrap(
     method: Callable, *default_args: Any, **new_default_kwargs: Any
 ) -> Callable:
     @functools.wraps(method)
-    def _conwrap(
-        con: MutableConstraint, *args: Any, **kwargs: Any
-    ) -> MutableConstraint:
+    def _conwrap(con: Constraint, *args: Any, **kwargs: Any) -> Constraint:
         for k, v in new_default_kwargs.items():
             kwargs.setdefault(k, v)
         return con.__class__(
@@ -111,10 +110,10 @@ def _con_unwrap(con: ConstraintBase | Dataset) -> Dataset:
 
 class ConstraintBase(ABC):
     """
-    Abstract base class for Constraint and MutableConstraint.
+    Abstract base class for Constraint and CSRConstraint.
 
-    Provides all read-only properties and methods shared by both the immutable
-    Constraint (CSR-backed) and the mutable MutableConstraint (Dataset-backed).
+    Provides all read-only properties and methods shared by both the frozen
+    Constraint (CSR-backed) and the standard Constraint (Dataset-backed).
     """
 
     _fill_value = FILL_VALUE
@@ -169,6 +168,11 @@ class ConstraintBase(ABC):
     def dual(self) -> DataArray:
         """Get the dual values DataArray."""
 
+    @dual.setter
+    @abstractmethod
+    def dual(self, value: DataArray) -> None:
+        """Set the dual values DataArray."""
+
     @abstractmethod
     def has_variable(self, variable: variables.Variable) -> bool:
         """Check if the constraint references any of the given variable labels."""
@@ -186,6 +190,18 @@ class ConstraintBase(ABC):
         """Mask out rows with invalid infinite RHS values."""
 
     @abstractmethod
+    def to_polars(self) -> pl.DataFrame:
+        """Convert constraint to a polars DataFrame."""
+
+    @abstractmethod
+    def freeze(self) -> CSRConstraint:
+        """Return an immutable Constraint (CSR-backed)."""
+
+    @abstractmethod
+    def mutable(self) -> Constraint:
+        """Return a mutable Constraint."""
+
+    @abstractmethod
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
@@ -198,15 +214,15 @@ class ConstraintBase(ABC):
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
-    ) -> MutableConstraint:
+    ) -> Constraint:
         """
         Get selection from the constraint.
-        Returns a MutableConstraint with the selected data.
+        Returns a Constraint with the selected data.
         """
         data = Dataset(
             {k: self.data[k][selector] for k in self.data}, attrs=self.data.attrs
         )
-        return MutableConstraint(data, self.model, self.name)
+        return Constraint(data, self.model, self.name)
 
     @property
     def attrs(self) -> dict[str, Any]:
@@ -298,7 +314,8 @@ class ConstraintBase(ABC):
         (True) and disabled (False).
         """
         if self.is_assigned:
-            return (self.labels != FILL_VALUE["labels"]).astype(bool)
+            result: DataArray = self.labels != FILL_VALUE["labels"]  # type: ignore[assignment]
+            return result.astype(bool)
         return None
 
     @property
@@ -333,7 +350,7 @@ class ConstraintBase(ABC):
                         for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
-                        expr = print_single_expression(
+                        expr = format_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
                             0,
@@ -341,9 +358,9 @@ class ConstraintBase(ABC):
                         )
                         sign = SIGNS_pretty[self.sign.values[indices]]
                         rhs = self.rhs.values[indices]
-                        line = print_coord(coord) + f": {expr} {sign} {rhs}"
+                        line = format_coord(coord) + f": {expr} {sign} {rhs}"
                     else:
-                        line = print_coord(coord) + ": None"
+                        line = format_coord(coord) + ": None"
                     lines.append(line)
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
@@ -352,7 +369,7 @@ class ConstraintBase(ABC):
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(
+            expr = format_single_expression(
                 self.coeffs.values, self.vars.values, 0, self.model
             )
             lines.append(
@@ -391,7 +408,7 @@ class ConstraintBase(ABC):
         """
         ds = self.data
 
-        def mask_func(data: pd.DataFrame) -> pd.Series:
+        def mask_func(data: dict) -> pd.Series:
             mask = (data["vars"] != -1) & (data["coeffs"] != 0)
             if "labels" in data:
                 mask &= data["labels"] != -1
@@ -468,9 +485,9 @@ class ConstraintBase(ABC):
     iterate_slices = iterate_slices
 
 
-class Constraint(ConstraintBase):
+class CSRConstraint(ConstraintBase):
     """
-    Immutable constraint backed by a CSR sparse matrix.
+    Frozen constraint backed by a CSR sparse matrix.
 
     Parameters
     ----------
@@ -479,9 +496,9 @@ class Constraint(ConstraintBase):
         constraint grid (including masked/empty rows).
     rhs : np.ndarray
         Shape (n_flat,). Right-hand-side values.
-    sign : str
-        Constraint sign: one of '=', '<=', '>='.
-        Note: per-element signs are not supported (documented regression vs MutableConstraint).
+    sign : str or np.ndarray
+        Constraint sign. Either a single str ('=', '<=', '>=') for uniform
+        signs, or a per-row np.ndarray of sign strings for mixed signs.
     coords : list of pd.Index
         One index per coordinate dimension defining the constraint grid.
     model : Model
@@ -511,7 +528,7 @@ class Constraint(ConstraintBase):
         csr: scipy.sparse.csr_array,
         con_labels: np.ndarray,
         rhs: np.ndarray,
-        sign: str,
+        sign: str | np.ndarray,
         coords: list[pd.Index],
         model: Model,
         name: str = "",
@@ -593,18 +610,21 @@ class Constraint(ConstraintBase):
 
     @property
     def coord_names(self) -> list[str]:
-        return [c.name for c in self._coords]
+        return [str(c.name) for c in self._coords]
+
+    def _active_to_dataarray(
+        self, active_values: np.ndarray, fill: float | int | str = -1
+    ) -> DataArray:
+        full = np.full(self.full_size, fill, dtype=active_values.dtype)
+        full[self.active_positions] = active_values
+        return DataArray(full.reshape(self.shape), coords=self._coords)
 
     @property
     def labels(self) -> DataArray:
         """Get labels DataArray, shape (*coord_dims)."""
         if self._cindex is None:
             return DataArray([])
-        shape = self.shape
-        full_size = self.full_size
-        labels_flat = np.full(full_size, -1, dtype=np.int64)
-        labels_flat[self.active_positions] = self._con_labels
-        return DataArray(labels_flat.reshape(shape), coords=self._coords)
+        return self._active_to_dataarray(self._con_labels, fill=-1)
 
     @property
     def coeffs(self) -> DataArray:
@@ -630,16 +650,39 @@ class Constraint(ConstraintBase):
 
     @property
     def sign(self) -> DataArray:
-        """Get sign DataArray (scalar, same sign for all entries)."""
-        return DataArray(np.full(self.shape, self._sign), coords=self._coords)
+        """Get sign DataArray."""
+        if isinstance(self._sign, str):
+            return DataArray(np.full(self.shape, self._sign), coords=self._coords)
+        return self._active_to_dataarray(self._sign, fill="")
 
     @property
     def rhs(self) -> DataArray:
         """Get RHS DataArray, shape (*coord_dims)."""
-        shape = self.shape
-        rhs_full = np.full(self.full_size, np.nan)
-        rhs_full[self.active_positions] = self._rhs
-        return DataArray(rhs_full.reshape(shape), coords=self._coords)
+        return self._active_to_dataarray(self._rhs, fill=np.nan)
+
+    @rhs.setter
+    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
+        self._refreeze_after(lambda mc: setattr(mc, "rhs", value))
+
+    @property
+    def lhs(self) -> expressions.LinearExpression:
+        """Get LHS as LinearExpression (triggers Dataset reconstruction)."""
+        return self.mutable().lhs
+
+    @lhs.setter
+    def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
+        self._refreeze_after(lambda mc: setattr(mc, "lhs", value))
+
+    def _refreeze_after(self, mutate: Callable[[Constraint], None]) -> None:
+        mc = self.mutable()
+        mutate(mc)
+        refrozen = CSRConstraint.from_mutable(mc, self._cindex)
+        self._csr = refrozen._csr
+        self._con_labels = refrozen._con_labels
+        self._rhs = refrozen._rhs
+        self._sign = refrozen._sign
+        self._coords = refrozen._coords
+        self._dual = None
 
     @property
     @has_optimized_model
@@ -649,9 +692,7 @@ class Constraint(ConstraintBase):
             raise AttributeError(
                 "Underlying is optimized but does not have dual values stored."
             )
-        dual_full = np.full(self.full_size, np.nan)
-        dual_full[self.active_positions] = self._dual
-        return DataArray(dual_full.reshape(self.shape), coords=self._coords)
+        return self._active_to_dataarray(self._dual, fill=np.nan)
 
     @dual.setter
     def dual(self, value: DataArray) -> None:
@@ -706,31 +747,20 @@ class Constraint(ConstraintBase):
         if self._cindex is not None:
             labels_flat = np.full(full_size, -1, dtype=np.int64)
             labels_flat[active_positions] = self._con_labels
-            ds["labels"] = DataArray(labels_flat.reshape(shape), coords=self._coords)
+            ds = assign_multiindex_safe(
+                ds,
+                labels=DataArray(labels_flat.reshape(shape), coords=self._coords),
+            )
         return ds
 
     @property
     def data(self) -> Dataset:
         """Reconstruct the xarray Dataset from the CSR representation."""
         ds = self._to_dataset(self.nterm)
-        shape = self.shape
-        active_pos = self.active_positions
-        rhs_full = np.full(self.full_size, np.nan)
-        rhs_full[active_pos] = self._rhs
-        ds = ds.assign(
-            sign=DataArray(np.full(shape, self._sign), coords=self._coords),
-            rhs=DataArray(rhs_full.reshape(shape), coords=self._coords),
-        )
+        extra = {"sign": self.sign, "rhs": self.rhs}
         if self._dual is not None:
-            dual_full = np.full(self.full_size, np.nan)
-            dual_full[active_pos] = self._dual
-            ds = ds.assign(
-                dual=DataArray(dual_full.reshape(shape), coords=self._coords)
-            )
-        attrs: dict[str, Any] = {"name": self._name}
-        if self._cindex is not None:
-            attrs["label_range"] = (self._cindex, self._cindex + self.full_size)
-        return ds.assign_attrs(attrs)
+            extra["dual"] = self._active_to_dataarray(self._dual, fill=np.nan)
+        return assign_multiindex_safe(ds, **extra).assign_attrs(self.attrs)
 
     def __repr__(self) -> str:
         """Print the constraint without reconstructing the full Dataset."""
@@ -759,7 +789,8 @@ class Constraint(ConstraintBase):
             coeffs_row = np.zeros(nterm, dtype=csr.dtype)
             vars_row[: end - start] = csr.indices[start:end]
             coeffs_row[: end - start] = csr.data[start:end]
-            return f"{print_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[self._sign]} {self._rhs[row]}"
+            sign = self._sign if isinstance(self._sign, str) else self._sign[row]
+            return f"{format_single_expression(coeffs_row, vars_row, 0, self._model)} {SIGNS_pretty[sign]} {self._rhs[row]}"
 
         if size > 1:
             for indices in generate_indices_for_printout(shape, max_lines):
@@ -770,7 +801,7 @@ class Constraint(ConstraintBase):
                     flat_idx = int(np.ravel_multi_index(indices, shape))
                     row = pos_to_row[flat_idx]
                     body = row_expr(row) if row >= 0 else "None"
-                    lines.append(print_coord(coord) + f": {body}")
+                    lines.append(format_coord(coord) + f": {body}")
             lines = align_lines_by_delimiter(lines, list(SIGNS_pretty.values()))
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, shape))
@@ -801,24 +832,25 @@ class Constraint(ConstraintBase):
             "rhs": DataArray(self._rhs, dims=["_flat"]),
             "_con_labels": DataArray(self._con_labels, dims=["_flat"]),
         }
+        if isinstance(self._sign, np.ndarray):
+            data_vars["_sign"] = DataArray(self._sign, dims=["_flat"])
         data_vars.update(coords_to_dataset_vars(self._coords))
         if self._dual is not None:
             data_vars["dual"] = DataArray(self._dual, dims=["_flat"])
         dim_names = [c.name for c in self._coords]
-        return Dataset(
-            data_vars,
-            attrs={
-                "_linopy_format": "csr",
-                "sign": self._sign,
-                "cindex": self._cindex if self._cindex is not None else -1,
-                "shape": list(csr.shape),
-                "coord_dims": dim_names,
-                "name": self._name,
-            },
-        )
+        attrs: dict[str, Any] = {
+            "_linopy_format": "csr",
+            "cindex": self._cindex if self._cindex is not None else -1,
+            "shape": list(csr.shape),
+            "coord_dims": dim_names,
+            "name": self._name,
+        }
+        if isinstance(self._sign, str):
+            attrs["sign"] = self._sign
+        return Dataset(data_vars, attrs=attrs)
 
     @classmethod
-    def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> Constraint:
+    def from_netcdf_ds(cls, ds: Dataset, model: Model, name: str) -> CSRConstraint:
         """Reconstruct a Constraint from a netcdf Dataset (CSR format)."""
         attrs = ds.attrs
         shape = tuple(attrs["shape"])
@@ -827,9 +859,9 @@ class Constraint(ConstraintBase):
             shape=shape,
         )
         rhs = ds["rhs"].values
-        sign = attrs["sign"]
-        cindex = int(attrs["cindex"])
-        cindex = cindex if cindex >= 0 else None
+        sign: str | np.ndarray = ds["_sign"].values if "_sign" in ds else attrs["sign"]
+        _cindex_raw = int(attrs["cindex"])
+        cindex: int | None = _cindex_raw if _cindex_raw >= 0 else None
         coord_dims = attrs["coord_dims"]
         if isinstance(coord_dims, str):
             coord_dims = [coord_dims]
@@ -855,42 +887,52 @@ class Constraint(ConstraintBase):
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) — all pre-stored, no recomputation."""
-        sense = np.full(len(self._rhs), self._sign[0])
+        if isinstance(self._sign, str):
+            sense = np.full(len(self._rhs), self._sign[0])
+        else:
+            sense = np.array([s[0] for s in self._sign])
         return self._csr, self._con_labels, self._rhs, sense
 
-    def sanitize_zeros(self) -> Constraint:
+    def sanitize_zeros(self) -> CSRConstraint:
         """Remove terms with zero or near-zero coefficients (mutates in-place)."""
         self._csr.data[np.abs(self._csr.data) <= 1e-10] = 0
         self._csr.eliminate_zeros()
         return self
 
-    def sanitize_missings(self) -> Constraint:
+    def sanitize_missings(self) -> CSRConstraint:
         """No-op: missing rows are already excluded during freezing."""
         return self
 
-    def sanitize_infinities(self) -> Constraint:
+    def sanitize_infinities(self) -> CSRConstraint:
         """Mask out rows with invalid infinite RHS values (mutates in-place)."""
-        if self._sign == LESS_EQUAL:
-            invalid = self._rhs == np.inf
-        elif self._sign == GREATER_EQUAL:
-            invalid = self._rhs == -np.inf
+        if isinstance(self._sign, str):
+            if self._sign == LESS_EQUAL:
+                invalid = self._rhs == np.inf
+            elif self._sign == GREATER_EQUAL:
+                invalid = self._rhs == -np.inf
+            else:
+                return self
         else:
-            return self
+            invalid = ((self._sign == LESS_EQUAL) & (self._rhs == np.inf)) | (
+                (self._sign == GREATER_EQUAL) & (self._rhs == -np.inf)
+            )
         if not invalid.any():
             return self
         keep = ~invalid
         self._csr = self._csr[keep]
         self._con_labels = self._con_labels[keep]
         self._rhs = self._rhs[keep]
+        if not isinstance(self._sign, str):
+            self._sign = self._sign[keep]
         return self
 
-    def freeze(self) -> Constraint:
+    def freeze(self) -> CSRConstraint:
         """Return self (already immutable)."""
         return self
 
-    def mutable(self) -> MutableConstraint:
-        """Convert to a MutableConstraint."""
-        return MutableConstraint(self.data, self._model, self._name)
+    def mutable(self) -> Constraint:
+        """Convert to a Constraint."""
+        return Constraint(self.data, self._model, self._name)
 
     def to_polars(self) -> pl.DataFrame:
         """Convert frozen constraint to polars DataFrame directly from CSR."""
@@ -955,15 +997,15 @@ class Constraint(ConstraintBase):
     @classmethod
     def from_mutable(
         cls,
-        con: MutableConstraint,
+        con: Constraint,
         cindex: int | None = None,
-    ) -> Constraint:
+    ) -> CSRConstraint:
         """
-        Create a Constraint from a MutableConstraint.
+        Create a CSRConstraint from a Constraint.
 
         Parameters
         ----------
-        con : MutableConstraint
+        con : Constraint
         cindex : int or None
             Starting label index, if assigned.
         """
@@ -978,13 +1020,14 @@ class Constraint(ConstraintBase):
         active_mask = (labels_flat != -1) & (vars_flat != -1).any(axis=1)
         rhs = con.rhs.values.ravel()[active_mask]
         sign_vals = con.sign.values.ravel()
-        unique_signs = np.unique(sign_vals[active_mask])
-        if len(unique_signs) > 1:
-            raise ValueError(
-                "Constraint has per-element signs; cannot freeze to immutable Constraint. "
-                "This is a known limitation — use MutableConstraint instead."
-            )
-        sign = str(unique_signs[0]) if len(unique_signs) == 1 else "="
+        active_signs = sign_vals[active_mask]
+        unique_signs = np.unique(active_signs)
+        if len(unique_signs) == 0:
+            sign: str | np.ndarray = "="
+        elif len(unique_signs) == 1:
+            sign = str(unique_signs[0])
+        else:
+            sign = active_signs
         dual = (
             con.data["dual"].values.ravel()[active_mask] if "dual" in con.data else None
         )
@@ -1001,11 +1044,10 @@ class Constraint(ConstraintBase):
         )
 
 
-class MutableConstraint(ConstraintBase):
+class Constraint(ConstraintBase):
     """
-    Mutable constraint backed by an xarray Dataset.
+    Constraint backed by an xarray Dataset.
 
-    This is the original Constraint implementation, renamed to MutableConstraint.
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
@@ -1155,21 +1197,21 @@ class MutableConstraint(ConstraintBase):
         sense = np.array([s[0] for s in sign_flat])
         return csr, con_labels, b, sense
 
-    def sanitize_zeros(self) -> MutableConstraint:
+    def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
         not_zero = abs(self.coeffs) > 1e-10
         self.vars = self.vars.where(not_zero, -1)
         self.coeffs = self.coeffs.where(not_zero)
         return self
 
-    def sanitize_missings(self) -> MutableConstraint:
+    def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""
         contains_non_missing = (self.vars != -1).any(self.term_dim)
         labels = self.labels.where(contains_non_missing, -1)
         self._data = assign_multiindex_safe(self.data, labels=labels)
         return self
 
-    def sanitize_infinities(self) -> MutableConstraint:
+    def sanitize_infinities(self) -> Constraint:
         """Mask out rows with invalid infinite RHS values."""
         valid_infinity_values = ((self.sign == LESS_EQUAL) & (self.rhs == np.inf)) | (
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
@@ -1178,23 +1220,21 @@ class MutableConstraint(ConstraintBase):
         self._data = assign_multiindex_safe(self.data, labels=labels)
         return self
 
-    def freeze(self) -> Constraint:
+    def freeze(self) -> CSRConstraint:
         """Convert to an immutable Constraint."""
         cindex = (
             int(self.data.attrs["label_range"][0])
             if "label_range" in self.data.attrs
             else None
         )
-        return Constraint.from_mutable(self, cindex=cindex)
+        return CSRConstraint.from_mutable(self, cindex=cindex)
 
-    def mutable(self) -> MutableConstraint:
+    def mutable(self) -> Constraint:
         """Return self (already mutable)."""
         return self
 
     @classmethod
-    def from_rule(
-        cls, model: Model, rule: Callable, coords: CoordsLike
-    ) -> MutableConstraint:
+    def from_rule(cls, model: Model, rule: Callable, coords: CoordsLike) -> Constraint:
         """
         Create a constraint from a rule and a set of coordinates.
 
@@ -1220,11 +1260,11 @@ class MutableConstraint(ConstraintBase):
 
         Returns
         -------
-        linopy.MutableConstraint
+        linopy.Constraint
 
         Examples
         --------
-        >>> from linopy import Model, LinearExpression, MutableConstraint
+        >>> from linopy import Model, LinearExpression, Constraint
         >>> m = Model()
         >>> coords = pd.RangeIndex(10), ["a", "b"]
         >>> x = m.add_variables(0, 100, coords)
@@ -1234,7 +1274,7 @@ class MutableConstraint(ConstraintBase):
         ...     else:
         ...         return i * x.at[i, j] >= 0
         ...
-        >>> con = MutableConstraint.from_rule(m, bound, coords)
+        >>> con = Constraint.from_rule(m, bound, coords)
         >>> con = m.add_constraints(con)
         """
         if not isinstance(coords, DataArrayCoordinates):
@@ -1310,7 +1350,7 @@ class MutableConstraint(ConstraintBase):
         df = long.join(short, on="labels", how="inner")
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
-    # Wrapped xarray methods — only available on MutableConstraint
+    # Wrapped xarray methods — only available on Constraint
     assign = conwrap(Dataset.assign)
     assign_multiindex_safe = conwrap(assign_multiindex_safe)
     assign_attrs = conwrap(Dataset.assign_attrs)
@@ -1438,7 +1478,7 @@ class Constraints:
         """
         Add a constraint to the constraints container.
         """
-        if freeze and isinstance(constraint, MutableConstraint):
+        if freeze and isinstance(constraint, Constraint):
             constraint = constraint.freeze()
         self.data[constraint.name] = constraint
         self._invalidate_label_position_index()
@@ -1615,29 +1655,47 @@ class Constraints:
             self._label_position_index = LabelPositionIndex(self)
         return get_label_position(self, values, self._label_position_index)
 
+    def format_labels(
+        self, values: Sequence[int], display_max_terms: int | None = None
+    ) -> str:
+        """
+        Get a string representation of a selection of constraint labels.
+
+        Parameters
+        ----------
+        values : list, array-like
+            One dimensional array of constraint labels.
+        display_max_terms : int, optional
+            Maximum number of terms to display per constraint. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
+
+        Returns
+        -------
+        str
+            String representation of the selected constraints.
+        """
+        with options as opts:
+            if display_max_terms is not None:
+                opts.set_value(display_max_terms=display_max_terms)
+            res = [format_single_constraint(self.model, v) for v in values]
+
+        return "\n".join(res)
+
     def print_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
     ) -> None:
         """
         Print a selection of labels of the constraints.
 
-        Parameters
-        ----------
-        values : list, array-like
-            One dimensional array of constraint labels.
+        .. deprecated::
+            Use :meth:`format_labels` instead.
         """
-        with options as opts:
-            if display_max_terms is not None:
-                opts.set_value(display_max_terms=display_max_terms)
-            res = [print_single_constraint(self.model, v) for v in values]
-
-        output = "\n".join(res)
-        try:
-            print(output)
-        except UnicodeEncodeError:
-            # Replace Unicode math symbols with ASCII equivalents for Windows console
-            output = output.replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
-            print(output)
+        warn(
+            "`Constraints.print_labels` is deprecated. Use `Constraints.format_labels` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_labels(values, display_max_terms=display_max_terms))
 
     def set_blocks(self, block_map: np.ndarray) -> None:
         """
@@ -1655,6 +1713,8 @@ class Constraints:
         N = block_map.max()
 
         for name, constraint in self.items():
+            if not isinstance(constraint, Constraint):
+                self.data[name] = constraint = constraint.mutable()
             res = xr.full_like(constraint.labels, N + 1, dtype=block_map.dtype)
             entries = replace_by_map(constraint.vars, block_map)
 
@@ -1723,9 +1783,9 @@ class Constraints:
         Reset the stored solution of variables.
         """
         for k, c in self.items():
-            if isinstance(c, Constraint):
+            if isinstance(c, CSRConstraint):
                 if c._dual is not None:
-                    self.data[k] = Constraint(
+                    self.data[k] = CSRConstraint(
                         c._csr,
                         c._con_labels,
                         c._rhs,
@@ -1736,9 +1796,12 @@ class Constraints:
                         cindex=c._cindex,
                         dual=None,
                     )
-            else:
+            elif isinstance(c, Constraint):
                 if "dual" in c.data:
                     c._data = c.data.drop_vars("dual")
+            else:
+                msg = f"reset_dual encountered an unknown constraint type: {type(c)}"
+                raise NotImplementedError(msg)
 
 
 class AnonymousScalarConstraint:
@@ -1772,7 +1835,7 @@ class AnonymousScalarConstraint:
         """
         Get the representation of the AnonymousScalarConstraint.
         """
-        expr_string = print_single_expression(
+        expr_string = format_single_expression(
             np.array(self.lhs.coeffs), np.array(self.lhs.vars), 0, self.lhs.model
         )
         return f"AnonymousScalarConstraint: {expr_string} {self.sign} {self.rhs}"
@@ -1798,6 +1861,6 @@ class AnonymousScalarConstraint:
         """
         return self._rhs
 
-    def to_constraint(self) -> MutableConstraint:
+    def to_constraint(self) -> Constraint:
         data = self.lhs.to_linexpr().data.assign(sign=self.sign, rhs=self.rhs)
-        return MutableConstraint(data=data, model=self.lhs.model)
+        return Constraint(data=data, model=self.lhs.model)

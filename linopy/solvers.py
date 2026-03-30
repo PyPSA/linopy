@@ -54,7 +54,7 @@ NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
-available_solvers = []
+available_solvers: list[str] = []
 
 which = "where" if os.name == "nt" else "which"
 
@@ -346,6 +346,7 @@ class Solver(ABC, Generic[EnvType]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Abstract method to solve a linear problem from a model.
@@ -449,6 +450,7 @@ class CBC(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for CBC"
         raise NotImplementedError(msg)
@@ -635,6 +637,7 @@ class GLPK(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for GLPK"
         raise NotImplementedError(msg)
@@ -815,6 +818,7 @@ class Highs(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the HiGHS solver.
@@ -838,6 +842,9 @@ class Highs(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -857,7 +864,10 @@ class Highs(Solver[None]):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy(explicit_coordinate_names=explicit_coordinate_names)
+        h = model.to_highspy(
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
         self._set_solver_params(h, log_fn)
 
         return self._solve(
@@ -1056,6 +1066,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         basis_fn: Path | None = None,
         env: gurobipy.Env | dict[str, Any] | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the Gurobi solver.
@@ -1078,6 +1089,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             Gurobi environment for the solver, pass env directly or kwargs for creation.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -1092,7 +1106,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 env_ = env
 
             m = model.to_gurobipy(
-                env=env_, explicit_coordinate_names=explicit_coordinate_names
+                env=env_,
+                explicit_coordinate_names=explicit_coordinate_names,
+                set_names=set_names,
             )
 
             return self._solve(
@@ -1295,6 +1311,7 @@ class Cplex(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Cplex"
         raise NotImplementedError(msg)
@@ -1449,6 +1466,7 @@ class SCIP(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for SCIP"
         raise NotImplementedError(msg)
@@ -1605,6 +1623,7 @@ class Xpress(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Xpress"
         raise NotImplementedError(msg)
@@ -1721,20 +1740,23 @@ class Xpress(Solver[None]):
             sol = pd.Series(m.getSolution(), index=var, dtype=float)
 
             try:
-                try:  # Try new API first
-                    _dual = m.getDuals()
-                except AttributeError:  # Fallback to old API
-                    _dual = m.getDual()
+                if m.attributes.rows == 0:
+                    dual = pd.Series(dtype=float)
+                else:
+                    try:  # Try new API first
+                        _dual = m.getDuals()
+                    except AttributeError:  # Fallback to old API
+                        _dual = m.getDual()
 
-                try:  # Try new API first
-                    constraints = m.getNameList(
-                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                    )
-                except AttributeError:  # Fallback to old API
-                    constraints = m.getnamelist(
-                        xpress_Namespaces.ROW, 0, m.attributes.rows - 1
-                    )
-                dual = pd.Series(_dual, index=constraints, dtype=float)
+                    try:  # Try new API first
+                        constraints = m.getNameList(
+                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                        )
+                    except AttributeError:  # Fallback to old API
+                        constraints = m.getnamelist(
+                            xpress_Namespaces.ROW, 0, m.attributes.rows - 1
+                        )
+                    dual = pd.Series(_dual, index=constraints, dtype=float)
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -1747,7 +1769,10 @@ class Xpress(Solver[None]):
         return Result(status, solution, m)
 
 
-KnitroResult = namedtuple("KnitroResult", "knitro_context reported_runtime")
+KnitroResult = namedtuple(
+    "KnitroResult",
+    "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error n_vars n_cons n_integer_vars n_continuous_vars",
+)
 
 
 class Knitro(Solver[None]):
@@ -1778,6 +1803,7 @@ class Knitro(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for Knitro"
         raise NotImplementedError(msg)
@@ -1895,8 +1921,38 @@ class Knitro(Solver[None]):
             ret = int(knitro.KN_solve(kc))
 
             reported_runtime: float | None = None
+            mip_relaxation_bnd: float | None = None
+            mip_number_nodes: int | None = None
+            mip_number_solves: int | None = None
+            mip_rel_gap: float | None = None
+            mip_abs_gap: float | None = None
+            abs_feas_error: float | None = None
+            rel_feas_error: float | None = None
+            abs_opt_error: float | None = None
+            rel_opt_error: float | None = None
+            n_vars: int | None = None
+            n_cons: int | None = None
+            n_integer_vars: int | None = None
+            n_continuous_vars: int | None = None
             with contextlib.suppress(Exception):
                 reported_runtime = float(knitro.KN_get_solve_time_real(kc))
+                mip_relaxation_bnd = float(knitro.KN_get_mip_relaxation_bnd(kc))
+                mip_number_nodes = int(knitro.KN_get_mip_number_nodes(kc))
+                mip_number_solves = int(knitro.KN_get_mip_number_solves(kc))
+                mip_rel_gap = float(knitro.KN_get_mip_rel_gap(kc))
+                mip_abs_gap = float(knitro.KN_get_mip_abs_gap(kc))
+                abs_feas_error = float(knitro.KN_get_abs_feas_error(kc))
+                rel_feas_error = float(knitro.KN_get_rel_feas_error(kc))
+                abs_opt_error = float(knitro.KN_get_abs_opt_error(kc))
+                rel_opt_error = float(knitro.KN_get_rel_opt_error(kc))
+                n_vars = int(knitro.KN_get_number_vars(kc))
+                n_cons = int(knitro.KN_get_number_cons(kc))
+                var_types = list(knitro.KN_get_var_types(kc))
+                n_integer_vars = int(
+                    var_types.count(knitro.KN_VARTYPE_INTEGER)
+                    + var_types.count(knitro.KN_VARTYPE_BINARY)
+                )
+                n_continuous_vars = int(var_types.count(knitro.KN_VARTYPE_CONTINUOUS))
 
             if ret in CONDITION_MAP:
                 termination_condition = CONDITION_MAP[ret]
@@ -1941,12 +1997,26 @@ class Knitro(Solver[None]):
             return Result(
                 status,
                 solution,
-                KnitroResult(knitro_context=kc, reported_runtime=reported_runtime),
+                KnitroResult(
+                    reported_runtime=reported_runtime,
+                    mip_relaxation_bnd=mip_relaxation_bnd,
+                    mip_number_nodes=mip_number_nodes,
+                    mip_number_solves=mip_number_solves,
+                    mip_rel_gap=mip_rel_gap,
+                    mip_abs_gap=mip_abs_gap,
+                    abs_feas_error=abs_feas_error,
+                    rel_feas_error=rel_feas_error,
+                    abs_opt_error=abs_opt_error,
+                    rel_opt_error=rel_opt_error,
+                    n_vars=n_vars,
+                    n_cons=n_cons,
+                    n_integer_vars=n_integer_vars,
+                    n_continuous_vars=n_continuous_vars,
+                ),
             )
-
         finally:
-            # Intentionally keep the Knitro context alive; do not free `kc` here.
-            pass
+            with contextlib.suppress(Exception):
+                knitro.KN_free(kc)
 
 
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
@@ -1987,6 +2057,7 @@ class Mosek(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the MOSEK solver.
@@ -2008,6 +2079,9 @@ class Mosek(Solver[None]):
             environment automatically. Will be removed in a future version.
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
 
         Returns
         -------
@@ -2023,7 +2097,11 @@ class Mosek(Solver[None]):
                 stacklevel=2,
             )
         with mosek.Task() as m:
-            m = model.to_mosek(m, explicit_coordinate_names=explicit_coordinate_names)
+            m = model.to_mosek(
+                m,
+                explicit_coordinate_names=explicit_coordinate_names,
+                set_names=set_names,
+            )
 
             return self._solve(
                 m,
@@ -2321,6 +2399,7 @@ class COPT(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for COPT"
         raise NotImplementedError(msg)
@@ -2462,6 +2541,7 @@ class MindOpt(Solver[None]):
         basis_fn: Path | None = None,
         env: None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         msg = "Direct API not implemented for MindOpt"
         raise NotImplementedError(msg)
@@ -2681,6 +2761,7 @@ class cuPDLPx(Solver[None]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool = True,
     ) -> Result:
         """
         Solve a linear problem directly from a linopy model using the solver cuPDLPx.
@@ -2703,6 +2784,8 @@ class cuPDLPx(Solver[None]):
             Environment for the solver
         explicit_coordinate_names : bool, optional
             Transfer variable and constraint names to the solver (default: False)
+        set_names : bool, optional
+            Ignored. cuPDLPx does not support named variables/constraints.
 
         Returns
         -------

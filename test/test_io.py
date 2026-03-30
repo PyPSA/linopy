@@ -79,19 +79,44 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
 
 
 def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
-    from linopy.constraints import Constraint
+    from linopy.constraints import CSRConstraint
 
     m = Model()
     x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
     m.add_constraints(x >= 1, name="c", freeze=True)
 
-    assert isinstance(m.constraints["c"], Constraint)
+    assert isinstance(m.constraints["c"], CSRConstraint)
 
     fn = tmp_path / "test_frozen.nc"
     m.to_netcdf(fn)
     p = read_netcdf(fn)
 
-    assert isinstance(p.constraints["c"], Constraint)
+    assert isinstance(p.constraints["c"], CSRConstraint)
+    assert_model_equal(m, p)
+
+
+def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
+    from linopy.constraints import CSRConstraint
+
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+
+    def bound(m: Model, i: int) -> object:
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c", freeze=True)
+    assert isinstance(m.constraints["c"], CSRConstraint)
+
+    fn = tmp_path / "test_mixed_sign.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.constraints["c"], CSRConstraint)
+    import numpy as np
+
+    np.testing.assert_array_equal(m.constraints["c"]._sign, p.constraints["c"]._sign)
     assert_model_equal(m, p)
 
 
@@ -216,9 +241,41 @@ def test_to_gurobipy(model: Model) -> None:
     model.to_gurobipy()
 
 
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_gurobipy_no_names(model: Model) -> None:
+    m_with = model.to_gurobipy(set_names=True)
+    m_without = model.to_gurobipy(set_names=False)
+    names_with = [v.VarName for v in m_with.getVars()]
+    names_without = [v.VarName for v in m_without.getVars()]
+    assert names_with != names_without
+
+
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
     model.to_highspy()
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_highspy_no_names(model: Model) -> None:
+    h = model.to_highspy(set_names=False)
+    lp = h.getLp()
+    assert len(lp.col_names_) == 0
+    assert len(lp.row_names_) == 0
+
+
+def test_model_set_names_in_solver_io_default() -> None:
+    assert Model().set_names_in_solver_io is True
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_model_set_names_in_solver_io(model: Model) -> None:
+    model.solve(solver_name="highs", io_api="direct")
+    expected_obj = model.objective.value
+
+    model.set_names_in_solver_io = False
+    status, _ = model.solve(solver_name="highs", io_api="direct")
+    assert status == "ok"
+    assert model.objective.value == pytest.approx(expected_obj)
 
 
 def test_to_blocks(tmp_path: Path) -> None:

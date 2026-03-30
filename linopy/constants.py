@@ -38,6 +38,8 @@ sign_replace_dict: dict[str, str] = {
     short_LESS_EQUAL: LESS_EQUAL,
 }
 
+FIX_CONSTRAINT_PREFIX = "__fix__"
+
 TERM_DIM = "_term"
 STACKED_TERM_DIM = "_stacked_term"
 
@@ -214,9 +216,11 @@ class Status:
 
     @classmethod
     def from_termination_condition(
-        cls, termination_condition: Union["TerminationCondition", str]
+        cls, termination_condition: Union["TerminationCondition", str, None]
     ) -> "Status":
-        termination_condition = TerminationCondition.process(termination_condition)
+        termination_condition = TerminationCondition.process(
+            termination_condition if termination_condition is not None else "unknown"
+        )
         solver_status = SolverStatus.from_termination_condition(termination_condition)
         return cls(solver_status, termination_condition)
 

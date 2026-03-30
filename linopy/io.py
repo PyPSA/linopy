@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -89,39 +90,50 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     )
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def format_coord(coord: str) -> str:
+    from linopy.common import format_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
+    coord = format_coord(coord).translate(coord_sanitizer)
     return coord
 
 
 def get_printers_scalar(
     m: Model, explicit_coordinate_names: bool = False
 ) -> tuple[Callable, Callable]:
-    """Get printer functions for scalar values (non-polars)."""
+    """
+    Get batch printer functions for numpy label arrays (non-polars).
+
+    Returns two callables that take an int64 numpy array of labels and return
+    a list of name strings.
+    """
     if explicit_coordinate_names:
 
-        def print_variable(var: Any) -> str:
+        def _fmt_var(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
-        def print_constraint(cons: Any) -> str:
+        def _fmt_con(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
-        return print_variable, print_constraint
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_var)(labels).tolist()
+
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return np.vectorize(_fmt_con)(labels).tolist()
+
+        return print_variables, print_constraints
     else:
 
-        def print_variable(var: Any) -> str:
-            return f"x{var}"
+        def print_variables(labels: np.ndarray) -> list[str]:
+            return ("x" + pl.Series(labels).cast(pl.String)).to_list()
 
-        def print_constraint(cons: Any) -> str:
-            return f"c{cons}"
+        def print_constraints(labels: np.ndarray) -> list[str]:
+            return ("c" + pl.Series(labels).cast(pl.String)).to_list()
 
-        return print_variable, print_constraint
+        return print_variables, print_constraints
 
 
 def get_printers(
@@ -133,12 +145,12 @@ def get_printers(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -624,7 +636,10 @@ def to_file(
 
 
 def to_mosek(
-    m: Model, task: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    task: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
     """
     Export model to MOSEK.
@@ -635,6 +650,11 @@ def to_mosek(
     ----------
     m : linopy.Model
     task : empty MOSEK task
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -651,10 +671,6 @@ def to_mosek(
 
     import mosek
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
     if task is None:
         task = mosek.Task()
 
@@ -662,13 +678,15 @@ def to_mosek(
     task.appendcons(m.ncons)
 
     M = m.matrices
-    # for j, n in enumerate(("x" + M.vlabels.astype(str).astype(object))):
-    #    task.putvarname(j, n)
 
-    labels = np.vectorize(print_variable)(M.vlabels).astype(object)
-    task.generatevarnames(
-        np.arange(0, len(labels)), "%0", [len(labels)], None, [0], list(labels)
-    )
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        labels = print_variables(M.vlabels)
+        task.generatevarnames(
+            np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
+        )
 
     ## Variables
 
@@ -704,9 +722,10 @@ def to_mosek(
     ## Constraints
 
     if len(m.constraints) > 0:
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
-        for i, n in enumerate(names):
-            task.putconname(i, n)
+        if set_names:
+            names = print_constraints(M.clabels)
+            for i, n in enumerate(names):
+                task.putconname(i, n)
         bkc = [
             (
                 (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
@@ -744,7 +763,10 @@ def to_mosek(
 
 
 def to_gurobipy(
-    m: Model, env: Any | None = None, explicit_coordinate_names: bool = False
+    m: Model,
+    env: Any | None = None,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
 ) -> Any:
     """
     Export the model to gurobipy.
@@ -757,6 +779,11 @@ def to_gurobipy(
     ----------
     m : linopy.Model
     env : gurobipy.Env
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -764,24 +791,24 @@ def to_gurobipy(
     """
     import gurobipy
 
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
-
     m.constraints.sanitize_missings()
     model = gurobipy.Model(env=env)
 
     M = m.matrices
 
-    names = np.vectorize(print_variable)(M.vlabels).astype(object)
     kwargs = {}
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        kwargs["name"] = print_variables(M.vlabels)
     if (
         len(m.binaries.labels)
         + len(m.integers.labels)
         + len(list(m.variables.semi_continuous))
     ):
         kwargs["vtype"] = M.vtypes
-    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, name=list(names), **kwargs)
+    x = model.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
 
     if m.is_quadratic:
         model.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)  # type: ignore
@@ -792,9 +819,10 @@ def to_gurobipy(
         model.ModelSense = -1
 
     if len(m.constraints):
-        names = np.vectorize(print_constraint)(M.clabels).astype(object)
         c = model.addMConstr(M.A, x, M.sense, M.b)  # type: ignore
-        c.setAttr("ConstrName", list(names))  # type: ignore
+        if set_names:
+            names = print_constraints(M.clabels)
+            c.setAttr("ConstrName", names)
 
     if m.variables.sos:
         for var_name in m.variables.sos:
@@ -820,18 +848,25 @@ def to_gurobipy(
     return model
 
 
-def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
+def to_highspy(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Highs:
     """
     Export the model to highspy.
 
     This function does not write the model to intermediate files but directly
     passes it to highspy.
 
-    Note, this function does not track variable and constraint labels.
-
     Parameters
     ----------
     m : linopy.Model
+    explicit_coordinate_names : bool, optional
+        Whether to use explicit coordinate names. Default is False.
+    set_names : bool, optional
+        Whether to set variable and constraint names. Default is True.
+        Setting to False can significantly speed up model export.
 
     Returns
     -------
@@ -844,10 +879,6 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         )
 
     import highspy
-
-    print_variable, print_constraint = get_printers_scalar(
-        m, explicit_coordinate_names=explicit_coordinate_names
-    )
 
     M = m.matrices
     h = highspy.Highs()
@@ -880,11 +911,15 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
         upper = np.where(M.sense != ">", M.b, np.inf)
         h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
 
-    lp = h.getLp()
-    lp.col_names_ = np.vectorize(print_variable)(M.vlabels).astype(object)
-    if len(M.clabels):
-        lp.row_names_ = np.vectorize(print_constraint)(M.clabels).astype(object)
-    h.passModel(lp)
+    if set_names:
+        print_variables, print_constraints = get_printers_scalar(
+            m, explicit_coordinate_names=explicit_coordinate_names
+        )
+        lp = h.getLp()
+        lp.col_names_ = print_variables(M.vlabels)
+        if len(M.clabels):
+            lp.row_names_ = print_constraints(M.clabels)
+        h.passModel(lp)
 
     # quadrative objective
     Q = M.Q
@@ -901,7 +936,11 @@ def to_highspy(m: Model, explicit_coordinate_names: bool = False) -> Highs:
     return h
 
 
-def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxModel:
+def to_cupdlpx(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> cupdlpxModel:
     """
     Export the model to cupdlpx.
 
@@ -909,12 +948,14 @@ def to_cupdlpx(m: Model, explicit_coordinate_names: bool = False) -> cupdlpxMode
     passes it to cupdlpx.
 
     cuPDLPx does not support named variables and constraints, so the
-    `explicit_coordinate_names` parameter is ignored.
+    `explicit_coordinate_names` and `set_names` parameters are ignored.
 
     Parameters
     ----------
     m : linopy.Model
     explicit_coordinate_names : bool, optional
+        Ignored. cuPDLPx does not support named variables/constraints.
+    set_names : bool, optional
         Ignored. cuPDLPx does not support named variables/constraints.
 
     Returns
@@ -1144,6 +1185,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1167,15 +1210,15 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     -------
     m : linopy.Model
     """
-    from linopy.constraints import Constraint
-    from linopy.model import (
+    from linopy.constraints import (
+        Constraint,
+        ConstraintBase,
         Constraints,
-        LinearExpression,
-        Model,
-        MutableConstraint,
-        Variable,
-        Variables,
+        CSRConstraint,
     )
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model
+    from linopy.variables import Variable, Variables
 
     if isinstance(path, str):
         path = Path(path)
@@ -1222,14 +1265,14 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     cons = [str(k) for k in ds if str(k).startswith("constraints")]
     con_names = list({str(k).rsplit("-", 1)[0] for k in cons})
-    constraints = {}
+    constraints: dict[str, ConstraintBase] = {}
     for k in sorted(con_names):
         name = remove_prefix(k, "constraints")
         con_ds = get_prefix(ds, k)
         if con_ds.attrs.get("_linopy_format") == "csr":
-            constraints[name] = Constraint.from_netcdf_ds(con_ds, m, name)
+            constraints[name] = CSRConstraint.from_netcdf_ds(con_ds, m, name)
         else:
-            constraints[name] = MutableConstraint(con_ds, m, name)
+            constraints[name] = Constraint(con_ds, m, name)
     m._constraints = Constraints(constraints, m)
 
     objective = get_prefix(ds, "objective")
@@ -1241,6 +1284,132 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     m.parameters = get_prefix(ds, "parameters")
 
     for k in m.scalar_attrs:
-        setattr(m, k, ds.attrs.get(k))
+        if k in ds.attrs:
+            setattr(m, k, ds.attrs[k])
+
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
 
     return m
+
+
+def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
+    """
+    Return a copy of this model.
+
+    With ``deep=True`` (default), variables, constraints, objective,
+    parameters, blocks, and scalar attributes are copied to a fully
+    independent model. With ``deep=False``, returns a shallow copy.
+
+    :meth:`Model.copy` defaults to deep copy for workflow safety.
+    In contrast, ``copy.copy(model)`` is shallow via ``__copy__``, and
+    ``copy.deepcopy(model)`` is deep via ``__deepcopy__``.
+
+    Solver runtime metadata (for example, ``solver_name`` and
+    ``solver_model``) is intentionally not copied. Solver backend state
+    is recreated on ``solve()``.
+
+    Parameters
+    ----------
+    m : Model
+        The model to copy.
+    include_solution : bool, optional
+        Whether to include solution and dual values in the copy.
+        If False (default), solve artifacts are excluded: solution/dual data,
+        objective value, and solve status are reset to initialized state.
+        If True, these values are copied when present. For unsolved models,
+        this has no additional effect.
+    deep : bool, optional
+        Whether to return a deep copy (default) or shallow copy. If False,
+        the returned model uses independent wrapper objects that share
+        underlying data buffers with the source model.
+
+    Returns
+    -------
+    Model
+        A deep or shallow copy of the model.
+    """
+    from linopy.constraints import Constraint, Constraints
+    from linopy.expressions import LinearExpression
+    from linopy.model import Model, Objective
+    from linopy.variables import Variable, Variables
+
+    SOLVE_STATE_ATTRS = {"status", "termination_condition"}
+
+    new_model = Model(
+        chunk=m._chunk,
+        force_dim_names=m._force_dim_names,
+        auto_mask=m._auto_mask,
+        freeze_constraints=m.freeze_constraints,
+        set_names_in_solver_io=m.set_names_in_solver_io,
+        solver_dir=str(m._solver_dir),
+    )
+
+    new_model._variables = Variables(
+        {
+            name: Variable(
+                var.data.copy(deep=deep)
+                if include_solution
+                else var.data[m.variables.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, var in m.variables.items()
+        },
+        new_model,
+    )
+
+    new_model._constraints = Constraints(
+        {
+            name: Constraint(
+                con.mutable().data.copy(deep=deep)
+                if include_solution
+                else con.mutable().data[m.constraints.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, con in m.constraints.items()
+        },
+        new_model,
+    )
+
+    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    new_model._objective._value = (
+        float(m.objective.value)
+        if (include_solution and m.objective.value is not None)
+        else None
+    )
+
+    new_model._parameters = m._parameters.copy(deep=deep)
+    new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
+
+    for attr in m.scalar_attrs:
+        if include_solution or attr not in SOLVE_STATE_ATTRS:
+            setattr(new_model, attr, getattr(m, attr))
+
+    return new_model
+
+
+def shallowcopy(m: Model) -> Model:
+    """
+    Support Python's ``copy.copy`` protocol for ``Model``.
+
+    Returns a shallow copy with independent wrapper objects that share
+    underlying array buffers with ``m``. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    return copy(m, include_solution=False, deep=False)
+
+
+def deepcopy(m: Model, memo: dict[int, Any]) -> Model:
+    """
+    Support Python's ``copy.deepcopy`` protocol for ``Model``.
+
+    Returns a deep, structurally independent copy and records it in ``memo``
+    as required by Python's copy protocol. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    new_model = copy(m, include_solution=False, deep=True)
+    memo[id(m)] = new_model
+    return new_model

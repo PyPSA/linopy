@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, Literal, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -49,9 +50,10 @@ from linopy.constants import (
 )
 from linopy.constraints import (
     AnonymousScalarConstraint,
+    Constraint,
     ConstraintBase,
     Constraints,
-    MutableConstraint,
+    CSRConstraint,
 )
 from linopy.expressions import (
     LinearExpression,
@@ -59,6 +61,9 @@ from linopy.expressions import (
     ScalarLinearExpression,
 )
 from linopy.io import (
+    copy,
+    deepcopy,
+    shallowcopy,
     to_block_files,
     to_cupdlpx,
     to_file,
@@ -134,6 +139,8 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
+    _freeze_constraints: bool
+    _set_names_in_solver_io: bool
     _solver_dir: Path
     __slots__ = (
         # containers
@@ -157,7 +164,10 @@ class Model:
         "_chunk",
         "_force_dim_names",
         "_auto_mask",
+        "_freeze_constraints",
+        "_set_names_in_solver_io",
         "_solver_dir",
+        "_relaxed_registry",
         "solver_model",
         "solver_name",
     )
@@ -168,6 +178,8 @@ class Model:
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
         auto_mask: bool = False,
+        freeze_constraints: bool = False,
+        set_names_in_solver_io: bool = True,
     ) -> None:
         """
         Initialize the linopy model.
@@ -191,6 +203,12 @@ class Model:
             Whether to automatically mask variables and constraints where
             bounds, coefficients, or RHS values contain NaN. The default is
             False.
+        freeze_constraints : bool
+            Whether constraints added to the model should be frozen to the
+            CSR-backed representation by default. The default is False.
+        set_names_in_solver_io : bool
+            Whether direct solver exports should include variable and
+            constraint names by default. The default is True.
 
         Returns
         -------
@@ -213,6 +231,9 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._freeze_constraints: bool = bool(freeze_constraints)
+        self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
+        self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -387,6 +408,24 @@ class Model:
         self._auto_mask = bool(value)
 
     @property
+    def freeze_constraints(self) -> bool:
+        """Whether constraints are frozen to CSR by default when added."""
+        return self._freeze_constraints
+
+    @freeze_constraints.setter
+    def freeze_constraints(self, value: bool) -> None:
+        self._freeze_constraints = bool(value)
+
+    @property
+    def set_names_in_solver_io(self) -> bool:
+        """Whether direct solver exports include names by default."""
+        return self._set_names_in_solver_io
+
+    @set_names_in_solver_io.setter
+    def set_names_in_solver_io(self, value: bool) -> None:
+        self._set_names_in_solver_io = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -418,6 +457,8 @@ class Model:
             "_pwlCounter",
             "force_dim_names",
             "auto_mask",
+            "freeze_constraints",
+            "set_names_in_solver_io",
         ]
 
     def __repr__(self) -> str:
@@ -720,6 +761,38 @@ class Model:
 
     add_piecewise_constraints = add_piecewise_constraints
 
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[False] = ...,
+    ) -> Constraint: ...
+
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[True] = ...,
+    ) -> CSRConstraint: ...
+
     def add_constraints(
         self,
         lhs: VariableLike
@@ -732,7 +805,7 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
         mask: MaskLike | None = None,
-        freeze: bool = True,
+        freeze: bool | None = None,
     ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -768,13 +841,14 @@ class Model:
             The shape of the mask has to match the shape the added constraints.
             Default is None.
         freeze : bool, optional
-            If True, convert the constraint to an immutable CSR-backed Constraint
-            before returning. Default is True.
+            If True, convert the constraint to an immutable CSR-backed CSRConstraint
+            for better memory efficiency. If None, uses the model default
+            ``Model.freeze_constraints`` setting (default False).
 
         Returns
         -------
         constraint : linopy.ConstraintBase
-            The added constraint (MutableConstraint by default, or Constraint if freeze=True).
+            The added constraint (Constraint by default, or CSRConstraint if freeze=True).
         """
 
         msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
@@ -810,7 +884,7 @@ class Model:
             rule = lhs
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
-            data = MutableConstraint.from_rule(self, rule, coords).data
+            data = Constraint.from_rule(self, rule, coords).data
         elif isinstance(lhs, AnonymousScalarConstraint):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
@@ -892,7 +966,9 @@ class Model:
         if self.chunk:
             data = data.chunk(self.chunk)
 
-        constraint = MutableConstraint(data, name=name, model=self, skip_broadcast=True)
+        constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
+        if freeze is None:
+            freeze = self.freeze_constraints
         return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(
@@ -945,7 +1021,17 @@ class Model:
         -------
         None.
         """
+        from linopy.constants import FIX_CONSTRAINT_PREFIX
+
         variable = self.variables[name]
+
+        # Clean up fix constraint if present
+        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
+        if fix_name in self.constraints:
+            self.constraints.remove(fix_name)
+
+        # Clean up relaxed registry if present
+        self._relaxed_registry.pop(name, None)
 
         to_remove = [
             k for k, con in self.constraints.items() if con.has_variable(variable)
@@ -1301,6 +1387,7 @@ class Model:
         solver_name: str | None = None,
         io_api: str | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool | None = None,
         problem_fn: str | Path | None = None,
         solution_fn: str | Path | None = None,
         log_fn: str | Path | None = None,
@@ -1311,7 +1398,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler = None,  # type: ignore
+        remote: RemoteHandler | OetcHandler | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,
@@ -1340,6 +1427,11 @@ class Model:
             this option allows to keep the variable and constraint names in the
             lp file. This may lead to slower run times.
             The default is set to False.
+        set_names : bool, optional
+            Whether to set variable and constraint names when using the direct
+            solver API (io_api='direct'). Setting to False can significantly
+            speed up model export. If None, uses the model default
+            ``Model.set_names_in_solver_io`` setting (default True).
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -1528,6 +1620,8 @@ class Model:
                 **solver_options,
             )
             if io_api == "direct":
+                if set_names is None:
+                    set_names = self.set_names_in_solver_io
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,
@@ -1537,6 +1631,7 @@ class Model:
                     basis_fn=to_path(basis_fn),
                     env=env,
                     explicit_coordinate_names=explicit_coordinate_names,
+                    set_names=set_names,
                 )
             else:
                 if (
@@ -1835,9 +1930,9 @@ class Model:
 
         return miisrow
 
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+    def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
-        Print a list of infeasible constraints.
+        Return a string representation of infeasible constraints.
 
         This function requires that the model was solved using `gurobi` or `xpress`
         and the termination condition was infeasible.
@@ -1845,20 +1940,35 @@ class Model:
         Parameters
         ----------
         display_max_terms : int, optional
-            The maximum number of infeasible terms to display. If `None`,
-            all infeasible terms will be displayed.
+            The maximum number of infeasible terms to display. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
 
         Returns
         -------
-        None
-            This function does not return anything. It simply prints the
-            infeasible constraints.
+        str
+            String representation of the infeasible constraints.
         """
         labels = self.compute_infeasibilities()
-        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+        return self.constraints.format_labels(
+            labels, display_max_terms=display_max_terms
+        )
+
+    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+        """
+        Print a list of infeasible constraints.
+
+        .. deprecated::
+            Use :meth:`format_infeasibilities` instead.
+        """
+        warn(
+            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_infeasibilities(display_max_terms=display_max_terms))
 
     @deprecated(
-        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
     )
     def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
@@ -1886,6 +1996,12 @@ class Model:
         """
         self.variables.reset_solution()
         self.constraints.reset_dual()
+
+    copy = copy
+
+    __copy__ = shallowcopy
+
+    __deepcopy__ = deepcopy
 
     to_netcdf = to_netcdf
 

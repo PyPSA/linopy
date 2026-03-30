@@ -19,7 +19,7 @@ from linopy.constraints import (
     Constraint,
     ConstraintBase,
     Constraints,
-    MutableConstraint,
+    CSRConstraint,
 )
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
@@ -34,10 +34,10 @@ except ImportError:
     pass
 
 __all__ = (
-    "Constraint",
+    "CSRConstraint",
     "ConstraintBase",
     "Constraints",
-    "MutableConstraint",
+    "Constraint",
     "EQUAL",
     "PerformanceWarning",
     "GREATER_EQUAL",
