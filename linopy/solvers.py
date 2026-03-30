@@ -1809,7 +1809,10 @@ class Xpress(Solver[None]):
         return Result(status, solution, m)
 
 
-KnitroResult = namedtuple("KnitroResult", "knitro_context reported_runtime")
+KnitroResult = namedtuple(
+    "KnitroResult",
+    "reported_runtime mip_relaxation_bnd mip_number_nodes mip_number_solves mip_rel_gap mip_abs_gap abs_feas_error rel_feas_error abs_opt_error rel_opt_error n_vars n_cons n_integer_vars n_continuous_vars",
+)
 
 
 class Knitro(Solver[None]):
@@ -1957,8 +1960,38 @@ class Knitro(Solver[None]):
             ret = int(knitro.KN_solve(kc))
 
             reported_runtime: float | None = None
+            mip_relaxation_bnd: float | None = None
+            mip_number_nodes: int | None = None
+            mip_number_solves: int | None = None
+            mip_rel_gap: float | None = None
+            mip_abs_gap: float | None = None
+            abs_feas_error: float | None = None
+            rel_feas_error: float | None = None
+            abs_opt_error: float | None = None
+            rel_opt_error: float | None = None
+            n_vars: int | None = None
+            n_cons: int | None = None
+            n_integer_vars: int | None = None
+            n_continuous_vars: int | None = None
             with contextlib.suppress(Exception):
                 reported_runtime = float(knitro.KN_get_solve_time_real(kc))
+                mip_relaxation_bnd = float(knitro.KN_get_mip_relaxation_bnd(kc))
+                mip_number_nodes = int(knitro.KN_get_mip_number_nodes(kc))
+                mip_number_solves = int(knitro.KN_get_mip_number_solves(kc))
+                mip_rel_gap = float(knitro.KN_get_mip_rel_gap(kc))
+                mip_abs_gap = float(knitro.KN_get_mip_abs_gap(kc))
+                abs_feas_error = float(knitro.KN_get_abs_feas_error(kc))
+                rel_feas_error = float(knitro.KN_get_rel_feas_error(kc))
+                abs_opt_error = float(knitro.KN_get_abs_opt_error(kc))
+                rel_opt_error = float(knitro.KN_get_rel_opt_error(kc))
+                n_vars = int(knitro.KN_get_number_vars(kc))
+                n_cons = int(knitro.KN_get_number_cons(kc))
+                var_types = list(knitro.KN_get_var_types(kc))
+                n_integer_vars = int(
+                    var_types.count(knitro.KN_VARTYPE_INTEGER)
+                    + var_types.count(knitro.KN_VARTYPE_BINARY)
+                )
+                n_continuous_vars = int(var_types.count(knitro.KN_VARTYPE_CONTINUOUS))
 
             if ret in CONDITION_MAP:
                 termination_condition = CONDITION_MAP[ret]
@@ -2003,9 +2036,23 @@ class Knitro(Solver[None]):
             return Result(
                 status,
                 solution,
-                KnitroResult(knitro_context=kc, reported_runtime=reported_runtime),
+                KnitroResult(
+                    reported_runtime=reported_runtime,
+                    mip_relaxation_bnd=mip_relaxation_bnd,
+                    mip_number_nodes=mip_number_nodes,
+                    mip_number_solves=mip_number_solves,
+                    mip_rel_gap=mip_rel_gap,
+                    mip_abs_gap=mip_abs_gap,
+                    abs_feas_error=abs_feas_error,
+                    rel_feas_error=rel_feas_error,
+                    abs_opt_error=abs_opt_error,
+                    rel_opt_error=rel_opt_error,
+                    n_vars=n_vars,
+                    n_cons=n_cons,
+                    n_integer_vars=n_integer_vars,
+                    n_continuous_vars=n_continuous_vars,
+                ),
             )
-
         finally:
             # Intentionally keep the Knitro context alive; do not free `kc` here.
             pass

@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, Literal, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -53,6 +54,9 @@ from linopy.expressions import (
     ScalarLinearExpression,
 )
 from linopy.io import (
+    copy,
+    deepcopy,
+    shallowcopy,
     to_block_files,
     to_cupdlpx,
     to_file,
@@ -155,6 +159,7 @@ class Model:
         "_force_dim_names",
         "_auto_mask",
         "_solver_dir",
+        "_relaxed_registry",
         "solver_model",
         "solver_name",
         "matrices",
@@ -211,6 +216,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -938,6 +944,16 @@ class Model:
         -------
         None.
         """
+        from linopy.constants import FIX_CONSTRAINT_PREFIX
+
+        # Clean up fix constraint if present
+        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
+        if fix_name in self.constraints:
+            self.constraints.remove(fix_name)
+
+        # Clean up relaxed registry if present
+        self._relaxed_registry.pop(name, None)
+
         labels = self.variables[name].labels
         self.variables.remove(name)
 
@@ -1402,7 +1418,9 @@ class Model:
 
         if remote is not None:
             if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(self)
+                solved = remote.solve_on_oetc(
+                    self, solver_name=solver_name, **solver_options
+                )
             else:
                 solved = remote.solve_on_remote(
                     self,
@@ -1418,7 +1436,8 @@ class Model:
                     **solver_options,
                 )
 
-            self.objective.set_value(solved.objective.value)
+            if solved.objective.value is not None:
+                self.objective.set_value(float(solved.objective.value))
             self.status = solved.status
             self.termination_condition = solved.termination_condition
             for k, v in self.variables.items():
@@ -1823,9 +1842,9 @@ class Model:
 
         return miisrow
 
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+    def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
-        Print a list of infeasible constraints.
+        Return a string representation of infeasible constraints.
 
         This function requires that the model was solved using `gurobi` or `xpress`
         and the termination condition was infeasible.
@@ -1833,20 +1852,35 @@ class Model:
         Parameters
         ----------
         display_max_terms : int, optional
-            The maximum number of infeasible terms to display. If `None`,
-            all infeasible terms will be displayed.
+            The maximum number of infeasible terms to display. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
 
         Returns
         -------
-        None
-            This function does not return anything. It simply prints the
-            infeasible constraints.
+        str
+            String representation of the infeasible constraints.
         """
         labels = self.compute_infeasibilities()
-        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+        return self.constraints.format_labels(
+            labels, display_max_terms=display_max_terms
+        )
+
+    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+        """
+        Print a list of infeasible constraints.
+
+        .. deprecated::
+            Use :meth:`format_infeasibilities` instead.
+        """
+        warn(
+            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_infeasibilities(display_max_terms=display_max_terms))
 
     @deprecated(
-        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
     )
     def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
@@ -1874,6 +1908,12 @@ class Model:
         """
         self.variables.reset_solution()
         self.constraints.reset_dual()
+
+    copy = copy
+
+    __copy__ = shallowcopy
+
+    __deepcopy__ = deepcopy
 
     to_netcdf = to_netcdf
 

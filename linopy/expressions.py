@@ -53,6 +53,8 @@ from linopy.common import (
     check_has_nulls_polars,
     fill_missing_coords,
     filter_nulls_polars,
+    format_coord,
+    format_single_expression,
     forward_as_properties,
     generate_indices_for_printout,
     get_dims_with_index_levels,
@@ -62,8 +64,6 @@ from linopy.common import (
     is_constant,
     iterate_slices,
     maybe_group_terms_polars,
-    print_coord,
-    print_single_expression,
     to_dataframe,
     to_polars,
 )
@@ -429,16 +429,16 @@ class BaseExpression(ABC):
                         self.data.indexes[dims[i]][ind] for i, ind in enumerate(indices)
                     ]
                     if self.mask is None or self.mask.values[indices]:
-                        expr = print_single_expression(
+                        expr = format_single_expression(
                             self.coeffs.values[indices],
                             self.vars.values[indices],
                             self.const.values[indices],
                             self.model,
                         )
 
-                        line = print_coord(coord) + f": {expr}"
+                        line = format_coord(coord) + f": {expr}"
                     else:
-                        line = print_coord(coord) + ": None"
+                        line = format_coord(coord) + ": None"
                     lines.append(line)
 
             shape_str = ", ".join(f"{d}: {s}" for d, s in zip(dim_names, dim_sizes))
@@ -446,7 +446,7 @@ class BaseExpression(ABC):
             underscore = "-" * (len(shape_str) + len(mask_str) + len(header_string) + 4)
             lines.insert(0, f"{header_string} [{shape_str}]{mask_str}:\n{underscore}")
         elif size == 1:
-            expr = print_single_expression(
+            expr = format_single_expression(
                 self.coeffs.values, self.vars.values, self.const.item(), self.model
             )
             lines.append(f"{header_string}\n{'-' * len(header_string)}\n{expr}")
@@ -2470,7 +2470,7 @@ class ScalarLinearExpression:
         self._model = model
 
     def __repr__(self) -> str:
-        expr_string = print_single_expression(
+        expr_string = format_single_expression(
             np.array(self.coeffs), np.array(self.vars), 0, self.model
         )
         return f"ScalarLinearExpression: {expr_string}"
