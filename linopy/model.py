@@ -31,8 +31,10 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
+    lookup_vals,
     maybe_replace_signs,
     replace_by_map,
+    series_to_lookup_array,
     set_int_index,
     to_path,
 )
@@ -1591,26 +1593,24 @@ class Model:
             sol = set_int_index(sol)
             sol.loc[-1] = nan
 
-            for name, var in self.variables.items():
-                idx = np.ravel(var.labels)
-                try:
-                    vals = sol[idx].values.reshape(var.labels.shape)
-                except KeyError:
-                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
-                var.solution = xr.DataArray(vals, var.coords)
+            sol_arr = series_to_lookup_array(sol)
+
+            for _, var in self.variables.items():
+                vals = lookup_vals(sol_arr, np.ravel(var.labels))
+                var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
             if not result.solution.dual.empty:
                 dual = result.solution.dual.copy()
                 dual = set_int_index(dual)
                 dual.loc[-1] = nan
 
-                for name, con in self.constraints.items():
-                    idx = np.ravel(con.labels)
-                    try:
-                        vals = dual[idx].values.reshape(con.labels.shape)
-                    except KeyError:
-                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                    con.dual = xr.DataArray(vals, con.labels.coords)
+                dual_arr = series_to_lookup_array(dual)
+
+                for _, con in self.constraints.items():
+                    vals = lookup_vals(dual_arr, np.ravel(con.labels))
+                    con.dual = xr.DataArray(
+                        vals.reshape(con.labels.shape), con.labels.coords
+                    )
 
             return result.status.status.value, result.status.termination_condition.value
         finally:
