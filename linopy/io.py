@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -89,10 +90,10 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     )
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def format_coord(coord: str) -> str:
+    from linopy.common import format_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
+    coord = format_coord(coord).translate(coord_sanitizer)
     return coord
 
 
@@ -105,12 +106,12 @@ def get_printers_scalar(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         return print_variable, print_constraint
     else:
@@ -133,12 +134,12 @@ def get_printers(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -1144,6 +1145,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1238,4 +1241,128 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))
 
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
+
     return m
+
+
+def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
+    """
+    Return a copy of this model.
+
+    With ``deep=True`` (default), variables, constraints, objective,
+    parameters, blocks, and scalar attributes are copied to a fully
+    independent model. With ``deep=False``, returns a shallow copy.
+
+    :meth:`Model.copy` defaults to deep copy for workflow safety.
+    In contrast, ``copy.copy(model)`` is shallow via ``__copy__``, and
+    ``copy.deepcopy(model)`` is deep via ``__deepcopy__``.
+
+    Solver runtime metadata (for example, ``solver_name`` and
+    ``solver_model``) is intentionally not copied. Solver backend state
+    is recreated on ``solve()``.
+
+    Parameters
+    ----------
+    m : Model
+        The model to copy.
+    include_solution : bool, optional
+        Whether to include solution and dual values in the copy.
+        If False (default), solve artifacts are excluded: solution/dual data,
+        objective value, and solve status are reset to initialized state.
+        If True, these values are copied when present. For unsolved models,
+        this has no additional effect.
+    deep : bool, optional
+        Whether to return a deep copy (default) or shallow copy. If False,
+        the returned model uses independent wrapper objects that share
+        underlying data buffers with the source model.
+
+    Returns
+    -------
+    Model
+        A deep or shallow copy of the model.
+    """
+    from linopy.model import (
+        Constraint,
+        Constraints,
+        LinearExpression,
+        Model,
+        Objective,
+        Variable,
+        Variables,
+    )
+
+    SOLVE_STATE_ATTRS = {"status", "termination_condition"}
+
+    new_model = Model(
+        chunk=m._chunk,
+        force_dim_names=m._force_dim_names,
+        auto_mask=m._auto_mask,
+        solver_dir=str(m._solver_dir),
+    )
+
+    new_model._variables = Variables(
+        {
+            name: Variable(
+                var.data.copy(deep=deep)
+                if include_solution
+                else var.data[m.variables.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, var in m.variables.items()
+        },
+        new_model,
+    )
+
+    new_model._constraints = Constraints(
+        {
+            name: Constraint(
+                con.data.copy(deep=deep)
+                if include_solution
+                else con.data[m.constraints.dataset_attrs].copy(deep=deep),
+                new_model,
+                name,
+            )
+            for name, con in m.constraints.items()
+        },
+        new_model,
+    )
+
+    obj_expr = LinearExpression(m.objective.expression.data.copy(deep=deep), new_model)
+    new_model._objective = Objective(obj_expr, new_model, m.objective.sense)
+    new_model._objective._value = m.objective.value if include_solution else None
+
+    new_model._parameters = m._parameters.copy(deep=deep)
+    new_model._blocks = m._blocks.copy(deep=deep) if m._blocks is not None else None
+
+    for attr in m.scalar_attrs:
+        if include_solution or attr not in SOLVE_STATE_ATTRS:
+            setattr(new_model, attr, getattr(m, attr))
+
+    return new_model
+
+
+def shallowcopy(m: Model) -> Model:
+    """
+    Support Python's ``copy.copy`` protocol for ``Model``.
+
+    Returns a shallow copy with independent wrapper objects that share
+    underlying array buffers with ``m``. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    return copy(m, include_solution=False, deep=False)
+
+
+def deepcopy(m: Model, memo: dict[int, Any]) -> Model:
+    """
+    Support Python's ``copy.deepcopy`` protocol for ``Model``.
+
+    Returns a deep, structurally independent copy and records it in ``memo``
+    as required by Python's copy protocol. Solve artifacts are excluded,
+    matching :meth:`Model.copy` defaults.
+    """
+    new_model = copy(m, include_solution=False, deep=True)
+    memo[id(m)] = new_model
+    return new_model
