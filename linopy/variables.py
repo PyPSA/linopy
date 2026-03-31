@@ -27,6 +27,7 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
@@ -333,6 +334,23 @@ class Variable:
         ds = Dataset({"coeffs": coefficient, "vars": self.labels}).expand_dims(
             TERM_DIM, -1
         )
+        # In v1 mode, set coeffs=NaN and const=NaN where the variable is
+        # absent so that absence propagates through arithmetic (consistent
+        # with expression path where shift/where/reindex fill with FILL_VALUE)
+        if options["arithmetic_convention"] == "v1":
+            absent = self.labels == -1
+            if absent.any():
+                nan_fill = DataArray(
+                    np.where(absent, np.nan, 0.0), coords=self.labels.coords
+                )
+                coeff_fill = DataArray(
+                    np.where(absent, np.nan, coefficient.values),
+                    coords=self.labels.coords,
+                )
+                ds = ds.assign(
+                    const=nan_fill,
+                    coeffs=coeff_fill.expand_dims(TERM_DIM, -1),
+                )
         return expressions.LinearExpression(ds, self.model)
 
     def __repr__(self) -> str:
@@ -415,7 +433,11 @@ class Variable:
             if isinstance(other, Variable | ScalarVariable):
                 return self.to_linexpr() * other
 
-            return self.to_linexpr(other)
+            # Fast path for scalars: build expression directly with coefficient
+            if np.isscalar(other):
+                return self.to_linexpr(other)
+
+            return self.to_linexpr() * other
         except TypeError:
             return NotImplemented
 
@@ -578,7 +600,7 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -595,7 +617,7 @@ class Variable:
         return self.to_linexpr().add(other, join=join)
 
     def sub(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -612,7 +634,10 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: str | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -625,11 +650,18 @@ class Variable:
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the factor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 0.
         """
-        return self.to_linexpr().mul(other, join=join)
+        return self.to_linexpr().mul(other, join=join, fill_value=fill_value)
 
     def div(
-        self, other: ConstantLike, join: str | None = None
+        self,
+        other: ConstantLike,
+        join: JoinOptions | None = None,
+        fill_value: float | None = None,
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -642,10 +674,14 @@ class Variable:
             How to align coordinates. One of "outer", "inner", "left",
             "right", "exact", "override". When None (default), uses the
             current default behavior.
+        fill_value : float, optional
+            Value to fill missing entries in the divisor during coordinate
+            alignment. In v1, defaults to NaN (raises on misalignment).
+            In legacy, defaults to 1.
         """
-        return self.to_linexpr().div(other, join=join)
+        return self.to_linexpr().div(other, join=join, fill_value=fill_value)
 
-    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -660,7 +696,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -675,7 +711,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 
@@ -1159,19 +1195,30 @@ class Variable:
 
     def fillna(
         self,
-        fill_value: ScalarVariable | dict[str, str | float | int] | Variable | Dataset,
-    ) -> Variable:
+        fill_value: int
+        | float
+        | ScalarVariable
+        | dict[str, str | float | int]
+        | Variable
+        | Dataset,
+    ) -> Variable | expressions.LinearExpression:
         """
-        Fill missing values with a variable.
+        Fill missing values.
 
-        This operation call ``xarray.DataArray.fillna`` but ensures preserving
-        the linopy.Variable type.
+        When ``fill_value`` is numeric, absent variable slots are replaced
+        with that constant and a :class:`LinearExpression` is returned
+        (since a constant is not a variable). When ``fill_value`` is a
+        Variable, the result stays a Variable.
 
         Parameters
         ----------
-        fill_value : Variable/ScalarVariable
-            Variable to use for filling.
+        fill_value : numeric, Variable, or ScalarVariable
+            Value to use for filling. Numeric values produce a
+            LinearExpression; Variable values produce a Variable.
         """
+        if isinstance(fill_value, int | float | np.integer | np.floating):
+            expr = self.to_linexpr()
+            return expr.fillna(fill_value)
         return self.where(~self.isnull(), fill_value)
 
     def ffill(self, dim: str, limit: None = None) -> Variable:
@@ -1282,6 +1329,41 @@ class Variable:
     isel = varwrap(Dataset.isel)
 
     shift = varwrap(Dataset.shift, fill_value=_fill_value)
+
+    def reindex(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        **indexers_kwargs: Any,
+    ) -> Variable:
+        """
+        Reindex the variable, filling with sentinel values.
+
+        Always fills with labels=-1, lower=NaN, upper=NaN to preserve
+        valid label references.
+        """
+        return self.__class__(
+            self.data.reindex(indexers, fill_value=self._fill_value, **indexers_kwargs),
+            self.model,
+            self.name,
+        )
+
+    def reindex_like(
+        self,
+        other: Any,
+        **kwargs: Any,
+    ) -> Variable:
+        """Reindex like another object, filling with sentinel values."""
+        if isinstance(other, DataArray):
+            ref = other.to_dataset(name="__tmp__")
+        elif isinstance(other, Dataset):
+            ref = other
+        else:
+            ref = other.data
+        return self.__class__(
+            self.data.reindex_like(ref, fill_value=self._fill_value, **kwargs),
+            self.model,
+            self.name,
+        )
 
     swap_dims = varwrap(Dataset.swap_dims)
 
