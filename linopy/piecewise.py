@@ -433,7 +433,7 @@ def tangent_lines(
 
 
 # ---------------------------------------------------------------------------
-# Internal validation
+# Internal validation and utility functions
 # ---------------------------------------------------------------------------
 
 
@@ -473,11 +473,6 @@ def _validate_breakpoint_shapes(x_points: DataArray, y_points: DataArray) -> boo
         )
 
     return x_has_seg
-
-
-# ---------------------------------------------------------------------------
-# Internal validation and utility functions
-# ---------------------------------------------------------------------------
 
 
 def _validate_numeric_breakpoint_coords(bp: DataArray) -> None:
