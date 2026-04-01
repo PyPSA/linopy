@@ -1147,6 +1147,11 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     ds = ds.assign_attrs(scalars)
     if m._relaxed_registry:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
+    if m._piecewise_formulations:
+        ds.attrs["_piecewise_formulations"] = json.dumps(
+            {name: {"method": pwl.method, "variables": pwl.variable_names, "constraints": pwl.constraint_names}
+             for name, pwl in m._piecewise_formulations.items()}
+        )
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1243,6 +1248,18 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     if "_relaxed_registry" in ds.attrs:
         m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
+
+    if "_piecewise_formulations" in ds.attrs:
+        from linopy.piecewise import PiecewiseFormulation
+
+        for name, d in json.loads(ds.attrs["_piecewise_formulations"]).items():
+            m._piecewise_formulations[name] = PiecewiseFormulation(
+                name=name,
+                method=d["method"],
+                variable_names=d["variables"],
+                constraint_names=d["constraints"],
+                model=m,
+            )
 
     return m
 

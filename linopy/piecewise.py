@@ -8,7 +8,6 @@ constraint methods for use with linopy.Model.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from numbers import Real
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
@@ -61,19 +60,40 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
-@dataclass(repr=False)
 class PiecewiseFormulation:
     """
     Result of ``add_piecewise_formulation``.
 
     Groups all auxiliary variables and constraints created by a single
-    piecewise formulation.
+    piecewise formulation. Stores only names internally; ``variables``
+    and ``constraints`` properties return live views from the model.
     """
 
-    name: str
-    method: str
-    variables: Variables
-    constraints: Constraints
+    __slots__ = ("name", "method", "variable_names", "constraint_names", "_model")
+
+    def __init__(
+        self,
+        name: str,
+        method: str,
+        variable_names: list[str],
+        constraint_names: list[str],
+        model: Model,
+    ) -> None:
+        self.name = name
+        self.method = method
+        self.variable_names = variable_names
+        self.constraint_names = constraint_names
+        self._model = model
+
+    @property
+    def variables(self) -> Variables:
+        """View of the auxiliary variables in this formulation."""
+        return self._model.variables[self.variable_names]
+
+    @property
+    def constraints(self) -> Constraints:
+        """View of the auxiliary constraints in this formulation."""
+        return self._model.constraints[self.constraint_names]
 
     def __repr__(self) -> str:
         # Collect user-facing dims with sizes (skip internal _ prefixed dims)
@@ -764,8 +784,9 @@ def add_piecewise_formulation(
     result = PiecewiseFormulation(
         name=name,
         method=resolved_method,
-        variables=model.variables[new_vars],
-        constraints=model.constraints[new_cons],
+        variable_names=new_vars,
+        constraint_names=new_cons,
+        model=model,
     )
     model._piecewise_formulations[name] = result
     return result

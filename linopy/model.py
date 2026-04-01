@@ -533,8 +533,8 @@ class Model:
         """Return all variable/constraint names belonging to piecewise formulations."""
         names: set[str] = set()
         for pwl in self._piecewise_formulations.values():
-            names.update(pwl.variables)
-            names.update(pwl.constraints)
+            names.update(pwl.variable_names)
+            names.update(pwl.constraint_names)
         return names
 
     def __getitem__(self, key: str) -> Variable:
