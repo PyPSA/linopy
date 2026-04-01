@@ -60,6 +60,18 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
+def _strip_nan(vals: Sequence[float] | np.ndarray) -> list[float]:
+    """Remove NaN values from a sequence."""
+    return [v for v in vals if not np.isnan(v)]
+
+
+def _rename_to_segments(da: DataArray, seg_index: np.ndarray) -> DataArray:
+    """Rename breakpoint dim to segment dim and reassign coordinates."""
+    da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    da[LP_SEG_DIM] = seg_index
+    return da
+
+
 def _sequence_to_array(values: Sequence[float]) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
@@ -152,6 +164,59 @@ def _dict_segments_to_array(
     return combined
 
 
+def _breakpoints_from_slopes(
+    slopes: BreaksLike,
+    x_points: BreaksLike,
+    y0: float | dict[str, float] | pd.Series | DataArray,
+    dim: str | None,
+) -> DataArray:
+    """Convert slopes + x_points + y0 into a breakpoint DataArray."""
+    slopes_arr = _coerce_breaks(slopes, dim)
+    xp_arr = _coerce_breaks(x_points, dim)
+
+    # 1D case: single set of breakpoints
+    if slopes_arr.ndim == 1:
+        if not isinstance(y0, Real):
+            raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
+        pts = slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
+        return _sequence_to_array(pts)
+
+    # Multi-dim case: per-entity slopes
+    entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
+    if len(entity_dims) != 1:
+        raise ValueError(
+            f"Expected exactly one entity dimension in slopes, got {entity_dims}"
+        )
+    entity_dim = str(entity_dims[0])
+    entity_keys = slopes_arr.coords[entity_dim].values
+
+    # Resolve y0 per entity
+    if isinstance(y0, Real):
+        y0_map: dict[str, float] = {str(k): float(y0) for k in entity_keys}
+    elif isinstance(y0, dict):
+        y0_map = {str(k): float(y0[k]) for k in entity_keys}
+    elif isinstance(y0, pd.Series):
+        y0_map = {str(k): float(y0[k]) for k in entity_keys}
+    elif isinstance(y0, DataArray):
+        y0_map = {str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys}
+    else:
+        raise TypeError(
+            f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
+        )
+
+    computed: dict[str, Sequence[float]] = {}
+    for key in entity_keys:
+        sk = str(key)
+        sl = _strip_nan(slopes_arr.sel({entity_dim: key}).values)
+        if entity_dim in xp_arr.dims:
+            xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
+        else:
+            xp = _strip_nan(xp_arr.values)
+        computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
+
+    return _dict_to_array(computed, entity_dim)
+
+
 # ---------------------------------------------------------------------------
 # Public factory functions
 # ---------------------------------------------------------------------------
@@ -241,64 +306,7 @@ def breakpoints(
     if slopes is not None:
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-
-    # Slopes mode: convert to points, then fall through to coerce
-    if slopes is not None:
-        if x_points is None or y0 is None:
-            raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-        slopes_arr = _coerce_breaks(slopes, dim)
-        xp_arr = _coerce_breaks(x_points, dim)
-
-        # 1D case: single set of breakpoints
-        if slopes_arr.ndim == 1:
-            if not isinstance(y0, Real):
-                raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
-            pts = slopes_to_points(
-                list(xp_arr.values), list(slopes_arr.values), float(y0)
-            )
-            return _sequence_to_array(pts)
-
-        # Multi-dim case: per-entity slopes
-        # Identify the entity dimension (not BREAKPOINT_DIM)
-        entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
-        if len(entity_dims) != 1:
-            raise ValueError(
-                f"Expected exactly one entity dimension in slopes, got {entity_dims}"
-            )
-        entity_dim = str(entity_dims[0])
-        entity_keys = slopes_arr.coords[entity_dim].values
-
-        # Resolve y0 per entity
-        if isinstance(y0, Real):
-            y0_map: dict[str, float] = {str(k): float(y0) for k in entity_keys}
-        elif isinstance(y0, dict):
-            y0_map = {str(k): float(y0[k]) for k in entity_keys}
-        elif isinstance(y0, pd.Series):
-            y0_map = {str(k): float(y0[k]) for k in entity_keys}
-        elif isinstance(y0, DataArray):
-            y0_map = {
-                str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys
-            }
-        else:
-            raise TypeError(
-                f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
-            )
-
-        # Compute points per entity
-        computed: dict[str, Sequence[float]] = {}
-        for key in entity_keys:
-            sk = str(key)
-            sl = list(slopes_arr.sel({entity_dim: key}).values)
-            # Remove trailing NaN from slopes
-            sl = [v for v in sl if not np.isnan(v)]
-            if entity_dim in xp_arr.dims:
-                xp = list(xp_arr.sel({entity_dim: key}).values)
-                xp = [v for v in xp if not np.isnan(v)]
-            else:
-                xp = [v for v in xp_arr.values if not np.isnan(v)]
-            computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
-
-        return _dict_to_array(computed, entity_dim)
+        return _breakpoints_from_slopes(slopes, x_points, y0, dim)
 
     # Points mode
     if values is None:
@@ -400,88 +408,71 @@ def tangent_lines(
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
 
-    if not isinstance(x_points, DataArray):
-        x_points = _coerce_breaks(x_points)
-    if not isinstance(y_points, DataArray):
-        y_points = _coerce_breaks(y_points)
+    x_points = _coerce_breaks(x_points)
+    y_points = _coerce_breaks(y_points)
 
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
-    slopes = dy / dx
+    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    n_seg = slopes.sizes[BREAKPOINT_DIM]
-    seg_index = np.arange(n_seg)
-
-    slopes = slopes.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    slopes[LP_SEG_DIM] = seg_index
-
-    x_base = x_points.isel({BREAKPOINT_DIM: slice(None, -1)}).rename(
-        {BREAKPOINT_DIM: LP_SEG_DIM}
+    slopes = _rename_to_segments(dy / dx, seg_index)
+    x_base = _rename_to_segments(
+        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
     )
-    y_base = y_points.isel({BREAKPOINT_DIM: slice(None, -1)}).rename(
-        {BREAKPOINT_DIM: LP_SEG_DIM}
+    y_base = _rename_to_segments(
+        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
     )
-    x_base[LP_SEG_DIM] = seg_index
-    y_base[LP_SEG_DIM] = seg_index
 
     intercepts = y_base - slopes * x_base
 
-    if isinstance(x, Variable):
-        x_expr = x.to_linexpr()
-    elif isinstance(x, LinExpr):
-        x_expr = x
-    else:
+    if not isinstance(x, Variable | LinExpr):
         raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
 
-    return slopes * x_expr + intercepts
-
-
-# ---------------------------------------------------------------------------
-# Internal validation
-# ---------------------------------------------------------------------------
-
-
-def _validate_xy_points(x_points: DataArray, y_points: DataArray) -> bool:
-    """Validate x/y breakpoint arrays and return whether formulation is disjunctive."""
-    if BREAKPOINT_DIM not in x_points.dims:
-        raise ValueError(
-            f"x_points is missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(x_points.dims)}. "
-            "Use the breakpoints() or segments() factory."
-        )
-    if BREAKPOINT_DIM not in y_points.dims:
-        raise ValueError(
-            f"y_points is missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(y_points.dims)}. "
-            "Use the breakpoints() or segments() factory."
-        )
-
-    if x_points.sizes[BREAKPOINT_DIM] != y_points.sizes[BREAKPOINT_DIM]:
-        raise ValueError(
-            f"x_points and y_points must have same size along '{BREAKPOINT_DIM}', "
-            f"got {x_points.sizes[BREAKPOINT_DIM]} and "
-            f"{y_points.sizes[BREAKPOINT_DIM]}"
-        )
-
-    x_has_seg = SEGMENT_DIM in x_points.dims
-    y_has_seg = SEGMENT_DIM in y_points.dims
-    if x_has_seg != y_has_seg:
-        raise ValueError(
-            "If one of x_points/y_points has a segment dimension, "
-            f"both must. x_points dims: {list(x_points.dims)}, "
-            f"y_points dims: {list(y_points.dims)}."
-        )
-    if x_has_seg and x_points.sizes[SEGMENT_DIM] != y_points.sizes[SEGMENT_DIM]:
-        raise ValueError(
-            f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
-        )
-
-    return x_has_seg
+    return slopes * _to_linexpr(x) + intercepts
 
 
 # ---------------------------------------------------------------------------
 # Internal validation and utility functions
 # ---------------------------------------------------------------------------
+
+
+def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
+    """
+    Validate that two breakpoint arrays have compatible shapes.
+
+    Returns whether the formulation is disjunctive (has segment dimension).
+    """
+    if BREAKPOINT_DIM not in bp_a.dims:
+        raise ValueError(
+            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
+            f"got dims {list(bp_a.dims)}. "
+            "Use the breakpoints() or segments() factory."
+        )
+    if BREAKPOINT_DIM not in bp_b.dims:
+        raise ValueError(
+            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
+            f"got dims {list(bp_b.dims)}. "
+            "Use the breakpoints() or segments() factory."
+        )
+
+    if bp_a.sizes[BREAKPOINT_DIM] != bp_b.sizes[BREAKPOINT_DIM]:
+        raise ValueError(
+            f"Breakpoints must have same size along '{BREAKPOINT_DIM}', "
+            f"got {bp_a.sizes[BREAKPOINT_DIM]} and "
+            f"{bp_b.sizes[BREAKPOINT_DIM]}"
+        )
+
+    a_has_seg = SEGMENT_DIM in bp_a.dims
+    b_has_seg = SEGMENT_DIM in bp_b.dims
+    if a_has_seg != b_has_seg:
+        raise ValueError(
+            "If one breakpoint array has a segment dimension, "
+            f"both must. Got dims: {list(bp_a.dims)} and {list(bp_b.dims)}."
+        )
+    if a_has_seg and bp_a.sizes[SEGMENT_DIM] != bp_b.sizes[SEGMENT_DIM]:
+        raise ValueError(f"Breakpoints must have same size along '{SEGMENT_DIM}'")
+
+    return a_has_seg
 
 
 def _validate_numeric_breakpoint_coords(bp: DataArray) -> None:
@@ -520,8 +511,11 @@ def _to_linexpr(expr: LinExprLike) -> LinearExpression:
     return expr.to_linexpr()
 
 
-def _extra_coords(points: DataArray, *exclude_dims: str | None) -> list[pd.Index]:
-    excluded = {d for d in exclude_dims if d is not None}
+def _var_coords_from(
+    points: DataArray, exclude: set[str] | None = None
+) -> list[pd.Index]:
+    """Extract pd.Index coords from points, excluding specified dimensions."""
+    excluded = exclude or set()
     return [
         pd.Index(points.coords[d].values, name=d)
         for d in points.dims
@@ -539,9 +533,10 @@ def _broadcast_points(
     if disjunctive:
         skip.add(SEGMENT_DIM)
 
+    lin_exprs = [_to_linexpr(e) for e in exprs]
+
     target_dims: set[str] = set()
-    for e in exprs:
-        le = _to_linexpr(e)
+    for le in lin_exprs:
         target_dims.update(str(d) for d in le.coord_dims)
 
     missing = target_dims - skip - {str(d) for d in points.dims}
@@ -550,8 +545,7 @@ def _broadcast_points(
 
     expand_map: dict[str, list] = {}
     for d in missing:
-        for e in exprs:
-            le = _to_linexpr(e)
+        for le in lin_exprs:
             if d in le.coords:
                 expand_map[str(d)] = list(le.coords[d].values)
                 break
@@ -559,21 +553,6 @@ def _broadcast_points(
     if expand_map:
         points = points.expand_dims(expand_map)
     return points
-
-
-def _compute_combined_mask(
-    x_points: DataArray,
-    y_points: DataArray,
-    skip_nan_check: bool,
-) -> DataArray | None:
-    if skip_nan_check:
-        if bool(x_points.isnull().any()) or bool(y_points.isnull().any()):
-            raise ValueError(
-                "skip_nan_check=True but breakpoints contain NaN. "
-                "Either remove NaN values or set skip_nan_check=False."
-            )
-        return None
-    return ~(x_points.isnull() | y_points.isnull())
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +566,6 @@ def add_piecewise_constraints(
     method: Literal["sos2", "incremental", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
-    skip_nan_check: bool = False,
 ) -> Constraint:
     r"""
     Add piecewise linear equality constraints.
@@ -629,13 +607,16 @@ def add_piecewise_constraints(
         ``active=0``, all auxiliary variables are forced to zero.
     name : str, optional
         Base name for generated variables/constraints.
-    skip_nan_check : bool, default False
-        If True, skip NaN detection in breakpoints.
 
     Returns
     -------
     Constraint
     """
+    if method not in ("sos2", "incremental", "auto"):
+        raise ValueError(
+            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
+        )
+
     if len(pairs) < 2:
         raise TypeError(
             "add_piecewise_constraints() requires at least 2 "
@@ -664,9 +645,10 @@ def add_piecewise_constraints(
     first_bp = coerced[0][1]
     disjunctive = SEGMENT_DIM in first_bp.dims
 
-    # Validate all breakpoint pairs have compatible shapes
+    # Validate all breakpoint pairs have compatible shapes.
+    # Checking each against the first is sufficient since the shape checks are transitive.
     for i in range(1, len(coerced)):
-        _validate_xy_points(first_bp, coerced[i][1])
+        _validate_breakpoint_shapes(first_bp, coerced[i][1])
 
     # Broadcast all breakpoints to match all expression dimensions
     all_exprs = [expr for expr, _ in coerced]
@@ -675,19 +657,10 @@ def add_piecewise_constraints(
     ]
 
     # Compute combined mask from all breakpoints
-    if skip_nan_check:
-        for bp in bp_list:
-            if bool(bp.isnull().any()):
-                raise ValueError(
-                    "skip_nan_check=True but breakpoints contain NaN. "
-                    "Either remove NaN values or set skip_nan_check=False."
-                )
-        bp_mask = None
-    else:
-        combined_null = bp_list[0].isnull()
-        for bp in bp_list[1:]:
-            combined_null = combined_null | bp.isnull()
-        bp_mask = ~combined_null if bool(combined_null.any()) else None
+    combined_null = bp_list[0].isnull()
+    for bp in bp_list[1:]:
+        combined_null = combined_null | bp.isnull()
+    bp_mask = ~combined_null if bool(combined_null.any()) else None
 
     # Name
     if name is None:
@@ -728,7 +701,7 @@ def add_piecewise_constraints(
         )
 
     # Continuous: stack into N-variable formulation
-    return _add_continuous_nvar(
+    return _add_continuous(
         model,
         name,
         lin_exprs,
@@ -736,12 +709,23 @@ def add_piecewise_constraints(
         link_coords,
         bp_mask,
         method,
-        skip_nan_check,
         active_expr,
     )
 
 
-def _add_continuous_nvar(
+def _stack_along_link(
+    items: Sequence[DataArray | xr.Dataset],
+    link_coords: list[str],
+    link_dim: str,
+) -> DataArray:
+    """Expand and concatenate DataArrays/Datasets along a new link dimension."""
+    expanded = [
+        item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)
+    ]
+    return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
+
+
+def _add_continuous(
     model: Model,
     name: str,
     lin_exprs: list[LinearExpression],
@@ -749,31 +733,20 @@ def _add_continuous_nvar(
     link_coords: list[str],
     bp_mask: DataArray | None,
     method: str,
-    skip_nan_check: bool,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Unified continuous piecewise equality for N expressions."""
+    """Dispatch continuous piecewise equality to SOS2 or incremental."""
     from linopy.expressions import LinearExpression
 
-    if method not in ("sos2", "incremental", "auto"):
-        raise ValueError(
-            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
-        )
-
-    # Stack breakpoints into a single DataArray with a link dimension
     link_dim = "_pwl_var"
-    stacked_bp = xr.concat(
-        [bp.expand_dims({link_dim: [c]}) for bp, c in zip(bp_list, link_coords)],
-        dim=link_dim,
-        coords="minimal",
-    )
+    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
 
-    dim = BREAKPOINT_DIM
+    # Pre-compute properties used by multiple branches
+    trailing_nan_only = _has_trailing_nan_only(stacked_bp)
 
     # Auto-detect method
     if method in ("incremental", "auto"):
         is_monotonic = _check_strict_monotonicity(stacked_bp)
-        trailing_nan_only = _has_trailing_nan_only(stacked_bp)
         if method == "auto":
             method = "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
         elif not is_monotonic:
@@ -787,110 +760,142 @@ def _add_continuous_nvar(
 
     if method == "sos2":
         _validate_numeric_breakpoint_coords(stacked_bp)
-        if not _has_trailing_nan_only(stacked_bp):
+        if not trailing_nan_only:
             raise ValueError(
                 "SOS2 method does not support non-trailing NaN breakpoints."
             )
 
     # Stack expressions along the link dimension
-    expr_data_list = [
-        e.data.expand_dims({link_dim: [c]}) for e, c in zip(lin_exprs, link_coords)
-    ]
-    stacked_data = xr.concat(expr_data_list, dim=link_dim, coords="minimal")
+    stacked_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
     target_expr = LinearExpression(stacked_data, model)
 
-    # Compute lambda mask
-    lambda_mask = None
+    # Compute stacked mask
+    stacked_mask = None
     if bp_mask is not None:
-        stacked_mask = xr.concat(
-            [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
-            dim=link_dim,
-            coords="minimal",
+        stacked_mask = _stack_along_link(
+            [bp_mask] * len(link_coords), link_coords, link_dim
         )
-        lambda_mask = stacked_mask.any(dim=link_dim)
 
-    extra = _extra_coords(stacked_bp, dim, link_dim)
-    lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
-
-    # Convexity RHS: 1 or active
     rhs = active if active is not None else 1
 
     if method == "sos2":
-        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
-        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-        link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-
-        lambda_var = model.add_variables(
-            lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+        return _add_sos2(
+            model,
+            name,
+            target_expr,
+            stacked_bp,
+            stacked_mask,
+            link_dim,
+            rhs,
         )
-        model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
-        model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
-
-        weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
-        return model.add_constraints(target_expr == weighted_sum, name=link_name)
-
-    else:  # incremental
-        delta_name = f"{name}{PWL_DELTA_SUFFIX}"
-        fill_name = f"{name}{PWL_FILL_SUFFIX}"
-        link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-        inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
-        inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
-        inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
-
-        n_segments = stacked_bp.sizes[dim] - 1
-        seg_dim = f"{dim}_seg"
-        seg_index = pd.Index(range(n_segments), name=seg_dim)
-        delta_extra = _extra_coords(stacked_bp, dim, link_dim)
-        delta_coords = delta_extra + [seg_index]
-
-        steps = stacked_bp.diff(dim).rename({dim: seg_dim})
-        steps[seg_dim] = seg_index
-
-        if bp_mask is not None:
-            stacked_mask = xr.concat(
-                [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
-                dim=link_dim,
-                coords="minimal",
-            )
-            bp_mask_agg = stacked_mask.all(dim=link_dim)
-            mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
-            mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
-            mask_lo[seg_dim] = seg_index
-            mask_hi[seg_dim] = seg_index
-            delta_mask: DataArray | None = mask_lo & mask_hi
-        else:
-            delta_mask = None
-
-        delta_var = model.add_variables(
-            lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+    else:
+        return _add_incremental(
+            model,
+            name,
+            target_expr,
+            stacked_bp,
+            stacked_mask,
+            link_dim,
+            rhs,
+            active,
         )
 
-        if active is not None:
-            active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
-            model.add_constraints(delta_var <= active, name=active_bound_name)
 
-        binary_var = model.add_variables(
-            binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
-        )
-        model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+def _add_sos2(
+    model: Model,
+    name: str,
+    target_expr: LinearExpression,
+    stacked_bp: DataArray,
+    stacked_mask: DataArray | None,
+    link_dim: str,
+    rhs: LinearExpression | int,
+) -> Constraint:
+    """SOS2 formulation for N-variable continuous piecewise equality."""
+    dim = BREAKPOINT_DIM
+    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
+    lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
+    lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
 
-        fill_con: Constraint | None = None
-        if n_segments >= 2:
-            delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
-            delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
-            fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+    lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+    convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
 
-            binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
-            model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+    lambda_var = model.add_variables(
+        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+    )
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+    model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
 
-        bp0 = stacked_bp.isel({dim: 0})
-        bp0_term: DataArray | LinearExpression = bp0
-        if active is not None:
-            bp0_term = bp0 * active
-        weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
-        link_con = model.add_constraints(target_expr == weighted_sum, name=link_name)
+    weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
+    return model.add_constraints(target_expr == weighted_sum, name=link_name)
 
-        return fill_con if fill_con is not None else link_con
+
+def _add_incremental(
+    model: Model,
+    name: str,
+    target_expr: LinearExpression,
+    stacked_bp: DataArray,
+    stacked_mask: DataArray | None,
+    link_dim: str,
+    rhs: LinearExpression | int,
+    active: LinearExpression | None,
+) -> Constraint:
+    """Incremental formulation for N-variable continuous piecewise equality."""
+    dim = BREAKPOINT_DIM
+    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
+
+    delta_name = f"{name}{PWL_DELTA_SUFFIX}"
+    fill_name = f"{name}{PWL_FILL_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
+    inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
+    inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
+
+    n_segments = stacked_bp.sizes[dim] - 1
+    seg_dim = f"{dim}_seg"
+    seg_index = pd.Index(range(n_segments), name=seg_dim)
+    delta_coords = extra + [seg_index]
+
+    steps = stacked_bp.diff(dim).rename({dim: seg_dim})
+    steps[seg_dim] = seg_index
+
+    if stacked_mask is not None:
+        bp_mask_agg = stacked_mask.all(dim=link_dim)
+        mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
+        mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
+        mask_lo[seg_dim] = seg_index
+        mask_hi[seg_dim] = seg_index
+        delta_mask: DataArray | None = mask_lo & mask_hi
+    else:
+        delta_mask = None
+
+    delta_var = model.add_variables(
+        lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+    )
+
+    if active is not None:
+        active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
+        model.add_constraints(delta_var <= active, name=active_bound_name)
+
+    binary_var = model.add_variables(
+        binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
+    )
+    model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+
+    if n_segments >= 2:
+        delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
+        delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+        model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+
+        binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
+        model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+
+    bp0 = stacked_bp.isel({dim: 0})
+    bp0_term: DataArray | LinearExpression = bp0
+    if active is not None:
+        bp0_term = bp0 * active
+    weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
+    return model.add_constraints(target_expr == weighted_sum, name=link_name)
 
 
 def _add_disjunctive(
@@ -924,7 +929,7 @@ def _add_disjunctive(
     x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
     y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
 
-    extra = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
+    extra = _var_coords_from(x_points, exclude={BREAKPOINT_DIM, SEGMENT_DIM})
     lambda_coords = extra + [
         pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
         pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
