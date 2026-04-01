@@ -1105,10 +1105,9 @@ def _add_continuous_nvar(
             model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
 
         bp0 = stacked_bp.isel({dim: 0})
+        bp0_term: DataArray | LinearExpression = bp0
         if active is not None:
             bp0_term = bp0 * active
-        else:
-            bp0_term = bp0
         weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
         link_con = model.add_constraints(target_expr == weighted_sum, name=link_name)
 
