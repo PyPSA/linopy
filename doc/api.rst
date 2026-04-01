@@ -19,9 +19,9 @@ Creating a model
     model.Model.add_constraints
     model.Model.add_objective
     model.Model.add_piecewise_constraints
-    piecewise.piecewise
     piecewise.breakpoints
     piecewise.segments
+    piecewise.tangent_lines
     model.Model.linexpr
     model.Model.remove_constraints
     model.Model.copy
