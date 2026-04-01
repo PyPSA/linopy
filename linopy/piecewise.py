@@ -576,72 +576,6 @@ def _compute_combined_mask(
     return ~(x_points.isnull() | y_points.isnull())
 
 
-def _add_dpwl_sos2_core(
-    model: Model,
-    name: str,
-    x_expr: LinearExpression,
-    target_expr: LinearExpression,
-    x_points: DataArray,
-    y_points: DataArray,
-    lambda_mask: DataArray | None,
-    active: LinearExpression | None = None,
-) -> Constraint:
-    """
-    Core disjunctive SOS2 formulation with separate x/y points.
-
-    When ``active`` is provided, the segment selection becomes
-    ``sum(z_k) == active`` instead of ``== 1``, forcing all segment
-    binaries, lambdas, and thus x and y to zero when ``active=0``.
-    """
-    binary_name = f"{name}{PWL_BINARY_SUFFIX}"
-    select_name = f"{name}{PWL_SELECT_SUFFIX}"
-    lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
-    convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-    y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
-
-    extra = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
-    lambda_coords = extra + [
-        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
-        pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
-    ]
-    binary_coords = extra + [
-        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
-    ]
-
-    binary_mask = (
-        lambda_mask.any(dim=BREAKPOINT_DIM) if lambda_mask is not None else None
-    )
-
-    binary_var = model.add_variables(
-        binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
-    )
-
-    # Segment selection: sum(z_k) == 1 or sum(z_k) == active
-    rhs = active if active is not None else 1
-    select_con = model.add_constraints(
-        binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name
-    )
-
-    lambda_var = model.add_variables(
-        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
-    )
-
-    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
-
-    model.add_constraints(
-        lambda_var.sum(dim=BREAKPOINT_DIM) == binary_var, name=convex_name
-    )
-
-    x_weighted = (lambda_var * x_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
-    model.add_constraints(x_expr == x_weighted, name=x_link_name)
-
-    y_weighted = (lambda_var * y_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
-    model.add_constraints(target_expr == y_weighted, name=y_link_name)
-
-    return select_con
-
-
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -983,6 +917,47 @@ def _add_disjunctive(
             "NaN values must only appear at the end of the breakpoint sequence."
         )
 
-    return _add_dpwl_sos2_core(
-        model, name, x_expr, y_expr, x_points, y_points, mask, active
+    binary_name = f"{name}{PWL_BINARY_SUFFIX}"
+    select_name = f"{name}{PWL_SELECT_SUFFIX}"
+    lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+    convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+    x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
+
+    extra = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
+    lambda_coords = extra + [
+        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
+        pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
+    ]
+    binary_coords = extra + [
+        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
+    ]
+
+    binary_mask = mask.any(dim=BREAKPOINT_DIM) if mask is not None else None
+
+    binary_var = model.add_variables(
+        binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
     )
+
+    rhs = active if active is not None else 1
+    select_con = model.add_constraints(
+        binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name
+    )
+
+    lambda_var = model.add_variables(
+        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=mask
+    )
+
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
+
+    model.add_constraints(
+        lambda_var.sum(dim=BREAKPOINT_DIM) == binary_var, name=convex_name
+    )
+
+    x_weighted = (lambda_var * x_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
+    model.add_constraints(x_expr == x_weighted, name=x_link_name)
+
+    y_weighted = (lambda_var * y_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
+    model.add_constraints(y_expr == y_weighted, name=y_link_name)
+
+    return select_con
