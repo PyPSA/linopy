@@ -303,11 +303,6 @@ def breakpoints(
     if slopes is not None:
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-
-    # Slopes mode
-    if slopes is not None:
-        if x_points is None or y0 is None:
-            raise ValueError("'slopes' requires both 'x_points' and 'y0'")
         return _breakpoints_from_slopes(slopes, x_points, y0, dim)
 
     # Points mode
