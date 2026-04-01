@@ -76,7 +76,7 @@ class PiecewiseFormulation:
     constraints: Constraints
 
     def __repr__(self) -> str:
-        r = f"PiecewiseFormulation '{self.name}' ({self.method})\n"
+        r = f"PiecewiseFormulation '{self.name}' — {self.method}\n"
         r += "  Variables:\n"
         for vname, var in self.variables.items():
             dims = ", ".join(str(d) for d in var.coords) if var.coords else ""

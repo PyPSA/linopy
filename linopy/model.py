@@ -522,8 +522,9 @@ class Model:
                             user_dims.append(str(d))
                 dims_str = f" over ({', '.join(user_dims)})" if user_dims else ""
                 result += (
-                    f" * {pwl.name} ({pwl.method}):"
-                    f" {n_vars} variables, {n_cons} constraints{dims_str}\n"
+                    f" * {pwl.name}:"
+                    f" {n_vars} variables, {n_cons} constraints{dims_str}"
+                    f" — {pwl.method}\n"
                 )
 
         result += f"\nStatus:\n-------\n{self.status}"
