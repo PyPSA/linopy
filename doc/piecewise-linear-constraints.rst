@@ -7,13 +7,78 @@ Piecewise linear (PWL) constraints approximate nonlinear functions as connected
 linear segments, allowing you to model cost curves, efficiency curves, or
 production functions within a linear programming framework.
 
-Use :py:meth:`~linopy.model.Model.add_piecewise_constraints` to add piecewise
-equality constraints to a model.  For inequality constraints (upper/lower
-envelopes), use :func:`~linopy.piecewise.tangent_lines`.
+linopy offers two tools:
+
+- :py:meth:`~linopy.model.Model.add_piecewise_constraints` ---
+  exact equality on the piecewise curve (creates auxiliary variables).
+- :func:`~linopy.piecewise.tangent_lines` ---
+  one-sided bounds via tangent lines (pure LP, no auxiliary variables).
 
 .. contents::
    :local:
    :depth: 2
+
+
+Equality vs Inequality
+----------------------
+
+linopy provides two distinct tools for piecewise linear modelling.
+Understanding when to use which is the key design decision.
+
+``add_piecewise_constraints`` — exact equality on the curve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use this when variables must lie **exactly on** the piecewise curve
+(:math:`y = f(x)`).  It creates auxiliary variables (lambda weights or
+delta fractions) and combinatorial constraints (SOS2 or binary indicators)
+to enforce that the operating point is interpolated between adjacent
+breakpoints.
+
+.. code-block:: python
+
+    m.add_piecewise_constraints(
+        x=power,
+        y=fuel,
+        x_points=x_pts,
+        y_points=y_pts,
+    )
+
+This is the only way to enforce exact piecewise equality.  It requires
+a MIP or SOS2-capable solver.
+
+``tangent_lines`` — one-sided bound, pure LP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use this when a variable must be **bounded above or below** by the
+piecewise curve (:math:`y \le f(x)` or :math:`y \ge f(x)`).  It
+computes one tangent line per segment and returns them as a regular
+:class:`~linopy.expressions.LinearExpression` with a segment dimension.
+**No auxiliary variables are created.**
+
+.. code-block:: python
+
+    t = linopy.tangent_lines(power, x_pts, y_pts)
+    m.add_constraints(fuel <= t)  # fuel bounded above by f(power)
+    m.add_constraints(fuel >= t)  # fuel bounded below by f(power)
+
+xarray broadcasting creates one linear constraint per segment per
+coordinate entry.  The result is solvable by **any LP solver** ---
+no SOS2, no binaries.
+
+.. warning::
+
+   ``tangent_lines`` does **not** work with equality.  Writing
+   ``fuel == tangent_lines(...)`` would require fuel to simultaneously
+   satisfy every tangent line, which is infeasible except at breakpoints.
+   Use ``add_piecewise_constraints`` for equality.
+
+**When is the bound tight?** The tangent-line bound is exact (tight at
+every point on the curve) when the function has the right convexity:
+
+- :math:`y \le f(x)` is tight when *f* is **concave** (slopes decrease)
+- :math:`y \ge f(x)` is tight when *f* is **convex** (slopes increase)
+
+For other combinations the bound is valid but loose (a relaxation).
 
 
 Overview
@@ -43,17 +108,6 @@ lie on the interpolated breakpoint curve.
         x_points=x_pts,
         y_points=y_pts,
     )
-
-**Envelope (inequality):** For inequality constraints such as
-:math:`y \le f(x)` or :math:`y \ge f(x)`, use
-:func:`~linopy.piecewise.tangent_lines` to obtain tangent-line
-expressions and add them as regular constraints:
-
-.. code-block:: python
-
-    envelope = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel <= envelope)  # upper bound (concave f)
-    m.add_constraints(fuel >= envelope)  # lower bound (convex f)
 
 
 Mathematical Background
@@ -130,26 +184,27 @@ same N-variable code path.
     )
 
 
-Piecewise Envelope (inequality)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tangent lines (inequality)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For inequality constraints, use :func:`~linopy.piecewise.tangent_lines`
-instead of ``add_piecewise_constraints``.  The envelope function computes
-tangent-line expressions for each segment --- no auxiliary variables are created:
+:func:`~linopy.piecewise.tangent_lines` computes the tangent line for
+each segment of the piecewise function:
 
 .. math::
 
    \text{tangent}_k(x) = m_k \cdot x + c_k \quad \text{for each segment } k
 
-Use the result in a regular constraint:
+where :math:`m_k = (y_{k+1} - y_k) / (x_{k+1} - x_k)` is the slope and
+:math:`c_k = y_k - m_k \cdot x_k` is the intercept.  The result is a
+:class:`~linopy.expressions.LinearExpression` with a segment dimension ---
+one linear expression per segment, no auxiliary variables.
+
+The user then adds their own constraint:
 
 .. code-block:: python
 
-    envelope = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel <= envelope)  # upper bound (concave f)
-    m.add_constraints(fuel >= envelope)  # lower bound (convex f)
-
-This is solvable by any LP solver --- no SOS2 or binary variables needed.
+    t = linopy.tangent_lines(power, x_pts, y_pts)
+    m.add_constraints(fuel <= t)  # one constraint per segment per timestep
 
 
 Formulation Methods
