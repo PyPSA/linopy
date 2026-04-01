@@ -141,7 +141,7 @@ def _dict_segments_to_array(
     for key, seg_list in d.items():
         arr = _segments_list_to_array(seg_list)
         parts.append(arr.expand_dims({dim: [key]}))
-    combined = xr.concat(parts, dim=dim)
+    combined = xr.concat(parts, dim=dim, coords="minimal")
     max_bp = max(max(len(seg) for seg in sl) for sl in d.values())
     max_seg = max(len(sl) for sl in d.values())
     if combined.sizes[BREAKPOINT_DIM] < max_bp or combined.sizes[SEGMENT_DIM] < max_seg:
@@ -982,6 +982,7 @@ def _add_continuous_nvar(
     stacked_bp = xr.concat(
         [bp.expand_dims({link_dim: [c]}) for bp, c in zip(bp_list, link_coords)],
         dim=link_dim,
+        coords="minimal",
     )
 
     dim = BREAKPOINT_DIM
@@ -1012,7 +1013,7 @@ def _add_continuous_nvar(
     expr_data_list = [
         e.data.expand_dims({link_dim: [c]}) for e, c in zip(lin_exprs, link_coords)
     ]
-    stacked_data = xr.concat(expr_data_list, dim=link_dim)
+    stacked_data = xr.concat(expr_data_list, dim=link_dim, coords="minimal")
     target_expr = LinearExpression(stacked_data, model)
 
     # Compute lambda mask
@@ -1021,6 +1022,7 @@ def _add_continuous_nvar(
         stacked_mask = xr.concat(
             [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
             dim=link_dim,
+            coords="minimal",
         )
         lambda_mask = stacked_mask.any(dim=link_dim)
 
@@ -1065,6 +1067,7 @@ def _add_continuous_nvar(
             stacked_mask = xr.concat(
                 [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
                 dim=link_dim,
+                coords="minimal",
             )
             bp_mask_agg = stacked_mask.all(dim=link_dim)
             mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
