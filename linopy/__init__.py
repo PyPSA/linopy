@@ -18,10 +18,9 @@ from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
-from linopy.linearization import tangent_lines
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.piecewise import breakpoints, segments, slopes_to_points
+from linopy.piecewise import breakpoints, segments, slopes_to_points, tangent_lines
 from linopy.remote import RemoteHandler
 
 try:

@@ -9,7 +9,7 @@ production functions within a linear programming framework.
 
 Use :py:meth:`~linopy.model.Model.add_piecewise_constraints` to add piecewise
 equality constraints to a model.  For inequality constraints (upper/lower
-envelopes), use :func:`~linopy.linearization.tangent_lines`.
+envelopes), use :func:`~linopy.piecewise.tangent_lines`.
 
 .. contents::
    :local:
@@ -46,7 +46,7 @@ lie on the interpolated breakpoint curve.
 
 **Envelope (inequality):** For inequality constraints such as
 :math:`y \le f(x)` or :math:`y \ge f(x)`, use
-:func:`~linopy.linearization.tangent_lines` to obtain tangent-line
+:func:`~linopy.piecewise.tangent_lines` to obtain tangent-line
 expressions and add them as regular constraints:
 
 .. code-block:: python
@@ -133,7 +133,7 @@ same N-variable code path.
 Piecewise Envelope (inequality)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For inequality constraints, use :func:`~linopy.linearization.tangent_lines`
+For inequality constraints, use :func:`~linopy.piecewise.tangent_lines`
 instead of ``add_piecewise_constraints``.  The envelope function computes
 tangent-line expressions for each segment --- no auxiliary variables are created:
 
