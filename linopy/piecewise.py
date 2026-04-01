@@ -778,23 +778,22 @@ def _add_continuous_nvar(
     stacked_data = xr.concat(expr_data_list, dim=link_dim, coords="minimal")
     target_expr = LinearExpression(stacked_data, model)
 
-    # Compute lambda mask
-    lambda_mask = None
+    # Compute stacked mask (shared by both branches)
+    stacked_mask = None
     if bp_mask is not None:
         stacked_mask = xr.concat(
             [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
             dim=link_dim,
             coords="minimal",
         )
-        lambda_mask = stacked_mask.any(dim=link_dim)
 
     extra = _extra_coords(stacked_bp, dim, link_dim)
-    lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
-
-    # Convexity RHS: 1 or active
     rhs = active if active is not None else 1
 
     if method == "sos2":
+        lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
+        lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
+
         lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
         convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
         link_name = f"{name}{PWL_X_LINK_SUFFIX}"
@@ -825,12 +824,7 @@ def _add_continuous_nvar(
         steps = stacked_bp.diff(dim).rename({dim: seg_dim})
         steps[seg_dim] = seg_index
 
-        if bp_mask is not None:
-            stacked_mask = xr.concat(
-                [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
-                dim=link_dim,
-                coords="minimal",
-            )
+        if stacked_mask is not None:
             bp_mask_agg = stacked_mask.all(dim=link_dim)
             mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
             mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
