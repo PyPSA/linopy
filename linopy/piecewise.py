@@ -647,7 +647,8 @@ def add_piecewise_constraints(
     first_bp = coerced[0][1]
     disjunctive = SEGMENT_DIM in first_bp.dims
 
-    # Validate all breakpoint pairs have compatible shapes
+    # Validate all breakpoint pairs have compatible shapes.
+    # Checking each against the first is sufficient since the shape checks are transitive.
     for i in range(1, len(coerced)):
         _validate_breakpoint_shapes(first_bp, coerced[i][1])
 
