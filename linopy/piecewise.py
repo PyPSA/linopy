@@ -60,7 +60,7 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
-def _strip_nan(vals: Sequence[float]) -> list[float]:
+def _strip_nan(vals: Sequence[float] | np.ndarray) -> list[float]:
     """Remove NaN values from a sequence."""
     return [v for v in vals if not np.isnan(v)]
 
@@ -720,16 +720,13 @@ def add_piecewise_constraints(
 
 
 def _stack_along_link(
-    items: list[DataArray],
+    items: Sequence[DataArray | xr.Dataset],
     link_coords: list[str],
     link_dim: str,
 ) -> DataArray:
-    """Expand and concatenate DataArrays along a new link dimension."""
-    return xr.concat(
-        [item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)],
-        dim=link_dim,
-        coords="minimal",
-    )
+    """Expand and concatenate DataArrays/Datasets along a new link dimension."""
+    expanded = [item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)]
+    return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
 
 
 def _add_continuous(
