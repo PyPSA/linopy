@@ -425,7 +425,7 @@ def tangent_lines(
 
     intercepts = y_base - slopes * x_base
 
-    if not isinstance(x, (Variable, LinExpr)):
+    if not isinstance(x, Variable | LinExpr):
         raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
 
     return slopes * _to_linexpr(x) + intercepts
@@ -437,7 +437,8 @@ def tangent_lines(
 
 
 def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
-    """Validate that two breakpoint arrays have compatible shapes.
+    """
+    Validate that two breakpoint arrays have compatible shapes.
 
     Returns whether the formulation is disjunctive (has segment dimension).
     """
@@ -739,7 +740,6 @@ def _add_continuous(
 
     link_dim = "_pwl_var"
     stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
-    dim = BREAKPOINT_DIM
 
     # Pre-compute properties used by multiple branches
     trailing_nan_only = _has_trailing_nan_only(stacked_bp)

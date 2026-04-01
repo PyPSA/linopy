@@ -1220,7 +1220,7 @@ class TestValidationEdgeCases:
             breakpoints(
                 slopes={"a": [1, 2], "b": [3, 4]},
                 x_points={"a": [0, 10, 20], "b": [0, 10, 20]},
-                y0="bad",  # type: ignore
+                y0="bad",
                 dim="entity",
             )
 
