@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from numbers import Real
-from typing import TYPE_CHECKING, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -827,98 +827,99 @@ def _add_dpwl_sos2_core(
 # ---------------------------------------------------------------------------
 
 
-@overload
-def add_piecewise_constraints(
-    model: Model,
-    x: LinExprLike,
-    y: LinExprLike,
-    x_points: BreaksLike,
-    y_points: BreaksLike,
-    *,
-    sign: str = "==",
-    method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
-    active: LinExprLike | None = None,
-    name: str | None = None,
-    skip_nan_check: bool = False,
-) -> Constraint: ...
-
-
-@overload
 def add_piecewise_constraints(
     model: Model,
     *,
-    exprs: Mapping[str, LinExprLike],
-    breakpoints: DataArray,
-    method: Literal["sos2", "incremental", "auto"] = "auto",
-    name: str | None = None,
-    mask: DataArray | None = None,
-    skip_nan_check: bool = False,
-) -> Constraint: ...
-
-
-def add_piecewise_constraints(
-    model: Model,
-    *args: LinExprLike | BreaksLike,
-    # 2-variable keyword args
-    sign: str = "==",
-    active: LinExprLike | None = None,
-    # N-variable keyword args
     exprs: Mapping[str, LinExprLike] | None = None,
     breakpoints: DataArray | None = None,
+    x: LinExprLike | None = None,
+    y: LinExprLike | None = None,
+    x_points: BreaksLike | None = None,
+    y_points: BreaksLike | None = None,
+    sign: str = "==",
+    active: LinExprLike | None = None,
     mask: DataArray | None = None,
-    # Shared keyword args
     method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
     name: str | None = None,
     skip_nan_check: bool = False,
-    # Positional breakpoints for 2-variable case
-    x_points: BreaksLike | None = None,
-    y_points: BreaksLike | None = None,
 ) -> Constraint:
-    """
+    r"""
     Add piecewise linear constraints.
 
     Supports two calling conventions:
 
-    **2-variable (positional):**
+    **N-variable — link N expressions through shared breakpoints:**
 
-    Links two expressions ``x`` and ``y`` via separate x/y breakpoints::
-
-        m.add_piecewise_constraints(x, y, x_points, y_points, sign="==")
-
-    **N-variable (keyword):**
-
-    Links N expressions through shared breakpoints (a single DataArray
-    whose coordinates match the dict keys)::
+    All expressions are symmetric and linked via shared SOS2 lambda
+    (or incremental delta) weights.  Mathematically, each expression is
+    constrained to lie on the interpolated breakpoint curve::
 
         m.add_piecewise_constraints(
             exprs={"power": power, "fuel": fuel, "heat": heat},
             breakpoints=bp,
         )
 
+    **2-variable convenience — link x and y via separate breakpoints:**
+
+    A shorthand that builds the N-variable dict internally.  When
+    ``sign="=="`` (the default), the constraint is::
+
+        y = f(x)
+
+    where *f* is the piecewise linear function defined by the breakpoints.
+    This is mathematically equivalent to the N-variable form with two
+    expressions.
+
+    When ``sign`` is ``"<="`` or ``">="``, the constraint becomes an
+    *inequality*:
+
+    - ``sign="<="`` means :math:`y \le f(x)` — *y* is bounded **above**
+      by the piecewise function.
+    - ``sign=">="`` means :math:`y \ge f(x)` — *y* is bounded **below**
+      by the piecewise function.
+
+    Inequality constraints introduce an auxiliary variable *z* that
+    satisfies the equality *z = f(x)*, then adds *y ≤ z* or *y ≥ z*.
+    This is a 2-variable-only feature because it requires distinct
+    "input" (*x*) and "output" (*y*) roles.
+
+    Example::
+
+        m.add_piecewise_constraints(
+            x=power, y=fuel, x_points=x_pts, y_points=y_pts,
+        )
+
     Parameters
     ----------
-    model : Model
-        The linopy model.
+    exprs : dict of str to Variable/LinearExpression
+        Expressions to link (N-variable case).  Keys must match a
+        dimension of ``breakpoints``.
+    breakpoints : DataArray
+        Shared breakpoint array (N-variable case).  Must have a
+        breakpoint dimension and a linking dimension whose coordinates
+        match the ``exprs`` keys.
     x : Variable or LinearExpression
-        The "x" side expression (2-variable case).
+        The input expression (2-variable case).
     y : Variable or LinearExpression
-        The "y" side expression (2-variable case).
+        The output expression (2-variable case).
     x_points : BreaksLike
         Breakpoint x-coordinates (2-variable case).
     y_points : BreaksLike
         Breakpoint y-coordinates (2-variable case).
-    sign : str, default "=="
-        Constraint sign: "==", "<=", or ">=" (2-variable case).
+    sign : {"==", "<=", ">="}, default "=="
+        Constraint sign (2-variable case only).  ``"=="`` constrains
+        *y = f(x)*.  ``"<="`` constrains *y ≤ f(x)*.  ``">="``
+        constrains *y ≥ f(x)*.  Ignored for the N-variable case
+        (always equality).
     active : Variable or LinearExpression, optional
-        Binary variable that scales the piecewise function (2-variable case).
-    exprs : dict of str to Variable/LinearExpression
-        Expressions to link (N-variable case).
-    breakpoints : DataArray
-        Shared breakpoint array (N-variable case).
+        Binary variable that gates the piecewise function.  When
+        ``active=0``, all auxiliary variables (and thus *x* and *y*)
+        are forced to zero.  2-variable case only.
     mask : DataArray, optional
         Boolean mask for valid constraints.
     method : {"auto", "sos2", "incremental", "lp"}, default "auto"
-        Formulation method. "lp" is only available for the 2-variable case.
+        Formulation method.  ``"lp"`` is only available for the
+        2-variable inequality case.
     name : str, optional
         Base name for generated variables/constraints.
     skip_nan_check : bool, default False
@@ -929,15 +930,15 @@ def add_piecewise_constraints(
     Constraint
     """
     if exprs is not None:
-        # N-variable path
+        # ── N-variable path ──────────────────────────────────────────
         if breakpoints is None:
             raise TypeError(
                 "N-variable call requires both 'exprs' and 'breakpoints' keywords."
             )
         if method == "lp":
             raise ValueError(
-                "Pure LP method is not supported for N-variable piecewise constraints. "
-                "Use method='sos2' or method='incremental'."
+                "Pure LP method is not supported for N-variable piecewise "
+                "constraints.  Use method='sos2' or method='incremental'."
             )
         return _add_piecewise_nvar(
             model,
@@ -948,36 +949,26 @@ def add_piecewise_constraints(
             mask=mask,
             skip_nan_check=skip_nan_check,
         )
-    elif len(args) >= 2:
-        # 2-variable positional path: (x, y, x_points, y_points)
-        if len(args) == 4:
-            x_arg, y_arg, xp_arg, yp_arg = args
-        elif len(args) == 2 and x_points is not None and y_points is not None:
-            x_arg, y_arg = args
-            xp_arg, yp_arg = x_points, y_points
-        else:
-            raise TypeError(
-                "2-variable call requires 4 positional args: (x, y, x_points, y_points) "
-                "or 2 positional args with x_points= and y_points= keywords."
-            )
-        return _add_piecewise_2var(
-            model,
-            x=x_arg,
-            y=y_arg,
-            x_points=xp_arg,
-            y_points=yp_arg,
-            sign=sign,
-            method=method,
-            active=active,
-            name=name,
-            skip_nan_check=skip_nan_check,
-        )
-    else:
+
+    # ── 2-variable convenience path ──────────────────────────────────
+    if x is None or y is None or x_points is None or y_points is None:
         raise TypeError(
             "add_piecewise_constraints() requires either:\n"
-            "  - 2-variable: (x, y, x_points, y_points, sign=...)\n"
-            "  - N-variable: (exprs={...}, breakpoints=...)"
+            "  - N-variable: exprs={...}, breakpoints=...\n"
+            "  - 2-variable: x=..., y=..., x_points=..., y_points=..."
         )
+    return _add_piecewise_2var(
+        model,
+        x=x,
+        y=y,
+        x_points=x_points,
+        y_points=y_points,
+        sign=sign,
+        method=method,
+        active=active,
+        name=name,
+        skip_nan_check=skip_nan_check,
+    )
 
 
 def _add_piecewise_2var(
