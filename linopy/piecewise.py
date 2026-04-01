@@ -767,8 +767,9 @@ def _add_continuous(
             )
 
     # Stack expressions along the link dimension
-    expr_data_list = [e.data.expand_dims({link_dim: [c]}) for e, c in zip(lin_exprs, link_coords)]
-    stacked_data = xr.concat(expr_data_list, dim=link_dim, coords="minimal")
+    stacked_data = _stack_along_link(
+        [e.data for e in lin_exprs], link_coords, link_dim
+    )
     target_expr = LinearExpression(stacked_data, model)
 
     # Compute stacked mask
