@@ -22,11 +22,8 @@ linopy offers two tools:
 Equality vs Inequality
 ----------------------
 
-linopy provides two distinct tools for piecewise linear modelling.
-Understanding when to use which is the key design decision.
-
-``add_piecewise_constraints`` — exact equality on the curve
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``add_piecewise_constraints`` --- exact equality on the curve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use this when variables must lie **exactly on** the piecewise curve
 (:math:`y = f(x)`).  It creates auxiliary variables (lambda weights or
@@ -37,17 +34,15 @@ breakpoints.
 .. code-block:: python
 
     m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=x_pts,
-        y_points=y_pts,
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 36, 84, 170]),
     )
 
 This is the only way to enforce exact piecewise equality.  It requires
 a MIP or SOS2-capable solver.
 
-``tangent_lines`` — one-sided bound, pure LP
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``tangent_lines`` --- one-sided bound, pure LP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use this when a variable must be **bounded above or below** by the
 piecewise curve (:math:`y \le f(x)` or :math:`y \ge f(x)`).  It
@@ -84,39 +79,37 @@ For other combinations the bound is valid but loose (a relaxation).
 Overview
 --------
 
-``add_piecewise_constraints`` supports two calling conventions:
+``add_piecewise_constraints`` takes ``(expression, breakpoints)`` tuples as
+positional arguments.  All tuples share the same interpolation weights,
+coupling the expressions on the same curve segment.
 
-**N-variable (general form):** Link any number of expressions through shared
-breakpoints.  All expressions are symmetric --- they are jointly constrained to
-lie on the interpolated breakpoint curve.
+**2 variables:**
 
 .. code-block:: python
 
     m.add_piecewise_constraints(
-        exprs={"power": power, "fuel": fuel, "heat": heat},
-        breakpoints=bp,
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 36, 84, 170]),
     )
 
-**2-variable (convenience form):** A shorthand for linking two expressions
-``x`` and ``y`` via separate x/y breakpoints.
+**N variables (e.g. CHP plant):**
 
 .. code-block:: python
 
     m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=x_pts,
-        y_points=y_pts,
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 40, 85, 160]),
+        (heat, [0, 25, 55, 95]),
     )
 
 
 Mathematical Background
 -----------------------
 
-Core formulation (N-variable)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Core formulation
+~~~~~~~~~~~~~~~~
 
-The general piecewise linear formulation links *N* expressions
+The piecewise linear formulation links *N* expressions
 :math:`e_1, e_2, \ldots, e_N` through a shared set of breakpoints.
 
 Given :math:`n+1` breakpoints :math:`B_{j,0}, B_{j,1}, \ldots, B_{j,n}` for
@@ -139,50 +132,6 @@ The SOS2 constraint ensures at most two *adjacent* :math:`\lambda_i` are
 non-zero, so every expression is interpolated within the same segment.  All
 expressions share the same :math:`\lambda` weights, which is what couples them.
 
-**Example:** A CHP plant with fuel input, electrical output, and heat output at
-four operating points:
-
-.. code-block:: python
-
-    bp = linopy.breakpoints(
-        {"fuel": [0, 50, 120, 200], "power": [0, 15, 50, 100], "heat": [0, 25, 45, 55]},
-        dim="var",
-    )
-    m.add_piecewise_constraints(
-        exprs={"fuel": fuel, "power": power, "heat": heat},
-        breakpoints=bp,
-    )
-
-At any feasible point, fuel, power, and heat are interpolated between the
-*same* pair of adjacent breakpoints.
-
-
-2-variable case: equality
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The 2-variable equality constraint :math:`y = f(x)` is the most common use
-case.  Mathematically, it is equivalent to the N-variable form with two
-expressions:
-
-.. math::
-
-   x = \sum_i \lambda_i \, x_i, \qquad
-   y = \sum_i \lambda_i \, y_i, \qquad
-   \sum_i \lambda_i = 1
-
-Internally, the 2-variable equality form builds a dict and delegates to the
-same N-variable code path.
-
-.. code-block:: python
-
-    # These two are equivalent:
-    m.add_piecewise_constraints(x=x, y=y, x_points=xp, y_points=yp)
-
-    m.add_piecewise_constraints(
-        exprs={"x": x, "y": y},
-        breakpoints=linopy.breakpoints({"x": xp, "y": yp}, dim="var"),
-    )
-
 
 Tangent lines (inequality)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -198,13 +147,6 @@ where :math:`m_k = (y_{k+1} - y_k) / (x_{k+1} - x_k)` is the slope and
 :math:`c_k = y_k - m_k \cdot x_k` is the intercept.  The result is a
 :class:`~linopy.expressions.LinearExpression` with a segment dimension ---
 one linear expression per segment, no auxiliary variables.
-
-The user then adds their own constraint:
-
-.. code-block:: python
-
-    t = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel <= t)  # one constraint per segment per timestep
 
 
 Formulation Methods
@@ -237,8 +179,7 @@ incremental formulation uses fill-fraction variables:
 Binary indicators enforce segment ordering.  This avoids SOS2 constraints
 entirely, using only standard MIP constructs.
 
-**Limitation:** Breakpoints must be strictly monotonic along the breakpoint
-dimension.
+**Limitation:** All breakpoint sequences must be strictly monotonic.
 
 Disjunctive (Disaggregated Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -260,39 +201,10 @@ Choosing a Formulation
 
 Pass ``method="auto"`` (the default) and linopy picks the best formulation:
 
-- **Equality + monotonic breakpoints** -> incremental
+- **All breakpoints monotonic** -> incremental
 - Otherwise -> SOS2
 - Disjunctive (segments) -> always SOS2 with binary selection
 - **Inequality** -> use ``tangent_lines`` + regular constraints
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 20 20 20
-
-   * - Property
-     - SOS2
-     - Incremental
-     - Disjunctive
-   * - Segments
-     - Connected
-     - Connected
-     - Disconnected
-   * - Constraint type
-     - Equality
-     - Equality
-     - Equality
-   * - Breakpoint order
-     - Any
-     - Strictly monotonic
-     - Any (per segment)
-   * - Variable types
-     - Continuous + SOS2
-     - Continuous + binary
-     - Binary + SOS2
-   * - N-variable support
-     - Yes
-     - Yes
-     - 2-var only
 
 
 Usage Examples
@@ -304,52 +216,38 @@ Usage Examples
 .. code-block:: python
 
     m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=linopy.breakpoints([0, 30, 60, 100]),
-        y_points=linopy.breakpoints([0, 36, 84, 170]),
+        (power, linopy.breakpoints([0, 30, 60, 100])),
+        (fuel, linopy.breakpoints([0, 36, 84, 170])),
     )
-
-Inequality via envelope
-~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    # fuel <= f(power): y bounded above (concave function)
-    envelope = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel <= envelope)
-
-    # fuel >= f(power): y bounded below (convex function)
-    envelope = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel >= envelope)
 
 N-variable linking
 ~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    bp = linopy.breakpoints(
-        {"power": [0, 30, 60, 100], "fuel": [0, 40, 85, 160], "heat": [0, 25, 55, 95]},
-        dim="var",
-    )
     m.add_piecewise_constraints(
-        exprs={"power": power, "fuel": fuel, "heat": heat},
-        breakpoints=bp,
+        (power, [0, 30, 60, 100]),
+        (fuel, [0, 40, 85, 160]),
+        (heat, [0, 25, 55, 95]),
     )
+
+Inequality via tangent lines
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    t = linopy.tangent_lines(power, x_pts, y_pts)
+    m.add_constraints(fuel <= t)  # upper bound (concave function)
+    m.add_constraints(fuel >= t)  # lower bound (convex function)
 
 Disjunctive (disconnected segments)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    x_seg = linopy.segments([(0, 10), (50, 100)])
-    y_seg = linopy.segments([(0, 15), (60, 130)])
-
     m.add_piecewise_constraints(
-        x=x,
-        y=y,
-        x_points=x_seg,
-        y_points=y_seg,
+        (x, linopy.segments([(0, 10), (50, 100)])),
+        (y, linopy.segments([(0, 15), (60, 130)])),
     )
 
 Choosing a method
@@ -357,13 +255,9 @@ Choosing a method
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(x=x, y=y, x_points=xp, y_points=yp, method="sos2")
-    m.add_piecewise_constraints(
-        x=x, y=y, x_points=xp, y_points=yp, method="incremental"
-    )
-    m.add_piecewise_constraints(
-        x=x, y=y, x_points=xp, y_points=yp, method="auto"
-    )  # default
+    m.add_piecewise_constraints((x, xp), (y, yp), method="sos2")
+    m.add_piecewise_constraints((x, xp), (y, yp), method="incremental")
+    m.add_piecewise_constraints((x, xp), (y, yp), method="auto")  # default
 
 Active parameter (unit commitment)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -375,10 +269,8 @@ When ``active=0``, all auxiliary variables are forced to zero.
 
     commit = m.add_variables(name="commit", binary=True, coords=[time])
     m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=x_pts,
-        y_points=y_pts,
+        (power, x_pts),
+        (fuel, y_pts),
         active=commit,
     )
 
@@ -418,7 +310,7 @@ You don't need ``expand_dims`` when your variables have extra dimensions:
     y = m.add_variables(name="y", coords=[time])
 
     # 1D breakpoints auto-expand to match x's time dimension
-    m.add_piecewise_constraints(x=x, y=y, x_points=[0, 50, 100], y_points=[0, 70, 150])
+    m.add_piecewise_constraints((x, [0, 50, 100]), (y, [0, 70, 150]))
 
 
 Generated Variables and Constraints

@@ -31,7 +31,6 @@ from linopy.constants import (
     PWL_LAMBDA_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
-    PWL_Y_LINK_SUFFIX,
     SEGMENT_DIM,
 )
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
@@ -284,16 +283,14 @@ class TestContinuousEquality:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [5, 2, 20, 80]),
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_Y_LINK_SUFFIX}" in m.constraints
+        # N-var path uses a single stacked link constraint (no separate y_link)
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert lam.attrs.get("sos_type") == 2
 
@@ -301,11 +298,10 @@ class TestContinuousEquality:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
+        # Both breakpoint sequences must be monotonic for incremental
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [0, 5, 20, 80]),
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
@@ -314,11 +310,10 @@ class TestContinuousEquality:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
+        # Non-monotonic y-breakpoints force SOS2
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 30, 100],
-            y_points=[5, 20, 15, 80],
+            (x, [0, 50, 30, 100]),
+            (y, [5, 20, 15, 80]),
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_DELTA_SUFFIX}" not in m.variables
@@ -329,13 +324,17 @@ class TestContinuousEquality:
         x = m.add_variables(coords=[gens], name="x")
         y = m.add_variables(coords=[gens], name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=breakpoints(
-                {"gen_a": [0, 10, 50], "gen_b": [0, 20, 80]}, dim="generator"
+            (
+                x,
+                breakpoints(
+                    {"gen_a": [0, 10, 50], "gen_b": [0, 20, 80]}, dim="generator"
+                ),
             ),
-            y_points=breakpoints(
-                {"gen_a": [0, 5, 30], "gen_b": [0, 8, 50]}, dim="generator"
+            (
+                y,
+                breakpoints(
+                    {"gen_a": [0, 5, 30], "gen_b": [0, 8, 50]}, dim="generator"
+                ),
             ),
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
@@ -345,15 +344,13 @@ class TestContinuousEquality:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
+        # slopes=[-0.3, 0.45, 1.2] with y0=5 -> y_points=[5, 2, 20, 80]
+        # Non-monotonic y-breakpoints, so auto selects SOS2
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=breakpoints(
-                slopes=[-0.3, 0.45, 1.2], x_points=[0, 10, 50, 100], y0=5
-            ),
+            (x, [0, 10, 50, 100]),
+            (y, breakpoints(slopes=[-0.3, 0.45, 1.2], x_points=[0, 10, 50, 100], y0=5)),
         )
-        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
 
 
 # ===========================================================================
@@ -426,10 +423,8 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [5, 10, 20, 80]),
             method="incremental",
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
@@ -444,10 +439,8 @@ class TestIncremental:
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="strictly monotonic"):
             m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 50, 30, 100],
-                y_points=[5, 20, 15, 80],
+                (x, [0, 50, 30, 100]),
+                (y, [5, 20, 15, 80]),
                 method="incremental",
             )
 
@@ -456,10 +449,8 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 30, 100],
-            y_points=[5, 20, 15, 80],
+            (x, [0, 50, 30, 100]),
+            (y, [5, 20, 15, 80]),
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
@@ -470,26 +461,22 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 100],
-            y_points=[5, 80],
+            (x, [0, 100]),
+            (y, [5, 80]),
             method="incremental",
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert delta.labels.sizes[LP_SEG_DIM] == 1
         assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_Y_LINK_SUFFIX}" in m.constraints
+        # N-var path uses a single stacked link constraint (no separate y_link)
 
     def test_creates_binary_indicator_vars(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [5, 10, 20, 80]),
             method="incremental",
         )
         assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
@@ -502,10 +489,8 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [5, 10, 20, 80]),
             method="incremental",
         )
         assert f"pwl0{PWL_INC_ORDER_SUFFIX}" in m.constraints
@@ -516,10 +501,8 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 100],
-            y_points=[5, 80],
+            (x, [0, 100]),
+            (y, [5, 80]),
             method="incremental",
         )
         assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
@@ -531,10 +514,8 @@ class TestIncremental:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[100, 50, 10, 0],
-            y_points=[80, 20, 2, 5],
+            (x, [100, 50, 10, 0]),
+            (y, [80, 20, 5, 2]),
             method="incremental",
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
@@ -551,10 +532,8 @@ class TestDisjunctive:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments([[0, 10], [50, 100]]),
-            y_points=segments([[0, 5], [20, 80]]),
+            (x, segments([[0, 10], [50, 100]])),
+            (y, segments([[0, 5], [20, 80]])),
         )
         assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
         assert f"pwl0{PWL_SELECT_SUFFIX}" in m.constraints
@@ -569,10 +548,8 @@ class TestDisjunctive:
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="disjunctive"):
             m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=segments([[0, 10], [50, 100]]),
-                y_points=segments([[0, 5], [20, 80]]),
+                (x, segments([[0, 10], [50, 100]])),
+                (y, segments([[0, 5], [20, 80]])),
                 method="incremental",
             )
 
@@ -582,15 +559,19 @@ class TestDisjunctive:
         x = m.add_variables(coords=[gens], name="x")
         y = m.add_variables(coords=[gens], name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments(
-                {"gen_a": [[0, 10], [50, 100]], "gen_b": [[0, 20], [60, 90]]},
-                dim="generator",
+            (
+                x,
+                segments(
+                    {"gen_a": [[0, 10], [50, 100]], "gen_b": [[0, 20], [60, 90]]},
+                    dim="generator",
+                ),
             ),
-            y_points=segments(
-                {"gen_a": [[0, 5], [20, 80]], "gen_b": [[0, 8], [30, 70]]},
-                dim="generator",
+            (
+                y,
+                segments(
+                    {"gen_a": [[0, 5], [20, 80]], "gen_b": [[0, 8], [30, 70]]},
+                    dim="generator",
+                ),
             ),
         )
         binary = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
@@ -608,8 +589,8 @@ class TestValidation:
     def test_wrong_arg_types_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
-        with pytest.raises(TypeError, match="requires either"):
-            m.add_piecewise_constraints(x=x)  # type: ignore
+        with pytest.raises(TypeError, match="at least 2"):
+            m.add_piecewise_constraints((x, [0, 10, 50]))
 
     def test_invalid_method_raises(self) -> None:
         m = Model()
@@ -617,10 +598,8 @@ class TestValidation:
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="method must be"):
             m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 10, 50],
-                y_points=[5, 2, 20],
+                (x, [0, 10, 50]),
+                (y, [5, 10, 20]),
                 method="invalid",  # type: ignore
             )
 
@@ -636,10 +615,8 @@ class TestNameGeneration:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         z = m.add_variables(name="z")
-        m.add_piecewise_constraints(x=x, y=y, x_points=[0, 10, 50], y_points=[5, 2, 20])
-        m.add_piecewise_constraints(
-            x=x, y=z, x_points=[0, 20, 80], y_points=[10, 15, 50]
-        )
+        m.add_piecewise_constraints((x, [0, 10, 50]), (y, [5, 10, 20]))
+        m.add_piecewise_constraints((x, [0, 20, 80]), (z, [10, 15, 50]))
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         assert f"pwl1{PWL_DELTA_SUFFIX}" in m.variables
 
@@ -648,15 +625,13 @@ class TestNameGeneration:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50],
-            y_points=[5, 2, 20],
+            (x, [0, 10, 50]),
+            (y, [5, 10, 20]),
             name="my_pwl",
         )
         assert f"my_pwl{PWL_DELTA_SUFFIX}" in m.variables
         assert f"my_pwl{PWL_X_LINK_SUFFIX}" in m.constraints
-        assert f"my_pwl{PWL_Y_LINK_SUFFIX}" in m.constraints
+        # N-var path uses a single stacked link constraint (no separate y_link)
 
 
 # ===========================================================================
@@ -673,13 +648,17 @@ class TestBroadcasting:
         y = m.add_variables(coords=[gens, times], name="y")
         # Points only have generator dim -> broadcast over time
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=breakpoints(
-                {"gen_a": [0, 10, 50], "gen_b": [0, 20, 80]}, dim="generator"
+            (
+                x,
+                breakpoints(
+                    {"gen_a": [0, 10, 50], "gen_b": [0, 20, 80]}, dim="generator"
+                ),
             ),
-            y_points=breakpoints(
-                {"gen_a": [0, 5, 30], "gen_b": [0, 8, 50]}, dim="generator"
+            (
+                y,
+                breakpoints(
+                    {"gen_a": [0, 5, 30], "gen_b": [0, 8, 50]}, dim="generator"
+                ),
             ),
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
@@ -701,10 +680,8 @@ class TestNaNMasking:
         x_pts = xr.DataArray([0, 10, 50, np.nan], dims=[BREAKPOINT_DIM])
         y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=x_pts,
-            y_points=y_pts,
+            (x, x_pts),
+            (y, y_pts),
             method="sos2",
         )
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
@@ -721,10 +698,8 @@ class TestNaNMasking:
         y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
         with pytest.raises(ValueError, match="skip_nan_check=True but breakpoints"):
             m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=x_pts,
-                y_points=y_pts,
+                (x, x_pts),
+                (y, y_pts),
                 method="sos2",
                 skip_nan_check=True,
             )
@@ -737,10 +712,8 @@ class TestNaNMasking:
         x_pts = xr.DataArray([0, 10, 50, 100], dims=[BREAKPOINT_DIM])
         y_pts = xr.DataArray([0, 5, 20, 40], dims=[BREAKPOINT_DIM])
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=x_pts,
-            y_points=y_pts,
+            (x, x_pts),
+            (y, y_pts),
             method="sos2",
             skip_nan_check=True,
         )
@@ -756,10 +729,8 @@ class TestNaNMasking:
         y_pts = xr.DataArray([0, np.nan, 20, 40], dims=[BREAKPOINT_DIM])
         with pytest.raises(ValueError, match="non-trailing NaN"):
             m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=x_pts,
-                y_points=y_pts,
+                (x, x_pts),
+                (y, y_pts),
                 method="sos2",
             )
 
@@ -775,10 +746,8 @@ class TestLPFileOutput:
         x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0.0, 10.0, 50.0, 100.0],
-            y_points=[5.0, 2.0, 20.0, 80.0],
+            (x, [0.0, 10.0, 50.0, 100.0]),
+            (y, [5.0, 2.0, 20.0, 80.0]),
             method="sos2",
         )
         m.add_objective(y)
@@ -793,10 +762,8 @@ class TestLPFileOutput:
         x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments([[0.0, 10.0], [50.0, 100.0]]),
-            y_points=segments([[0.0, 5.0], [20.0, 80.0]]),
+            (x, segments([[0.0, 10.0], [50.0, 100.0]])),
+            (y, segments([[0.0, 5.0], [20.0, 80.0]])),
         )
         m.add_objective(y)
         fn = tmp_path / "pwl_disj.lp"
@@ -822,10 +789,8 @@ class TestSolverSOS2:
         x = m.add_variables(lower=0, upper=100, name="x")
         cost = m.add_variables(name="cost")
         m.add_piecewise_constraints(
-            x=x,
-            y=cost,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (cost, [0, 10, 50]),
         )
         m.add_constraints(x >= 50, name="x_min")
         m.add_objective(cost)
@@ -839,10 +804,8 @@ class TestSolverSOS2:
         power = m.add_variables(lower=0, upper=100, name="power")
         eff = m.add_variables(name="eff")
         m.add_piecewise_constraints(
-            x=power,
-            y=eff,
-            x_points=[0, 25, 50, 75, 100],
-            y_points=[0.7, 0.85, 0.95, 0.9, 0.8],
+            (power, [0, 25, 50, 75, 100]),
+            (eff, [0.7, 0.85, 0.95, 0.9, 0.8]),
         )
         m.add_objective(eff, sense="max")
         status, _ = m.solve(solver_name=solver_name)
@@ -855,10 +818,8 @@ class TestSolverSOS2:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments([[0.0, 10.0], [50.0, 100.0]]),
-            y_points=segments([[0.0, 5.0], [20.0, 80.0]]),
+            (x, segments([[0.0, 10.0], [50.0, 100.0]])),
+            (y, segments([[0.0, 5.0], [20.0, 80.0]])),
         )
         m.add_constraints(x >= 60, name="x_min")
         m.add_objective(y)
@@ -962,10 +923,8 @@ class TestActiveParameter:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50, 100],
-            y_points=[5, 2, 20, 80],
+            (x, [0, 10, 50, 100]),
+            (y, [5, 10, 20, 80]),
             active=u,
             method="incremental",
         )
@@ -978,10 +937,8 @@ class TestActiveParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 10, 50],
-            y_points=[0, 5, 30],
+            (x, [0, 10, 50]),
+            (y, [0, 5, 30]),
             method="incremental",
         )
         assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" not in m.constraints
@@ -993,10 +950,8 @@ class TestActiveParameter:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
             active=1 * u,
             method="incremental",
         )
@@ -1021,10 +976,8 @@ class TestSolverActive:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
             active=u,
             method="incremental",
         )
@@ -1043,10 +996,8 @@ class TestSolverActive:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
             active=u,
             method="incremental",
         )
@@ -1069,10 +1020,8 @@ class TestSolverActive:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[20, 60, 100],
-            y_points=[5, 20, 50],
+            (x, [20, 60, 100]),
+            (y, [5, 20, 50]),
             active=u,
             method="incremental",
         )
@@ -1094,10 +1043,8 @@ class TestSolverActive:
         u = m.add_variables(binary=True, name="commit")
 
         m.add_piecewise_constraints(
-            x=power,
-            y=fuel,
-            x_points=[p_min, p_max],
-            y_points=[fuel_at_pmin, fuel_at_pmax],
+            (power, [p_min, p_max]),
+            (fuel, [fuel_at_pmin, fuel_at_pmax]),
             active=u,
             method="incremental",
         )
@@ -1119,10 +1066,8 @@ class TestSolverActive:
         y = m.add_variables(coords=[gens], name="y")
         u = m.add_variables(binary=True, coords=[gens], name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
             active=u,
             method="incremental",
         )
@@ -1151,10 +1096,8 @@ class TestSolverActiveSOS2:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
+            (x, [0, 50, 100]),
+            (y, [0, 10, 50]),
             active=u,
             method="sos2",
         )
@@ -1172,10 +1115,8 @@ class TestSolverActiveSOS2:
         y = m.add_variables(name="y")
         u = m.add_variables(binary=True, name="u")
         m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments([[0.0, 10.0], [50.0, 100.0]]),
-            y_points=segments([[0.0, 5.0], [20.0, 80.0]]),
+            (x, segments([[0.0, 10.0], [50.0, 100.0]])),
+            (y, segments([[0.0, 5.0], [20.0, 80.0]])),
             active=u,
         )
         m.add_constraints(u <= 0, name="force_off")
@@ -1192,24 +1133,15 @@ class TestSolverActiveSOS2:
 
 
 class TestNVariable:
-    """Tests for the N-variable (dict-based) piecewise constraint API."""
-
-    def _make_chp_breakpoints(self) -> xr.DataArray:
-        """Create a 2-variable breakpoint array for a CHP-like problem."""
-        return xr.DataArray(
-            [[0.0, 50.0, 100.0], [0.0, 20.0, 60.0]],
-            dims=["var", BREAKPOINT_DIM],
-            coords={"var": ["power", "fuel"], BREAKPOINT_DIM: [0, 1, 2]},
-        )
+    """Tests for the N-variable tuple-based piecewise constraint API."""
 
     def test_sos2_creates_lambda_and_link(self) -> None:
         m = Model()
         power = m.add_variables(lower=0, upper=100, name="power")
         fuel = m.add_variables(name="fuel")
-        bp = self._make_chp_breakpoints()
         m.add_piecewise_constraints(
-            exprs={"power": power, "fuel": fuel},
-            breakpoints=bp,
+            (power, [0.0, 50.0, 100.0]),
+            (fuel, [0.0, 20.0, 60.0]),
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
@@ -1220,10 +1152,9 @@ class TestNVariable:
         m = Model()
         power = m.add_variables(lower=0, upper=100, name="power")
         fuel = m.add_variables(name="fuel")
-        bp = self._make_chp_breakpoints()
         m.add_piecewise_constraints(
-            exprs={"power": power, "fuel": fuel},
-            breakpoints=bp,
+            (power, [0.0, 50.0, 100.0]),
+            (fuel, [0.0, 20.0, 60.0]),
             method="incremental",
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
@@ -1233,20 +1164,19 @@ class TestNVariable:
         m = Model()
         power = m.add_variables(lower=0, upper=100, name="power")
         fuel = m.add_variables(name="fuel")
-        bp = self._make_chp_breakpoints()
         m.add_piecewise_constraints(
-            exprs={"power": power, "fuel": fuel},
-            breakpoints=bp,
+            (power, [0.0, 50.0, 100.0]),
+            (fuel, [0.0, 20.0, 60.0]),
         )
         # Auto should select incremental for monotonic breakpoints
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
 
-    def test_missing_breakpoints_raises(self) -> None:
+    def test_single_pair_raises(self) -> None:
         m = Model()
         power = m.add_variables(name="power")
-        with pytest.raises(TypeError, match="both 'exprs' and 'breakpoints'"):
+        with pytest.raises(TypeError, match="at least 2"):
             m.add_piecewise_constraints(
-                exprs={"power": power},
+                (power, [0.0, 50.0, 100.0]),
             )
 
     def test_three_variables(self) -> None:
@@ -1254,60 +1184,25 @@ class TestNVariable:
         power = m.add_variables(lower=0, upper=100, name="power")
         fuel = m.add_variables(name="fuel")
         heat = m.add_variables(name="heat")
-        bp = xr.DataArray(
-            [[0.0, 50.0, 100.0], [0.0, 20.0, 60.0], [0.0, 30.0, 80.0]],
-            dims=["var", BREAKPOINT_DIM],
-            coords={"var": ["power", "fuel", "heat"], BREAKPOINT_DIM: [0, 1, 2]},
-        )
         m.add_piecewise_constraints(
-            exprs={"power": power, "fuel": fuel, "heat": heat},
-            breakpoints=bp,
+            (power, [0.0, 50.0, 100.0]),
+            (fuel, [0.0, 20.0, 60.0]),
+            (heat, [0.0, 30.0, 80.0]),
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
-        # link constraint should have var dimension
+        # link constraint should have _pwl_var dimension
         link = m.constraints[f"pwl0{PWL_X_LINK_SUFFIX}"]
-        assert "var" in link.labels.dims
+        assert "_pwl_var" in link.labels.dims
 
     def test_custom_name(self) -> None:
         m = Model()
         power = m.add_variables(lower=0, upper=100, name="power")
         fuel = m.add_variables(name="fuel")
-        bp = self._make_chp_breakpoints()
         m.add_piecewise_constraints(
-            exprs={"power": power, "fuel": fuel},
-            breakpoints=bp,
+            (power, [0.0, 50.0, 100.0]),
+            (fuel, [0.0, 20.0, 60.0]),
             name="chp",
         )
         assert f"chp{PWL_DELTA_SUFFIX}" in m.variables
-
-    def test_missing_breakpoint_dim_raises(self) -> None:
-        m = Model()
-        power = m.add_variables(name="power")
-        fuel = m.add_variables(name="fuel")
-        bp = xr.DataArray(
-            [[0.0, 50.0], [0.0, 20.0]],
-            dims=["var", "knot"],
-            coords={"var": ["power", "fuel"], "knot": [0, 1]},
-        )
-        with pytest.raises(ValueError, match="must have a"):
-            m.add_piecewise_constraints(
-                exprs={"power": power, "fuel": fuel},
-                breakpoints=bp,
-            )
-
-    def test_link_dim_mismatch_raises(self) -> None:
-        m = Model()
-        power = m.add_variables(name="power")
-        fuel = m.add_variables(name="fuel")
-        bp = xr.DataArray(
-            [[0.0, 50.0], [0.0, 20.0]],
-            dims=["wrong", BREAKPOINT_DIM],
-            coords={"wrong": ["a", "b"], BREAKPOINT_DIM: [0, 1]},
-        )
-        with pytest.raises(ValueError, match="Could not auto-detect"):
-            m.add_piecewise_constraints(
-                exprs={"power": power, "fuel": fuel},
-                breakpoints=bp,
-            )
