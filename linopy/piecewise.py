@@ -1248,6 +1248,11 @@ def _add_piecewise_nvar(
             computed_mask = computed_mask.broadcast_like(breakpoints_da)
         lambda_mask = computed_mask.any(dim=link_dim)
 
+    # Broadcast breakpoints to cover expression dimensions (e.g. time)
+    breakpoints_da = _broadcast_points(
+        breakpoints_da, *exprs.values(), disjunctive=False
+    )
+
     target_expr = _build_stacked_expr(model, exprs, breakpoints_da, link_dim)
     extra = _extra_coords(breakpoints_da, dim, link_dim)
     lambda_coords = extra + [pd.Index(breakpoints_da.coords[dim].values, name=dim)]
