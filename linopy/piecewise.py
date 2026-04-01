@@ -437,8 +437,8 @@ def tangent_lines(
 # ---------------------------------------------------------------------------
 
 
-def _validate_xy_points(x_points: DataArray, y_points: DataArray) -> bool:
-    """Validate x/y breakpoint arrays and return whether formulation is disjunctive."""
+def _validate_breakpoint_shapes(x_points: DataArray, y_points: DataArray) -> bool:
+    """Validate breakpoint array shapes and return whether formulation is disjunctive."""
     if BREAKPOINT_DIM not in x_points.dims:
         raise ValueError(
             f"x_points is missing the '{BREAKPOINT_DIM}' dimension, "
@@ -662,7 +662,7 @@ def add_piecewise_constraints(
 
     # Validate all breakpoint pairs have compatible shapes
     for i in range(1, len(coerced)):
-        _validate_xy_points(first_bp, coerced[i][1])
+        _validate_breakpoint_shapes(first_bp, coerced[i][1])
 
     # Broadcast all breakpoints to match all expression dimensions
     all_exprs = [expr for expr, _ in coerced]
