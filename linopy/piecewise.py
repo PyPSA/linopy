@@ -870,11 +870,15 @@ def add_piecewise_constraints(
                 f"got {type(pair)}."
             )
 
-    # Coerce all breakpoints
+    # Coerce all breakpoints.  Drop scalar coordinates (e.g. left over
+    # from bp.sel(var="power")) so they don't conflict when stacking.
     coerced: list[tuple[LinExprLike, DataArray]] = []
     for expr, bp in pairs:
         if not isinstance(bp, DataArray):
             bp = _coerce_breaks(bp)
+        scalar_coords = [c for c in bp.coords if c not in bp.dims]
+        if scalar_coords:
+            bp = bp.drop_vars(scalar_coords)
         coerced.append((expr, bp))
 
     # Check for disjunctive (segment dimension) on first pair
