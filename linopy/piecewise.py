@@ -157,6 +157,63 @@ def _dict_segments_to_array(
     return combined
 
 
+def _breakpoints_from_slopes(
+    slopes: BreaksLike,
+    x_points: BreaksLike,
+    y0: float | dict[str, float] | pd.Series | DataArray,
+    dim: str | None,
+) -> DataArray:
+    """Convert slopes + x_points + y0 into a breakpoint DataArray."""
+    slopes_arr = _coerce_breaks(slopes, dim)
+    xp_arr = _coerce_breaks(x_points, dim)
+
+    # 1D case: single set of breakpoints
+    if slopes_arr.ndim == 1:
+        if not isinstance(y0, Real):
+            raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
+        pts = slopes_to_points(
+            list(xp_arr.values), list(slopes_arr.values), float(y0)
+        )
+        return _sequence_to_array(pts)
+
+    # Multi-dim case: per-entity slopes
+    entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
+    if len(entity_dims) != 1:
+        raise ValueError(
+            f"Expected exactly one entity dimension in slopes, got {entity_dims}"
+        )
+    entity_dim = str(entity_dims[0])
+    entity_keys = slopes_arr.coords[entity_dim].values
+
+    # Resolve y0 per entity
+    if isinstance(y0, Real):
+        y0_map: dict[str, float] = {str(k): float(y0) for k in entity_keys}
+    elif isinstance(y0, dict):
+        y0_map = {str(k): float(y0[k]) for k in entity_keys}
+    elif isinstance(y0, pd.Series):
+        y0_map = {str(k): float(y0[k]) for k in entity_keys}
+    elif isinstance(y0, DataArray):
+        y0_map = {
+            str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys
+        }
+    else:
+        raise TypeError(
+            f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
+        )
+
+    computed: dict[str, Sequence[float]] = {}
+    for key in entity_keys:
+        sk = str(key)
+        sl = _strip_nan(slopes_arr.sel({entity_dim: key}).values)
+        if entity_dim in xp_arr.dims:
+            xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
+        else:
+            xp = _strip_nan(xp_arr.values)
+        computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
+
+    return _dict_to_array(computed, entity_dim)
+
+
 # ---------------------------------------------------------------------------
 # Public factory functions
 # ---------------------------------------------------------------------------
@@ -247,60 +304,11 @@ def breakpoints(
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
 
-    # Slopes mode: convert to points, then fall through to coerce
+    # Slopes mode
     if slopes is not None:
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-        slopes_arr = _coerce_breaks(slopes, dim)
-        xp_arr = _coerce_breaks(x_points, dim)
-
-        # 1D case: single set of breakpoints
-        if slopes_arr.ndim == 1:
-            if not isinstance(y0, Real):
-                raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
-            pts = slopes_to_points(
-                list(xp_arr.values), list(slopes_arr.values), float(y0)
-            )
-            return _sequence_to_array(pts)
-
-        # Multi-dim case: per-entity slopes
-        # Identify the entity dimension (not BREAKPOINT_DIM)
-        entity_dims = [d for d in slopes_arr.dims if d != BREAKPOINT_DIM]
-        if len(entity_dims) != 1:
-            raise ValueError(
-                f"Expected exactly one entity dimension in slopes, got {entity_dims}"
-            )
-        entity_dim = str(entity_dims[0])
-        entity_keys = slopes_arr.coords[entity_dim].values
-
-        # Resolve y0 per entity
-        if isinstance(y0, Real):
-            y0_map: dict[str, float] = {str(k): float(y0) for k in entity_keys}
-        elif isinstance(y0, dict):
-            y0_map = {str(k): float(y0[k]) for k in entity_keys}
-        elif isinstance(y0, pd.Series):
-            y0_map = {str(k): float(y0[k]) for k in entity_keys}
-        elif isinstance(y0, DataArray):
-            y0_map = {
-                str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys
-            }
-        else:
-            raise TypeError(
-                f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
-            )
-
-        # Compute points per entity
-        computed: dict[str, Sequence[float]] = {}
-        for key in entity_keys:
-            sk = str(key)
-            sl = _strip_nan(slopes_arr.sel({entity_dim: key}).values)
-            if entity_dim in xp_arr.dims:
-                xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
-            else:
-                xp = _strip_nan(xp_arr.values)
-            computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
-
-        return _dict_to_array(computed, entity_dim)
+        return _breakpoints_from_slopes(slopes, x_points, y0, dim)
 
     # Points mode
     if values is None:
@@ -406,6 +414,7 @@ def tangent_lines(
     y_points = _coerce_breaks(y_points)
 
     def _to_seg(da: DataArray, seg_index: np.ndarray) -> DataArray:
+        """Rename breakpoint dim to segment dim and reassign coordinates."""
         da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
         da[LP_SEG_DIM] = seg_index
         return da
