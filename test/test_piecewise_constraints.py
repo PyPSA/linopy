@@ -358,7 +358,7 @@ class TestContinuousEquality:
 # ===========================================================================
 
 
-class TestPiecewiseEnvelope:
+class TestTangentLines:
     def test_basic_variable(self) -> None:
         """Envelope from a Variable produces a LinearExpression with seg dim."""
         m = Model()
@@ -821,7 +821,7 @@ class TestSolverSOS2:
 
 
 @pytest.mark.skipif(len(_any_solvers) == 0, reason="No solver available")
-class TestSolverEnvelope:
+class TestSolverTangentLines:
     @pytest.fixture(params=_any_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
