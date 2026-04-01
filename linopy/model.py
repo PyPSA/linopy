@@ -514,9 +514,16 @@ class Model:
             for group in self._groups.values():
                 n_vars = len(group.variables)
                 n_cons = len(group.constraints)
+                # Collect user-facing dims (skip internal _ prefixed dims)
+                user_dims: list[str] = []
+                for var in group.variables.data.values():
+                    for d in var.coords:
+                        if not str(d).startswith("_") and str(d) not in user_dims:
+                            user_dims.append(str(d))
+                dims_str = f" over ({', '.join(user_dims)})" if user_dims else ""
                 result += (
                     f" * {group.name} ({group.method}):"
-                    f" {n_vars} variables, {n_cons} constraints\n"
+                    f" {n_vars} variables, {n_cons} constraints{dims_str}\n"
                 )
 
         result += f"\nStatus:\n-------\n{self.status}"
