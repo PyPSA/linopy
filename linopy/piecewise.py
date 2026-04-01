@@ -31,7 +31,6 @@ from linopy.constants import (
     PWL_LAMBDA_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
-    PWL_Y_LINK_SUFFIX,
     SEGMENT_DIM,
 )
 
@@ -682,21 +681,17 @@ def add_piecewise_constraints(
     active_expr = _to_linexpr(active) if active is not None else None
 
     if disjunctive:
-        # Disjunctive only supports 2-variable for now
-        if len(coerced) != 2:
+        if method == "incremental":
             raise ValueError(
-                "Disjunctive piecewise constraints currently support "
-                "exactly 2 (expression, breakpoints) pairs."
+                "Incremental method is not supported for disjunctive constraints"
             )
         return _add_disjunctive(
             model,
             name,
-            lin_exprs[0],
-            lin_exprs[1],
-            bp_list[0],
-            bp_list[1],
+            lin_exprs,
+            bp_list,
+            link_coords,
             bp_mask,
-            method,
             active_expr,
         )
 
@@ -901,68 +896,81 @@ def _add_incremental(
 def _add_disjunctive(
     model: Model,
     name: str,
-    x_expr: LinearExpression,
-    y_expr: LinearExpression,
-    x_points: DataArray,
-    y_points: DataArray,
-    mask: DataArray | None,
-    method: str,
+    lin_exprs: list[LinearExpression],
+    bp_list: list[DataArray],
+    link_coords: list[str],
+    bp_mask: DataArray | None,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Handle disjunctive piecewise equality constraints (2-variable only)."""
-    if method == "incremental":
-        raise ValueError(
-            "Incremental method is not supported for disjunctive constraints"
-        )
+    """Disjunctive SOS2 formulation for N-variable piecewise equality."""
+    from linopy.expressions import LinearExpression
 
-    _validate_numeric_breakpoint_coords(x_points)
-    if not _has_trailing_nan_only(x_points):
+    link_dim = "_pwl_var"
+    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
+
+    _validate_numeric_breakpoint_coords(stacked_bp)
+    if not _has_trailing_nan_only(stacked_bp):
         raise ValueError(
             "Disjunctive SOS2 does not support non-trailing NaN breakpoints. "
             "NaN values must only appear at the end of the breakpoint sequence."
         )
 
+    # Stack expressions along link dimension
+    stacked_data = _stack_along_link(
+        [e.data for e in lin_exprs], link_coords, link_dim
+    )
+    target_expr = LinearExpression(stacked_data, model)
+
+    # Compute stacked mask
+    stacked_mask = None
+    if bp_mask is not None:
+        stacked_mask = _stack_along_link(
+            [bp_mask] * len(link_coords), link_coords, link_dim
+        )
+
+    dim = BREAKPOINT_DIM
+    extra = _var_coords_from(stacked_bp, exclude={dim, SEGMENT_DIM, link_dim})
+    lambda_coords = extra + [
+        pd.Index(stacked_bp.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
+        pd.Index(stacked_bp.coords[dim].values, name=dim),
+    ]
+    binary_coords = extra + [
+        pd.Index(stacked_bp.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
+    ]
+
+    # Masks
+    lambda_mask = None
+    binary_mask = None
+    if stacked_mask is not None:
+        # Aggregate across link_dim — all variables must be valid
+        agg_mask = stacked_mask.all(dim=link_dim)
+        lambda_mask = agg_mask
+        binary_mask = agg_mask.any(dim=dim)
+
     binary_name = f"{name}{PWL_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-    y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
-
-    extra = _var_coords_from(x_points, exclude={BREAKPOINT_DIM, SEGMENT_DIM})
-    lambda_coords = extra + [
-        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
-        pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
-    ]
-    binary_coords = extra + [
-        pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
-    ]
-
-    binary_mask = mask.any(dim=BREAKPOINT_DIM) if mask is not None else None
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
 
     binary_var = model.add_variables(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
     )
 
     rhs = active if active is not None else 1
-    select_con = model.add_constraints(
+    model.add_constraints(
         binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name
     )
 
     lambda_var = model.add_variables(
-        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=mask
+        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
     )
 
-    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=BREAKPOINT_DIM)
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
 
     model.add_constraints(
-        lambda_var.sum(dim=BREAKPOINT_DIM) == binary_var, name=convex_name
+        lambda_var.sum(dim=dim) == binary_var, name=convex_name
     )
 
-    x_weighted = (lambda_var * x_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
-    model.add_constraints(x_expr == x_weighted, name=x_link_name)
-
-    y_weighted = (lambda_var * y_points).sum(dim=[SEGMENT_DIM, BREAKPOINT_DIM])
-    model.add_constraints(y_expr == y_weighted, name=y_link_name)
-
-    return select_con
+    weighted = (lambda_var * stacked_bp).sum(dim=[SEGMENT_DIM, dim])
+    return model.add_constraints(target_expr == weighted, name=link_name)

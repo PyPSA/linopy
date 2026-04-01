@@ -579,6 +579,23 @@ class TestDisjunctive:
         assert "generator" in binary.dims
         assert "generator" in lam.dims
 
+    def test_three_variables(self) -> None:
+        """Disjunctive with 3 variables creates single link constraint."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        m.add_piecewise_constraints(
+            (x, segments([[0, 10], [50, 100]])),
+            (y, segments([[0, 5], [20, 80]])),
+            (z, segments([[0, 3], [15, 60]])),
+        )
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        # Single link constraint with _pwl_var dimension
+        link = m.constraints[f"pwl0{PWL_X_LINK_SUFFIX}"]
+        assert "_pwl_var" in [str(d) for d in link.dims]
+
 
 # ===========================================================================
 # Validation
@@ -1278,19 +1295,21 @@ class TestValidationEdgeCases:
         with pytest.raises(ValueError, match="segment dimension"):
             m.add_piecewise_constraints((x, x_pts), (y, y_pts))
 
-    def test_disjunctive_three_pairs_raises(self) -> None:
-        """Disjunctive with 3 pairs raises ValueError."""
+    def test_disjunctive_three_pairs(self) -> None:
+        """Disjunctive with 3 pairs works (N-variable)."""
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         z = m.add_variables(name="z")
         seg = segments([[0, 10], [50, 100]])
-        with pytest.raises(ValueError, match="exactly 2"):
-            m.add_piecewise_constraints(
-                (x, seg),
-                (y, seg),
-                (z, seg),
-            )
+        m.add_piecewise_constraints(
+            (x, seg),
+            (y, seg),
+            (z, seg),
+        )
+        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
 
     def test_disjunctive_interior_nan_raises(self) -> None:
         """Disjunctive with interior NaN raises ValueError."""
