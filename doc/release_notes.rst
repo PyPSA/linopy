@@ -11,11 +11,11 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Refactor ``add_piecewise_constraints()`` to a tuple-based API: ``m.add_piecewise_constraints((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, ``breakpoints()``, ``segments()``, and slopes mode. Removes ``piecewise()`` function and descriptor classes.
-* Add ``tangent_lines()`` utility for piecewise inequality bounds — returns a ``LinearExpression`` with one tangent line per segment, no auxiliary variables created. Use with regular ``add_constraints``.
+* Add ``add_piecewise_constraints()`` for piecewise linear equality constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_constraints((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, and unit commitment via the ``active`` parameter.
+* Add ``tangent_lines()`` for piecewise linear inequality bounds — returns a ``LinearExpression`` with one tangent line per segment, no auxiliary variables. Use with regular ``add_constraints``.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``active`` parameter to ``add_piecewise_constraints()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add ``slopes_to_points()`` utility for converting segment slopes to breakpoint y-coordinates.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
