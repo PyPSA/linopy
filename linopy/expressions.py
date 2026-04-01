@@ -654,7 +654,7 @@ class BaseExpression(ABC):
     def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    def __eq__(self, rhs: SideLike) -> Constraint:
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -2336,7 +2336,7 @@ def merge(
     has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
     has_linear_expression = any(type(e) is LinearExpression for e in exprs)
     if cls is None:
-        cls = QuadraticExpression if has_quad_expression else LinearExpression
+        cls = QuadraticExpression if has_quad_expression else LinearExpression  # type: ignore
 
     if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
         raise ValueError(

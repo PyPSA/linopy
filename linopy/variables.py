@@ -542,7 +542,7 @@ class Variable:
     def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    def __eq__(self, other: SideLike) -> Constraint:
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
