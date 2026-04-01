@@ -916,9 +916,7 @@ def _add_disjunctive(
         )
 
     # Stack expressions along link dimension
-    stacked_data = _stack_along_link(
-        [e.data for e in lin_exprs], link_coords, link_dim
-    )
+    stacked_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
     target_expr = LinearExpression(stacked_data, model)
 
     # Compute stacked mask
@@ -958,9 +956,7 @@ def _add_disjunctive(
     )
 
     rhs = active if active is not None else 1
-    model.add_constraints(
-        binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name
-    )
+    model.add_constraints(binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name)
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
@@ -968,9 +964,7 @@ def _add_disjunctive(
 
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
 
-    model.add_constraints(
-        lambda_var.sum(dim=dim) == binary_var, name=convex_name
-    )
+    model.add_constraints(lambda_var.sum(dim=dim) == binary_var, name=convex_name)
 
     weighted = (lambda_var * stacked_bp).sum(dim=[SEGMENT_DIM, dim])
     return model.add_constraints(target_expr == weighted, name=link_name)
