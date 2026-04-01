@@ -79,7 +79,6 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -537,31 +536,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    @overload
-    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, other: SideLike) -> Constraint: ...
-
-    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    @overload
-    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, other: SideLike) -> Constraint: ...
-
-    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, other: SideLike) -> Constraint: ...
-
-    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:

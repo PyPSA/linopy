@@ -7,10 +7,9 @@ constraint methods for use with linopy.Model.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from numbers import Real
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias, overload
 
 import numpy as np
 import pandas as pd
@@ -363,92 +362,26 @@ def segments(
     return _coerce_segments(values, dim)
 
 
-# ---------------------------------------------------------------------------
-# Piecewise expression and descriptor types
-# ---------------------------------------------------------------------------
-
-
-class PiecewiseExpression:
-    """
-    Lazy descriptor representing a piecewise linear function of an expression.
-
-    Created by :func:`piecewise`. Supports comparison operators so that
-    ``piecewise(x, ...) >= y`` produces a
-    :class:`PiecewiseConstraintDescriptor`.
-    """
-
-    __slots__ = ("active", "disjunctive", "expr", "x_points", "y_points")
-
-    def __init__(
-        self,
-        expr: LinExprLike,
-        x_points: DataArray,
-        y_points: DataArray,
-        disjunctive: bool,
-        active: LinExprLike | None = None,
-    ) -> None:
-        self.expr = expr
-        self.x_points = x_points
-        self.y_points = y_points
-        self.disjunctive = disjunctive
-        self.active = active
-
-    # y <= pw  →  Python tries y.__le__(pw) → NotImplemented → pw.__ge__(y)
-    def __ge__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:
-        return PiecewiseConstraintDescriptor(lhs=other, sign="<=", piecewise_func=self)
-
-    # y >= pw  →  Python tries y.__ge__(pw) → NotImplemented → pw.__le__(y)
-    def __le__(self, other: LinExprLike) -> PiecewiseConstraintDescriptor:
-        return PiecewiseConstraintDescriptor(lhs=other, sign=">=", piecewise_func=self)
-
-    # y == pw  →  Python tries y.__eq__(pw) → NotImplemented → pw.__eq__(y)
-    def __eq__(self, other: object) -> PiecewiseConstraintDescriptor:  # type: ignore[override]
-        from linopy.expressions import LinearExpression
-        from linopy.variables import Variable
-
-        if not isinstance(other, Variable | LinearExpression):
-            return NotImplemented
-        return PiecewiseConstraintDescriptor(lhs=other, sign="==", piecewise_func=self)
-
-
-@dataclass
-class PiecewiseConstraintDescriptor:
-    """Holds all information needed to add a piecewise constraint to a model."""
-
-    lhs: LinExprLike
-    sign: str  # "<=", ">=", "=="
-    piecewise_func: PiecewiseExpression
-
-
-def _detect_disjunctive(x_points: DataArray, y_points: DataArray) -> bool:
-    """
-    Detect whether point arrays represent a disjunctive formulation.
-
-    Both ``x_points`` and ``y_points`` **must** use the well-known dimension
-    names ``BREAKPOINT_DIM`` and, for disjunctive formulations,
-    ``SEGMENT_DIM``.  Use the :func:`breakpoints` / :func:`segments` factory
-    helpers to build arrays with the correct dimension names.
-    """
-    x_has_bp = BREAKPOINT_DIM in x_points.dims
-    y_has_bp = BREAKPOINT_DIM in y_points.dims
-    if not x_has_bp and not y_has_bp:
+def _validate_xy_points(x_points: DataArray, y_points: DataArray) -> bool:
+    """Validate x/y breakpoint arrays and return whether formulation is disjunctive."""
+    if BREAKPOINT_DIM not in x_points.dims:
         raise ValueError(
-            "x_points and y_points must have a breakpoint dimension. "
-            f"Got x_points dims {list(x_points.dims)} and y_points dims "
-            f"{list(y_points.dims)}. Use the breakpoints() or segments() "
-            f"factory to create correctly-dimensioned arrays."
-        )
-    if not x_has_bp:
-        raise ValueError(
-            "x_points is missing the breakpoint dimension, "
+            f"x_points is missing the '{BREAKPOINT_DIM}' dimension, "
             f"got dims {list(x_points.dims)}. "
             "Use the breakpoints() or segments() factory."
         )
-    if not y_has_bp:
+    if BREAKPOINT_DIM not in y_points.dims:
         raise ValueError(
-            "y_points is missing the breakpoint dimension, "
+            f"y_points is missing the '{BREAKPOINT_DIM}' dimension, "
             f"got dims {list(y_points.dims)}. "
             "Use the breakpoints() or segments() factory."
+        )
+
+    if x_points.sizes[BREAKPOINT_DIM] != y_points.sizes[BREAKPOINT_DIM]:
+        raise ValueError(
+            f"x_points and y_points must have same size along '{BREAKPOINT_DIM}', "
+            f"got {x_points.sizes[BREAKPOINT_DIM]} and "
+            f"{y_points.sizes[BREAKPOINT_DIM]}"
         )
 
     x_has_seg = SEGMENT_DIM in x_points.dims
@@ -459,64 +392,12 @@ def _detect_disjunctive(x_points: DataArray, y_points: DataArray) -> bool:
             f"both must. x_points dims: {list(x_points.dims)}, "
             f"y_points dims: {list(y_points.dims)}."
         )
-
-    return x_has_seg
-
-
-def piecewise(
-    expr: LinExprLike,
-    x_points: BreaksLike,
-    y_points: BreaksLike,
-    active: LinExprLike | None = None,
-) -> PiecewiseExpression:
-    """
-    Create a piecewise linear function descriptor.
-
-    Parameters
-    ----------
-    expr : Variable or LinearExpression
-        The "x" side expression.
-    x_points : BreaksLike
-        Breakpoint x-coordinates.
-    y_points : BreaksLike
-        Breakpoint y-coordinates.
-    active : Variable or LinearExpression, optional
-        Binary variable that scales the piecewise function. When
-        ``active=0``, all auxiliary variables are forced to zero, which
-        in turn forces the reconstructed x and y to zero. When
-        ``active=1``, the normal piecewise domain ``[x₀, xₙ]`` is
-        active. This is the only behavior the linear formulation
-        supports — selectively *relaxing* the constraint (letting x and
-        y float freely when off) would require big-M or indicator
-        constraints.
-
-    Returns
-    -------
-    PiecewiseExpression
-    """
-    if not isinstance(x_points, DataArray):
-        x_points = _coerce_breaks(x_points)
-    if not isinstance(y_points, DataArray):
-        y_points = _coerce_breaks(y_points)
-
-    disjunctive = _detect_disjunctive(x_points, y_points)
-
-    # Validate compatible shapes along breakpoint dimension
-    if x_points.sizes[BREAKPOINT_DIM] != y_points.sizes[BREAKPOINT_DIM]:
+    if x_has_seg and x_points.sizes[SEGMENT_DIM] != y_points.sizes[SEGMENT_DIM]:
         raise ValueError(
-            f"x_points and y_points must have same size along '{BREAKPOINT_DIM}', "
-            f"got {x_points.sizes[BREAKPOINT_DIM]} and "
-            f"{y_points.sizes[BREAKPOINT_DIM]}"
+            f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
         )
 
-    # Validate compatible shapes along segment dimension
-    if disjunctive:
-        if x_points.sizes[SEGMENT_DIM] != y_points.sizes[SEGMENT_DIM]:
-            raise ValueError(
-                f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
-            )
-
-    return PiecewiseExpression(expr, x_points, y_points, disjunctive, active)
+    return x_has_seg
 
 
 # ---------------------------------------------------------------------------
@@ -946,63 +827,191 @@ def _add_dpwl_sos2_core(
 # ---------------------------------------------------------------------------
 
 
+@overload
 def add_piecewise_constraints(
     model: Model,
-    descriptor: PiecewiseConstraintDescriptor | Constraint,
+    x: LinExprLike,
+    y: LinExprLike,
+    x_points: BreaksLike,
+    y_points: BreaksLike,
+    *,
+    sign: str = "==",
+    method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
+    active: LinExprLike | None = None,
+    name: str | None = None,
+    skip_nan_check: bool = False,
+) -> Constraint: ...
+
+
+@overload
+def add_piecewise_constraints(
+    model: Model,
+    *,
+    exprs: Mapping[str, LinExprLike],
+    breakpoints: DataArray,
+    method: Literal["sos2", "incremental", "auto"] = "auto",
+    name: str | None = None,
+    mask: DataArray | None = None,
+    skip_nan_check: bool = False,
+) -> Constraint: ...
+
+
+def add_piecewise_constraints(
+    model: Model,
+    *args: LinExprLike | BreaksLike,
+    # 2-variable keyword args
+    sign: str = "==",
+    active: LinExprLike | None = None,
+    # N-variable keyword args
+    exprs: Mapping[str, LinExprLike] | None = None,
+    breakpoints: DataArray | None = None,
+    mask: DataArray | None = None,
+    # Shared keyword args
     method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
     name: str | None = None,
     skip_nan_check: bool = False,
+    # Positional breakpoints for 2-variable case
+    x_points: BreaksLike | None = None,
+    y_points: BreaksLike | None = None,
 ) -> Constraint:
     """
-    Add a piecewise linear constraint from a :class:`PiecewiseConstraintDescriptor`.
+    Add piecewise linear constraints.
 
-    Typically called as::
+    Supports two calling conventions:
 
-        m.add_piecewise_constraints(piecewise(x, x_points, y_points) >= y)
+    **2-variable (positional):**
+
+    Links two expressions ``x`` and ``y`` via separate x/y breakpoints::
+
+        m.add_piecewise_constraints(x, y, x_points, y_points, sign="==")
+
+    **N-variable (keyword):**
+
+    Links N expressions through shared breakpoints (a single DataArray
+    whose coordinates match the dict keys)::
+
+        m.add_piecewise_constraints(
+            exprs={"power": power, "fuel": fuel, "heat": heat},
+            breakpoints=bp,
+        )
 
     Parameters
     ----------
     model : Model
         The linopy model.
-    descriptor : PiecewiseConstraintDescriptor
-        Created by comparing a variable/expression with a :class:`PiecewiseExpression`.
+    x : Variable or LinearExpression
+        The "x" side expression (2-variable case).
+    y : Variable or LinearExpression
+        The "y" side expression (2-variable case).
+    x_points : BreaksLike
+        Breakpoint x-coordinates (2-variable case).
+    y_points : BreaksLike
+        Breakpoint y-coordinates (2-variable case).
+    sign : str, default "=="
+        Constraint sign: "==", "<=", or ">=" (2-variable case).
+    active : Variable or LinearExpression, optional
+        Binary variable that scales the piecewise function (2-variable case).
+    exprs : dict of str to Variable/LinearExpression
+        Expressions to link (N-variable case).
+    breakpoints : DataArray
+        Shared breakpoint array (N-variable case).
+    mask : DataArray, optional
+        Boolean mask for valid constraints.
     method : {"auto", "sos2", "incremental", "lp"}, default "auto"
-        Formulation method.
+        Formulation method. "lp" is only available for the 2-variable case.
     name : str, optional
         Base name for generated variables/constraints.
     skip_nan_check : bool, default False
-        If True, skip NaN detection.
+        If True, skip NaN detection in breakpoints.
 
     Returns
     -------
     Constraint
     """
-    if not isinstance(descriptor, PiecewiseConstraintDescriptor):
+    if exprs is not None:
+        # N-variable path
+        if breakpoints is None:
+            raise TypeError(
+                "N-variable call requires both 'exprs' and 'breakpoints' keywords."
+            )
+        if method == "lp":
+            raise ValueError(
+                "Pure LP method is not supported for N-variable piecewise constraints. "
+                "Use method='sos2' or method='incremental'."
+            )
+        return _add_piecewise_nvar(
+            model,
+            exprs=dict(exprs),
+            breakpoints_da=breakpoints,
+            method=method,
+            name=name,
+            mask=mask,
+            skip_nan_check=skip_nan_check,
+        )
+    elif len(args) >= 2:
+        # 2-variable positional path: (x, y, x_points, y_points)
+        if len(args) == 4:
+            x_arg, y_arg, xp_arg, yp_arg = args
+        elif len(args) == 2 and x_points is not None and y_points is not None:
+            x_arg, y_arg = args
+            xp_arg, yp_arg = x_points, y_points
+        else:
+            raise TypeError(
+                "2-variable call requires 4 positional args: (x, y, x_points, y_points) "
+                "or 2 positional args with x_points= and y_points= keywords."
+            )
+        return _add_piecewise_2var(
+            model,
+            x=x_arg,
+            y=y_arg,
+            x_points=xp_arg,
+            y_points=yp_arg,
+            sign=sign,
+            method=method,
+            active=active,
+            name=name,
+            skip_nan_check=skip_nan_check,
+        )
+    else:
         raise TypeError(
-            f"Expected PiecewiseConstraintDescriptor, got {type(descriptor)}. "
-            f"Use: m.add_piecewise_constraints(piecewise(x, x_points, y_points) >= y)"
+            "add_piecewise_constraints() requires either:\n"
+            "  - 2-variable: (x, y, x_points, y_points, sign=...)\n"
+            "  - N-variable: (exprs={...}, breakpoints=...)"
         )
 
+
+def _add_piecewise_2var(
+    model: Model,
+    x: LinExprLike,
+    y: LinExprLike,
+    x_points: BreaksLike,
+    y_points: BreaksLike,
+    sign: str = "==",
+    method: str = "auto",
+    active: LinExprLike | None = None,
+    name: str | None = None,
+    skip_nan_check: bool = False,
+) -> Constraint:
+    """2-variable piecewise constraint: y sign f(x)."""
     if method not in ("sos2", "incremental", "auto", "lp"):
         raise ValueError(
             f"method must be 'sos2', 'incremental', 'auto', or 'lp', got '{method}'"
         )
 
-    pw = descriptor.piecewise_func
-    sign = descriptor.sign
-    y_lhs = descriptor.lhs
-    x_expr_raw = pw.expr
-    x_points = pw.x_points
-    y_points = pw.y_points
-    disjunctive = pw.disjunctive
-    active = pw.active
+    # Coerce breakpoints
+    if not isinstance(x_points, DataArray):
+        x_points = _coerce_breaks(x_points)
+    if not isinstance(y_points, DataArray):
+        y_points = _coerce_breaks(y_points)
+
+    disjunctive = _validate_xy_points(x_points, y_points)
 
     # Broadcast points to match expression dimensions
-    x_points = _broadcast_points(x_points, x_expr_raw, y_lhs, disjunctive=disjunctive)
-    y_points = _broadcast_points(y_points, x_expr_raw, y_lhs, disjunctive=disjunctive)
+    x_points = _broadcast_points(x_points, x, y, disjunctive=disjunctive)
+    y_points = _broadcast_points(y_points, x, y, disjunctive=disjunctive)
 
     # Compute mask
-    mask = _compute_combined_mask(x_points, y_points, skip_nan_check)
+    bp_mask = _compute_combined_mask(x_points, y_points, skip_nan_check)
 
     # Name
     if name is None:
@@ -1010,13 +1019,10 @@ def add_piecewise_constraints(
         model._pwlCounter += 1
 
     # Convert to LinearExpressions
-    x_expr = _to_linexpr(x_expr_raw)
-    y_expr = _to_linexpr(y_lhs)
-
-    # Convert active to LinearExpression if provided
+    x_expr = _to_linexpr(x)
+    y_expr = _to_linexpr(y)
     active_expr = _to_linexpr(active) if active is not None else None
 
-    # Validate: active is not supported with LP method
     if active_expr is not None and method == "lp":
         raise ValueError(
             "The 'active' parameter is not supported with method='lp'. "
@@ -1032,7 +1038,7 @@ def add_piecewise_constraints(
             sign,
             x_points,
             y_points,
-            mask,
+            bp_mask,
             method,
             active_expr,
         )
@@ -1045,10 +1051,230 @@ def add_piecewise_constraints(
             sign,
             x_points,
             y_points,
-            mask,
+            bp_mask,
             method,
             skip_nan_check,
             active_expr,
+        )
+
+
+# ---------------------------------------------------------------------------
+# N-variable path (shared-lambda linking)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_link_dim(
+    bp: DataArray,
+    expr_keys: set[str],
+    exclude_dims: set[str],
+) -> str:
+    """Auto-detect the linking dimension from breakpoints."""
+    for d in bp.dims:
+        if d in exclude_dims:
+            continue
+        coord_set = {str(c) for c in bp.coords[d].values}
+        if coord_set == expr_keys:
+            return str(d)
+    raise ValueError(
+        "Could not auto-detect linking dimension from breakpoints. "
+        "Ensure breakpoints have a dimension whose coordinates match "
+        f"the expression dict keys. "
+        f"Breakpoint dimensions: {list(bp.dims)}, "
+        f"expression keys: {list(expr_keys)}"
+    )
+
+
+def _build_stacked_expr(
+    model: Model,
+    expr_dict: dict[str, LinExprLike],
+    bp: DataArray,
+    link_dim: str,
+) -> LinearExpression:
+    """Stack expressions along the link dimension."""
+    from linopy.expressions import LinearExpression
+
+    link_coords = list(bp.coords[link_dim].values)
+    expr_data_list = []
+    for k in link_coords:
+        e = expr_dict[str(k)]
+        linexpr = _to_linexpr(e)
+        expr_data_list.append(linexpr.data.expand_dims({link_dim: [k]}))
+
+    stacked_data = xr.concat(expr_data_list, dim=link_dim)
+    return LinearExpression(stacked_data, model)
+
+
+def _add_pwl_sos2_nvar(
+    model: Model,
+    name: str,
+    bp: DataArray,
+    dim: str,
+    target_expr: LinearExpression,
+    lambda_coords: list[pd.Index],
+    lambda_mask: DataArray | None,
+) -> Constraint:
+    """SOS2 formulation for N-variable linking."""
+    lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+    convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+
+    lambda_var = model.add_variables(
+        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+    )
+
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+
+    model.add_constraints(lambda_var.sum(dim=dim) == 1, name=convex_name)
+
+    weighted_sum = (lambda_var * bp).sum(dim=dim)
+    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+
+
+def _add_pwl_incremental_nvar(
+    model: Model,
+    name: str,
+    bp: DataArray,
+    dim: str,
+    target_expr: LinearExpression,
+    extra_coords: list[pd.Index],
+    bp_mask: DataArray | None,
+    link_dim: str | None,
+) -> Constraint:
+    """Incremental formulation for N-variable linking."""
+    delta_name = f"{name}{PWL_DELTA_SUFFIX}"
+    fill_name = f"{name}{PWL_FILL_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+
+    n_segments = bp.sizes[dim] - 1
+    seg_dim = f"{dim}_seg"
+    seg_index = pd.Index(range(n_segments), name=seg_dim)
+    delta_coords = extra_coords + [seg_index]
+
+    steps = bp.diff(dim).rename({dim: seg_dim})
+    steps[seg_dim] = seg_index
+
+    if bp_mask is not None:
+        bp_mask_agg = bp_mask
+        if link_dim is not None:
+            bp_mask_agg = bp_mask_agg.all(dim=link_dim)
+        mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
+        mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
+        mask_lo[seg_dim] = seg_index
+        mask_hi[seg_dim] = seg_index
+        delta_mask: DataArray | None = mask_lo & mask_hi
+    else:
+        delta_mask = None
+
+    delta_var = model.add_variables(
+        lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+    )
+
+    fill_con: Constraint | None = None
+    if n_segments >= 2:
+        delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
+        delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+        fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+
+    bp0 = bp.isel({dim: 0})
+    weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0
+    link_con = model.add_constraints(target_expr == weighted_sum, name=link_name)
+
+    return fill_con if fill_con is not None else link_con
+
+
+def _compute_mask_nvar(
+    mask: DataArray | None,
+    bp: DataArray,
+    skip_nan_check: bool,
+) -> DataArray | None:
+    """Compute mask from NaN values in breakpoints (N-variable path)."""
+    if skip_nan_check:
+        if bool(bp.isnull().any()):
+            raise ValueError(
+                "skip_nan_check=True but breakpoints contain NaN. "
+                "Either remove NaN values or set skip_nan_check=False."
+            )
+        return mask
+    nan_mask = ~bp.isnull()
+    if mask is not None:
+        return mask & nan_mask
+    return nan_mask if bool(bp.isnull().any()) else None
+
+
+def _add_piecewise_nvar(
+    model: Model,
+    exprs: dict[str, LinExprLike],
+    breakpoints_da: DataArray,
+    method: str = "auto",
+    name: str | None = None,
+    mask: DataArray | None = None,
+    skip_nan_check: bool = False,
+) -> Constraint:
+    """N-variable piecewise constraint with shared lambdas."""
+    if method not in ("sos2", "incremental", "auto"):
+        raise ValueError(
+            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
+        )
+
+    dim = BREAKPOINT_DIM
+    if dim not in breakpoints_da.dims:
+        raise ValueError(
+            f"breakpoints must have a '{dim}' dimension. "
+            f"Got dims {list(breakpoints_da.dims)}. "
+            "Use the breakpoints() factory to create the array."
+        )
+
+    # Auto-detect method
+    if method in ("incremental", "auto"):
+        is_monotonic = _check_strict_monotonicity(breakpoints_da)
+        trailing_nan_only = _has_trailing_nan_only(breakpoints_da)
+        if method == "auto":
+            method = "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
+        elif not is_monotonic:
+            raise ValueError(
+                "Incremental method requires strictly monotonic breakpoints."
+            )
+        if method == "incremental" and not trailing_nan_only:
+            raise ValueError(
+                "Incremental method does not support non-trailing NaN breakpoints."
+            )
+
+    if method == "sos2":
+        _validate_numeric_breakpoint_coords(breakpoints_da)
+
+    if name is None:
+        name = f"pwl{model._pwlCounter}"
+        model._pwlCounter += 1
+
+    # Resolve expressions and linking dimension
+    expr_keys = set(exprs.keys())
+    link_dim = _resolve_link_dim(breakpoints_da, expr_keys, {dim})
+    computed_mask = _compute_mask_nvar(mask, breakpoints_da, skip_nan_check)
+
+    lambda_mask = None
+    if computed_mask is not None:
+        if link_dim not in computed_mask.dims:
+            computed_mask = computed_mask.broadcast_like(breakpoints_da)
+        lambda_mask = computed_mask.any(dim=link_dim)
+
+    target_expr = _build_stacked_expr(model, exprs, breakpoints_da, link_dim)
+    extra = _extra_coords(breakpoints_da, dim, link_dim)
+    lambda_coords = extra + [pd.Index(breakpoints_da.coords[dim].values, name=dim)]
+
+    if method == "sos2":
+        return _add_pwl_sos2_nvar(
+            model, name, breakpoints_da, dim, target_expr, lambda_coords, lambda_mask
+        )
+    else:
+        return _add_pwl_incremental_nvar(
+            model,
+            name,
+            breakpoints_da,
+            dim,
+            target_expr,
+            extra,
+            computed_mask,
+            link_dim,
         )
 
 
