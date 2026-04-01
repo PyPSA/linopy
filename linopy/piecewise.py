@@ -552,20 +552,6 @@ def _broadcast_points(
     return points
 
 
-def _compute_combined_mask(
-    x_points: DataArray,
-    y_points: DataArray,
-    skip_nan_check: bool,
-) -> DataArray | None:
-    if skip_nan_check:
-        if bool(x_points.isnull().any()) or bool(y_points.isnull().any()):
-            raise ValueError(
-                "skip_nan_check=True but breakpoints contain NaN. "
-                "Either remove NaN values or set skip_nan_check=False."
-            )
-        return None
-    return ~(x_points.isnull() | y_points.isnull())
-
 
 # ---------------------------------------------------------------------------
 # Main entry point
