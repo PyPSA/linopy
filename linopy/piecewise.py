@@ -509,8 +509,11 @@ def _to_linexpr(expr: LinExprLike) -> LinearExpression:
     return expr.to_linexpr()
 
 
-def _extra_coords(points: DataArray, *exclude_dims: str | None) -> list[pd.Index]:
-    excluded = {d for d in exclude_dims if d is not None}
+def _var_coords_from(
+    points: DataArray, exclude: set[str] | None = None
+) -> list[pd.Index]:
+    """Extract pd.Index coords from points, excluding specified dimensions."""
+    excluded = exclude or set()
     return [
         pd.Index(points.coords[d].values, name=d)
         for d in points.dims
@@ -785,7 +788,7 @@ def _add_continuous_nvar(
             coords="minimal",
         )
 
-    extra = _extra_coords(stacked_bp, dim, link_dim)
+    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
     rhs = active if active is not None else 1
 
     if method == "sos2":
@@ -816,7 +819,7 @@ def _add_continuous_nvar(
         n_segments = stacked_bp.sizes[dim] - 1
         seg_dim = f"{dim}_seg"
         seg_index = pd.Index(range(n_segments), name=seg_dim)
-        delta_extra = _extra_coords(stacked_bp, dim, link_dim)
+        delta_extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
         delta_coords = delta_extra + [seg_index]
 
         steps = stacked_bp.diff(dim).rename({dim: seg_dim})
@@ -895,7 +898,7 @@ def _add_disjunctive(
     x_link_name = f"{name}{PWL_X_LINK_SUFFIX}"
     y_link_name = f"{name}{PWL_Y_LINK_SUFFIX}"
 
-    extra = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
+    extra = _var_coords_from(x_points, exclude={BREAKPOINT_DIM, SEGMENT_DIM})
     lambda_coords = extra + [
         pd.Index(x_points.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
         pd.Index(x_points.coords[BREAKPOINT_DIM].values, name=BREAKPOINT_DIM),
