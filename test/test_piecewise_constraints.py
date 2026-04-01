@@ -13,6 +13,7 @@ from linopy import (
     Model,
     available_solvers,
     breakpoints,
+    piecewise_envelope,
     segments,
     slopes_to_points,
 )
@@ -20,7 +21,6 @@ from linopy.constants import (
     BREAKPOINT_DIM,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
-    PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
@@ -29,8 +29,6 @@ from linopy.constants import (
     PWL_INC_LINK_SUFFIX,
     PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
-    PWL_LP_DOMAIN_SUFFIX,
-    PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
     PWL_Y_LINK_SUFFIX,
@@ -359,148 +357,62 @@ class TestContinuousEquality:
 
 
 # ===========================================================================
-# Continuous piecewise – inequality
+# Piecewise Envelope
 # ===========================================================================
 
 
-class TestContinuousInequality:
-    def test_concave_le_uses_lp(self) -> None:
-        """Y <= concave f(x) -> LP tangent lines"""
+class TestPiecewiseEnvelope:
+    def test_basic_variable(self) -> None:
+        """Envelope from a Variable produces a LinearExpression with seg dim."""
         m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        # Concave: slopes 0.8, 0.4 (decreasing)
-        # y <= pw -> sign="<="
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 40, 60],
-            sign="<=",
-        )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
-        assert f"pwl0{PWL_AUX_SUFFIX}" not in m.variables
+        x = m.add_variables(name="x", lower=0, upper=100)
+        env = piecewise_envelope(x, [0, 50, 100], [0, 40, 60])
+        assert LP_SEG_DIM in env.dims
 
-    def test_convex_le_uses_sos2_aux(self) -> None:
-        """Y <= convex f(x) -> SOS2 + aux"""
+    def test_basic_linexpr(self) -> None:
+        """Envelope from a LinearExpression works too."""
         m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        # Convex: slopes 0.2, 1.0 (increasing)
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 60],
-            sign="<=",
-        )
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
+        x = m.add_variables(name="x", lower=0, upper=100)
+        env = piecewise_envelope(1 * x, [0, 50, 100], [0, 40, 60])
+        assert LP_SEG_DIM in env.dims
 
-    def test_convex_ge_uses_lp(self) -> None:
-        """Y >= convex f(x) -> LP tangent lines"""
+    def test_segment_count(self) -> None:
+        """Number of segments = number of breakpoints - 1."""
         m = Model()
         x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        # Convex: slopes 0.2, 1.0 (increasing)
-        # y >= pw -> sign=">="
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 60],
-            sign=">=",
-        )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
-        assert f"pwl0{PWL_AUX_SUFFIX}" not in m.variables
+        env = piecewise_envelope(x, [0, 50, 100], [0, 40, 60])
+        assert env.sizes[LP_SEG_DIM] == 2
 
-    def test_concave_ge_uses_sos2_aux(self) -> None:
-        """Y >= concave f(x) -> SOS2 + aux"""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        # Concave: slopes 0.8, 0.4 (decreasing)
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 40, 60],
-            sign=">=",
-        )
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
+    def test_invalid_x_type_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be a Variable or LinearExpression"):
+            piecewise_envelope(42, [0, 50, 100], [0, 40, 60])  # type: ignore
 
-    def test_mixed_uses_sos2(self) -> None:
+    def test_concave_le_constraint(self) -> None:
+        """Using envelope with <= constraint creates regular constraints."""
         m = Model()
-        x = m.add_variables(name="x")
+        x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
-        # Mixed: slopes 0.5, 0.3, 0.9 (down then up)
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 30, 60, 100],
-            y_points=[0, 15, 24, 60],
-            sign="<=",
-        )
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
+        env = piecewise_envelope(x, [0, 50, 100], [0, 40, 60])
+        m.add_constraints(y <= env, name="pwl")
+        assert "pwl" in m.constraints
 
-    def test_method_lp_wrong_convexity_raises(self) -> None:
+    def test_convex_ge_constraint(self) -> None:
+        """Using envelope with >= constraint creates regular constraints."""
         m = Model()
-        x = m.add_variables(name="x")
+        x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
-        # Convex function + y <= pw + method="lp" should fail
-        with pytest.raises(ValueError, match="convex"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 50, 100],
-                y_points=[0, 10, 60],
-                sign="<=",
-                method="lp",
-            )
+        env = piecewise_envelope(x, [0, 50, 100], [0, 10, 60])
+        m.add_constraints(y >= env, name="pwl")
+        assert "pwl" in m.constraints
 
-    def test_method_lp_decreasing_breakpoints_raises(self) -> None:
+    def test_dataarray_breakpoints(self) -> None:
+        """Envelope accepts DataArray breakpoints."""
         m = Model()
         x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        with pytest.raises(ValueError, match="strictly increasing x_points"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[100, 50, 0],
-                y_points=[60, 10, 0],
-                sign=">=",
-                method="lp",
-            )
-
-    def test_auto_inequality_decreasing_breakpoints_raises(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        with pytest.raises(ValueError, match="strictly increasing x_points"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[100, 50, 0],
-                y_points=[60, 10, 0],
-                sign=">=",
-            )
-
-    def test_method_lp_equality_raises(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        with pytest.raises(ValueError, match="equality"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 50, 100],
-                y_points=[0, 40, 60],
-                method="lp",
-            )
+        x_pts = xr.DataArray([0, 50, 100], dims=[BREAKPOINT_DIM])
+        y_pts = xr.DataArray([0, 40, 60], dims=[BREAKPOINT_DIM])
+        env = piecewise_envelope(x, x_pts, y_pts)
+        assert LP_SEG_DIM in env.dims
 
 
 # ===========================================================================
@@ -650,35 +562,6 @@ class TestDisjunctive:
         assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert lam.attrs.get("sos_type") == 2
-
-    def test_inequality_creates_aux(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=segments([[0, 10], [50, 100]]),
-            y_points=segments([[0, 5], [20, 80]]),
-            sign="<=",
-        )
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-
-    def test_method_lp_raises(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        with pytest.raises(ValueError, match="disjunctive"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=segments([[0, 10], [50, 100]]),
-                y_points=segments([[0, 5], [20, 80]]),
-                sign="<=",
-                method="lp",
-            )
 
     def test_method_incremental_raises(self) -> None:
         m = Model()
@@ -882,69 +765,6 @@ class TestNaNMasking:
 
 
 # ===========================================================================
-# Convexity detection edge cases
-# ===========================================================================
-
-
-class TestConvexityDetection:
-    def test_linear_uses_lp_both_directions(self) -> None:
-        """Linear function uses LP for both <= and >= inequalities."""
-        m = Model()
-        x = m.add_variables(lower=0, upper=100, name="x")
-        y1 = m.add_variables(name="y1")
-        y2 = m.add_variables(name="y2")
-        # y1 >= f(x) -> LP
-        m.add_piecewise_constraints(
-            x=x,
-            y=y1,
-            x_points=[0, 50, 100],
-            y_points=[0, 25, 50],
-            sign=">=",
-        )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
-        # y2 <= f(x) -> also LP (linear is both convex and concave)
-        m.add_piecewise_constraints(
-            x=x,
-            y=y2,
-            x_points=[0, 50, 100],
-            y_points=[0, 25, 50],
-            sign="<=",
-        )
-        assert f"pwl1{PWL_LP_SUFFIX}" in m.constraints
-
-    def test_single_segment_uses_lp(self) -> None:
-        """A single segment (2 breakpoints) is linear; uses LP."""
-        m = Model()
-        x = m.add_variables(lower=0, upper=100, name="x")
-        y = m.add_variables(name="y")
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 100],
-            y_points=[0, 50],
-            sign=">=",
-        )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
-
-    def test_mixed_convexity_uses_sos2(self) -> None:
-        """Mixed convexity should fall back to SOS2 for inequalities."""
-        m = Model()
-        x = m.add_variables(lower=0, upper=100, name="x")
-        y = m.add_variables(name="y")
-        # Mixed: slope goes up then down -> neither convex nor concave
-        # y <= f(x) -> sign="<="
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 30, 60, 100],
-            y_points=[0, 40, 30, 50],
-            sign="<=",
-        )
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-
-
-# ===========================================================================
 # LP file output
 # ===========================================================================
 
@@ -968,24 +788,6 @@ class TestLPFileOutput:
         assert "sos" in content
         assert "s2" in content
 
-    def test_lp_formulation_no_sos2(self, tmp_path: Path) -> None:
-        m = Model()
-        x = m.add_variables(name="x", lower=0, upper=100)
-        y = m.add_variables(name="y")
-        # Concave: y <= pw uses LP
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0.0, 50.0, 100.0],
-            y_points=[0.0, 40.0, 60.0],
-            sign="<=",
-        )
-        m.add_objective(y)
-        fn = tmp_path / "pwl_lp.lp"
-        m.to_file(fn, io_api="lp")
-        content = fn.read_text().lower()
-        assert "s2" not in content
-
     def test_disjunctive_sos2_and_binary(self, tmp_path: Path) -> None:
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
@@ -1005,7 +807,7 @@ class TestLPFileOutput:
 
 
 # ===========================================================================
-# Solver integration – SOS2 capable
+# Solver integration -- SOS2 capable
 # ===========================================================================
 
 
@@ -1068,12 +870,12 @@ class TestSolverSOS2:
 
 
 # ===========================================================================
-# Solver integration – LP formulation (any solver)
+# Solver integration -- Envelope (any solver)
 # ===========================================================================
 
 
 @pytest.mark.skipif(len(_any_solvers) == 0, reason="No solver available")
-class TestSolverLP:
+class TestSolverEnvelope:
     @pytest.fixture(params=_any_solvers)
     def solver_name(self, request: pytest.FixtureRequest) -> str:
         return request.param
@@ -1084,14 +886,10 @@ class TestSolverLP:
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(name="y")
         # Concave: [0,0],[50,40],[100,60]
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 40, 60],
-            sign="<=",
-        )
+        env = piecewise_envelope(x, [0, 50, 100], [0, 40, 60])
+        m.add_constraints(y <= env, name="pwl")
         m.add_constraints(x <= 75, name="x_max")
+        m.add_constraints(x >= 0, name="x_lo")
         m.add_objective(y, sense="max")
         status, _ = m.solve(solver_name=solver_name)
         assert status == "ok"
@@ -1105,13 +903,8 @@ class TestSolverLP:
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(name="y")
         # Convex: [0,0],[50,10],[100,60]
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 60],
-            sign=">=",
-        )
+        env = piecewise_envelope(x, [0, 50, 100], [0, 10, 60])
+        m.add_constraints(y >= env, name="pwl")
         m.add_constraints(x >= 25, name="x_min")
         m.add_objective(y)
         status, _ = m.solve(solver_name=solver_name)
@@ -1126,14 +919,10 @@ class TestSolverLP:
         m1 = Model()
         x1 = m1.add_variables(lower=0, upper=100, name="x")
         y1 = m1.add_variables(name="y")
-        m1.add_piecewise_constraints(
-            x=x1,
-            y=y1,
-            x_points=[0, 50, 100],
-            y_points=[0, 40, 60],
-            sign="<=",
-        )
+        env1 = piecewise_envelope(x1, [0, 50, 100], [0, 40, 60])
+        m1.add_constraints(y1 <= env1, name="pwl")
         m1.add_constraints(x1 <= 75, name="x_max")
+        m1.add_constraints(x1 >= 0, name="x_lo")
         m1.add_objective(y1, sense="max")
         s1, _ = m1.solve(solver_name=solver_name)
 
@@ -1141,14 +930,14 @@ class TestSolverLP:
         m2 = Model()
         x2 = m2.add_variables(lower=0, upper=100, name="x")
         y2 = m2.add_variables(name="y")
-        m2.add_piecewise_constraints(
-            x=x2,
-            y=y2,
-            x_points=[0, 50, 100],
-            y_points=breakpoints(slopes=[0.8, 0.4], x_points=[0, 50, 100], y0=0),
-            sign="<=",
+        env2 = piecewise_envelope(
+            x2,
+            [0, 50, 100],
+            breakpoints(slopes=[0.8, 0.4], x_points=[0, 50, 100], y0=0),
         )
+        m2.add_constraints(y2 <= env2, name="pwl")
         m2.add_constraints(x2 <= 75, name="x_max")
+        m2.add_constraints(x2 >= 0, name="x_lo")
         m2.add_objective(y2, sense="max")
         s2, _ = m2.solve(solver_name=solver_name)
 
@@ -1157,48 +946,6 @@ class TestSolverLP:
         np.testing.assert_allclose(
             float(y1.solution.values), float(y2.solution.values), atol=1e-4
         )
-
-
-class TestLPDomainConstraints:
-    """Tests for LP domain bound constraints."""
-
-    def test_lp_domain_constraints_created(self) -> None:
-        """LP method creates domain bound constraints."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        # Concave: slopes decreasing -> y <= pw uses LP
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 40, 60],
-            sign="<=",
-        )
-        assert f"pwl0{PWL_LP_DOMAIN_SUFFIX}_lo" in m.constraints
-        assert f"pwl0{PWL_LP_DOMAIN_SUFFIX}_hi" in m.constraints
-
-    def test_lp_domain_constraints_multidim(self) -> None:
-        """Domain constraints have entity dimension for per-entity breakpoints."""
-        m = Model()
-        x = m.add_variables(coords=[pd.Index(["a", "b"], name="entity")], name="x")
-        y = m.add_variables(coords=[pd.Index(["a", "b"], name="entity")], name="y")
-        x_pts = breakpoints({"a": [0, 50, 100], "b": [10, 60, 110]}, dim="entity")
-        y_pts = breakpoints({"a": [0, 40, 60], "b": [5, 35, 55]}, dim="entity")
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=x_pts,
-            y_points=y_pts,
-            sign="<=",
-        )
-        lo_name = f"pwl0{PWL_LP_DOMAIN_SUFFIX}_lo"
-        hi_name = f"pwl0{PWL_LP_DOMAIN_SUFFIX}_hi"
-        assert lo_name in m.constraints
-        assert hi_name in m.constraints
-        # Domain constraints should have the entity dimension
-        assert "entity" in m.constraints[lo_name].labels.dims
-        assert "entity" in m.constraints[hi_name].labels.dims
 
 
 # ===========================================================================
@@ -1239,57 +986,6 @@ class TestActiveParameter:
         )
         assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" not in m.constraints
 
-    def test_active_with_lp_method_raises(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        u = m.add_variables(binary=True, name="u")
-        with pytest.raises(ValueError, match="not supported with method='lp'"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 50, 100],
-                y_points=[0, 40, 60],
-                sign="<=",
-                active=u,
-                method="lp",
-            )
-
-    def test_active_with_auto_lp_raises(self) -> None:
-        """Auto selects LP for concave <=, but active is incompatible."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        u = m.add_variables(binary=True, name="u")
-        with pytest.raises(ValueError, match="not supported with method='lp'"):
-            m.add_piecewise_constraints(
-                x=x,
-                y=y,
-                x_points=[0, 50, 100],
-                y_points=[0, 40, 60],
-                sign="<=",
-                active=u,
-            )
-
-    def test_incremental_inequality_with_active(self) -> None:
-        """Inequality + active creates aux variable and active bound."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        u = m.add_variables(binary=True, name="u")
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
-            sign="<=",
-            active=u,
-            method="incremental",
-        )
-        assert f"pwl0{PWL_AUX_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_ACTIVE_BOUND_SUFFIX}" in m.constraints
-        assert "pwl0_ineq" in m.constraints
-
     def test_active_with_linear_expression(self) -> None:
         """Active can be a LinearExpression, not just a Variable."""
         m = Model()
@@ -1308,7 +1004,7 @@ class TestActiveParameter:
 
 
 # ===========================================================================
-# Solver integration – active parameter
+# Solver integration -- active parameter
 # ===========================================================================
 
 
@@ -1385,27 +1081,6 @@ class TestSolverActive:
         status, _ = m.solve(solver_name=solver_name)
         assert status == "ok"
         np.testing.assert_allclose(float(x.solution.values), 0, atol=1e-4)
-        np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
-
-    def test_incremental_inequality_active_off(self, solver_name: str) -> None:
-        """Inequality with active=0: aux variable is 0, so y <= 0."""
-        m = Model()
-        x = m.add_variables(lower=0, upper=100, name="x")
-        y = m.add_variables(lower=0, name="y")
-        u = m.add_variables(binary=True, name="u")
-        m.add_piecewise_constraints(
-            x=x,
-            y=y,
-            x_points=[0, 50, 100],
-            y_points=[0, 10, 50],
-            sign="<=",
-            active=u,
-            method="incremental",
-        )
-        m.add_constraints(u <= 0, name="force_off")
-        m.add_objective(y, sense="max")
-        status, _ = m.solve(solver_name=solver_name)
-        assert status == "ok"
         np.testing.assert_allclose(float(y.solution.values), 0, atol=1e-4)
 
     def test_unit_commitment_pattern(self, solver_name: str) -> None:
@@ -1565,18 +1240,6 @@ class TestNVariable:
         )
         # Auto should select incremental for monotonic breakpoints
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
-
-    def test_lp_method_raises(self) -> None:
-        m = Model()
-        power = m.add_variables(lower=0, upper=100, name="power")
-        fuel = m.add_variables(name="fuel")
-        bp = self._make_chp_breakpoints()
-        with pytest.raises(ValueError, match="not supported for N-variable"):
-            m.add_piecewise_constraints(
-                exprs={"power": power, "fuel": fuel},
-                breakpoints=bp,
-                method="lp",
-            )
 
     def test_missing_breakpoints_raises(self) -> None:
         m = Model()

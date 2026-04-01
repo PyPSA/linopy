@@ -8,7 +8,8 @@ linear segments, allowing you to model cost curves, efficiency curves, or
 production functions within a linear programming framework.
 
 Use :py:meth:`~linopy.model.Model.add_piecewise_constraints` to add piecewise
-constraints to a model.
+equality constraints to a model.  For inequality constraints (upper/lower
+envelopes), use :func:`~linopy.linearization.piecewise_envelope`.
 
 .. contents::
    :local:
@@ -21,7 +22,7 @@ Overview
 ``add_piecewise_constraints`` supports two calling conventions:
 
 **N-variable (general form):** Link any number of expressions through shared
-breakpoints.  All expressions are symmetric — they are jointly constrained to
+breakpoints.  All expressions are symmetric --- they are jointly constrained to
 lie on the interpolated breakpoint curve.
 
 .. code-block:: python
@@ -32,8 +33,7 @@ lie on the interpolated breakpoint curve.
     )
 
 **2-variable (convenience form):** A shorthand for linking two expressions
-``x`` and ``y`` via separate x/y breakpoints.  Supports equality and
-inequality constraints.
+``x`` and ``y`` via separate x/y breakpoints.
 
 .. code-block:: python
 
@@ -43,6 +43,17 @@ inequality constraints.
         x_points=x_pts,
         y_points=y_pts,
     )
+
+**Envelope (inequality):** For inequality constraints such as
+:math:`y \le f(x)` or :math:`y \ge f(x)`, use
+:func:`~linopy.linearization.piecewise_envelope` to obtain tangent-line
+expressions and add them as regular constraints:
+
+.. code-block:: python
+
+    envelope = linopy.piecewise_envelope(power, x_pts, y_pts)
+    m.add_constraints(fuel <= envelope)  # upper bound (concave f)
+    m.add_constraints(fuel >= envelope)  # lower bound (convex f)
 
 
 Mathematical Background
@@ -118,41 +129,27 @@ same N-variable code path.
         breakpoints=linopy.breakpoints({"x": xp, "y": yp}, dim="var"),
     )
 
-2-variable case: inequality
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The 2-variable form also supports inequality constraints.  This requires
-distinct "input" (``x``) and "output" (``y``) roles and is **not available**
-in the N-variable form.
+Piecewise Envelope (inequality)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- ``sign="<="`` means :math:`y \le f(x)` — *y* is bounded **above** by the
-  piecewise function.
-- ``sign=">="`` means :math:`y \ge f(x)` — *y* is bounded **below** by the
-  piecewise function.
-
-Internally, an auxiliary variable :math:`z` is created that satisfies the
-equality :math:`z = f(x)`, then the inequality :math:`y \le z` or
-:math:`y \ge z` is added:
+For inequality constraints, use :func:`~linopy.linearization.piecewise_envelope`
+instead of ``add_piecewise_constraints``.  The envelope function computes
+tangent-line expressions for each segment --- no auxiliary variables are created:
 
 .. math::
 
-   &z = \sum_i \lambda_i \, y_i, \qquad
-   x = \sum_i \lambda_i \, x_i
+   \text{tangent}_k(x) = m_k \cdot x + c_k \quad \text{for each segment } k
 
-   &y \le z \quad \text{(for sign="<=")}
-   \qquad \text{or} \qquad
-   y \ge z \quad \text{(for sign=">=")}
+Use the result in a regular constraint:
 
 .. code-block:: python
 
-    # fuel is bounded above by the piecewise function of power
-    m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=xp,
-        y_points=yp,
-        sign="<=",
-    )
+    envelope = linopy.piecewise_envelope(power, x_pts, y_pts)
+    m.add_constraints(fuel <= envelope)  # upper bound (concave f)
+    m.add_constraints(fuel >= envelope)  # lower bound (convex f)
+
+This is solvable by any LP solver --- no SOS2 or binary variables needed.
 
 
 Formulation Methods
@@ -162,7 +159,7 @@ SOS2 (Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The default formulation, using Special Ordered Sets of type 2.  Works for any
-breakpoint ordering and both equality and inequality constraints.
+breakpoint ordering.
 
 .. note::
 
@@ -188,22 +185,6 @@ entirely, using only standard MIP constructs.
 **Limitation:** Breakpoints must be strictly monotonic along the breakpoint
 dimension.
 
-LP (Tangent-Line) Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **inequality** constraints where the function is **convex** (for ``>=``)
-or **concave** (for ``<=``), a pure LP formulation adds one tangent-line
-constraint per segment:
-
-.. math::
-
-   y \le m_k \, x + c_k \quad \text{for each segment } k \text{ (concave, sign="<=")}
-
-No SOS2 or binary variables are needed — this is solvable by any LP solver.
-Domain bounds :math:`x_{\min} \le x \le x_{\max}` are added automatically.
-
-**Limitation:** 2-variable inequality only.  Requires correct convexity.
-
 Disjunctive (Disaggregated Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -224,49 +205,38 @@ Choosing a Formulation
 
 Pass ``method="auto"`` (the default) and linopy picks the best formulation:
 
-- **Equality + monotonic breakpoints** → incremental
-- **Inequality + correct convexity** → LP
-- Otherwise → SOS2
-- Disjunctive (segments) → always SOS2 with binary selection
+- **Equality + monotonic breakpoints** -> incremental
+- Otherwise -> SOS2
+- Disjunctive (segments) -> always SOS2 with binary selection
+- **Inequality** -> use ``piecewise_envelope`` + regular constraints
 
 .. list-table::
    :header-rows: 1
-   :widths: 25 20 20 15 20
+   :widths: 25 20 20 20
 
    * - Property
      - SOS2
      - Incremental
-     - LP
      - Disjunctive
    * - Segments
      - Connected
      - Connected
-     - Connected
      - Disconnected
    * - Constraint type
-     - ``==``, ``<=``, ``>=``
-     - ``==``, ``<=``, ``>=``
-     - ``<=``, ``>=`` only
-     - ``==``, ``<=``, ``>=``
+     - Equality
+     - Equality
+     - Equality
    * - Breakpoint order
      - Any
      - Strictly monotonic
-     - Strictly increasing
      - Any (per segment)
-   * - Convexity requirement
-     - None
-     - None
-     - Concave (≤) or convex (≥)
-     - None
    * - Variable types
      - Continuous + SOS2
      - Continuous + binary
-     - Continuous only
      - Binary + SOS2
    * - N-variable support
      - Yes
      - Yes
-     - **No** (2-var only)
      - 2-var only
 
 
@@ -285,28 +255,18 @@ Usage Examples
         y_points=linopy.breakpoints([0, 36, 84, 170]),
     )
 
-2-variable inequality
-~~~~~~~~~~~~~~~~~~~~~
+Inequality via envelope
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    # fuel <= f(power): y bounded above
-    m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=x_pts,
-        y_points=y_pts,
-        sign="<=",
-    )
+    # fuel <= f(power): y bounded above (concave function)
+    envelope = linopy.piecewise_envelope(power, x_pts, y_pts)
+    m.add_constraints(fuel <= envelope)
 
-    # fuel >= f(power): y bounded below
-    m.add_piecewise_constraints(
-        x=power,
-        y=fuel,
-        x_points=x_pts,
-        y_points=y_pts,
-        sign=">=",
-    )
+    # fuel >= f(power): y bounded below (convex function)
+    envelope = linopy.piecewise_envelope(power, x_pts, y_pts)
+    m.add_constraints(fuel >= envelope)
 
 N-variable linking
 ~~~~~~~~~~~~~~~~~~
@@ -345,9 +305,6 @@ Choosing a method
     m.add_piecewise_constraints(x=x, y=y, x_points=xp, y_points=yp, method="sos2")
     m.add_piecewise_constraints(
         x=x, y=y, x_points=xp, y_points=yp, method="incremental"
-    )
-    m.add_piecewise_constraints(
-        x=x, y=y, x_points=xp, y_points=yp, sign="<=", method="lp"
     )
     m.add_piecewise_constraints(
         x=x, y=y, x_points=xp, y_points=yp, method="auto"
@@ -432,12 +389,6 @@ Given base name ``name``, the following objects are created:
    * - ``{name}_x_link``
      - Constraint
      - Linking: :math:`e_j = \sum_i \lambda_i \, B_{j,i}` for all expressions.
-   * - ``{name}_aux``
-     - Variable
-     - Auxiliary variable :math:`z` (2-var inequality only).
-   * - ``{name}_ineq``
-     - Constraint
-     - :math:`y \le z` or :math:`y \ge z` (2-var inequality only).
 
 **Incremental method:**
 
@@ -460,25 +411,6 @@ Given base name ``name``, the following objects are created:
    * - ``{name}_x_link``
      - Constraint
      - Linking: :math:`e_j = B_{j,0} + \sum_i \delta_i \, \Delta B_{j,i}`.
-
-**LP method (2-var inequality only):**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Name
-     - Type
-     - Description
-   * - ``{name}_lp``
-     - Constraint
-     - Tangent-line constraints (one per segment).
-   * - ``{name}_lp_domain_lo``
-     - Constraint
-     - :math:`x \ge x_{\min}`.
-   * - ``{name}_lp_domain_hi``
-     - Constraint
-     - :math:`x \le x_{\max}`.
 
 **Disjunctive method:**
 

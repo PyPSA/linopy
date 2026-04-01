@@ -21,7 +21,6 @@ from linopy.constants import (
     HELPER_DIMS,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
-    PWL_AUX_SUFFIX,
     PWL_BINARY_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_SUFFIX,
@@ -30,8 +29,6 @@ from linopy.constants import (
     PWL_INC_LINK_SUFFIX,
     PWL_INC_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
-    PWL_LP_DOMAIN_SUFFIX,
-    PWL_LP_SUFFIX,
     PWL_SELECT_SUFFIX,
     PWL_X_LINK_SUFFIX,
     PWL_Y_LINK_SUFFIX,
@@ -425,15 +422,6 @@ def _check_strict_monotonicity(bp: DataArray) -> bool:
     return bool(monotonic.all())
 
 
-def _check_strict_increasing(bp: DataArray) -> bool:
-    """Check if breakpoints are strictly increasing along BREAKPOINT_DIM."""
-    diffs = bp.diff(BREAKPOINT_DIM)
-    pos = (diffs > 0) | diffs.isnull()
-    has_non_nan = (~diffs.isnull()).any(BREAKPOINT_DIM)
-    increasing = pos.all(BREAKPOINT_DIM) & has_non_nan
-    return bool(increasing.all())
-
-
 def _has_trailing_nan_only(bp: DataArray) -> bool:
     """Check that NaN values only appear as trailing entries along BREAKPOINT_DIM."""
     valid = ~bp.isnull()
@@ -504,101 +492,6 @@ def _compute_combined_mask(
             )
         return None
     return ~(x_points.isnull() | y_points.isnull())
-
-
-def _detect_convexity(
-    x_points: DataArray,
-    y_points: DataArray,
-) -> Literal["convex", "concave", "linear", "mixed"]:
-    """
-    Detect convexity of the piecewise function.
-
-    Requires strictly increasing x breakpoints and computes slopes and
-    second differences in the given order.
-    """
-    if not _check_strict_increasing(x_points):
-        raise ValueError(
-            "Convexity detection requires strictly increasing x_points. "
-            "Pass breakpoints in increasing x-order or use method='sos2'."
-        )
-
-    dx = x_points.diff(BREAKPOINT_DIM)
-    dy = y_points.diff(BREAKPOINT_DIM)
-
-    valid = ~(dx.isnull() | dy.isnull() | (dx == 0))
-    slopes = dy / dx
-
-    if slopes.sizes[BREAKPOINT_DIM] < 2:
-        return "linear"
-
-    slope_diffs = slopes.diff(BREAKPOINT_DIM)
-
-    valid_diffs = valid.isel({BREAKPOINT_DIM: slice(None, -1)})
-    valid_diffs_hi = valid.isel({BREAKPOINT_DIM: slice(1, None)})
-    valid_diffs_combined = valid_diffs.values & valid_diffs_hi.values
-
-    sd_values = slope_diffs.values
-    if valid_diffs_combined.size == 0 or not valid_diffs_combined.any():
-        return "linear"
-
-    valid_sd = sd_values[valid_diffs_combined]
-    all_nonneg = bool(np.all(valid_sd >= -1e-10))
-    all_nonpos = bool(np.all(valid_sd <= 1e-10))
-
-    if all_nonneg and all_nonpos:
-        return "linear"
-    if all_nonneg:
-        return "convex"
-    if all_nonpos:
-        return "concave"
-    return "mixed"
-
-
-# ---------------------------------------------------------------------------
-# Internal formulation functions
-# ---------------------------------------------------------------------------
-
-
-def _add_pwl_lp(
-    model: Model,
-    name: str,
-    x_expr: LinearExpression,
-    y_expr: LinearExpression,
-    sign: str,
-    x_points: DataArray,
-    y_points: DataArray,
-) -> Constraint:
-    """Add pure LP tangent-line constraints."""
-    dx = x_points.diff(BREAKPOINT_DIM)
-    dy = y_points.diff(BREAKPOINT_DIM)
-    slopes = dy / dx
-
-    slopes = slopes.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    n_seg = slopes.sizes[LP_SEG_DIM]
-    slopes[LP_SEG_DIM] = np.arange(n_seg)
-
-    x_base = x_points.isel({BREAKPOINT_DIM: slice(None, -1)})
-    y_base = y_points.isel({BREAKPOINT_DIM: slice(None, -1)})
-    x_base = x_base.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    y_base = y_base.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    x_base[LP_SEG_DIM] = np.arange(n_seg)
-    y_base[LP_SEG_DIM] = np.arange(n_seg)
-
-    rhs = y_base - slopes * x_base
-    lhs = y_expr - slopes * x_expr
-
-    if sign == "<=":
-        con = model.add_constraints(lhs <= rhs, name=f"{name}{PWL_LP_SUFFIX}")
-    else:
-        con = model.add_constraints(lhs >= rhs, name=f"{name}{PWL_LP_SUFFIX}")
-
-    # Domain bound constraints to keep x within [x_min, x_max]
-    x_lo = x_points.min(dim=BREAKPOINT_DIM)
-    x_hi = x_points.max(dim=BREAKPOINT_DIM)
-    model.add_constraints(x_expr >= x_lo, name=f"{name}{PWL_LP_DOMAIN_SUFFIX}_lo")
-    model.add_constraints(x_expr <= x_hi, name=f"{name}{PWL_LP_DOMAIN_SUFFIX}_hi")
-
-    return con
 
 
 def _add_pwl_sos2_core(
@@ -836,19 +729,18 @@ def add_piecewise_constraints(
     y: LinExprLike | None = None,
     x_points: BreaksLike | None = None,
     y_points: BreaksLike | None = None,
-    sign: str = "==",
     active: LinExprLike | None = None,
     mask: DataArray | None = None,
-    method: Literal["sos2", "incremental", "auto", "lp"] = "auto",
+    method: Literal["sos2", "incremental", "auto"] = "auto",
     name: str | None = None,
     skip_nan_check: bool = False,
 ) -> Constraint:
     r"""
-    Add piecewise linear constraints.
+    Add piecewise linear equality constraints.
 
     Supports two calling conventions:
 
-    **N-variable — link N expressions through shared breakpoints:**
+    **N-variable --- link N expressions through shared breakpoints:**
 
     All expressions are symmetric and linked via shared SOS2 lambda
     (or incremental delta) weights.  Mathematically, each expression is
@@ -859,10 +751,10 @@ def add_piecewise_constraints(
             breakpoints=bp,
         )
 
-    **2-variable convenience — link x and y via separate breakpoints:**
+    **2-variable convenience --- link x and y via separate breakpoints:**
 
-    A shorthand that builds the N-variable dict internally.  When
-    ``sign="=="`` (the default), the constraint is::
+    A shorthand that builds the N-variable dict internally.  The
+    constraint is::
 
         y = f(x)
 
@@ -870,18 +762,9 @@ def add_piecewise_constraints(
     This is mathematically equivalent to the N-variable form with two
     expressions.
 
-    When ``sign`` is ``"<="`` or ``">="``, the constraint becomes an
-    *inequality*:
-
-    - ``sign="<="`` means :math:`y \le f(x)` — *y* is bounded **above**
-      by the piecewise function.
-    - ``sign=">="`` means :math:`y \ge f(x)` — *y* is bounded **below**
-      by the piecewise function.
-
-    Inequality constraints introduce an auxiliary variable *z* that
-    satisfies the equality *z = f(x)*, then adds *y ≤ z* or *y ≥ z*.
-    This is a 2-variable-only feature because it requires distinct
-    "input" (*x*) and "output" (*y*) roles.
+    For inequality constraints (y <= f(x) or y >= f(x)), use
+    :func:`~linopy.linearization.piecewise_envelope` with regular
+    ``add_constraints`` instead.
 
     Example::
 
@@ -906,20 +789,14 @@ def add_piecewise_constraints(
         Breakpoint x-coordinates (2-variable case).
     y_points : BreaksLike
         Breakpoint y-coordinates (2-variable case).
-    sign : {"==", "<=", ">="}, default "=="
-        Constraint sign (2-variable case only).  ``"=="`` constrains
-        *y = f(x)*.  ``"<="`` constrains *y ≤ f(x)*.  ``">="``
-        constrains *y ≥ f(x)*.  Ignored for the N-variable case
-        (always equality).
     active : Variable or LinearExpression, optional
         Binary variable that gates the piecewise function.  When
         ``active=0``, all auxiliary variables (and thus *x* and *y*)
         are forced to zero.  2-variable case only.
     mask : DataArray, optional
         Boolean mask for valid constraints.
-    method : {"auto", "sos2", "incremental", "lp"}, default "auto"
-        Formulation method.  ``"lp"`` is only available for the
-        2-variable inequality case.
+    method : {"auto", "sos2", "incremental"}, default "auto"
+        Formulation method.
     name : str, optional
         Base name for generated variables/constraints.
     skip_nan_check : bool, default False
@@ -930,15 +807,10 @@ def add_piecewise_constraints(
     Constraint
     """
     if exprs is not None:
-        # ── N-variable path ──────────────────────────────────────────
+        # -- N-variable path --
         if breakpoints is None:
             raise TypeError(
                 "N-variable call requires both 'exprs' and 'breakpoints' keywords."
-            )
-        if method == "lp":
-            raise ValueError(
-                "Pure LP method is not supported for N-variable piecewise "
-                "constraints.  Use method='sos2' or method='incremental'."
             )
         return _add_piecewise_nvar(
             model,
@@ -950,7 +822,7 @@ def add_piecewise_constraints(
             skip_nan_check=skip_nan_check,
         )
 
-    # ── 2-variable convenience path ──────────────────────────────────
+    # -- 2-variable convenience path --
     if x is None or y is None or x_points is None or y_points is None:
         raise TypeError(
             "add_piecewise_constraints() requires either:\n"
@@ -963,7 +835,6 @@ def add_piecewise_constraints(
         y=y,
         x_points=x_points,
         y_points=y_points,
-        sign=sign,
         method=method,
         active=active,
         name=name,
@@ -977,16 +848,15 @@ def _add_piecewise_2var(
     y: LinExprLike,
     x_points: BreaksLike,
     y_points: BreaksLike,
-    sign: str = "==",
     method: str = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
     skip_nan_check: bool = False,
 ) -> Constraint:
-    """2-variable piecewise constraint: y sign f(x)."""
-    if method not in ("sos2", "incremental", "auto", "lp"):
+    """2-variable piecewise equality constraint: y = f(x)."""
+    if method not in ("sos2", "incremental", "auto"):
         raise ValueError(
-            f"method must be 'sos2', 'incremental', 'auto', or 'lp', got '{method}'"
+            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
         )
 
     # Coerce breakpoints
@@ -1014,19 +884,12 @@ def _add_piecewise_2var(
     y_expr = _to_linexpr(y)
     active_expr = _to_linexpr(active) if active is not None else None
 
-    if active_expr is not None and method == "lp":
-        raise ValueError(
-            "The 'active' parameter is not supported with method='lp'. "
-            "Use method='incremental' or method='sos2'."
-        )
-
     if disjunctive:
         return _add_disjunctive(
             model,
             name,
             x_expr,
             y_expr,
-            sign,
             x_points,
             y_points,
             bp_mask,
@@ -1039,7 +902,6 @@ def _add_piecewise_2var(
             name,
             x_expr,
             y_expr,
-            sign,
             x_points,
             y_points,
             bp_mask,
@@ -1279,7 +1141,6 @@ def _add_continuous(
     name: str,
     x_expr: LinearExpression,
     y_expr: LinearExpression,
-    sign: str,
     x_points: DataArray,
     y_points: DataArray,
     mask: DataArray | None,
@@ -1287,49 +1148,13 @@ def _add_continuous(
     skip_nan_check: bool,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Handle continuous (non-disjunctive) piecewise constraints."""
-    convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
-
+    """Handle continuous (non-disjunctive) piecewise equality constraints."""
     # Determine actual method
     if method == "auto":
-        if sign == "==":
-            if _check_strict_monotonicity(x_points) and _has_trailing_nan_only(
-                x_points
-            ):
-                method = "incremental"
-            else:
-                method = "sos2"
+        if _check_strict_monotonicity(x_points) and _has_trailing_nan_only(x_points):
+            method = "incremental"
         else:
-            if not _check_strict_increasing(x_points):
-                raise ValueError(
-                    "Automatic method selection for piecewise inequalities requires "
-                    "strictly increasing x_points. Pass breakpoints in increasing "
-                    "x-order or use method='sos2'."
-                )
-            convexity = _detect_convexity(x_points, y_points)
-            if convexity == "linear":
-                method = "lp"
-            elif (sign == "<=" and convexity == "concave") or (
-                sign == ">=" and convexity == "convex"
-            ):
-                method = "lp"
-            else:
-                method = "sos2"
-    elif method == "lp":
-        if sign == "==":
-            raise ValueError("Pure LP method is not supported for equality constraints")
-        convexity = _detect_convexity(x_points, y_points)
-        if convexity != "linear":
-            if sign == "<=" and convexity != "concave":
-                raise ValueError(
-                    f"Pure LP method for '<=' requires concave or linear function, "
-                    f"got {convexity}"
-                )
-            if sign == ">=" and convexity != "convex":
-                raise ValueError(
-                    f"Pure LP method for '>=' requires convex or linear function, "
-                    f"got {convexity}"
-                )
+            method = "sos2"
     elif method == "incremental":
         if not _check_strict_monotonicity(x_points):
             raise ValueError("Incremental method requires strictly monotonic x_points")
@@ -1347,50 +1172,15 @@ def _add_continuous(
                 "NaN values must only appear at the end of the breakpoint sequence."
             )
 
-    # LP formulation
-    if method == "lp":
-        if active is not None:
-            raise ValueError(
-                "The 'active' parameter is not supported with method='lp'. "
-                "Use method='incremental' or method='sos2'."
-            )
-        return _add_pwl_lp(model, name, x_expr, y_expr, sign, x_points, y_points)
-
-    # SOS2 or incremental formulation
-    if sign == "==":
-        # Direct linking: y = f(x)
-        if method == "sos2":
-            return _add_pwl_sos2_core(
-                model, name, x_expr, y_expr, x_points, y_points, mask, active
-            )
-        else:  # incremental
-            return _add_pwl_incremental_core(
-                model, name, x_expr, y_expr, x_points, y_points, mask, active
-            )
-    else:
-        # Inequality: create aux variable z, enforce z = f(x), then y <= z or y >= z
-        aux_name = f"{name}{PWL_AUX_SUFFIX}"
-        aux_coords = _extra_coords(x_points, BREAKPOINT_DIM)
-        z = model.add_variables(coords=aux_coords, name=aux_name)
-        z_expr = _to_linexpr(z)
-
-        if method == "sos2":
-            result = _add_pwl_sos2_core(
-                model, name, x_expr, z_expr, x_points, y_points, mask, active
-            )
-        else:  # incremental
-            result = _add_pwl_incremental_core(
-                model, name, x_expr, z_expr, x_points, y_points, mask, active
-            )
-
-        # Add inequality
-        ineq_name = f"{name}_ineq"
-        if sign == "<=":
-            model.add_constraints(y_expr <= z_expr, name=ineq_name)
-        else:
-            model.add_constraints(y_expr >= z_expr, name=ineq_name)
-
-        return result
+    # Direct linking: y = f(x)
+    if method == "sos2":
+        return _add_pwl_sos2_core(
+            model, name, x_expr, y_expr, x_points, y_points, mask, active
+        )
+    else:  # incremental
+        return _add_pwl_incremental_core(
+            model, name, x_expr, y_expr, x_points, y_points, mask, active
+        )
 
 
 def _add_disjunctive(
@@ -1398,16 +1188,13 @@ def _add_disjunctive(
     name: str,
     x_expr: LinearExpression,
     y_expr: LinearExpression,
-    sign: str,
     x_points: DataArray,
     y_points: DataArray,
     mask: DataArray | None,
     method: str,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Handle disjunctive piecewise constraints."""
-    if method == "lp":
-        raise ValueError("Pure LP method is not supported for disjunctive constraints")
+    """Handle disjunctive piecewise equality constraints."""
     if method == "incremental":
         raise ValueError(
             "Incremental method is not supported for disjunctive constraints"
@@ -1420,25 +1207,6 @@ def _add_disjunctive(
             "NaN values must only appear at the end of the breakpoint sequence."
         )
 
-    if sign == "==":
-        return _add_dpwl_sos2_core(
-            model, name, x_expr, y_expr, x_points, y_points, mask, active
-        )
-    else:
-        # Create aux variable z, disjunctive SOS2 for z = f(x), then y <= z or y >= z
-        aux_name = f"{name}{PWL_AUX_SUFFIX}"
-        aux_coords = _extra_coords(x_points, BREAKPOINT_DIM, SEGMENT_DIM)
-        z = model.add_variables(coords=aux_coords, name=aux_name)
-        z_expr = _to_linexpr(z)
-
-        result = _add_dpwl_sos2_core(
-            model, name, x_expr, z_expr, x_points, y_points, mask, active
-        )
-
-        ineq_name = f"{name}_ineq"
-        if sign == "<=":
-            model.add_constraints(y_expr <= z_expr, name=ineq_name)
-        else:
-            model.add_constraints(y_expr >= z_expr, name=ineq_name)
-
-        return result
+    return _add_dpwl_sos2_core(
+        model, name, x_expr, y_expr, x_points, y_points, mask, active
+    )
