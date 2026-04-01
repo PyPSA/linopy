@@ -520,10 +520,10 @@ class Model:
                     for d in var.coords:
                         if not str(d).startswith("_") and str(d) not in user_dims:
                             user_dims.append(str(d))
-                dims_str = f" over ({', '.join(user_dims)})" if user_dims else ""
+                dims_str = f" ({', '.join(user_dims)})" if user_dims else ""
                 result += (
-                    f" * {pwl.name}:"
-                    f" {n_vars} variables, {n_cons} constraints{dims_str}"
+                    f" * {pwl.name}{dims_str}:"
+                    f" {n_vars} variables, {n_cons} constraints"
                     f" — {pwl.method}\n"
                 )
 
