@@ -400,10 +400,8 @@ def tangent_lines(
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
 
-    if not isinstance(x_points, DataArray):
-        x_points = _coerce_breaks(x_points)
-    if not isinstance(y_points, DataArray):
-        y_points = _coerce_breaks(y_points)
+    x_points = _coerce_breaks(x_points)
+    y_points = _coerce_breaks(y_points)
 
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
