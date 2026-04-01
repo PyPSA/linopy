@@ -435,42 +435,44 @@ def tangent_lines(
 # ---------------------------------------------------------------------------
 
 
-def _validate_breakpoint_shapes(x_points: DataArray, y_points: DataArray) -> bool:
-    """Validate breakpoint array shapes and return whether formulation is disjunctive."""
-    if BREAKPOINT_DIM not in x_points.dims:
+def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
+    """Validate that two breakpoint arrays have compatible shapes.
+
+    Returns whether the formulation is disjunctive (has segment dimension).
+    """
+    if BREAKPOINT_DIM not in bp_a.dims:
         raise ValueError(
-            f"x_points is missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(x_points.dims)}. "
+            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
+            f"got dims {list(bp_a.dims)}. "
             "Use the breakpoints() or segments() factory."
         )
-    if BREAKPOINT_DIM not in y_points.dims:
+    if BREAKPOINT_DIM not in bp_b.dims:
         raise ValueError(
-            f"y_points is missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(y_points.dims)}. "
+            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
+            f"got dims {list(bp_b.dims)}. "
             "Use the breakpoints() or segments() factory."
         )
 
-    if x_points.sizes[BREAKPOINT_DIM] != y_points.sizes[BREAKPOINT_DIM]:
+    if bp_a.sizes[BREAKPOINT_DIM] != bp_b.sizes[BREAKPOINT_DIM]:
         raise ValueError(
-            f"x_points and y_points must have same size along '{BREAKPOINT_DIM}', "
-            f"got {x_points.sizes[BREAKPOINT_DIM]} and "
-            f"{y_points.sizes[BREAKPOINT_DIM]}"
+            f"Breakpoints must have same size along '{BREAKPOINT_DIM}', "
+            f"got {bp_a.sizes[BREAKPOINT_DIM]} and "
+            f"{bp_b.sizes[BREAKPOINT_DIM]}"
         )
 
-    x_has_seg = SEGMENT_DIM in x_points.dims
-    y_has_seg = SEGMENT_DIM in y_points.dims
-    if x_has_seg != y_has_seg:
+    a_has_seg = SEGMENT_DIM in bp_a.dims
+    b_has_seg = SEGMENT_DIM in bp_b.dims
+    if a_has_seg != b_has_seg:
         raise ValueError(
-            "If one of x_points/y_points has a segment dimension, "
-            f"both must. x_points dims: {list(x_points.dims)}, "
-            f"y_points dims: {list(y_points.dims)}."
+            "If one breakpoint array has a segment dimension, "
+            f"both must. Got dims: {list(bp_a.dims)} and {list(bp_b.dims)}."
         )
-    if x_has_seg and x_points.sizes[SEGMENT_DIM] != y_points.sizes[SEGMENT_DIM]:
+    if a_has_seg and bp_a.sizes[SEGMENT_DIM] != bp_b.sizes[SEGMENT_DIM]:
         raise ValueError(
-            f"x_points and y_points must have same size along '{SEGMENT_DIM}'"
+            f"Breakpoints must have same size along '{SEGMENT_DIM}'"
         )
 
-    return x_has_seg
+    return a_has_seg
 
 
 def _validate_numeric_breakpoint_coords(bp: DataArray) -> None:
