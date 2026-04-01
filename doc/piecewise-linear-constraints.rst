@@ -50,7 +50,6 @@ API
         method="auto",  # "auto", "sos2", or "incremental"
         active=None,  # binary variable to gate the constraint
         name=None,  # base name for generated variables/constraints
-        skip_nan_check=False,
     )
 
 Creates auxiliary variables and constraints that enforce all expressions

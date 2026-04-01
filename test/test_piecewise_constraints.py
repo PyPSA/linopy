@@ -705,37 +705,6 @@ class TestNaNMasking:
         assert (lam.labels.isel({BREAKPOINT_DIM: slice(None, 3)}) != -1).all()
         assert int(lam.labels.isel({BREAKPOINT_DIM: 3})) == -1
 
-    def test_skip_nan_check_with_nan_raises(self) -> None:
-        """skip_nan_check=True with NaN breakpoints raises ValueError."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, 10, 50, np.nan], dims=[BREAKPOINT_DIM])
-        y_pts = xr.DataArray([0, 5, 20, np.nan], dims=[BREAKPOINT_DIM])
-        with pytest.raises(ValueError, match="skip_nan_check=True but breakpoints"):
-            m.add_piecewise_constraints(
-                (x, x_pts),
-                (y, y_pts),
-                method="sos2",
-                skip_nan_check=True,
-            )
-
-    def test_skip_nan_check_without_nan(self) -> None:
-        """skip_nan_check=True without NaN works fine (no mask computed)."""
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        x_pts = xr.DataArray([0, 10, 50, 100], dims=[BREAKPOINT_DIM])
-        y_pts = xr.DataArray([0, 5, 20, 40], dims=[BREAKPOINT_DIM])
-        m.add_piecewise_constraints(
-            (x, x_pts),
-            (y, y_pts),
-            method="sos2",
-            skip_nan_check=True,
-        )
-        lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
-        assert (lam.labels != -1).all()
-
     def test_sos2_interior_nan_raises(self) -> None:
         """SOS2 with interior NaN breakpoints raises ValueError."""
         m = Model()

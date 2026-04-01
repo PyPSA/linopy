@@ -565,7 +565,6 @@ def add_piecewise_constraints(
     method: Literal["sos2", "incremental", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
-    skip_nan_check: bool = False,
 ) -> Constraint:
     r"""
     Add piecewise linear equality constraints.
@@ -607,8 +606,6 @@ def add_piecewise_constraints(
         ``active=0``, all auxiliary variables are forced to zero.
     name : str, optional
         Base name for generated variables/constraints.
-    skip_nan_check : bool, default False
-        If True, skip NaN detection in breakpoints.
 
     Returns
     -------
@@ -659,19 +656,10 @@ def add_piecewise_constraints(
     ]
 
     # Compute combined mask from all breakpoints
-    if skip_nan_check:
-        for bp in bp_list:
-            if bool(bp.isnull().any()):
-                raise ValueError(
-                    "skip_nan_check=True but breakpoints contain NaN. "
-                    "Either remove NaN values or set skip_nan_check=False."
-                )
-        bp_mask = None
-    else:
-        combined_null = bp_list[0].isnull()
-        for bp in bp_list[1:]:
-            combined_null = combined_null | bp.isnull()
-        bp_mask = ~combined_null if bool(combined_null.any()) else None
+    combined_null = bp_list[0].isnull()
+    for bp in bp_list[1:]:
+        combined_null = combined_null | bp.isnull()
+    bp_mask = ~combined_null if bool(combined_null.any()) else None
 
     # Name
     if name is None:
@@ -720,7 +708,6 @@ def add_piecewise_constraints(
         link_coords,
         bp_mask,
         method,
-        skip_nan_check,
         active_expr,
     )
 
@@ -733,7 +720,6 @@ def _add_continuous_nvar(
     link_coords: list[str],
     bp_mask: DataArray | None,
     method: str,
-    skip_nan_check: bool,
     active: LinearExpression | None = None,
 ) -> Constraint:
     """Unified continuous piecewise equality for N expressions."""
