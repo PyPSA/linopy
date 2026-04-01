@@ -613,6 +613,11 @@ def add_piecewise_constraints(
     -------
     Constraint
     """
+    if method not in ("sos2", "incremental", "auto"):
+        raise ValueError(
+            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
+        )
+
     if len(pairs) < 2:
         raise TypeError(
             "add_piecewise_constraints() requires at least 2 "
@@ -732,11 +737,6 @@ def _add_continuous_nvar(
     """Unified continuous piecewise equality for N expressions."""
     from linopy.expressions import LinearExpression
 
-    if method not in ("sos2", "incremental", "auto"):
-        raise ValueError(
-            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
-        )
-
     # Stack breakpoints into a single DataArray with a link dimension
     link_dim = "_pwl_var"
     stacked_bp = xr.concat(
@@ -747,10 +747,12 @@ def _add_continuous_nvar(
 
     dim = BREAKPOINT_DIM
 
+    # Pre-compute properties used by multiple branches
+    trailing_nan_only = _has_trailing_nan_only(stacked_bp)
+
     # Auto-detect method
     if method in ("incremental", "auto"):
         is_monotonic = _check_strict_monotonicity(stacked_bp)
-        trailing_nan_only = _has_trailing_nan_only(stacked_bp)
         if method == "auto":
             method = "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
         elif not is_monotonic:
@@ -764,7 +766,7 @@ def _add_continuous_nvar(
 
     if method == "sos2":
         _validate_numeric_breakpoint_coords(stacked_bp)
-        if not _has_trailing_nan_only(stacked_bp):
+        if not trailing_nan_only:
             raise ValueError(
                 "SOS2 method does not support non-trailing NaN breakpoints."
             )
