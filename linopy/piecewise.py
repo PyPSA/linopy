@@ -8,6 +8,7 @@ constraint methods for use with linopy.Model.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from numbers import Real
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
@@ -35,10 +36,11 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import Constraint
+    from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model
     from linopy.types import LinExprLike
+    from linopy.variables import Variables
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
@@ -52,6 +54,38 @@ SegmentsLike: TypeAlias = (
     | pd.DataFrame
     | dict[str, Sequence[Sequence[float]]]
 )
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+
+@dataclass(repr=False)
+class PiecewiseFormulation:
+    """
+    Result of ``add_piecewise_formulation``.
+
+    Groups all auxiliary variables and constraints created by a single
+    piecewise formulation.
+    """
+
+    name: str
+    method: str
+    variables: Variables
+    constraints: Constraints
+
+    def __repr__(self) -> str:
+        n_vars = len(self.variables)
+        n_cons = len(self.constraints)
+        r = f"PiecewiseFormulation '{self.name}' ({self.method})\n"
+        r += f"  Variables ({n_vars}):\n"
+        for vname in self.variables:
+            r += f"    * {vname}\n"
+        r += f"  Constraints ({n_cons}):\n"
+        for cname in self.constraints:
+            r += f"    * {cname}\n"
+        return r
 
 
 # ---------------------------------------------------------------------------
@@ -559,13 +593,13 @@ def _broadcast_points(
 # ---------------------------------------------------------------------------
 
 
-def add_piecewise_constraints(
+def add_piecewise_formulation(
     model: Model,
     *pairs: tuple[LinExprLike, BreaksLike],
     method: Literal["sos2", "incremental", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
-) -> Constraint:
+) -> PiecewiseFormulation:
     r"""
     Add piecewise linear equality constraints.
 
@@ -576,14 +610,14 @@ def add_piecewise_constraints(
 
     Example — 2 variables::
 
-        m.add_piecewise_constraints(
+        m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
             (fuel,  [0, 36, 84, 170]),
         )
 
     Example — 3 variables (CHP plant)::
 
-        m.add_piecewise_constraints(
+        m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
             (fuel,  [0, 40, 85, 160]),
             (heat,  [0, 25, 55, 95]),
@@ -609,7 +643,7 @@ def add_piecewise_constraints(
 
     Returns
     -------
-    Constraint
+    PiecewiseFormulation
     """
     if method not in ("sos2", "incremental", "auto"):
         raise ValueError(
@@ -618,7 +652,7 @@ def add_piecewise_constraints(
 
     if len(pairs) < 2:
         raise TypeError(
-            "add_piecewise_constraints() requires at least 2 "
+            "add_piecewise_formulation() requires at least 2 "
             "(expression, breakpoints) pairs."
         )
 
@@ -680,12 +714,16 @@ def add_piecewise_constraints(
     lin_exprs = [_to_linexpr(expr) for expr in all_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
 
+    # Snapshot existing names to detect what the formulation adds
+    vars_before = set(model.variables)
+    cons_before = set(model.constraints)
+
     if disjunctive:
         if method == "incremental":
             raise ValueError(
                 "Incremental method is not supported for disjunctive constraints"
             )
-        return _add_disjunctive(
+        _add_disjunctive(
             model,
             name,
             lin_exprs,
@@ -694,18 +732,32 @@ def add_piecewise_constraints(
             bp_mask,
             active_expr,
         )
+        resolved_method = "sos2"
+    else:
+        # Continuous: stack into N-variable formulation
+        resolved_method = _add_continuous(
+            model,
+            name,
+            lin_exprs,
+            bp_list,
+            link_coords,
+            bp_mask,
+            method,
+            active_expr,
+        )
 
-    # Continuous: stack into N-variable formulation
-    return _add_continuous(
-        model,
-        name,
-        lin_exprs,
-        bp_list,
-        link_coords,
-        bp_mask,
-        method,
-        active_expr,
+    # Collect newly created variable and constraint names
+    new_vars = [n for n in model.variables if n not in vars_before]
+    new_cons = [n for n in model.constraints if n not in cons_before]
+
+    result = PiecewiseFormulation(
+        name=name,
+        method=resolved_method,
+        variables=model.variables[new_vars],
+        constraints=model.constraints[new_cons],
     )
+    model._groups[name] = result
+    return result
 
 
 def _stack_along_link(
@@ -729,8 +781,12 @@ def _add_continuous(
     bp_mask: DataArray | None,
     method: str,
     active: LinearExpression | None = None,
-) -> Constraint:
-    """Dispatch continuous piecewise equality to SOS2 or incremental."""
+) -> str:
+    """
+    Dispatch continuous piecewise equality to SOS2 or incremental.
+
+    Returns the resolved method name ("sos2" or "incremental").
+    """
     from linopy.expressions import LinearExpression
 
     link_dim = "_pwl_var"
@@ -774,7 +830,7 @@ def _add_continuous(
     rhs = active if active is not None else 1
 
     if method == "sos2":
-        return _add_sos2(
+        _add_sos2(
             model,
             name,
             target_expr,
@@ -783,8 +839,9 @@ def _add_continuous(
             link_dim,
             rhs,
         )
+        return method
     else:
-        return _add_incremental(
+        _add_incremental(
             model,
             name,
             target_expr,
@@ -794,6 +851,7 @@ def _add_continuous(
             rhs,
             active,
         )
+        return method
 
 
 def _add_sos2(

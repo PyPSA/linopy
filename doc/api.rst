@@ -18,7 +18,7 @@ Creating a model
     model.Model.add_variables
     model.Model.add_constraints
     model.Model.add_objective
-    model.Model.add_piecewise_constraints
+    model.Model.add_piecewise_formulation
     piecewise.breakpoints
     piecewise.segments
     piecewise.tangent_lines

@@ -20,7 +20,13 @@ from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.piecewise import breakpoints, segments, slopes_to_points, tangent_lines
+from linopy.piecewise import (
+    PiecewiseFormulation,
+    breakpoints,
+    segments,
+    slopes_to_points,
+    tangent_lines,
+)
 from linopy.remote import RemoteHandler
 
 try:
@@ -38,6 +44,7 @@ __all__ = (
     "Model",
     "Objective",
     "OetcHandler",
+    "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",
     "Variable",

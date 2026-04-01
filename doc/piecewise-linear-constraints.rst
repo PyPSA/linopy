@@ -24,7 +24,7 @@ Quick Start
     fuel = m.add_variables(name="fuel")
 
     # Link power and fuel via a piecewise linear curve
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, [0, 30, 60, 100]),
         (fuel, [0, 36, 84, 170]),
     )
@@ -38,12 +38,12 @@ of adjacent breakpoints.
 API
 ---
 
-``add_piecewise_constraints``
+``add_piecewise_formulation``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (expr1, breakpoints1),
         (expr2, breakpoints2),
         ...,
@@ -97,7 +97,7 @@ linopy provides two distinct tools for piecewise linear modelling.
    :widths: 30 35 35
 
    * -
-     - ``add_piecewise_constraints``
+     - ``add_piecewise_formulation``
      - ``tangent_lines``
    * - **Constraint type**
      - Equality: :math:`y = f(x)`
@@ -117,7 +117,7 @@ linopy provides two distinct tools for piecewise linear modelling.
    ``tangent_lines`` does **not** work with equality.  Writing
    ``fuel == tangent_lines(...)`` creates one equality per segment,
    which is overconstrained (infeasible except at breakpoints).
-   Use ``add_piecewise_constraints`` for equality.
+   Use ``add_piecewise_formulation`` for equality.
 
 **When is the tangent-line bound tight?**
 
@@ -137,7 +137,7 @@ The simplest form --- pass Python lists directly in the tuple:
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, [0, 30, 60, 100]),
         (fuel, [0, 36, 84, 170]),
     )
@@ -149,7 +149,7 @@ Equivalent, but explicit about the DataArray construction:
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, linopy.breakpoints([0, 30, 60, 100])),
         (fuel, linopy.breakpoints([0, 36, 84, 170])),
     )
@@ -161,7 +161,7 @@ When you know marginal costs (slopes) rather than absolute values:
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, [0, 50, 100, 150]),
         (
             cost,
@@ -180,7 +180,7 @@ Different generators can have different curves.  Pass a dict to
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (
             power,
             linopy.breakpoints(
@@ -206,7 +206,7 @@ For disconnected operating regions (e.g. forbidden zones), use
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, linopy.segments([(0, 0), (50, 80)])),
         (cost, linopy.segments([(0, 0), (125, 200)])),
     )
@@ -222,7 +222,7 @@ are symmetric --- there is no distinguished "x" or "y":
 
 .. code-block:: python
 
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, [0, 30, 60, 100]),
         (fuel, [0, 40, 85, 160]),
         (heat, [0, 25, 55, 95]),
@@ -263,7 +263,7 @@ non-zero, so every expression is interpolated within the same segment.
 
 .. code-block:: python
 
-    m.add_piecewise_constraints((power, xp), (fuel, yp), method="sos2")
+    m.add_piecewise_formulation((power, xp), (fuel, yp), method="sos2")
 
 Incremental (Delta) Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -279,7 +279,7 @@ For **strictly monotonic** breakpoints.  Uses fill-fraction variables
 
 .. code-block:: python
 
-    m.add_piecewise_constraints((power, xp), (fuel, yp), method="incremental")
+    m.add_piecewise_formulation((power, xp), (fuel, yp), method="incremental")
 
 **Limitation:** All breakpoint sequences must be strictly monotonic.
 
@@ -330,7 +330,7 @@ linked expressions) are forced to zero:
 .. code-block:: python
 
     commit = m.add_variables(name="commit", binary=True, coords=[time])
-    m.add_piecewise_constraints(
+    m.add_piecewise_formulation(
         (power, [30, 60, 100]),
         (fuel, [40, 90, 170]),
         active=commit,
@@ -352,7 +352,7 @@ You don't need ``expand_dims``:
     y = m.add_variables(name="y", coords=[time])
 
     # 1D breakpoints auto-expand to match x's time dimension
-    m.add_piecewise_constraints((x, [0, 50, 100]), (y, [0, 70, 150]))
+    m.add_piecewise_formulation((x, [0, 50, 100]), (y, [0, 70, 150]))
 
 NaN masking
 ~~~~~~~~~~~
