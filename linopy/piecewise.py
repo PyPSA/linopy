@@ -835,11 +835,10 @@ def _add_continuous_nvar(
         )
         model.add_constraints(delta_var <= binary_var, name=inc_link_name)
 
-        fill_con: Constraint | None = None
         if n_segments >= 2:
             delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
             delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
-            fill_con = model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+            model.add_constraints(delta_hi <= delta_lo, name=fill_name)
 
             binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
             model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
@@ -849,9 +848,7 @@ def _add_continuous_nvar(
         if active is not None:
             bp0_term = bp0 * active
         weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
-        link_con = model.add_constraints(target_expr == weighted_sum, name=link_name)
-
-        return fill_con if fill_con is not None else link_con
+        return model.add_constraints(target_expr == weighted_sum, name=link_name)
 
 
 def _add_disjunctive(
