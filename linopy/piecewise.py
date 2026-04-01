@@ -756,7 +756,7 @@ def add_piecewise_formulation(
         variables=model.variables[new_vars],
         constraints=model.constraints[new_cons],
     )
-    model._groups[name] = result
+    model._piecewise_formulations[name] = result
     return result
 
 

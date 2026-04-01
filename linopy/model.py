@@ -231,7 +231,7 @@ class Model:
         "_auto_mask",
         "_solver_dir",
         "_relaxed_registry",
-        "_groups",
+        "_piecewise_formulations",
         "solver_model",
         "solver_name",
         "matrices",
@@ -288,7 +288,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
-        self._groups: dict[str, PiecewiseFormulation] = {}
+        self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
@@ -498,7 +498,7 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        grouped_names = self._grouped_names()
+        grouped_names = self._piecewise_names()
         var_string = self.variables._repr_filtered(grouped_names)
         con_string = self.constraints._repr_filtered(grouped_names)
         model_string = f"Linopy {self.type} model"
@@ -509,32 +509,32 @@ class Model:
             f"Constraints:\n------------\n{con_string}"
         )
 
-        if self._groups:
-            result += "\nGroups:\n-------\n"
-            for group in self._groups.values():
-                n_vars = len(group.variables)
-                n_cons = len(group.constraints)
+        if self._piecewise_formulations:
+            result += "\nPiecewise Formulations:\n----------------------\n"
+            for pwl in self._piecewise_formulations.values():
+                n_vars = len(pwl.variables)
+                n_cons = len(pwl.constraints)
                 # Collect user-facing dims (skip internal _ prefixed dims)
                 user_dims: list[str] = []
-                for var in group.variables.data.values():
+                for var in pwl.variables.data.values():
                     for d in var.coords:
                         if not str(d).startswith("_") and str(d) not in user_dims:
                             user_dims.append(str(d))
                 dims_str = f" over ({', '.join(user_dims)})" if user_dims else ""
                 result += (
-                    f" * {group.name} ({group.method}):"
+                    f" * {pwl.name} ({pwl.method}):"
                     f" {n_vars} variables, {n_cons} constraints{dims_str}\n"
                 )
 
         result += f"\nStatus:\n-------\n{self.status}"
         return result
 
-    def _grouped_names(self) -> set[str]:
-        """Return all variable/constraint names that belong to a group."""
+    def _piecewise_names(self) -> set[str]:
+        """Return all variable/constraint names belonging to piecewise formulations."""
         names: set[str] = set()
-        for group in self._groups.values():
-            names.update(group.variables)
-            names.update(group.constraints)
+        for pwl in self._piecewise_formulations.values():
+            names.update(pwl.variables)
+            names.update(pwl.constraints)
         return names
 
     def __getitem__(self, key: str) -> Variable:
