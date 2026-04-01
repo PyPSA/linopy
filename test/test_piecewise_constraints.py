@@ -21,16 +21,16 @@ from linopy.constants import (
     BREAKPOINT_DIM,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
-    PWL_BINARY_SUFFIX,
+    PWL_BINARY_ORDER_SUFFIX,
     PWL_CONVEX_SUFFIX,
+    PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
-    PWL_FILL_SUFFIX,
-    PWL_INC_BINARY_SUFFIX,
-    PWL_INC_LINK_SUFFIX,
-    PWL_INC_ORDER_SUFFIX,
+    PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LINK_SUFFIX,
+    PWL_ORDER_BINARY_SUFFIX,
+    PWL_SEGMENT_BINARY_SUFFIX,
     PWL_SELECT_SUFFIX,
-    PWL_X_LINK_SUFFIX,
     SEGMENT_DIM,
 )
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
@@ -289,7 +289,7 @@ class TestContinuousEquality:
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
         # N-var path uses a single stacked link constraint (no separate y_link)
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert lam.attrs.get("sos_type") == 2
@@ -430,7 +430,7 @@ class TestIncremental:
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert delta.labels.sizes[LP_SEG_DIM] == 3
-        assert f"pwl0{PWL_FILL_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_FILL_ORDER_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
 
     def test_nonmonotonic_raises(self) -> None:
@@ -467,7 +467,7 @@ class TestIncremental:
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert delta.labels.sizes[LP_SEG_DIM] == 1
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
         # N-var path uses a single stacked link constraint (no separate y_link)
 
     def test_creates_binary_indicator_vars(self) -> None:
@@ -479,10 +479,10 @@ class TestIncremental:
             (y, [5, 10, 20, 80]),
             method="incremental",
         )
-        assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
-        binary = m.variables[f"pwl0{PWL_INC_BINARY_SUFFIX}"]
+        assert f"pwl0{PWL_ORDER_BINARY_SUFFIX}" in m.variables
+        binary = m.variables[f"pwl0{PWL_ORDER_BINARY_SUFFIX}"]
         assert binary.labels.sizes[LP_SEG_DIM] == 3
-        assert f"pwl0{PWL_INC_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_DELTA_BOUND_SUFFIX}" in m.constraints
 
     def test_creates_order_constraints(self) -> None:
         m = Model()
@@ -493,7 +493,7 @@ class TestIncremental:
             (y, [5, 10, 20, 80]),
             method="incremental",
         )
-        assert f"pwl0{PWL_INC_ORDER_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_BINARY_ORDER_SUFFIX}" in m.constraints
 
     def test_two_breakpoints_no_order_constraint(self) -> None:
         """With only one segment, there's no order constraint needed."""
@@ -505,9 +505,9 @@ class TestIncremental:
             (y, [5, 80]),
             method="incremental",
         )
-        assert f"pwl0{PWL_INC_BINARY_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_INC_LINK_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_INC_ORDER_SUFFIX}" not in m.constraints
+        assert f"pwl0{PWL_ORDER_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_DELTA_BOUND_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_BINARY_ORDER_SUFFIX}" not in m.constraints
 
     def test_decreasing_monotonic(self) -> None:
         m = Model()
@@ -535,7 +535,7 @@ class TestDisjunctive:
             (x, segments([[0, 10], [50, 100]])),
             (y, segments([[0, 5], [20, 80]])),
         )
-        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_SEGMENT_BINARY_SUFFIX}" in m.variables
         assert f"pwl0{PWL_SELECT_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
@@ -574,7 +574,7 @@ class TestDisjunctive:
                 ),
             ),
         )
-        binary = m.variables[f"pwl0{PWL_BINARY_SUFFIX}"]
+        binary = m.variables[f"pwl0{PWL_SEGMENT_BINARY_SUFFIX}"]
         lam = m.variables[f"pwl0{PWL_LAMBDA_SUFFIX}"]
         assert "generator" in binary.dims
         assert "generator" in lam.dims
@@ -590,10 +590,10 @@ class TestDisjunctive:
             (y, segments([[0, 5], [20, 80]])),
             (z, segments([[0, 3], [15, 60]])),
         )
-        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_SEGMENT_BINARY_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         # Single link constraint with _pwl_var dimension
-        link = m.constraints[f"pwl0{PWL_X_LINK_SUFFIX}"]
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
         assert "_pwl_var" in [str(d) for d in link.dims]
 
 
@@ -663,7 +663,7 @@ class TestNameGeneration:
             name="my_pwl",
         )
         assert f"my_pwl{PWL_DELTA_SUFFIX}" in m.variables
-        assert f"my_pwl{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"my_pwl{PWL_LINK_SUFFIX}" in m.constraints
         # N-var path uses a single stacked link constraint (no separate y_link)
 
 
@@ -1148,7 +1148,7 @@ class TestNVariable:
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_CONVEX_SUFFIX}" in m.constraints
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
     def test_incremental_creates_delta(self) -> None:
         m = Model()
@@ -1160,7 +1160,7 @@ class TestNVariable:
             method="incremental",
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
     def test_auto_selects_method(self) -> None:
         m = Model()
@@ -1193,9 +1193,9 @@ class TestNVariable:
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
         # link constraint should have _pwl_var dimension
-        link = m.constraints[f"pwl0{PWL_X_LINK_SUFFIX}"]
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
         assert "_pwl_var" in link.labels.dims
 
     def test_custom_name(self) -> None:
@@ -1307,9 +1307,9 @@ class TestValidationEdgeCases:
             (y, seg),
             (z, seg),
         )
-        assert f"pwl0{PWL_BINARY_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_SEGMENT_BINARY_SUFFIX}" in m.variables
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
-        assert f"pwl0{PWL_X_LINK_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
 
     def test_disjunctive_interior_nan_raises(self) -> None:
         """Disjunctive with interior NaN raises ValueError."""
