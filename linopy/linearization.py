@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from linopy.types import LinExprLike
 
 
-def piecewise_tangents(
+def tangent_lines(
     x: LinExprLike,
     x_points: BreaksLike,
     y_points: BreaksLike,
@@ -37,7 +37,7 @@ def piecewise_tangents(
 
     .. code-block:: python
 
-        envelope = piecewise_tangents(power, x_pts, y_pts)
+        envelope = tangent_lines(power, x_pts, y_pts)
         m.add_constraints(fuel <= envelope)  # upper bound (concave f)
         m.add_constraints(fuel >= envelope)  # lower bound (convex f)
 

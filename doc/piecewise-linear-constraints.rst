@@ -9,7 +9,7 @@ production functions within a linear programming framework.
 
 Use :py:meth:`~linopy.model.Model.add_piecewise_constraints` to add piecewise
 equality constraints to a model.  For inequality constraints (upper/lower
-envelopes), use :func:`~linopy.linearization.piecewise_tangents`.
+envelopes), use :func:`~linopy.linearization.tangent_lines`.
 
 .. contents::
    :local:
@@ -46,12 +46,12 @@ lie on the interpolated breakpoint curve.
 
 **Envelope (inequality):** For inequality constraints such as
 :math:`y \le f(x)` or :math:`y \ge f(x)`, use
-:func:`~linopy.linearization.piecewise_tangents` to obtain tangent-line
+:func:`~linopy.linearization.tangent_lines` to obtain tangent-line
 expressions and add them as regular constraints:
 
 .. code-block:: python
 
-    envelope = linopy.piecewise_tangents(power, x_pts, y_pts)
+    envelope = linopy.tangent_lines(power, x_pts, y_pts)
     m.add_constraints(fuel <= envelope)  # upper bound (concave f)
     m.add_constraints(fuel >= envelope)  # lower bound (convex f)
 
@@ -133,7 +133,7 @@ same N-variable code path.
 Piecewise Envelope (inequality)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For inequality constraints, use :func:`~linopy.linearization.piecewise_tangents`
+For inequality constraints, use :func:`~linopy.linearization.tangent_lines`
 instead of ``add_piecewise_constraints``.  The envelope function computes
 tangent-line expressions for each segment --- no auxiliary variables are created:
 
@@ -145,7 +145,7 @@ Use the result in a regular constraint:
 
 .. code-block:: python
 
-    envelope = linopy.piecewise_tangents(power, x_pts, y_pts)
+    envelope = linopy.tangent_lines(power, x_pts, y_pts)
     m.add_constraints(fuel <= envelope)  # upper bound (concave f)
     m.add_constraints(fuel >= envelope)  # lower bound (convex f)
 
@@ -208,7 +208,7 @@ Pass ``method="auto"`` (the default) and linopy picks the best formulation:
 - **Equality + monotonic breakpoints** -> incremental
 - Otherwise -> SOS2
 - Disjunctive (segments) -> always SOS2 with binary selection
-- **Inequality** -> use ``piecewise_tangents`` + regular constraints
+- **Inequality** -> use ``tangent_lines`` + regular constraints
 
 .. list-table::
    :header-rows: 1
@@ -261,11 +261,11 @@ Inequality via envelope
 .. code-block:: python
 
     # fuel <= f(power): y bounded above (concave function)
-    envelope = linopy.piecewise_tangents(power, x_pts, y_pts)
+    envelope = linopy.tangent_lines(power, x_pts, y_pts)
     m.add_constraints(fuel <= envelope)
 
     # fuel >= f(power): y bounded below (convex function)
-    envelope = linopy.piecewise_tangents(power, x_pts, y_pts)
+    envelope = linopy.tangent_lines(power, x_pts, y_pts)
     m.add_constraints(fuel >= envelope)
 
 N-variable linking

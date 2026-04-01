@@ -13,9 +13,9 @@ from linopy import (
     Model,
     available_solvers,
     breakpoints,
-    piecewise_tangents,
     segments,
     slopes_to_points,
+    tangent_lines,
 )
 from linopy.constants import (
     BREAKPOINT_DIM,
@@ -366,33 +366,33 @@ class TestPiecewiseEnvelope:
         """Envelope from a Variable produces a LinearExpression with seg dim."""
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
-        env = piecewise_tangents(x, [0, 50, 100], [0, 40, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
         assert LP_SEG_DIM in env.dims
 
     def test_basic_linexpr(self) -> None:
         """Envelope from a LinearExpression works too."""
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
-        env = piecewise_tangents(1 * x, [0, 50, 100], [0, 40, 60])
+        env = tangent_lines(1 * x, [0, 50, 100], [0, 40, 60])
         assert LP_SEG_DIM in env.dims
 
     def test_segment_count(self) -> None:
         """Number of segments = number of breakpoints - 1."""
         m = Model()
         x = m.add_variables(name="x")
-        env = piecewise_tangents(x, [0, 50, 100], [0, 40, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
         assert env.sizes[LP_SEG_DIM] == 2
 
     def test_invalid_x_type_raises(self) -> None:
         with pytest.raises(TypeError, match="must be a Variable or LinearExpression"):
-            piecewise_tangents(42, [0, 50, 100], [0, 40, 60])  # type: ignore
+            tangent_lines(42, [0, 50, 100], [0, 40, 60])  # type: ignore
 
     def test_concave_le_constraint(self) -> None:
         """Using envelope with <= constraint creates regular constraints."""
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
-        env = piecewise_tangents(x, [0, 50, 100], [0, 40, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
         m.add_constraints(y <= env, name="pwl")
         assert "pwl" in m.constraints
 
@@ -401,7 +401,7 @@ class TestPiecewiseEnvelope:
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
         y = m.add_variables(name="y")
-        env = piecewise_tangents(x, [0, 50, 100], [0, 10, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 10, 60])
         m.add_constraints(y >= env, name="pwl")
         assert "pwl" in m.constraints
 
@@ -411,7 +411,7 @@ class TestPiecewiseEnvelope:
         x = m.add_variables(name="x")
         x_pts = xr.DataArray([0, 50, 100], dims=[BREAKPOINT_DIM])
         y_pts = xr.DataArray([0, 40, 60], dims=[BREAKPOINT_DIM])
-        env = piecewise_tangents(x, x_pts, y_pts)
+        env = tangent_lines(x, x_pts, y_pts)
         assert LP_SEG_DIM in env.dims
 
 
@@ -886,7 +886,7 @@ class TestSolverEnvelope:
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(name="y")
         # Concave: [0,0],[50,40],[100,60]
-        env = piecewise_tangents(x, [0, 50, 100], [0, 40, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
         m.add_constraints(y <= env, name="pwl")
         m.add_constraints(x <= 75, name="x_max")
         m.add_constraints(x >= 0, name="x_lo")
@@ -903,7 +903,7 @@ class TestSolverEnvelope:
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(name="y")
         # Convex: [0,0],[50,10],[100,60]
-        env = piecewise_tangents(x, [0, 50, 100], [0, 10, 60])
+        env = tangent_lines(x, [0, 50, 100], [0, 10, 60])
         m.add_constraints(y >= env, name="pwl")
         m.add_constraints(x >= 25, name="x_min")
         m.add_objective(y)
@@ -919,7 +919,7 @@ class TestSolverEnvelope:
         m1 = Model()
         x1 = m1.add_variables(lower=0, upper=100, name="x")
         y1 = m1.add_variables(name="y")
-        env1 = piecewise_tangents(x1, [0, 50, 100], [0, 40, 60])
+        env1 = tangent_lines(x1, [0, 50, 100], [0, 40, 60])
         m1.add_constraints(y1 <= env1, name="pwl")
         m1.add_constraints(x1 <= 75, name="x_max")
         m1.add_constraints(x1 >= 0, name="x_lo")
@@ -930,7 +930,7 @@ class TestSolverEnvelope:
         m2 = Model()
         x2 = m2.add_variables(lower=0, upper=100, name="x")
         y2 = m2.add_variables(name="y")
-        env2 = piecewise_tangents(
+        env2 = tangent_lines(
             x2,
             [0, 50, 100],
             breakpoints(slopes=[0.8, 0.4], x_points=[0, 50, 100], y0=0),
