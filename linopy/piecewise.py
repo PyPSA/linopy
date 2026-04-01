@@ -60,6 +60,11 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
+def _strip_nan(vals: Sequence[float]) -> list[float]:
+    """Remove NaN values from a sequence."""
+    return [v for v in vals if not np.isnan(v)]
+
+
 def _sequence_to_array(values: Sequence[float]) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
@@ -288,14 +293,11 @@ def breakpoints(
         computed: dict[str, Sequence[float]] = {}
         for key in entity_keys:
             sk = str(key)
-            sl = list(slopes_arr.sel({entity_dim: key}).values)
-            # Remove trailing NaN from slopes
-            sl = [v for v in sl if not np.isnan(v)]
+            sl = _strip_nan(slopes_arr.sel({entity_dim: key}).values)
             if entity_dim in xp_arr.dims:
-                xp = list(xp_arr.sel({entity_dim: key}).values)
-                xp = [v for v in xp if not np.isnan(v)]
+                xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
             else:
-                xp = [v for v in xp_arr.values if not np.isnan(v)]
+                xp = _strip_nan(xp_arr.values)
             computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
 
         return _dict_to_array(computed, entity_dim)
