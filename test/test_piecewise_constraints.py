@@ -1191,3 +1191,154 @@ class TestNVariable:
             name="chp",
         )
         assert f"chp{PWL_DELTA_SUFFIX}" in m.variables
+
+
+# ===========================================================================
+# Additional validation and edge-case coverage
+# ===========================================================================
+
+
+class TestValidationEdgeCases:
+    def test_non_1d_sequence_raises(self) -> None:
+        """breakpoints() with a 2D nested list raises ValueError."""
+        with pytest.raises(ValueError, match="1D sequence"):
+            breakpoints([[1, 2], [3, 4]])
+
+    def test_breakpoints_no_values_no_slopes_raises(self) -> None:
+        """breakpoints() with neither values nor slopes raises."""
+        with pytest.raises(ValueError, match="Must pass either"):
+            breakpoints()
+
+    def test_slopes_1d_non_scalar_y0_raises(self) -> None:
+        """1D slopes with dict y0 raises TypeError."""
+        with pytest.raises(TypeError, match="scalar float"):
+            breakpoints(slopes=[1, 2], x_points=[0, 10, 20], y0={"a": 0})
+
+    def test_slopes_bad_y0_type_raises(self) -> None:
+        """slopes with unsupported y0 type raises TypeError."""
+        with pytest.raises(TypeError, match="y0"):
+            breakpoints(
+                slopes={"a": [1, 2], "b": [3, 4]},
+                x_points={"a": [0, 10, 20], "b": [0, 10, 20]},
+                y0="bad",  # type: ignore
+                dim="entity",
+            )
+
+    def test_slopes_dataarray_y0(self) -> None:
+        """slopes mode with DataArray y0 works."""
+        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
+        bp = breakpoints(
+            slopes={"a": [1, 2], "b": [3, 4]},
+            x_points={"a": [0, 10, 20], "b": [0, 10, 20]},
+            y0=y0_da,
+            dim="gen",
+        )
+        assert BREAKPOINT_DIM in bp.dims
+        assert "gen" in bp.dims
+
+    def test_non_numeric_breakpoint_coords_raises(self) -> None:
+        """SOS2 with string breakpoint coords raises ValueError."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        x_pts = xr.DataArray(
+            [0, 10, 50], dims=[BREAKPOINT_DIM],
+            coords={BREAKPOINT_DIM: ["a", "b", "c"]},
+        )
+        y_pts = xr.DataArray(
+            [0, 5, 20], dims=[BREAKPOINT_DIM],
+            coords={BREAKPOINT_DIM: ["a", "b", "c"]},
+        )
+        with pytest.raises(ValueError, match="numeric coordinates"):
+            m.add_piecewise_constraints(
+                (x, x_pts), (y, y_pts), method="sos2",
+            )
+
+    def test_missing_breakpoint_dim_on_second_arg_raises(self) -> None:
+        """Second breakpoint array missing breakpoint dim raises."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        good = xr.DataArray([0, 10, 50], dims=[BREAKPOINT_DIM])
+        bad = xr.DataArray([0, 5, 20], dims=["wrong"])
+        with pytest.raises(ValueError, match="missing"):
+            m.add_piecewise_constraints((x, good), (y, bad))
+
+    def test_segment_dim_mismatch_raises(self) -> None:
+        """Segment dim on only one breakpoint array raises."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        x_pts = segments([[0, 10], [50, 100]])
+        y_pts = breakpoints([0, 5])  # same breakpoint count but no segment dim
+        with pytest.raises(ValueError, match="segment dimension"):
+            m.add_piecewise_constraints((x, x_pts), (y, y_pts))
+
+    def test_disjunctive_three_pairs_raises(self) -> None:
+        """Disjunctive with 3 pairs raises ValueError."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        seg = segments([[0, 10], [50, 100]])
+        with pytest.raises(ValueError, match="exactly 2"):
+            m.add_piecewise_constraints(
+                (x, seg), (y, seg), (z, seg),
+            )
+
+    def test_disjunctive_interior_nan_raises(self) -> None:
+        """Disjunctive with interior NaN raises ValueError."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        # 3 breakpoints per segment, NaN in the middle of segment 0
+        x_pts = xr.DataArray(
+            [[0, np.nan, 10], [50, 75, 100]],
+            dims=[SEGMENT_DIM, BREAKPOINT_DIM],
+        )
+        y_pts = xr.DataArray(
+            [[0, np.nan, 5], [20, 50, 80]],
+            dims=[SEGMENT_DIM, BREAKPOINT_DIM],
+        )
+        with pytest.raises(ValueError, match="non-trailing NaN"):
+            m.add_piecewise_constraints((x, x_pts), (y, y_pts))
+
+    def test_expression_name_fallback(self) -> None:
+        """LinExpr (not Variable) gets numeric name in link coords."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        # Non-monotonic so auto picks SOS2 (which creates lambda vars)
+        m.add_piecewise_constraints(
+            (1.0 * x, [0, 50, 10]),
+            (1.0 * y, [0, 20, 5]),
+            method="sos2",
+        )
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+
+    def test_incremental_with_nan_mask(self) -> None:
+        """Incremental method with trailing NaN creates masked delta vars."""
+        m = Model()
+        gens = pd.Index(["a", "b"], name="gen")
+        x = m.add_variables(coords=[gens], name="x")
+        y = m.add_variables(coords=[gens], name="y")
+        x_pts = breakpoints({"a": [0, 10, 50], "b": [0, 20]}, dim="gen")
+        y_pts = breakpoints({"a": [0, 5, 20], "b": [0, 8]}, dim="gen")
+        m.add_piecewise_constraints(
+            (x, x_pts), (y, y_pts), method="incremental",
+        )
+        delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert delta.labels.shape[0] == 2  # 2 generators
+
+    def test_scalar_coord_dropped(self) -> None:
+        """Scalar coords on breakpoints are dropped before stacking."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        bp = breakpoints([0, 10, 50])
+        bp_with_scalar = bp.assign_coords(extra=42)
+        m.add_piecewise_constraints(
+            (x, bp_with_scalar), (y, [0, 5, 20]),
+            method="sos2",
+        )
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
