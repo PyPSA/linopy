@@ -426,14 +426,10 @@ def tangent_lines(
 
     intercepts = y_base - slopes * x_base
 
-    if isinstance(x, Variable):
-        x_expr = x.to_linexpr()
-    elif isinstance(x, LinExpr):
-        x_expr = x
-    else:
+    if not isinstance(x, (Variable, LinExpr)):
         raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
 
-    return slopes * x_expr + intercepts
+    return slopes * _to_linexpr(x) + intercepts
 
 
 # ---------------------------------------------------------------------------
