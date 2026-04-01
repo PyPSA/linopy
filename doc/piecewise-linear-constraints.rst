@@ -26,7 +26,7 @@ Quick Start
     # Link power and fuel via a piecewise linear curve
     m.add_piecewise_constraints(
         (power, [0, 30, 60, 100]),
-        (fuel,  [0, 36, 84, 170]),
+        (fuel, [0, 36, 84, 170]),
     )
 
 Each ``(expression, breakpoints)`` tuple pairs a variable with its
@@ -47,9 +47,9 @@ API
         (expr1, breakpoints1),
         (expr2, breakpoints2),
         ...,
-        method="auto",       # "auto", "sos2", or "incremental"
-        active=None,         # binary variable to gate the constraint
-        name=None,           # base name for generated variables/constraints
+        method="auto",  # "auto", "sos2", or "incremental"
+        active=None,  # binary variable to gate the constraint
+        name=None,  # base name for generated variables/constraints
         skip_nan_check=False,
     )
 
@@ -71,8 +71,8 @@ linear algebra.  Use it with regular ``add_constraints``:
 .. code-block:: python
 
     t = linopy.tangent_lines(power, x_pts, y_pts)
-    m.add_constraints(fuel <= t)   # upper bound
-    m.add_constraints(fuel >= t)   # lower bound
+    m.add_constraints(fuel <= t)  # upper bound
+    m.add_constraints(fuel >= t)  # lower bound
 
 ``breakpoints`` and ``segments``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -81,11 +81,11 @@ Factory functions that create DataArrays with the correct dimension names:
 
 .. code-block:: python
 
-    linopy.breakpoints([0, 50, 100])                                        # list
-    linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")       # per-entity
-    linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0)      # from slopes
-    linopy.segments([(0, 10), (50, 100)])                                   # disjunctive
-    linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")      # per-entity
+    linopy.breakpoints([0, 50, 100])  # list
+    linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")  # per-entity
+    linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0)  # from slopes
+    linopy.segments([(0, 10), (50, 100)])  # disjunctive
+    linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")  # per-entity
 
 
 When to Use What
@@ -140,7 +140,7 @@ The simplest form --- pass Python lists directly in the tuple:
 
     m.add_piecewise_constraints(
         (power, [0, 30, 60, 100]),
-        (fuel,  [0, 36, 84, 170]),
+        (fuel, [0, 36, 84, 170]),
     )
 
 With the ``breakpoints()`` factory
@@ -152,7 +152,7 @@ Equivalent, but explicit about the DataArray construction:
 
     m.add_piecewise_constraints(
         (power, linopy.breakpoints([0, 30, 60, 100])),
-        (fuel,  linopy.breakpoints([0, 36, 84, 170])),
+        (fuel, linopy.breakpoints([0, 36, 84, 170])),
     )
 
 From slopes
@@ -164,7 +164,12 @@ When you know marginal costs (slopes) rather than absolute values:
 
     m.add_piecewise_constraints(
         (power, [0, 50, 100, 150]),
-        (cost,  linopy.breakpoints(slopes=[1.1, 1.5, 1.9], x_points=[0, 50, 100, 150], y0=0)),
+        (
+            cost,
+            linopy.breakpoints(
+                slopes=[1.1, 1.5, 1.9], x_points=[0, 50, 100, 150], y0=0
+            ),
+        ),
     )
     # cost breakpoints: [0, 55, 130, 225]
 
@@ -177,8 +182,18 @@ Different generators can have different curves.  Pass a dict to
 .. code-block:: python
 
     m.add_piecewise_constraints(
-        (power, linopy.breakpoints({"gas": [0, 30, 60, 100], "coal": [0, 50, 100, 150]}, dim="gen")),
-        (fuel,  linopy.breakpoints({"gas": [0, 40, 90, 180], "coal": [0, 55, 130, 225]}, dim="gen")),
+        (
+            power,
+            linopy.breakpoints(
+                {"gas": [0, 30, 60, 100], "coal": [0, 50, 100, 150]}, dim="gen"
+            ),
+        ),
+        (
+            fuel,
+            linopy.breakpoints(
+                {"gas": [0, 40, 90, 180], "coal": [0, 55, 130, 225]}, dim="gen"
+            ),
+        ),
     )
 
 Ragged lengths are NaN-padded automatically.  Breakpoints are
@@ -194,7 +209,7 @@ For disconnected operating regions (e.g. forbidden zones), use
 
     m.add_piecewise_constraints(
         (power, linopy.segments([(0, 0), (50, 80)])),
-        (cost,  linopy.segments([(0, 0), (125, 200)])),
+        (cost, linopy.segments([(0, 0), (125, 200)])),
     )
 
 The disjunctive formulation is selected automatically when breakpoints
@@ -210,8 +225,8 @@ are symmetric --- there is no distinguished "x" or "y":
 
     m.add_piecewise_constraints(
         (power, [0, 30, 60, 100]),
-        (fuel,  [0, 40, 85, 160]),
-        (heat,  [0, 25, 55, 95]),
+        (fuel, [0, 40, 85, 160]),
+        (heat, [0, 25, 55, 95]),
     )
 
 
@@ -318,7 +333,7 @@ linked expressions) are forced to zero:
     commit = m.add_variables(name="commit", binary=True, coords=[time])
     m.add_piecewise_constraints(
         (power, [30, 60, 100]),
-        (fuel,  [40, 90, 170]),
+        (fuel, [40, 90, 170]),
         active=commit,
     )
 
