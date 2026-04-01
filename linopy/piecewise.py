@@ -763,7 +763,7 @@ def add_piecewise_constraints(
     expressions.
 
     For inequality constraints (y <= f(x) or y >= f(x)), use
-    :func:`~linopy.linearization.piecewise_envelope` with regular
+    :func:`~linopy.linearization.piecewise_tangents` with regular
     ``add_constraints`` instead.
 
     Example::

@@ -18,7 +18,7 @@ from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
 from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
-from linopy.linearization import piecewise_envelope
+from linopy.linearization import piecewise_tangents
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
 from linopy.piecewise import breakpoints, segments, slopes_to_points
@@ -45,7 +45,7 @@ __all__ = (
     "Variables",
     "available_solvers",
     "breakpoints",
-    "piecewise_envelope",
+    "piecewise_tangents",
     "segments",
     "slopes_to_points",
     "align",
