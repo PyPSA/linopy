@@ -76,14 +76,12 @@ class PiecewiseFormulation:
     constraints: Constraints
 
     def __repr__(self) -> str:
-        n_vars = len(self.variables)
-        n_cons = len(self.constraints)
         r = f"PiecewiseFormulation '{self.name}' ({self.method})\n"
-        r += f"  Variables ({n_vars}):\n"
+        r += "  Variables:\n"
         for vname, var in self.variables.items():
             dims = ", ".join(str(d) for d in var.coords) if var.coords else ""
             r += f"    * {vname} ({dims})\n" if dims else f"    * {vname}\n"
-        r += f"  Constraints ({n_cons}):\n"
+        r += "  Constraints:\n"
         for cname, con in self.constraints.items():
             dims = ", ".join(str(d) for d in con.coords) if con.coords else ""
             r += f"    * {cname} ({dims})\n" if dims else f"    * {cname}\n"
