@@ -603,6 +603,22 @@ class TestValidation:
                 method="invalid",  # type: ignore
             )
 
+    def test_mismatched_breakpoint_sizes_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="same size"):
+            m.add_piecewise_constraints(
+                (x, [0, 10, 50]),
+                (y, [5, 10]),
+            )
+
+    def test_non_tuple_arg_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        with pytest.raises(TypeError, match="tuple"):
+            m.add_piecewise_constraints(x, [0, 10, 50])  # type: ignore
+
 
 # ===========================================================================
 # Name generation
