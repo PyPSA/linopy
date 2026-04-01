@@ -403,24 +403,18 @@ def tangent_lines(
     x_points = _coerce_breaks(x_points)
     y_points = _coerce_breaks(y_points)
 
+    def _to_seg(da: DataArray, seg_index: np.ndarray) -> DataArray:
+        da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+        da[LP_SEG_DIM] = seg_index
+        return da
+
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
-    slopes = dy / dx
+    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    n_seg = slopes.sizes[BREAKPOINT_DIM]
-    seg_index = np.arange(n_seg)
-
-    slopes = slopes.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    slopes[LP_SEG_DIM] = seg_index
-
-    x_base = x_points.isel({BREAKPOINT_DIM: slice(None, -1)}).rename(
-        {BREAKPOINT_DIM: LP_SEG_DIM}
-    )
-    y_base = y_points.isel({BREAKPOINT_DIM: slice(None, -1)}).rename(
-        {BREAKPOINT_DIM: LP_SEG_DIM}
-    )
-    x_base[LP_SEG_DIM] = seg_index
-    y_base[LP_SEG_DIM] = seg_index
+    slopes = _to_seg(dy / dx, seg_index)
+    x_base = _to_seg(x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
+    y_base = _to_seg(y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
 
     intercepts = y_base - slopes * x_base
 
