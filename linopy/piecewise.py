@@ -530,9 +530,10 @@ def _broadcast_points(
     if disjunctive:
         skip.add(SEGMENT_DIM)
 
+    lin_exprs = [_to_linexpr(e) for e in exprs]
+
     target_dims: set[str] = set()
-    for e in exprs:
-        le = _to_linexpr(e)
+    for le in lin_exprs:
         target_dims.update(str(d) for d in le.coord_dims)
 
     missing = target_dims - skip - {str(d) for d in points.dims}
@@ -541,8 +542,7 @@ def _broadcast_points(
 
     expand_map: dict[str, list] = {}
     for d in missing:
-        for e in exprs:
-            le = _to_linexpr(e)
+        for le in lin_exprs:
             if d in le.coords:
                 expand_map[str(d)] = list(le.coords[d].values)
                 break
