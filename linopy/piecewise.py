@@ -700,7 +700,7 @@ def add_piecewise_constraints(
         )
 
     # Continuous: stack into N-variable formulation
-    return _add_continuous_nvar(
+    return _add_continuous(
         model,
         name,
         lin_exprs,
@@ -712,7 +712,20 @@ def add_piecewise_constraints(
     )
 
 
-def _add_continuous_nvar(
+def _stack_along_link(
+    items: list[DataArray],
+    link_coords: list[str],
+    link_dim: str,
+) -> DataArray:
+    """Expand and concatenate DataArrays along a new link dimension."""
+    return xr.concat(
+        [item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)],
+        dim=link_dim,
+        coords="minimal",
+    )
+
+
+def _add_continuous(
     model: Model,
     name: str,
     lin_exprs: list[LinearExpression],
@@ -722,17 +735,11 @@ def _add_continuous_nvar(
     method: str,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Unified continuous piecewise equality for N expressions."""
+    """Dispatch continuous piecewise equality to SOS2 or incremental."""
     from linopy.expressions import LinearExpression
 
-    # Stack breakpoints into a single DataArray with a link dimension
     link_dim = "_pwl_var"
-    stacked_bp = xr.concat(
-        [bp.expand_dims({link_dim: [c]}) for bp, c in zip(bp_list, link_coords)],
-        dim=link_dim,
-        coords="minimal",
-    )
-
+    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
     dim = BREAKPOINT_DIM
 
     # Pre-compute properties used by multiple branches
@@ -760,95 +767,126 @@ def _add_continuous_nvar(
             )
 
     # Stack expressions along the link dimension
-    expr_data_list = [
-        e.data.expand_dims({link_dim: [c]}) for e, c in zip(lin_exprs, link_coords)
-    ]
+    expr_data_list = [e.data.expand_dims({link_dim: [c]}) for e, c in zip(lin_exprs, link_coords)]
     stacked_data = xr.concat(expr_data_list, dim=link_dim, coords="minimal")
     target_expr = LinearExpression(stacked_data, model)
 
-    # Compute stacked mask (shared by both branches)
+    # Compute stacked mask
     stacked_mask = None
     if bp_mask is not None:
-        stacked_mask = xr.concat(
-            [bp_mask.expand_dims({link_dim: [c]}) for c in link_coords],
-            dim=link_dim,
-            coords="minimal",
+        stacked_mask = _stack_along_link(
+            [bp_mask] * len(link_coords), link_coords, link_dim
         )
 
-    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
     rhs = active if active is not None else 1
 
     if method == "sos2":
-        lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
-        lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
-
-        lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
-        convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-        link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-
-        lambda_var = model.add_variables(
-            lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+        return _add_sos2(
+            model, name, target_expr, stacked_bp, stacked_mask,
+            link_dim, rhs,
         )
-        model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
-        model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
-
-        weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
-        return model.add_constraints(target_expr == weighted_sum, name=link_name)
-
-    else:  # incremental
-        delta_name = f"{name}{PWL_DELTA_SUFFIX}"
-        fill_name = f"{name}{PWL_FILL_SUFFIX}"
-        link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-        inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
-        inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
-        inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
-
-        n_segments = stacked_bp.sizes[dim] - 1
-        seg_dim = f"{dim}_seg"
-        seg_index = pd.Index(range(n_segments), name=seg_dim)
-        delta_extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
-        delta_coords = delta_extra + [seg_index]
-
-        steps = stacked_bp.diff(dim).rename({dim: seg_dim})
-        steps[seg_dim] = seg_index
-
-        if stacked_mask is not None:
-            bp_mask_agg = stacked_mask.all(dim=link_dim)
-            mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
-            mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
-            mask_lo[seg_dim] = seg_index
-            mask_hi[seg_dim] = seg_index
-            delta_mask: DataArray | None = mask_lo & mask_hi
-        else:
-            delta_mask = None
-
-        delta_var = model.add_variables(
-            lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+    else:
+        return _add_incremental(
+            model, name, target_expr, stacked_bp, stacked_mask,
+            link_dim, rhs, active,
         )
 
-        if active is not None:
-            active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
-            model.add_constraints(delta_var <= active, name=active_bound_name)
 
-        binary_var = model.add_variables(
-            binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
-        )
-        model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+def _add_sos2(
+    model: Model,
+    name: str,
+    target_expr: LinearExpression,
+    stacked_bp: DataArray,
+    stacked_mask: DataArray | None,
+    link_dim: str,
+    rhs: LinearExpression | int,
+) -> Constraint:
+    """SOS2 formulation for N-variable continuous piecewise equality."""
+    dim = BREAKPOINT_DIM
+    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
+    lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
+    lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
 
-        if n_segments >= 2:
-            delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
-            delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
-            model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+    lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
+    convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
 
-            binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
-            model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+    lambda_var = model.add_variables(
+        lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
+    )
+    model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
+    model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
 
-        bp0 = stacked_bp.isel({dim: 0})
-        bp0_term: DataArray | LinearExpression = bp0
-        if active is not None:
-            bp0_term = bp0 * active
-        weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
-        return model.add_constraints(target_expr == weighted_sum, name=link_name)
+    weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
+    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+
+
+def _add_incremental(
+    model: Model,
+    name: str,
+    target_expr: LinearExpression,
+    stacked_bp: DataArray,
+    stacked_mask: DataArray | None,
+    link_dim: str,
+    rhs: LinearExpression | int,
+    active: LinearExpression | None,
+) -> Constraint:
+    """Incremental formulation for N-variable continuous piecewise equality."""
+    dim = BREAKPOINT_DIM
+    extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
+
+    delta_name = f"{name}{PWL_DELTA_SUFFIX}"
+    fill_name = f"{name}{PWL_FILL_SUFFIX}"
+    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
+    inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
+    inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
+
+    n_segments = stacked_bp.sizes[dim] - 1
+    seg_dim = f"{dim}_seg"
+    seg_index = pd.Index(range(n_segments), name=seg_dim)
+    delta_coords = extra + [seg_index]
+
+    steps = stacked_bp.diff(dim).rename({dim: seg_dim})
+    steps[seg_dim] = seg_index
+
+    if stacked_mask is not None:
+        bp_mask_agg = stacked_mask.all(dim=link_dim)
+        mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
+        mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
+        mask_lo[seg_dim] = seg_index
+        mask_hi[seg_dim] = seg_index
+        delta_mask: DataArray | None = mask_lo & mask_hi
+    else:
+        delta_mask = None
+
+    delta_var = model.add_variables(
+        lower=0, upper=1, coords=delta_coords, name=delta_name, mask=delta_mask
+    )
+
+    if active is not None:
+        active_bound_name = f"{name}{PWL_ACTIVE_BOUND_SUFFIX}"
+        model.add_constraints(delta_var <= active, name=active_bound_name)
+
+    binary_var = model.add_variables(
+        binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
+    )
+    model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+
+    if n_segments >= 2:
+        delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
+        delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+        model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+
+        binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
+        model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+
+    bp0 = stacked_bp.isel({dim: 0})
+    bp0_term: DataArray | LinearExpression = bp0
+    if active is not None:
+        bp0_term = bp0 * active
+    weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
+    return model.add_constraints(target_expr == weighted_sum, name=link_name)
 
 
 def _add_disjunctive(
