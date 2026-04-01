@@ -65,6 +65,13 @@ def _strip_nan(vals: Sequence[float] | np.ndarray) -> list[float]:
     return [v for v in vals if not np.isnan(v)]
 
 
+def _rename_to_segments(da: DataArray, seg_index: np.ndarray) -> DataArray:
+    """Rename breakpoint dim to segment dim and reassign coordinates."""
+    da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
+    da[LP_SEG_DIM] = seg_index
+    return da
+
+
 def _sequence_to_array(values: Sequence[float]) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
@@ -408,19 +415,13 @@ def tangent_lines(
     x_points = _coerce_breaks(x_points)
     y_points = _coerce_breaks(y_points)
 
-    def _to_seg(da: DataArray, seg_index: np.ndarray) -> DataArray:
-        """Rename breakpoint dim to segment dim and reassign coordinates."""
-        da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-        da[LP_SEG_DIM] = seg_index
-        return da
-
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
     seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    slopes = _to_seg(dy / dx, seg_index)
-    x_base = _to_seg(x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
-    y_base = _to_seg(y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
+    slopes = _rename_to_segments(dy / dx, seg_index)
+    x_base = _rename_to_segments(x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
+    y_base = _rename_to_segments(y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
 
     intercepts = y_base - slopes * x_base
 
@@ -553,7 +554,6 @@ def _broadcast_points(
     if expand_map:
         points = points.expand_dims(expand_map)
     return points
-
 
 
 # ---------------------------------------------------------------------------
