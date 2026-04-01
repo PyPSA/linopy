@@ -1149,8 +1149,14 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     if m._piecewise_formulations:
         ds.attrs["_piecewise_formulations"] = json.dumps(
-            {name: {"method": pwl.method, "variables": pwl.variable_names, "constraints": pwl.constraint_names}
-             for name, pwl in m._piecewise_formulations.items()}
+            {
+                name: {
+                    "method": pwl.method,
+                    "variables": pwl.variable_names,
+                    "constraints": pwl.constraint_names,
+                }
+                for name, pwl in m._piecewise_formulations.items()
+            }
         )
     ds.attrs = non_bool_dict(ds.attrs)
 
