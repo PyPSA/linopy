@@ -911,6 +911,16 @@ def add_piecewise_constraints(
         name = f"pwl{model._pwlCounter}"
         model._pwlCounter += 1
 
+    # Build link dimension coordinates from variable names
+    from linopy.variables import Variable
+
+    link_coords: list[str] = []
+    for i, expr in enumerate(all_exprs):
+        if isinstance(expr, Variable) and expr.name:
+            link_coords.append(expr.name)
+        else:
+            link_coords.append(str(i))
+
     # Convert expressions to LinearExpressions
     lin_exprs = [_to_linexpr(expr) for expr in all_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
@@ -940,6 +950,7 @@ def add_piecewise_constraints(
         name,
         lin_exprs,
         bp_list,
+        link_coords,
         bp_mask,
         method,
         skip_nan_check,
@@ -952,6 +963,7 @@ def _add_continuous_nvar(
     name: str,
     lin_exprs: list[LinearExpression],
     bp_list: list[DataArray],
+    link_coords: list[str],
     bp_mask: DataArray | None,
     method: str,
     skip_nan_check: bool,
@@ -967,7 +979,6 @@ def _add_continuous_nvar(
 
     # Stack breakpoints into a single DataArray with a link dimension
     link_dim = "_pwl_var"
-    link_coords = [str(i) for i in range(len(lin_exprs))]
     stacked_bp = xr.concat(
         [bp.expand_dims({link_dim: [c]}) for bp, c in zip(bp_list, link_coords)],
         dim=link_dim,
