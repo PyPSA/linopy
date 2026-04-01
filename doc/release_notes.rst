@@ -11,11 +11,11 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
-* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
+* Refactor ``add_piecewise_constraints()`` to a tuple-based API: ``m.add_piecewise_constraints((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, ``breakpoints()``, ``segments()``, and slopes mode. Removes ``piecewise()`` function and descriptor classes.
+* Add ``tangent_lines()`` utility for piecewise inequality bounds — returns a ``LinearExpression`` with one tangent line per segment, no auxiliary variables created. Use with regular ``add_constraints``.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add ``active`` parameter to ``add_piecewise_constraints()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
