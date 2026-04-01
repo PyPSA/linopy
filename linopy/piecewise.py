@@ -21,16 +21,16 @@ from linopy.constants import (
     HELPER_DIMS,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
-    PWL_BINARY_SUFFIX,
+    PWL_BINARY_ORDER_SUFFIX,
     PWL_CONVEX_SUFFIX,
+    PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
-    PWL_FILL_SUFFIX,
-    PWL_INC_BINARY_SUFFIX,
-    PWL_INC_LINK_SUFFIX,
-    PWL_INC_ORDER_SUFFIX,
+    PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LINK_SUFFIX,
+    PWL_ORDER_BINARY_SUFFIX,
+    PWL_SEGMENT_BINARY_SUFFIX,
     PWL_SELECT_SUFFIX,
-    PWL_X_LINK_SUFFIX,
     SEGMENT_DIM,
 )
 
@@ -813,7 +813,7 @@ def _add_sos2(
 
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
@@ -840,11 +840,11 @@ def _add_incremental(
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
 
     delta_name = f"{name}{PWL_DELTA_SUFFIX}"
-    fill_name = f"{name}{PWL_FILL_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-    inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
-    inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
-    inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
+    fill_order_name = f"{name}{PWL_FILL_ORDER_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
+    order_binary_name = f"{name}{PWL_ORDER_BINARY_SUFFIX}"
+    delta_bound_name = f"{name}{PWL_DELTA_BOUND_SUFFIX}"
+    binary_order_name = f"{name}{PWL_BINARY_ORDER_SUFFIX}"
 
     n_segments = stacked_bp.sizes[dim] - 1
     seg_dim = f"{dim}_seg"
@@ -873,17 +873,17 @@ def _add_incremental(
         model.add_constraints(delta_var <= active, name=active_bound_name)
 
     binary_var = model.add_variables(
-        binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
+        binary=True, coords=delta_coords, name=order_binary_name, mask=delta_mask
     )
-    model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+    model.add_constraints(delta_var <= binary_var, name=delta_bound_name)
 
     if n_segments >= 2:
         delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
-        model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+        model.add_constraints(delta_hi <= delta_lo, name=fill_order_name)
 
         binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
-        model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+        model.add_constraints(binary_hi <= delta_lo, name=binary_order_name)
 
     bp0 = stacked_bp.isel({dim: 0})
     bp0_term: DataArray | LinearExpression = bp0
@@ -947,11 +947,11 @@ def _add_disjunctive(
         lambda_mask = agg_mask
         binary_mask = agg_mask.any(dim=dim)
 
-    binary_name = f"{name}{PWL_BINARY_SUFFIX}"
+    binary_name = f"{name}{PWL_SEGMENT_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
 
     binary_var = model.add_variables(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
