@@ -585,7 +585,7 @@ class TestDisjunctive:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         z = m.add_variables(name="z")
-        m.add_piecewise_constraints(
+        m.add_piecewise_formulation(
             (x, segments([[0, 10], [50, 100]])),
             (y, segments([[0, 5], [20, 80]])),
             (z, segments([[0, 3], [15, 60]])),
