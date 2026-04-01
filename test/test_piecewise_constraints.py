@@ -1215,7 +1215,7 @@ class TestValidationEdgeCases:
             breakpoints(slopes=[1, 2], x_points=[0, 10, 20], y0={"a": 0})
 
     def test_slopes_bad_y0_type_raises(self) -> None:
-        """slopes with unsupported y0 type raises TypeError."""
+        """Slopes with unsupported y0 type raises TypeError."""
         with pytest.raises(TypeError, match="y0"):
             breakpoints(
                 slopes={"a": [1, 2], "b": [3, 4]},
@@ -1225,7 +1225,7 @@ class TestValidationEdgeCases:
             )
 
     def test_slopes_dataarray_y0(self) -> None:
-        """slopes mode with DataArray y0 works."""
+        """Slopes mode with DataArray y0 works."""
         y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
         bp = breakpoints(
             slopes={"a": [1, 2], "b": [3, 4]},
@@ -1242,16 +1242,20 @@ class TestValidationEdgeCases:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         x_pts = xr.DataArray(
-            [0, 10, 50], dims=[BREAKPOINT_DIM],
+            [0, 10, 50],
+            dims=[BREAKPOINT_DIM],
             coords={BREAKPOINT_DIM: ["a", "b", "c"]},
         )
         y_pts = xr.DataArray(
-            [0, 5, 20], dims=[BREAKPOINT_DIM],
+            [0, 5, 20],
+            dims=[BREAKPOINT_DIM],
             coords={BREAKPOINT_DIM: ["a", "b", "c"]},
         )
         with pytest.raises(ValueError, match="numeric coordinates"):
             m.add_piecewise_constraints(
-                (x, x_pts), (y, y_pts), method="sos2",
+                (x, x_pts),
+                (y, y_pts),
+                method="sos2",
             )
 
     def test_missing_breakpoint_dim_on_second_arg_raises(self) -> None:
@@ -1283,7 +1287,9 @@ class TestValidationEdgeCases:
         seg = segments([[0, 10], [50, 100]])
         with pytest.raises(ValueError, match="exactly 2"):
             m.add_piecewise_constraints(
-                (x, seg), (y, seg), (z, seg),
+                (x, seg),
+                (y, seg),
+                (z, seg),
             )
 
     def test_disjunctive_interior_nan_raises(self) -> None:
@@ -1325,7 +1331,9 @@ class TestValidationEdgeCases:
         x_pts = breakpoints({"a": [0, 10, 50], "b": [0, 20]}, dim="gen")
         y_pts = breakpoints({"a": [0, 5, 20], "b": [0, 8]}, dim="gen")
         m.add_piecewise_constraints(
-            (x, x_pts), (y, y_pts), method="incremental",
+            (x, x_pts),
+            (y, y_pts),
+            method="incremental",
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
         assert delta.labels.shape[0] == 2  # 2 generators
@@ -1338,7 +1346,8 @@ class TestValidationEdgeCases:
         bp = breakpoints([0, 10, 50])
         bp_with_scalar = bp.assign_coords(extra=42)
         m.add_piecewise_constraints(
-            (x, bp_with_scalar), (y, [0, 5, 20]),
+            (x, bp_with_scalar),
+            (y, [0, 5, 20]),
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables

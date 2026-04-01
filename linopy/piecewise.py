@@ -178,9 +178,7 @@ def _breakpoints_from_slopes(
     if slopes_arr.ndim == 1:
         if not isinstance(y0, Real):
             raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
-        pts = slopes_to_points(
-            list(xp_arr.values), list(slopes_arr.values), float(y0)
-        )
+        pts = slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
         return _sequence_to_array(pts)
 
     # Multi-dim case: per-entity slopes
@@ -200,9 +198,7 @@ def _breakpoints_from_slopes(
     elif isinstance(y0, pd.Series):
         y0_map = {str(k): float(y0[k]) for k in entity_keys}
     elif isinstance(y0, DataArray):
-        y0_map = {
-            str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys
-        }
+        y0_map = {str(k): float(y0.sel({entity_dim: k}).item()) for k in entity_keys}
     else:
         raise TypeError(
             f"'y0' must be a float, Series, DataArray, or dict, got {type(y0)}"
@@ -420,8 +416,12 @@ def tangent_lines(
     seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
     slopes = _rename_to_segments(dy / dx, seg_index)
-    x_base = _rename_to_segments(x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
-    y_base = _rename_to_segments(y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index)
+    x_base = _rename_to_segments(
+        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
+    y_base = _rename_to_segments(
+        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
 
     intercepts = y_base - slopes * x_base
 
@@ -470,9 +470,7 @@ def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
             f"both must. Got dims: {list(bp_a.dims)} and {list(bp_b.dims)}."
         )
     if a_has_seg and bp_a.sizes[SEGMENT_DIM] != bp_b.sizes[SEGMENT_DIM]:
-        raise ValueError(
-            f"Breakpoints must have same size along '{SEGMENT_DIM}'"
-        )
+        raise ValueError(f"Breakpoints must have same size along '{SEGMENT_DIM}'")
 
     return a_has_seg
 
@@ -721,7 +719,9 @@ def _stack_along_link(
     link_dim: str,
 ) -> DataArray:
     """Expand and concatenate DataArrays/Datasets along a new link dimension."""
-    expanded = [item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)]
+    expanded = [
+        item.expand_dims({link_dim: [c]}) for item, c in zip(items, link_coords)
+    ]
     return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
 
 
@@ -766,9 +766,7 @@ def _add_continuous(
             )
 
     # Stack expressions along the link dimension
-    stacked_data = _stack_along_link(
-        [e.data for e in lin_exprs], link_coords, link_dim
-    )
+    stacked_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
     target_expr = LinearExpression(stacked_data, model)
 
     # Compute stacked mask
@@ -782,13 +780,24 @@ def _add_continuous(
 
     if method == "sos2":
         return _add_sos2(
-            model, name, target_expr, stacked_bp, stacked_mask,
-            link_dim, rhs,
+            model,
+            name,
+            target_expr,
+            stacked_bp,
+            stacked_mask,
+            link_dim,
+            rhs,
         )
     else:
         return _add_incremental(
-            model, name, target_expr, stacked_bp, stacked_mask,
-            link_dim, rhs, active,
+            model,
+            name,
+            target_expr,
+            stacked_bp,
+            stacked_mask,
+            link_dim,
+            rhs,
+            active,
         )
 
 
