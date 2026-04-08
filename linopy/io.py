@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -89,10 +90,10 @@ def signed_number(expr: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     )
 
 
-def print_coord(coord: str) -> str:
-    from linopy.common import print_coord
+def format_coord(coord: str) -> str:
+    from linopy.common import format_coord
 
-    coord = print_coord(coord).translate(coord_sanitizer)
+    coord = format_coord(coord).translate(coord_sanitizer)
     return coord
 
 
@@ -105,12 +106,12 @@ def get_printers_scalar(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         return print_variable, print_constraint
     else:
@@ -133,12 +134,12 @@ def get_printers(
         def print_variable(var: Any) -> str:
             name, coord = m.variables.get_label_position(var)
             name = clean_name(name)
-            return f"{name}{print_coord(coord)}#{var}"
+            return f"{name}{format_coord(coord)}#{var}"
 
         def print_constraint(cons: Any) -> str:
             name, coord = m.constraints.get_label_position(cons)
             name = clean_name(name)  # type: ignore
-            return f"{name}{print_coord(coord)}#{cons}"  # type: ignore
+            return f"{name}{format_coord(coord)}#{cons}"  # type: ignore
 
         def print_variable_series(series: pl.Series) -> tuple[pl.Expr, pl.Series]:
             return pl.lit(" "), series.map_elements(
@@ -1144,6 +1145,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     scalars = {k: getattr(m, k) for k in m.scalar_attrs}
     ds = xr.merge(vars + cons + obj + params, combine_attrs="drop_conflicts")
     ds = ds.assign_attrs(scalars)
+    if m._relaxed_registry:
+        ds.attrs["_relaxed_registry"] = json.dumps(m._relaxed_registry)
     ds.attrs = non_bool_dict(ds.attrs)
 
     for k in ds:
@@ -1237,6 +1240,9 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
     for k in m.scalar_attrs:
         setattr(m, k, ds.attrs.get(k))
+
+    if "_relaxed_registry" in ds.attrs:
+        m._relaxed_registry = json.loads(ds.attrs["_relaxed_registry"])
 
     return m
 

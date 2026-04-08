@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
 from typing import Any, Literal, overload
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -30,8 +31,10 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
+    lookup_vals,
     maybe_replace_signs,
     replace_by_map,
+    series_to_lookup_array,
     set_int_index,
     to_path,
 )
@@ -98,6 +101,73 @@ from linopy.variables import ScalarVariable, Variable, Variables
 logger = logging.getLogger(__name__)
 
 
+def _coords_to_dict(
+    coords: Sequence[Sequence | pd.Index | DataArray] | Mapping,
+) -> dict[str, Any]:
+    """Normalize coords to a dict mapping dim names to coordinate values."""
+    if isinstance(coords, Mapping):
+        return dict(coords)
+    # Sequence of indexes
+    result: dict[str, Any] = {}
+    for c in coords:
+        if isinstance(c, pd.Index) and c.name:
+            result[c.name] = c
+    return result
+
+
+def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
+    """
+    Validate and expand DataArray bounds against explicit coords.
+
+    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
+    will handle conversion). For DataArray inputs:
+
+    - Raises ``ValueError`` if the array has dimensions not in coords.
+    - Raises ``ValueError`` if shared dimension coordinates don't match.
+    - Expands missing dimensions via ``expand_dims``.
+    """
+    if not isinstance(arr, DataArray):
+        return arr
+
+    expected = _coords_to_dict(coords)
+    if not expected:
+        return arr
+
+    extra = set(arr.dims) - set(expected)
+    if extra:
+        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+
+    for dim, coord_values in expected.items():
+        if dim not in arr.dims:
+            continue
+        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+            continue
+        expected_idx = (
+            coord_values
+            if isinstance(coord_values, pd.Index)
+            else pd.Index(coord_values)
+        )
+        actual_idx = arr.coords[dim].to_index()
+        if not actual_idx.equals(expected_idx):
+            # Same values, different order → reindex to match expected order
+            if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
+                expected_idx
+            ):
+                arr = arr.reindex({dim: expected_idx})
+            else:
+                raise ValueError(
+                    f"Coordinates for dimension '{dim}' do not match: "
+                    f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
+                )
+
+    # Expand missing dimensions
+    expand = {k: v for k, v in expected.items() if k not in arr.dims}
+    if expand:
+        arr = arr.expand_dims(expand)
+
+    return arr
+
+
 class Model:
     """
     Linear optimization model.
@@ -158,6 +228,7 @@ class Model:
         "_force_dim_names",
         "_auto_mask",
         "_solver_dir",
+        "_relaxed_registry",
         "solver_model",
         "solver_name",
         "matrices",
@@ -214,6 +285,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
@@ -607,6 +679,10 @@ class Model:
                     "Semi-continuous variables require a positive scalar lower bound."
                 )
 
+        if coords is not None:
+            lower = _validate_dataarray_bounds(lower, coords)
+            upper = _validate_dataarray_bounds(upper, coords)
+
         data = Dataset(
             {
                 "lower": as_dataarray(lower, coords, **kwargs),
@@ -941,6 +1017,16 @@ class Model:
         -------
         None.
         """
+        from linopy.constants import FIX_CONSTRAINT_PREFIX
+
+        # Clean up fix constraint if present
+        fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
+        if fix_name in self.constraints:
+            self.constraints.remove(fix_name)
+
+        # Clean up relaxed registry if present
+        self._relaxed_registry.pop(name, None)
+
         labels = self.variables[name].labels
         self.variables.remove(name)
 
@@ -1579,26 +1665,24 @@ class Model:
             sol = set_int_index(sol)
             sol.loc[-1] = nan
 
-            for name, var in self.variables.items():
-                idx = np.ravel(var.labels)
-                try:
-                    vals = sol[idx].values.reshape(var.labels.shape)
-                except KeyError:
-                    vals = sol.reindex(idx).values.reshape(var.labels.shape)
-                var.solution = xr.DataArray(vals, var.coords)
+            sol_arr = series_to_lookup_array(sol)
+
+            for _, var in self.variables.items():
+                vals = lookup_vals(sol_arr, np.ravel(var.labels))
+                var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
             if not result.solution.dual.empty:
                 dual = result.solution.dual.copy()
                 dual = set_int_index(dual)
                 dual.loc[-1] = nan
 
-                for name, con in self.constraints.items():
-                    idx = np.ravel(con.labels)
-                    try:
-                        vals = dual[idx].values.reshape(con.labels.shape)
-                    except KeyError:
-                        vals = dual.reindex(idx).values.reshape(con.labels.shape)
-                    con.dual = xr.DataArray(vals, con.labels.coords)
+                dual_arr = series_to_lookup_array(dual)
+
+                for _, con in self.constraints.items():
+                    vals = lookup_vals(dual_arr, np.ravel(con.labels))
+                    con.dual = xr.DataArray(
+                        vals.reshape(con.labels.shape), con.labels.coords
+                    )
 
             return result.status.status.value, result.status.termination_condition.value
         finally:
@@ -1829,9 +1913,9 @@ class Model:
 
         return miisrow
 
-    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+    def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
-        Print a list of infeasible constraints.
+        Return a string representation of infeasible constraints.
 
         This function requires that the model was solved using `gurobi` or `xpress`
         and the termination condition was infeasible.
@@ -1839,20 +1923,35 @@ class Model:
         Parameters
         ----------
         display_max_terms : int, optional
-            The maximum number of infeasible terms to display. If `None`,
-            all infeasible terms will be displayed.
+            The maximum number of infeasible terms to display. If ``None``,
+            uses the global ``linopy.options.display_max_terms`` setting.
 
         Returns
         -------
-        None
-            This function does not return anything. It simply prints the
-            infeasible constraints.
+        str
+            String representation of the infeasible constraints.
         """
         labels = self.compute_infeasibilities()
-        self.constraints.print_labels(labels, display_max_terms=display_max_terms)
+        return self.constraints.format_labels(
+            labels, display_max_terms=display_max_terms
+        )
+
+    def print_infeasibilities(self, display_max_terms: int | None = None) -> None:
+        """
+        Print a list of infeasible constraints.
+
+        .. deprecated::
+            Use :meth:`format_infeasibilities` instead.
+        """
+        warn(
+            "`Model.print_infeasibilities` is deprecated. Use `Model.format_infeasibilities` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        print(self.format_infeasibilities(display_max_terms=display_max_terms))
 
     @deprecated(
-        details="Use `compute_infeasibilities`/`print_infeasibilities` instead."
+        details="Use `compute_infeasibilities`/`format_infeasibilities` instead."
     )
     def compute_set_of_infeasible_constraints(self) -> Dataset:
         """
