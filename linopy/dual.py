@@ -86,7 +86,7 @@ def _lookup(
 
     coord_values = [labels.coords[d].values for d in labels.dims]
 
-    # Choosing np.ndindex over np.argwhere or da.to_series for memory efficiency on large ND arrays
+    # Choosing np.ndindex over np.argwhere or da.to_series for memory efficiency on large n-dimensional arrays
     for idx in np.ndindex(vals.shape):
         label = int(vals[idx])
         if label == -1:
@@ -430,7 +430,9 @@ def _add_dual_feasibility_constraints(
         )
 
         def __rule(m: Model, *coord_vals: Any) -> LinearExpression | None:
-            coord_dict = dict(zip(var.labels.dims, coord_vals))
+            coord_dict = {
+                str(dim): val for dim, val in zip(var.labels.dims, coord_vals)
+            }
             flat = var.labels.sel(**coord_dict).item()
             if flat == -1 or flat not in (term_dict := dual_feas_terms[var_name]):
                 return None
