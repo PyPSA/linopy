@@ -275,14 +275,18 @@ def _add_dual_variables(m: Model, m2: Model) -> dict:
         logger.debug(
             f"Adding {var_type} dual variable for constraint '{name}' with shape {con.shape} and dims {con.labels.dims}."
         )
+        coords = (
+            [con.labels.coords[dim] for dim in con.labels.dims]
+            if con.labels.dims
+            else None
+        )
         dual_vars[name] = m2.add_variables(
             lower=lower,
             upper=upper,
-            coords=con.labels.coords,
+            coords=coords,
             name=name,
             mask=mask,
         )
-
     return dual_vars
 
 
