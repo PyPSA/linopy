@@ -2340,7 +2340,7 @@ def merge(
         LinearExpression | QuadraticExpression | variables.Variable | Dataset
     ],
     dim: str = TERM_DIM,
-    cls: type[GenericExpression] = None,  # type: ignore
+    cls: type[GenericExpression] | None = None,
     join: str | None = None,
     **kwargs: Any,
 ) -> GenericExpression:
@@ -2384,7 +2384,7 @@ def merge(
     has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
     has_linear_expression = any(type(e) is LinearExpression for e in exprs)
     if cls is None:
-        cls = QuadraticExpression if has_quad_expression else LinearExpression
+        cls = QuadraticExpression if has_quad_expression else LinearExpression  # type: ignore[assignment]
 
     if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
         raise ValueError(
@@ -2445,6 +2445,7 @@ def merge(
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
 
+    assert cls is not None
     return cls(ds, model)
 
 
