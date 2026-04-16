@@ -359,7 +359,7 @@ class Model:
         """
         Set the parameters of the model.
         """
-        self._parameters = Dataset(value)
+        self._parameters = value if isinstance(value, Dataset) else Dataset(value)
 
     @property
     def solution(self) -> Dataset:

@@ -284,7 +284,7 @@ class LinearExpressionGroupby:
                 index.names = [str(col) for col in orig_group.columns]
                 index.name = GROUP_DIM
                 new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = xr.Dataset(ds.assign_coords(new_coords))
+                ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
             return LinearExpression(ds, self.model)
@@ -392,7 +392,7 @@ class BaseExpression(ABC):
         data = assign_multiindex_safe(data, **coeffs_vars_dict)
 
         # transpose with new Dataset to really ensure correct order
-        data = Dataset(data.transpose(..., TERM_DIM))
+        data = data.transpose(..., TERM_DIM)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
@@ -2098,7 +2098,7 @@ class QuadraticExpression(BaseExpression):
             raise ValueError(f"Size of dimension {FACTOR_DIM} must be 2.")
 
         # transpose data to have _term as last dimension and _factor as second last
-        data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
+        data = data.transpose(..., FACTOR_DIM, TERM_DIM)
         self._data = data
 
     @property
