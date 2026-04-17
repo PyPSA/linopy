@@ -28,6 +28,7 @@ Upcoming Version
 * Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
 * Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
+* Add compatibility to latest xarray version.
 
 
 Version 0.6.6
