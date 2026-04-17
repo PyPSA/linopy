@@ -5,6 +5,7 @@ Version 0.6.7
 -------------
 
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Use ``xarray.Dataset.copy`` instead of constructor for compatibility with the latest xarray version.
 
 
 Version 0.6.6
