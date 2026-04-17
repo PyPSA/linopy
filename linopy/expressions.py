@@ -38,7 +38,7 @@ try:
     from xarray.computation.rolling import DatasetRolling
 except ImportError:
     import xarray.core.rolling
-    from xarray.core.rolling import DatasetRolling  # type: ignore
+    from xarray.core.rolling import DatasetRolling
 
 from types import EllipsisType, NotImplementedType
 
@@ -536,7 +536,7 @@ class BaseExpression(ABC):
         # merge on factor dimension only returns v1 * v2 + c1 * c2
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
-        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)  # type: ignore
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
             res = res + self.const * other.reset_const()
@@ -741,7 +741,7 @@ class BaseExpression(ABC):
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
+        return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
         self: GenericExpression,
@@ -2332,18 +2332,39 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
+ExpVarDs = BaseExpression | variables.Variable | Dataset
+
+
+@overload
 def merge(
-    exprs: Sequence[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
-    *add_exprs: tuple[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
+    exprs: Sequence[ExpVarDs] | ExpVarDs,
+    *add_exprs: ExpVarDs,
+    dim: str = ...,
+    cls: type[GenericExpression],
+    join: str | None = ...,
+    **kwargs: Any,
+) -> GenericExpression: ...
+
+
+@overload
+def merge(
+    exprs: Sequence[ExpVarDs] | ExpVarDs,
+    *add_exprs: ExpVarDs,
+    dim: str = ...,
+    cls: None = ...,
+    join: str | None = ...,
+    **kwargs: Any,
+) -> BaseExpression: ...
+
+
+def merge(
+    exprs: Sequence[ExpVarDs] | ExpVarDs,
+    *add_exprs: ExpVarDs,
     dim: str = TERM_DIM,
-    cls: type[GenericExpression] = None,  # type: ignore
+    cls: type[BaseExpression] | None = None,
     join: str | None = None,
     **kwargs: Any,
-) -> GenericExpression:
+) -> BaseExpression:
     """
     Merge multiple expression together.
 
@@ -2374,12 +2395,12 @@ def merge(
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if not isinstance(exprs, list) and len(add_exprs):
+    if not isinstance(exprs, Sequence):
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
         )
-        exprs = [exprs] + list(add_exprs)  # type: ignore
+        exprs = [exprs] + list(add_exprs)
 
     has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
     has_linear_expression = any(type(e) is LinearExpression for e in exprs)
@@ -2395,7 +2416,7 @@ def merge(
     if has_quad_expression and cls is not QuadraticExpression:
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
-    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
+    linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
 
