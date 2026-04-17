@@ -2402,18 +2402,22 @@ def merge(
         )
         exprs = [exprs] + list(add_exprs)
 
-    has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
-    has_linear_expression = any(type(e) is LinearExpression for e in exprs)
+    has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
+    has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
         cls = QuadraticExpression if has_quad_expression else LinearExpression
 
-    if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
+    if (
+        issubclass(cls, QuadraticExpression)
+        and dim == TERM_DIM
+        and has_linear_expression
+    ):
         raise ValueError(
             "Cannot merge linear and quadratic expressions along term dimension."
             "Convert to QuadraticExpression first."
         )
 
-    if has_quad_expression and cls is not QuadraticExpression:
+    if has_quad_expression and not issubclass(cls, QuadraticExpression):
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
     linopy_types = (variables.Variable, BaseExpression)
@@ -2422,7 +2426,7 @@ def merge(
 
     if join is not None:
         override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
+    elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
@@ -2438,9 +2442,9 @@ def merge(
             "coords": "minimal",
             "compat": "override",
         }
-        if cls == LinearExpression:
+        if issubclass(cls, LinearExpression):
             kwargs["fill_value"] = FILL_VALUE
-        elif cls == variables.Variable:
+        elif issubclass(cls, variables.Variable):
             kwargs["fill_value"] = variables.FILL_VALUE
 
         if join is not None:
