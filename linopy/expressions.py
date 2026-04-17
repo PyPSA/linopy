@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -38,7 +38,7 @@ try:
     from xarray.computation.rolling import DatasetRolling
 except ImportError:
     import xarray.core.rolling
-    from xarray.core.rolling import DatasetRolling
+    from xarray.core.rolling import DatasetRolling  # type: ignore
 
 from types import EllipsisType, NotImplementedType
 
@@ -2332,13 +2332,13 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
-ExpVarDs = BaseExpression | variables.Variable | Dataset
+Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
 
 
 @overload
 def merge(
-    exprs: Sequence[ExpVarDs] | ExpVarDs,
-    *add_exprs: ExpVarDs,
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
     dim: str = ...,
     cls: type[GenericExpression],
     join: str | None = ...,
@@ -2348,8 +2348,8 @@ def merge(
 
 @overload
 def merge(
-    exprs: Sequence[ExpVarDs] | ExpVarDs,
-    *add_exprs: ExpVarDs,
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
     dim: str = ...,
     cls: None = ...,
     join: str | None = ...,
@@ -2358,8 +2358,8 @@ def merge(
 
 
 def merge(
-    exprs: Sequence[ExpVarDs] | ExpVarDs,
-    *add_exprs: ExpVarDs,
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
     dim: str = TERM_DIM,
     cls: type[BaseExpression] | None = None,
     join: str | None = None,
