@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 * Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
