@@ -20,6 +20,9 @@ Upcoming Version
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
+* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Enable quadratic problems with SCIP on windows.
 * Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
 * Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
