@@ -383,6 +383,16 @@ def test_as_dataarray_with_number_and_coords() -> None:
     assert list(da.coords["a"].values) == list(range(10))
 
 
+def test_as_dataarray_with_np_number_and_multiindex_coords() -> None:
+    """Level names in multi-index coords must not be treated as extra dims."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
+    da = as_dataarray(np.float64(3.0), coords=source.coords)
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert (da.values == 3.0).all()
+
+
 def test_as_dataarray_with_dataarray() -> None:
     da_in = DataArray(
         data=[[1, 2], [3, 4]],
