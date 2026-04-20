@@ -2025,26 +2025,26 @@ class TestJoinParameter:
 
     class TestMerge:
         def test_merge_join_parameter(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="inner"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="inner"
             )
             assert list(result.data.indexes["i"]) == [1, 2]
 
         def test_merge_outer_join(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="outer"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="outer"
             )
             assert set(result.coords["i"].values) == {0, 1, 2, 3}
 
         def test_merge_join_left(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="left"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="left"
             )
             assert list(result.data.indexes["i"]) == [0, 1, 2]
 
         def test_merge_join_right(self, a: Variable, b: Variable) -> None:
-            result: LinearExpression = merge(
-                [a.to_linexpr(), b.to_linexpr()], join="right"
+            result = merge(
+                [a.to_linexpr(), b.to_linexpr()], cls=LinearExpression, join="right"
             )
             assert list(result.data.indexes["i"]) == [1, 2, 3]
 

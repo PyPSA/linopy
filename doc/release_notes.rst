@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 * Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
@@ -33,6 +34,7 @@ Upcoming Version
   - Add ``freeze`` parameter to ``Model.add_constraints`` for per-constraint opt-in to CSR storage.
   - Add ``freeze()`` and ``mutable()`` methods on ``Constraint`` and ``CSRConstraint`` for lossless conversion between xarray-backed and CSR-backed representations.
 * Add ``set_names_in_solver_io`` parameter to ``Model`` to skip setting variable/constraint names in direct solver exports for faster performance.
+* Add compatibility to latest xarray version.
 
 
 Version 0.6.6
