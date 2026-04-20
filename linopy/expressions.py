@@ -2346,7 +2346,7 @@ def merge(
     *add_exprs: Mergeable,
     dim: str = ...,
     cls: type[GenericExpression],
-    join: str | None = ...,
+    join: JoinOptions | None = None,
     **kwargs: Any,
 ) -> GenericExpression: ...
 
@@ -2357,7 +2357,7 @@ def merge(
     *add_exprs: Mergeable,
     dim: str = ...,
     cls: None = ...,
-    join: str | None = ...,
+    join: JoinOptions | None = None,
     **kwargs: Any,
 ) -> BaseExpression: ...
 
