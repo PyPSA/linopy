@@ -5,6 +5,8 @@ Created on Mon Jun 19 12:11:03 2023
 @author: fabian
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -25,6 +27,7 @@ from linopy.common import (
     maybe_group_terms_polars,
 )
 from linopy.testing import assert_linequal, assert_varequal
+from linopy.types import CoordsLike
 
 
 def test_as_dataarray_with_series_dims_default() -> None:
@@ -393,7 +396,9 @@ def test_as_dataarray_with_number_and_coords() -> None:
     ],
     ids=["np_number", "python_int", "python_float", "numpy_array"],
 )
-def test_as_dataarray_with_multiindex_coords(arr, expected_values) -> None:
+def test_as_dataarray_with_multiindex_coords(
+    arr: object, expected_values: list[float]
+) -> None:
     """Level names in multi-index coords must not be treated as extra dims."""
     mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
     source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
@@ -419,7 +424,9 @@ def test_as_dataarray_with_multiindex_coords(arr, expected_values) -> None:
     ],
     ids=["xarray_Coordinates", "plain_dict", "dataarray_coords"],
 )
-def test_as_dataarray_with_various_multiindex_coord_inputs(coords_factory) -> None:
+def test_as_dataarray_with_various_multiindex_coord_inputs(
+    coords_factory: Callable[[pd.MultiIndex], CoordsLike],
+) -> None:
     """Users may pass a MultiIndex via Coordinates, a dict, or another DataArray's coords."""
     mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
     coords = coords_factory(mi)
