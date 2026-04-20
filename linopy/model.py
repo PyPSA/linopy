@@ -231,6 +231,9 @@ class Model:
         "solver_model",
         "solver_name",
         "matrices",
+        # allow weak references to Model instances so third-party extensions
+        # can attach per-instance state via WeakKeyDictionary
+        "__weakref__",
     )
 
     def __init__(
