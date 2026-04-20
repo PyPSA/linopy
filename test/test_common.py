@@ -383,14 +383,66 @@ def test_as_dataarray_with_number_and_coords() -> None:
     assert list(da.coords["a"].values) == list(range(10))
 
 
-def test_as_dataarray_with_np_number_and_multiindex_coords() -> None:
+@pytest.mark.parametrize(
+    ("arr", "expected_values"),
+    [
+        (np.float64(3.0), [3.0, 3.0]),
+        (3, [3, 3]),
+        (3.0, [3.0, 3.0]),
+        (np.array([10.0, 20.0]), [10.0, 20.0]),
+    ],
+    ids=["np_number", "python_int", "python_float", "numpy_array"],
+)
+def test_as_dataarray_with_multiindex_coords(arr, expected_values) -> None:
     """Level names in multi-index coords must not be treated as extra dims."""
     mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
     source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
-    da = as_dataarray(np.float64(3.0), coords=source.coords)
+
+    da = as_dataarray(arr, coords=source.coords)
+
     assert da.dims == ("station",)
     assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
+    assert list(da.coords["letter"].values) == ["a", "b"]
+    assert list(da.coords["num"].values) == [1, 2]
+    assert da.coords["letter"].dims == ("station",)
+    assert da.coords["num"].dims == ("station",)
+    assert list(da.values) == expected_values
+
+
+@pytest.mark.parametrize(
+    "coords_factory",
+    [
+        lambda mi: xr.Coordinates.from_pandas_multiindex(mi, "station"),
+        lambda mi: {"station": mi},
+        lambda mi: DataArray([1.0, 2.0], coords={"station": mi}, dims="station").coords,
+    ],
+    ids=["xarray_Coordinates", "plain_dict", "dataarray_coords"],
+)
+def test_as_dataarray_with_various_multiindex_coord_inputs(coords_factory) -> None:
+    """Users may pass a MultiIndex via Coordinates, a dict, or another DataArray's coords."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    coords = coords_factory(mi)
+
+    da = as_dataarray(3.0, coords=coords)
+
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
+    assert da.coords["letter"].dims == ("station",)
+    assert da.coords["num"].dims == ("station",)
     assert (da.values == 3.0).all()
+
+
+def test_as_dataarray_with_scalar_and_explicit_dims_over_multiindex_coords() -> None:
+    """Explicit dims must win over any inference from Coordinates."""
+    mi = pd.MultiIndex.from_tuples([("a", 1), ("b", 2)], names=["letter", "num"])
+    source = DataArray([1.0, 2.0], coords={"station": mi}, dims="station")
+
+    da = as_dataarray(3.0, coords=source.coords, dims=["station"])
+    assert da.dims == ("station",)
+    assert da.shape == (2,)
+    assert set(da.coords.keys()) == {"station", "letter", "num"}
 
 
 def test_as_dataarray_with_dataarray() -> None:
