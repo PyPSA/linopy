@@ -53,8 +53,8 @@ def test_model_copy_preserves_config() -> None:
     copied = m.copy()
     assert copied.freeze_constraints is True
     assert copied.set_names_in_solver_io is False
-    
-    
+
+
 def test_model_is_weakrefable() -> None:
     m: Model = Model()
     ref = weakref.ref(m)
