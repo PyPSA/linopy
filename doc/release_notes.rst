@@ -24,6 +24,7 @@ Upcoming Version
 * Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Fix ``Model.compute_infeasibilities`` returning a flattened, deduplicated union of all IIS when Xpress found more than one. The Xpress path now computes a single IIS (via ``firstIIS``), matching the Gurobi path.
 * Enable quadratic problems with SCIP on windows.
 * Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
