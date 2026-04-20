@@ -6,6 +6,7 @@ Test function defined in the Model class.
 from __future__ import annotations
 
 import copy as pycopy
+import weakref
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -52,6 +53,25 @@ def test_model_copy_preserves_config() -> None:
     copied = m.copy()
     assert copied.freeze_constraints is True
     assert copied.set_names_in_solver_io is False
+    
+    
+def test_model_is_weakrefable() -> None:
+    m: Model = Model()
+    ref = weakref.ref(m)
+    assert ref() is m
+
+
+def test_model_weakkeydict_use_case() -> None:
+    # third-party extensions rely on WeakKeyDictionary for per-instance storage
+    registry: weakref.WeakKeyDictionary[Model, str] = weakref.WeakKeyDictionary()
+    m: Model = Model()
+    registry[m] = "extension-state"
+    assert registry[m] == "extension-state"
+    del m
+    import gc
+
+    gc.collect()
+    assert len(registry) == 0
 
 
 def test_model_variable_getitem() -> None:
