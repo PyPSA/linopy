@@ -29,6 +29,7 @@ Upcoming Version
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
 * Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
 * Add compatibility to latest xarray version.
+* Fix ``as_dataarray`` treating multi-index level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
 
 
 Version 0.6.6
