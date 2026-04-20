@@ -42,6 +42,19 @@ def test_model_solver_dir() -> None:
     assert m.solver_dir == Path(d)
 
 
+def test_model_config_defaults() -> None:
+    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
+    assert m.freeze_constraints is True
+    assert m.set_names_in_solver_io is False
+
+
+def test_model_copy_preserves_config() -> None:
+    m = Model(freeze_constraints=True, set_names_in_solver_io=False)
+    copied = m.copy()
+    assert copied.freeze_constraints is True
+    assert copied.set_names_in_solver_io is False
+
+
 def test_model_is_weakrefable() -> None:
     m: Model = Model()
     ref = weakref.ref(m)
@@ -130,10 +143,11 @@ def test_remove_variable() -> None:
 
     assert "x" in m.variables
 
-    m.remove_variables("x")
+    with pytest.warns(UserWarning, match="con0"):
+        m.remove_variables("x")
     assert "x" not in m.variables
 
-    assert not m.constraints.con0.vars.isin(x.labels).any()
+    assert "con0" not in m.constraints
 
     assert not m.objective.vars.isin(x.labels).any()
 

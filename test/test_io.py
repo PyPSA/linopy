@@ -78,6 +78,48 @@ def test_model_to_netcdf(model: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
+def test_model_to_netcdf_frozen_constraint(tmp_path: Path) -> None:
+    from linopy.constraints import CSRConstraint
+
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(5, name="i")], name="x")
+    m.add_constraints(x >= 1, name="c", freeze=True)
+
+    assert isinstance(m.constraints["c"], CSRConstraint)
+
+    fn = tmp_path / "test_frozen.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.constraints["c"], CSRConstraint)
+    assert_model_equal(m, p)
+
+
+def test_model_to_netcdf_mixed_sign_constraint(tmp_path: Path) -> None:
+    from linopy.constraints import CSRConstraint
+
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+
+    def bound(m: Model, i: int) -> object:
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] == 0.0
+
+    m.add_constraints(bound, coords=[pd.RangeIndex(4, name="i")], name="c", freeze=True)
+    assert isinstance(m.constraints["c"], CSRConstraint)
+
+    fn = tmp_path / "test_mixed_sign.nc"
+    m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert isinstance(p.constraints["c"], CSRConstraint)
+    import numpy as np
+
+    np.testing.assert_array_equal(m.constraints["c"]._sign, p.constraints["c"]._sign)
+    assert_model_equal(m, p)
+
+
 def test_model_to_netcdf_with_sense(model: Model, tmp_path: Path) -> None:
     m = model
     m.objective.sense = "max"
@@ -199,9 +241,41 @@ def test_to_gurobipy(model: Model) -> None:
     model.to_gurobipy()
 
 
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+def test_to_gurobipy_no_names(model: Model) -> None:
+    m_with = model.to_gurobipy(set_names=True)
+    m_without = model.to_gurobipy(set_names=False)
+    names_with = [v.VarName for v in m_with.getVars()]
+    names_without = [v.VarName for v in m_without.getVars()]
+    assert names_with != names_without
+
+
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
     model.to_highspy()
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_highspy_no_names(model: Model) -> None:
+    h = model.to_highspy(set_names=False)
+    lp = h.getLp()
+    assert len(lp.col_names_) == 0
+    assert len(lp.row_names_) == 0
+
+
+def test_model_set_names_in_solver_io_default() -> None:
+    assert Model().set_names_in_solver_io is True
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_model_set_names_in_solver_io(model: Model) -> None:
+    model.solve(solver_name="highs", io_api="direct")
+    expected_obj = model.objective.value
+
+    model.set_names_in_solver_io = False
+    status, _ = model.solve(solver_name="highs", io_api="direct")
+    assert status == "ok"
+    assert model.objective.value == pytest.approx(expected_obj)
 
 
 def test_to_blocks(tmp_path: Path) -> None:
@@ -373,3 +447,63 @@ def test_to_file_lp_mixed_sign_constraints(tmp_path: Path) -> None:
     assert "<=" in content
     assert ">=" in content
     assert "=" in content
+
+
+def test_to_file_lp_frozen_vs_mutable(tmp_path: Path) -> None:
+    """Test that frozen and mutable constraints produce identical LP output."""
+    m_frozen = Model()
+    N = np.arange(5)
+    x = m_frozen.add_variables(coords=[N], name="x")
+    y = m_frozen.add_variables(coords=[N], name="y")
+    m_frozen.add_constraints(x + y <= 10, name="upper")
+    m_frozen.add_constraints(x >= 1, name="lower")
+    m_frozen.add_constraints(2 * x + y == 8, name="eq")
+    m_frozen.add_objective(x.sum() + 2 * y.sum())
+
+    m_mutable = Model()
+    x2 = m_mutable.add_variables(coords=[N], name="x")
+    y2 = m_mutable.add_variables(coords=[N], name="y")
+    m_mutable.add_constraints(x2 + y2 <= 10, name="upper", freeze=False)
+    m_mutable.add_constraints(x2 >= 1, name="lower", freeze=False)
+    m_mutable.add_constraints(2 * x2 + y2 == 8, name="eq", freeze=False)
+    m_mutable.add_objective(x2.sum() + 2 * y2.sum())
+
+    fn_frozen = tmp_path / "frozen.lp"
+    fn_mutable = tmp_path / "mutable.lp"
+    m_frozen.to_file(fn_frozen)
+    m_mutable.to_file(fn_mutable)
+
+    assert fn_frozen.read_text() == fn_mutable.read_text()
+
+
+def test_to_file_lp_frozen_mixed_sign(tmp_path: Path) -> None:
+    """Test LP writing for frozen constraint with per-row signs."""
+    m_frozen = Model()
+    N = pd.RangeIndex(4, name="i")
+    x = m_frozen.add_variables(coords=[N], name="x")
+
+    def bound(m: Model, i: int) -> object:
+        if i % 2:
+            return x.at[i] >= i
+        return x.at[i] <= 10
+
+    m_frozen.add_constraints(bound, coords=[N], name="mixed", freeze=True)
+    m_frozen.add_objective(x.sum())
+
+    m_mutable = Model()
+    x2 = m_mutable.add_variables(coords=[N], name="x")
+
+    def bound2(m: Model, i: int) -> object:
+        if i % 2:
+            return x2.at[i] >= i
+        return x2.at[i] <= 10
+
+    m_mutable.add_constraints(bound2, coords=[N], name="mixed", freeze=False)
+    m_mutable.add_objective(x2.sum())
+
+    fn_frozen = tmp_path / "frozen_mixed.lp"
+    fn_mutable = tmp_path / "mutable_mixed.lp"
+    m_frozen.to_file(fn_frozen)
+    m_mutable.to_file(fn_mutable)
+
+    assert fn_frozen.read_text() == fn_mutable.read_text()

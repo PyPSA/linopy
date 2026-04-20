@@ -94,8 +94,9 @@ class TestInfeasibility:
         assert isinstance(labels, list)
         assert len(labels) > 0  # Should find at least one infeasible constraint
 
-        # Test print_infeasibilities (just check it doesn't raise an error)
-        m.print_infeasibilities()
+        formatted = m.format_infeasibilities()
+        assert isinstance(formatted, str)
+        assert formatted
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress"])
     def test_complex_infeasibility_detection(
@@ -294,7 +295,7 @@ class TestInfeasibility:
         assert grouped_coords["sum_lower"]
         assert grouped_coords["sum_lower"] == grouped_coords["x_upper"]
 
-        m.print_infeasibilities()
+        print(m.format_infeasibilities())
         output = capsys.readouterr().out
         for time_coord in grouped_coords["sum_lower"]:
             assert f"sum_lower[{time_coord}]" in output

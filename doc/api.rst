@@ -95,6 +95,27 @@ Constraint
     constraints.Constraint.sign
     constraints.Constraint.rhs
     constraints.Constraint.flat
+    constraints.Constraint.freeze
+    constraints.Constraint.mutable
+
+
+CSRConstraint
+-------------
+
+``CSRConstraint`` is a memory-efficient, immutable constraint representation backed by a scipy CSR sparse matrix. See the :doc:`creating-constraints` guide for usage.
+
+.. autosummary::
+    :toctree: generated/
+
+    constraints.CSRConstraint
+    constraints.CSRConstraint.coeffs
+    constraints.CSRConstraint.vars
+    constraints.CSRConstraint.sign
+    constraints.CSRConstraint.rhs
+    constraints.CSRConstraint.ncons
+    constraints.CSRConstraint.nterm
+    constraints.CSRConstraint.freeze
+    constraints.CSRConstraint.mutable
 
 
 Constraints

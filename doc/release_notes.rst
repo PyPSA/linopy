@@ -28,6 +28,12 @@ Upcoming Version
 * Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
 * Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
+* Increase speed of direct solver communication (~10x) in conversion functions like `to_highspy` through faster matrix creation (see below), leading to significant overall speed-up when setting `io_api="direct"`.
+* Add ``CSRConstraint``, a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Provides up to 90% memory savings for constraints with many terms and 30–120x faster matrix generation for direct solver APIs.
+  - Add ``freeze_constraints`` parameter to ``Model`` for globally storing constraints in CSR format on ``add_constraints``.
+  - Add ``freeze`` parameter to ``Model.add_constraints`` for per-constraint opt-in to CSR storage.
+  - Add ``freeze()`` and ``mutable()`` methods on ``Constraint`` and ``CSRConstraint`` for lossless conversion between xarray-backed and CSR-backed representations.
+* Add ``set_names_in_solver_io`` parameter to ``Model`` to skip setting variable/constraint names in direct solver exports for faster performance.
 * Add compatibility to latest xarray version.
 
 

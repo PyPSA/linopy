@@ -27,12 +27,14 @@ from pandas.core.frame import DataFrame
 from xarray import DataArray, Dataset, broadcast
 from xarray.core.coordinates import DatasetCoordinates
 from xarray.core.indexes import Indexes
+from xarray.core.types import JoinOptions
 from xarray.core.utils import Frozen
 
 import linopy.expressions as expressions
 from linopy.common import (
     LabelPositionIndex,
     LocIndexer,
+    VariableLabelIndex,
     as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
@@ -578,7 +580,7 @@ class Variable:
         return self.data.__contains__(value)
 
     def add(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Add variables to linear expressions or other variables.
@@ -595,7 +597,7 @@ class Variable:
         return self.to_linexpr().add(other, join=join)
 
     def sub(
-        self, other: SideLike, join: str | None = None
+        self, other: SideLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Subtract linear expressions or other variables from the variables.
@@ -612,7 +614,7 @@ class Variable:
         return self.to_linexpr().sub(other, join=join)
 
     def mul(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Multiply variables with a coefficient.
@@ -629,7 +631,7 @@ class Variable:
         return self.to_linexpr().mul(other, join=join)
 
     def div(
-        self, other: ConstantLike, join: str | None = None
+        self, other: ConstantLike, join: JoinOptions | None = None
     ) -> LinearExpression | QuadraticExpression:
         """
         Divide variables with a coefficient.
@@ -645,7 +647,7 @@ class Variable:
         """
         return self.to_linexpr().div(other, join=join)
 
-    def le(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def le(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Less than or equal constraint.
 
@@ -660,7 +662,7 @@ class Variable:
         """
         return self.to_linexpr().le(rhs, join=join)
 
-    def ge(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def ge(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Greater than or equal constraint.
 
@@ -675,7 +677,7 @@ class Variable:
         """
         return self.to_linexpr().ge(rhs, join=join)
 
-    def eq(self, rhs: SideLike, join: str | None = None) -> Constraint:
+    def eq(self, rhs: SideLike, join: JoinOptions | None = None) -> Constraint:
         """
         Equality constraint.
 
@@ -1457,6 +1459,7 @@ class Variables:
     data: dict[str, Variable]
     model: Model
     _label_position_index: LabelPositionIndex | None = None
+    _variable_label_index: VariableLabelIndex | None = None
 
     dataset_attrs = ["labels", "lower", "upper"]
     dataset_names = ["Labels", "Lower bounds", "Upper bounds"]
@@ -1566,6 +1569,15 @@ class Variables:
         """Invalidate the label position index cache."""
         if self._label_position_index is not None:
             self._label_position_index.invalidate()
+        if self._variable_label_index is not None:
+            self._variable_label_index.invalidate()
+
+    @property
+    def label_index(self) -> VariableLabelIndex:
+        """Index for O(1) label->position mapping and compact vlabels array."""
+        if self._variable_label_index is None:
+            self._variable_label_index = VariableLabelIndex(self)
+        return self._variable_label_index
 
     @property
     def attrs(self) -> dict[Any, Any]:

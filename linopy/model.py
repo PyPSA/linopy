@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -49,7 +50,13 @@ from linopy.constants import (
     ModelStatus,
     TerminationCondition,
 )
-from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.constraints import (
+    AnonymousScalarConstraint,
+    Constraint,
+    ConstraintBase,
+    Constraints,
+    CSRConstraint,
+)
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
@@ -201,9 +208,9 @@ class Model:
     _blocks: DataArray | None
     _chunk: T_Chunks
     _force_dim_names: bool
+    _freeze_constraints: bool
+    _set_names_in_solver_io: bool
     _solver_dir: Path
-    matrices: MatrixAccessor
-
     __slots__ = (
         # containers
         "_variables",
@@ -226,14 +233,12 @@ class Model:
         "_chunk",
         "_force_dim_names",
         "_auto_mask",
+        "_freeze_constraints",
+        "_set_names_in_solver_io",
         "_solver_dir",
         "_relaxed_registry",
         "solver_model",
         "solver_name",
-        "matrices",
-        # allow weak references to Model instances so third-party extensions
-        # can attach per-instance state via WeakKeyDictionary
-        "__weakref__",
     )
 
     def __init__(
@@ -242,6 +247,8 @@ class Model:
         chunk: T_Chunks = None,
         force_dim_names: bool = False,
         auto_mask: bool = False,
+        freeze_constraints: bool = False,
+        set_names_in_solver_io: bool = True,
     ) -> None:
         """
         Initialize the linopy model.
@@ -265,6 +272,12 @@ class Model:
             Whether to automatically mask variables and constraints where
             bounds, coefficients, or RHS values contain NaN. The default is
             False.
+        freeze_constraints : bool
+            Whether constraints added to the model should be frozen to the
+            CSR-backed representation by default. The default is False.
+        set_names_in_solver_io : bool
+            Whether direct solver exports should include variable and
+            constraint names by default. The default is True.
 
         Returns
         -------
@@ -287,12 +300,17 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._freeze_constraints: bool = bool(freeze_constraints)
+        self._set_names_in_solver_io: bool = bool(set_names_in_solver_io)
         self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
 
-        self.matrices: MatrixAccessor = MatrixAccessor(self)
+    @property
+    def matrices(self) -> MatrixAccessor:
+        """Matrix representation of the model, computed fresh on each access."""
+        return MatrixAccessor(self)
 
     @property
     def variables(self) -> Variables:
@@ -461,6 +479,24 @@ class Model:
         self._auto_mask = bool(value)
 
     @property
+    def freeze_constraints(self) -> bool:
+        """Whether constraints are frozen to CSR by default when added."""
+        return self._freeze_constraints
+
+    @freeze_constraints.setter
+    def freeze_constraints(self, value: bool) -> None:
+        self._freeze_constraints = bool(value)
+
+    @property
+    def set_names_in_solver_io(self) -> bool:
+        """Whether direct solver exports include names by default."""
+        return self._set_names_in_solver_io
+
+    @set_names_in_solver_io.setter
+    def set_names_in_solver_io(self, value: bool) -> None:
+        self._set_names_in_solver_io = bool(value)
+
+    @property
     def solver_dir(self) -> Path:
         """
         Solver directory of the model.
@@ -492,6 +528,8 @@ class Model:
             "_pwlCounter",
             "force_dim_names",
             "auto_mask",
+            "freeze_constraints",
+            "set_names_in_solver_io",
         ]
 
     def __repr__(self) -> str:
@@ -798,6 +836,38 @@ class Model:
 
     add_piecewise_constraints = add_piecewise_constraints
 
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[False] = ...,
+    ) -> Constraint: ...
+
+    @overload
+    def add_constraints(
+        self,
+        lhs: VariableLike
+        | ExpressionLike
+        | ConstraintLike
+        | Sequence[tuple[ConstantLike, VariableLike | str]]
+        | Callable,
+        sign: SignLike | None = ...,
+        rhs: ConstantLike | VariableLike | ExpressionLike | None = ...,
+        name: str | None = ...,
+        coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = ...,
+        mask: MaskLike | None = ...,
+        freeze: Literal[True] = ...,
+    ) -> CSRConstraint: ...
+
     def add_constraints(
         self,
         lhs: VariableLike
@@ -810,7 +880,8 @@ class Model:
         name: str | None = None,
         coords: Sequence[Sequence | pd.Index | DataArray] | Mapping | None = None,
         mask: MaskLike | None = None,
-    ) -> Constraint:
+        freeze: bool | None = None,
+    ) -> ConstraintBase:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
         model.
@@ -822,7 +893,7 @@ class Model:
 
         Parameters
         ----------
-        lhs : linopy.LinearExpression/linopy.Constraint/callable
+        lhs : linopy.LinearExpression/linopy.ConstraintBase/callable
             Left hand side of the constraint(s) or optionally full constraint.
             In case a linear expression is passed, `sign` and `rhs` must not be
             None.
@@ -844,12 +915,15 @@ class Model:
             Boolean mask with False values for constraints which are skipped.
             The shape of the mask has to match the shape the added constraints.
             Default is None.
-
+        freeze : bool, optional
+            If True, convert the constraint to an immutable CSR-backed CSRConstraint
+            for better memory efficiency. If None, uses the model default
+            ``Model.freeze_constraints`` setting (default False).
 
         Returns
         -------
-        labels : linopy.model.Constraint
-            Array containing the labels of the added constraints.
+        constraint : linopy.ConstraintBase
+            The added constraint (Constraint by default, or CSRConstraint if freeze=True).
         """
 
         msg_sign_rhs_none = f"Arguments `sign` and `rhs` cannot be None when passing along with a {type(lhs)}."
@@ -890,7 +964,7 @@ class Model:
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.to_constraint().data
-        elif isinstance(lhs, Constraint):
+        elif isinstance(lhs, ConstraintBase):
             if sign is not None or rhs is not None:
                 raise ValueError(msg_sign_rhs_none)
             data = lhs.data
@@ -968,8 +1042,9 @@ class Model:
             data = data.chunk(self.chunk)
 
         constraint = Constraint(data, name=name, model=self, skip_broadcast=True)
-        self.constraints.add(constraint)
-        return constraint
+        if freeze is None:
+            freeze = self.freeze_constraints
+        return self.constraints.add(constraint, freeze=freeze and not self.chunk)
 
     def add_objective(
         self,
@@ -1023,6 +1098,8 @@ class Model:
         """
         from linopy.constants import FIX_CONSTRAINT_PREFIX
 
+        variable = self.variables[name]
+
         # Clean up fix constraint if present
         fix_name = f"{FIX_CONSTRAINT_PREFIX}{name}"
         if fix_name in self.constraints:
@@ -1031,18 +1108,24 @@ class Model:
         # Clean up relaxed registry if present
         self._relaxed_registry.pop(name, None)
 
-        labels = self.variables[name].labels
+        to_remove = [
+            k for k, con in self.constraints.items() if con.has_variable(variable)
+        ]
+
+        if to_remove:
+            warnings.warn(
+                f"Removing variable '{name}' also removes constraints {to_remove} "
+                "because they reference this variable.",
+                UserWarning,
+                stacklevel=2,
+            )
+            for k in to_remove:
+                self.constraints.remove(k)
+
         self.variables.remove(name)
 
-        for k in list(self.constraints):
-            vars = self.constraints[k].data["vars"]
-            vars = vars.where(~vars.isin(labels), -1)
-            self.constraints[k]._data = assign_multiindex_safe(
-                self.constraints[k].data, vars=vars
-            )
-
         self.objective = self.objective.sel(
-            {TERM_DIM: ~self.objective.vars.isin(labels)}
+            {TERM_DIM: ~self.objective.vars.isin(variable.labels)}
         )
 
     def remove_constraints(self, name: str | list[str]) -> None:
@@ -1379,6 +1462,7 @@ class Model:
         solver_name: str | None = None,
         io_api: str | None = None,
         explicit_coordinate_names: bool = False,
+        set_names: bool | None = None,
         problem_fn: str | Path | None = None,
         solution_fn: str | Path | None = None,
         log_fn: str | Path | None = None,
@@ -1389,7 +1473,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler = None,  # type: ignore
+        remote: RemoteHandler | OetcHandler | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,
@@ -1418,6 +1502,11 @@ class Model:
             this option allows to keep the variable and constraint names in the
             lp file. This may lead to slower run times.
             The default is set to False.
+        set_names : bool, optional
+            Whether to set variable and constraint names when using the direct
+            solver API (io_api='direct'). Setting to False can significantly
+            speed up model export. If None, uses the model default
+            ``Model.set_names_in_solver_io`` setting (default True).
         problem_fn : path_like, optional
             Path of the lp file or output file/directory which is written out
             during the process. The default None results in a temporary file.
@@ -1483,9 +1572,6 @@ class Model:
             return self._mock_solve(
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
-
-        # clear cached matrix properties potentially present from previous solve commands
-        self.matrices.clean_cached_properties()
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
@@ -1609,6 +1695,8 @@ class Model:
                 **solver_options,
             )
             if io_api == "direct":
+                if set_names is None:
+                    set_names = self.set_names_in_solver_io
                 # no problem file written and direct model is set for solver
                 result = solver.solve_problem_from_model(
                     model=self,
@@ -1618,6 +1706,7 @@ class Model:
                     basis_fn=to_path(basis_fn),
                     env=env,
                     explicit_coordinate_names=explicit_coordinate_names,
+                    set_names=set_names,
                 )
             else:
                 if (
@@ -1699,9 +1788,6 @@ class Model:
         sanitize_infinities: bool = True,
     ) -> tuple[str, str]:
         solver_name = "mock"
-
-        # clear cached matrix properties potentially present from previous solve commands
-        self.matrices.clean_cached_properties()
 
         logger.info(f" Solve problem using {solver_name.title()} solver")
         # reset result

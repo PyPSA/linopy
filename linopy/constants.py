@@ -18,6 +18,11 @@ EQUAL = "="
 GREATER_EQUAL = ">="
 LESS_EQUAL = "<="
 
+
+class PerformanceWarning(UserWarning):
+    """Warning raised when an operation triggers expensive Dataset reconstruction."""
+
+
 long_EQUAL = "=="
 short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"
@@ -211,9 +216,11 @@ class Status:
 
     @classmethod
     def from_termination_condition(
-        cls, termination_condition: Union["TerminationCondition", str]
+        cls, termination_condition: Union["TerminationCondition", str, None]
     ) -> "Status":
-        termination_condition = TerminationCondition.process(termination_condition)
+        termination_condition = TerminationCondition.process(
+            termination_condition if termination_condition is not None else "unknown"
+        )
         solver_status = SolverStatus.from_termination_condition(termination_condition)
         return cls(solver_status, termination_condition)
 
