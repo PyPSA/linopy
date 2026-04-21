@@ -1601,18 +1601,16 @@ class Model:
         be skipped (e.g., labels [0, 2, 4] with gaps instead of sequential
         [0, 1, 2]).
         """
-        # Compute all IIS
+        # Compute a single IIS (matches Gurobi behavior; multiple IIS would
+        # otherwise get flattened into an ambiguous union). Mode 2 prioritises
+        # a fast IIS search over minimality.
         try:  # Try new API first
-            solver_model.IISAll()
+            solver_model.firstIIS(2)
         except AttributeError:  # Fallback to old API
-            solver_model.iisall()
+            solver_model.iisfirst(2)
 
-        # Get the number of IIS found
-        num_iis = solver_model.attributes.numiis
-        if num_iis == 0:
+        if solver_model.attributes.numiis == 0:
             return []
-
-        labels = set()
 
         clabels = self.matrices.clabels
         constraint_position_map = {}
@@ -1622,17 +1620,12 @@ class Model:
                 if constraint_label >= 0:
                     constraint_position_map[constraint_obj] = constraint_label
 
-        # Retrieve each IIS
-        for iis_num in range(1, num_iis + 1):
-            iis_constraints = self._extract_iis_constraints(solver_model, iis_num)
+        labels = set()
+        for constraint_obj in self._extract_iis_constraints(solver_model, 1):
+            if constraint_obj in constraint_position_map:
+                labels.add(constraint_position_map[constraint_obj])
 
-            for constraint_obj in iis_constraints:
-                if constraint_obj in constraint_position_map:
-                    labels.add(constraint_position_map[constraint_obj])
-                # Note: Silently skip constraints not found in mapping
-                # This can happen if the model structure changed after solving
-
-        return sorted(list(labels))
+        return sorted(labels)
 
     def _extract_iis_constraints(self, solver_model: Any, iis_num: int) -> list[Any]:
         """

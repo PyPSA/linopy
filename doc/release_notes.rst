@@ -5,6 +5,7 @@ Version 0.6.7
 -------------
 
 * Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Fix ``Model.compute_infeasibilities`` returning a flattened, deduplicated union of all IIS when Xpress found more than one. The Xpress path now computes a single IIS (via ``firstIIS``), matching the Gurobi path.
 * Use ``xarray.Dataset.copy`` instead of constructor for compatibility with the latest xarray version.
 * Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 
