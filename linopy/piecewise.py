@@ -18,20 +18,29 @@ from xarray import DataArray
 
 from linopy.constants import (
     BREAKPOINT_DIM,
+    EQUAL,
+    GREATER_EQUAL,
     HELPER_DIMS,
+    LESS_EQUAL,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
+    PWL_DOMAIN_HI_SUFFIX,
+    PWL_DOMAIN_LO_SUFFIX,
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
+    PWL_LP_SUFFIX,
     PWL_ORDER_BINARY_SUFFIX,
+    PWL_OUTPUT_LINK_SUFFIX,
     PWL_SEGMENT_BINARY_SUFFIX,
     PWL_SELECT_SUFFIX,
     SEGMENT_DIM,
+    SIGNS,
+    sign_replace_dict,
 )
 
 if TYPE_CHECKING:
@@ -559,6 +568,43 @@ def _check_strict_monotonicity(bp: DataArray) -> bool:
     return bool(monotonic.all())
 
 
+def _detect_convexity(
+    x_points: DataArray, y_points: DataArray
+) -> Literal["convex", "concave", "linear", "mixed"]:
+    """
+    Classify the shape of a piecewise function from its breakpoints.
+
+    Requires strictly increasing ``x_points``. Computes segment slopes and
+    checks the sign of second differences.
+    """
+    dx = x_points.diff(BREAKPOINT_DIM)
+    dy = y_points.diff(BREAKPOINT_DIM)
+    valid = ~(dx.isnull() | dy.isnull() | (dx == 0))
+    slopes = dy / dx
+
+    if slopes.sizes[BREAKPOINT_DIM] < 2:
+        return "linear"
+
+    slope_diffs = slopes.diff(BREAKPOINT_DIM)
+    valid_lo = valid.isel({BREAKPOINT_DIM: slice(None, -1)})
+    valid_hi = valid.isel({BREAKPOINT_DIM: slice(1, None)})
+    valid_diffs = valid_lo.values & valid_hi.values
+    sd_values = slope_diffs.values
+    if valid_diffs.size == 0 or not valid_diffs.any():
+        return "linear"
+    valid_sd = sd_values[valid_diffs]
+    tol = 1e-10
+    all_nonneg = bool(np.all(valid_sd >= -tol))
+    all_nonpos = bool(np.all(valid_sd <= tol))
+    if all_nonneg and all_nonpos:
+        return "linear"
+    if all_nonneg:
+        return "convex"
+    if all_nonpos:
+        return "concave"
+    return "mixed"
+
+
 def _has_trailing_nan_only(bp: DataArray) -> bool:
     """Check that NaN values only appear as trailing entries along BREAKPOINT_DIM."""
     valid = ~bp.isnull()
@@ -627,12 +673,13 @@ def _broadcast_points(
 def add_piecewise_formulation(
     model: Model,
     *pairs: tuple[LinExprLike, BreaksLike],
-    method: Literal["sos2", "incremental", "auto"] = "auto",
+    sign: Literal["==", "<=", ">="] = "==",
+    method: Literal["sos2", "incremental", "lp", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
-    Add piecewise linear equality constraints.
+    Add piecewise linear constraints.
 
     Each positional argument is a ``(expression, breakpoints)`` tuple.
     All expressions are linked through shared interpolation weights so
@@ -654,21 +701,51 @@ def add_piecewise_formulation(
             (heat,  [0, 25, 55, 95]),
         )
 
-    For inequality constraints (:math:`y \le f(x)` or
-    :math:`y \ge f(x)`), use :func:`tangent_lines` with regular
-    ``add_constraints`` instead.
+    **Sign — inequality bounds:**
+
+    The ``sign`` parameter follows the *first-tuple convention*:
+
+    - ``sign="=="`` (default): all expressions must lie exactly on the
+      piecewise curve (joint equality).
+    - ``sign="<="``: the **first** tuple's expression is **bounded above**
+      by its interpolated value; all other tuples are forced to equality
+      (inputs on the curve).  Reads as *"first expression ≤ f(the rest)"*.
+    - ``sign=">="``: same but the first is bounded **below**.
+
+    For 2-variable inequality on convex/concave curves, ``method="auto"``
+    automatically selects a pure-LP tangent-line formulation (no auxiliary
+    variables).  Non-convex curves fall back to SOS2/incremental with the
+    sign applied to the first tuple's link constraint.
+
+    Example — ``fuel ≤ f(power)`` on a concave curve::
+
+        m.add_piecewise_formulation(
+            (fuel,  y_pts),    # bounded output, listed first
+            (power, x_pts),    # input, always equality
+            sign="<=",
+        )
 
     Parameters
     ----------
     *pairs : tuple of (expression, breakpoints)
-        Each pair links an expression (Variable or LinearExpression)
-        to its breakpoint values (list, DataArray, etc.).  At least
-        two pairs are required.
-    method : {"auto", "sos2", "incremental"}, default "auto"
+        Each pair links an expression (Variable or LinearExpression) to
+        its breakpoint values.  At least two pairs are required.  With
+        ``sign != EQUAL`` the **first** pair is the bounded output; all
+        later pairs are treated as inputs forced to equality.
+    sign : {"==", "<=", ">="}, default "=="
+        Constraint sign applied to the *last* tuple's link constraint.
+        Earlier tuples always use equality.  See description above.
+    method : {"auto", "sos2", "incremental", "lp"}, default "auto"
         Formulation method.
+        ``"lp"`` uses tangent lines (pure LP, no variables) and requires
+        ``sign != EQUAL`` plus a matching-convexity curve with exactly
+        two tuples.
+        ``"auto"`` picks ``"lp"`` when applicable, otherwise
+        ``"incremental"`` (monotonic breakpoints) or ``"sos2"``.
     active : Variable or LinearExpression, optional
         Binary variable that gates the piecewise function.  When
         ``active=0``, all auxiliary variables are forced to zero.
+        Not supported with ``method="lp"``.
     name : str, optional
         Base name for generated variables/constraints.
 
@@ -676,9 +753,19 @@ def add_piecewise_formulation(
     -------
     PiecewiseFormulation
     """
-    if method not in ("sos2", "incremental", "auto"):
+    # Normalize sign (accept "==" or "=" for equality, etc.)
+    sign = sign_replace_dict.get(sign, sign)
+    if sign not in SIGNS:
+        raise ValueError(f"sign must be one of {sorted(SIGNS)}, got '{sign}'")
+    if method not in ("sos2", "incremental", "auto", "lp"):
         raise ValueError(
-            f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
+            f"method must be 'sos2', 'incremental', 'auto', or 'lp', "
+            f"got '{method}'"
+        )
+    if method == "lp" and sign == EQUAL:
+        raise ValueError(
+            "method='lp' requires sign='<=' or '>='. "
+            "LP tangent lines cannot enforce equality on a piecewise curve."
         )
 
     if len(pairs) < 2:
@@ -754,6 +841,10 @@ def add_piecewise_formulation(
             raise ValueError(
                 "Incremental method is not supported for disjunctive constraints"
             )
+        if method == "lp":
+            raise ValueError(
+                "method='lp' is not supported for disjunctive (segment) breakpoints"
+            )
         _add_disjunctive(
             model,
             name,
@@ -761,6 +852,7 @@ def add_piecewise_formulation(
             bp_list,
             link_coords,
             bp_mask,
+            sign,
             active_expr,
         )
         resolved_method = "sos2"
@@ -774,6 +866,7 @@ def add_piecewise_formulation(
             link_coords,
             bp_mask,
             method,
+            sign,
             active_expr,
         )
 
@@ -812,22 +905,70 @@ def _add_continuous(
     link_coords: list[str],
     bp_mask: DataArray | None,
     method: str,
+    sign: str,
     active: LinearExpression | None = None,
 ) -> str:
     """
-    Dispatch continuous piecewise equality to SOS2 or incremental.
+    Dispatch continuous piecewise constraints.
 
-    Returns the resolved method name ("sos2" or "incremental").
+    Returns the resolved method name ("lp", "sos2", or "incremental").
     """
     from linopy.expressions import LinearExpression
 
     link_dim = "_pwl_var"
-    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
 
-    # Pre-compute properties used by multiple branches
+    # First tuple is the "output" (bounded by sign), second is the input.
+    # For LP dispatch we need 2 tuples and a convex/concave match.
+
+    # Auto-dispatch: try LP for 2-var inequality with matching convexity
+    if method == "auto" and sign != EQUAL:
+        if len(lin_exprs) == 2:
+            y_expr, x_expr = lin_exprs[0], lin_exprs[1]
+            y_pts, x_pts = bp_list[0], bp_list[1]
+            if _check_strict_monotonicity(x_pts) and _has_trailing_nan_only(x_pts):
+                convexity = _detect_convexity(x_pts, y_pts)
+                if (sign == LESS_EQUAL and convexity in ("concave", "linear")) or (
+                    sign == GREATER_EQUAL and convexity in ("convex", "linear")
+                ):
+                    if active is None:
+                        _add_lp(
+                            model, name, x_expr, y_expr,
+                            x_pts, y_pts, sign,
+                        )
+                        return "lp"
+
+    # Explicit LP method
+    if method == "lp":
+        if len(lin_exprs) != 2:
+            raise ValueError(
+                "method='lp' requires exactly 2 (expression, breakpoints) pairs."
+            )
+        if active is not None:
+            raise ValueError("method='lp' is not compatible with active=...")
+        y_expr, x_expr = lin_exprs[0], lin_exprs[1]
+        y_pts, x_pts = bp_list[0], bp_list[1]
+        if not _check_strict_monotonicity(x_pts):
+            raise ValueError(
+                "method='lp' requires strictly monotonic x breakpoints."
+            )
+        convexity = _detect_convexity(x_pts, y_pts)
+        if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
+            raise ValueError(
+                f"method='lp' with sign='<=' requires a concave or linear curve, "
+                f"got '{convexity}'."
+            )
+        if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
+            raise ValueError(
+                f"method='lp' with sign='>=' requires a convex or linear curve, "
+                f"got '{convexity}'."
+            )
+        _add_lp(model, name, x_expr, y_expr, x_pts, y_pts, sign)
+        return "lp"
+
+    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
     trailing_nan_only = _has_trailing_nan_only(stacked_bp)
 
-    # Auto-detect method
+    # Auto-select SOS2 vs incremental (sign already decided LP or not)
     if method in ("incremental", "auto"):
         is_monotonic = _check_strict_monotonicity(stacked_bp)
         if method == "auto":
@@ -848,40 +989,45 @@ def _add_continuous(
                 "SOS2 method does not support non-trailing NaN breakpoints."
             )
 
-    # Stack expressions along the link dimension
-    stacked_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
-    target_expr = LinearExpression(stacked_data, model)
-
-    # Compute stacked mask
-    stacked_mask = None
-    if bp_mask is not None:
-        stacked_mask = _stack_along_link(
-            [bp_mask] * len(link_coords), link_coords, link_dim
+    # When sign="==", stack ALL tuples into one link constraint (cheaper, same math).
+    # When sign != EQUAL, split: output (FIRST, signed) + inputs (stacked, equality).
+    if sign == EQUAL:
+        stacked_full_data = _stack_along_link(
+            [e.data for e in lin_exprs], link_coords, link_dim
         )
+        linked_expr = LinearExpression(stacked_full_data, model)
+        linked_bp = stacked_bp
+        output_expr = None
+        output_bp = None
+    else:
+        output_expr = lin_exprs[0]
+        output_bp = bp_list[0]
+        inputs_exprs = lin_exprs[1:]
+        inputs_bp_list = bp_list[1:]
+        inputs_coords = link_coords[1:]
+        linked_expr = None
+        linked_bp = None
+        if inputs_exprs:
+            linked_bp = _stack_along_link(inputs_bp_list, inputs_coords, link_dim)
+            input_data = _stack_along_link(
+                [e.data for e in inputs_exprs], inputs_coords, link_dim
+            )
+            linked_expr = LinearExpression(input_data, model)
 
     rhs = active if active is not None else 1
 
     if method == "sos2":
         _add_sos2(
-            model,
-            name,
-            target_expr,
-            stacked_bp,
-            stacked_mask,
-            link_dim,
-            rhs,
+            model, name, linked_expr, output_expr,
+            stacked_bp, linked_bp, output_bp,
+            bp_mask, link_dim, rhs, sign,
         )
         return method
     else:
         _add_incremental(
-            model,
-            name,
-            target_expr,
-            stacked_bp,
-            stacked_mask,
-            link_dim,
-            rhs,
-            active,
+            model, name, linked_expr, output_expr,
+            stacked_bp, linked_bp, output_bp,
+            bp_mask, link_dim, rhs, active, sign,
         )
         return method
 
@@ -889,21 +1035,26 @@ def _add_continuous(
 def _add_sos2(
     model: Model,
     name: str,
-    target_expr: LinearExpression,
+    input_expr: LinearExpression | None,
+    output_expr: LinearExpression,
     stacked_bp: DataArray,
-    stacked_mask: DataArray | None,
+    input_stacked_bp: DataArray | None,
+    output_bp: DataArray,
+    bp_mask: DataArray | None,
     link_dim: str,
     rhs: LinearExpression | int,
-) -> Constraint:
-    """SOS2 formulation for N-variable continuous piecewise equality."""
+    sign: str,
+) -> None:
+    """SOS2 formulation.  Inputs use equality; output uses ``sign``."""
     dim = BREAKPOINT_DIM
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
-    lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
+    lambda_mask = bp_mask
     lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
 
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
     link_name = f"{name}{PWL_LINK_SUFFIX}"
+    output_link_name = f"{name}{PWL_OUTPUT_LINK_SUFFIX}"
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
@@ -911,27 +1062,39 @@ def _add_sos2(
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
     model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
 
-    weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
-    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+    # Primary (input) link — always equality, covers all tuples when sign="=="
+    if input_expr is not None and input_stacked_bp is not None:
+        input_weighted = (lambda_var * input_stacked_bp).sum(dim=dim)
+        model.add_constraints(input_expr == input_weighted, name=link_name)
+
+    # Output link — only when sign != EQUAL (otherwise already covered above)
+    if output_expr is not None and output_bp is not None:
+        output_weighted = (lambda_var * output_bp).sum(dim=dim)
+        _add_signed_link(model, output_expr, output_weighted, sign, output_link_name)
 
 
 def _add_incremental(
     model: Model,
     name: str,
-    target_expr: LinearExpression,
+    input_expr: LinearExpression | None,
+    output_expr: LinearExpression,
     stacked_bp: DataArray,
-    stacked_mask: DataArray | None,
+    input_stacked_bp: DataArray | None,
+    output_bp: DataArray,
+    bp_mask: DataArray | None,
     link_dim: str,
     rhs: LinearExpression | int,
     active: LinearExpression | None,
-) -> Constraint:
-    """Incremental formulation for N-variable continuous piecewise equality."""
+    sign: str,
+) -> None:
+    """Incremental formulation.  Inputs use equality; output uses ``sign``."""
     dim = BREAKPOINT_DIM
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
 
     delta_name = f"{name}{PWL_DELTA_SUFFIX}"
     fill_order_name = f"{name}{PWL_FILL_ORDER_SUFFIX}"
     link_name = f"{name}{PWL_LINK_SUFFIX}"
+    output_link_name = f"{name}{PWL_OUTPUT_LINK_SUFFIX}"
     order_binary_name = f"{name}{PWL_ORDER_BINARY_SUFFIX}"
     delta_bound_name = f"{name}{PWL_DELTA_BOUND_SUFFIX}"
     binary_order_name = f"{name}{PWL_BINARY_ORDER_SUFFIX}"
@@ -941,13 +1104,9 @@ def _add_incremental(
     seg_index = pd.Index(range(n_segments), name=seg_dim)
     delta_coords = extra + [seg_index]
 
-    steps = stacked_bp.diff(dim).rename({dim: seg_dim})
-    steps[seg_dim] = seg_index
-
-    if stacked_mask is not None:
-        bp_mask_agg = stacked_mask.all(dim=link_dim)
-        mask_lo = bp_mask_agg.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
-        mask_hi = bp_mask_agg.isel({dim: slice(1, None)}).rename({dim: seg_dim})
+    if bp_mask is not None:
+        mask_lo = bp_mask.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
+        mask_hi = bp_mask.isel({dim: slice(1, None)}).rename({dim: seg_dim})
         mask_lo[seg_dim] = seg_index
         mask_hi[seg_dim] = seg_index
         delta_mask: DataArray | None = mask_lo & mask_hi
@@ -975,12 +1134,27 @@ def _add_incremental(
         binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
         model.add_constraints(binary_hi <= delta_lo, name=binary_order_name)
 
-    bp0 = stacked_bp.isel({dim: 0})
-    bp0_term: DataArray | LinearExpression = bp0
-    if active is not None:
-        bp0_term = bp0 * active
-    weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
-    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+    # Primary (input) link — always equality, covers all tuples when sign="=="
+    if input_expr is not None and input_stacked_bp is not None:
+        input_steps = input_stacked_bp.diff(dim).rename({dim: seg_dim})
+        input_steps[seg_dim] = seg_index
+        input_bp0 = input_stacked_bp.isel({dim: 0})
+        input_bp0_term: DataArray | LinearExpression = input_bp0
+        if active is not None:
+            input_bp0_term = input_bp0 * active
+        input_weighted = (delta_var * input_steps).sum(dim=seg_dim) + input_bp0_term
+        model.add_constraints(input_expr == input_weighted, name=link_name)
+
+    # Output link — only when sign != EQUAL (otherwise already covered above)
+    if output_expr is not None and output_bp is not None:
+        output_steps = output_bp.diff(dim).rename({dim: seg_dim})
+        output_steps[seg_dim] = seg_index
+        output_bp0 = output_bp.isel({dim: 0})
+        output_bp0_term: DataArray | LinearExpression = output_bp0
+        if active is not None:
+            output_bp0_term = output_bp0 * active
+        output_weighted = (delta_var * output_steps).sum(dim=seg_dim) + output_bp0_term
+        _add_signed_link(model, output_expr, output_weighted, sign, output_link_name)
 
 
 def _add_disjunctive(
@@ -990,9 +1164,10 @@ def _add_disjunctive(
     bp_list: list[DataArray],
     link_coords: list[str],
     bp_mask: DataArray | None,
+    sign: str,
     active: LinearExpression | None = None,
-) -> Constraint:
-    """Disjunctive SOS2 formulation for N-variable piecewise equality."""
+) -> None:
+    """Disjunctive SOS2 formulation.  Inputs use equality; output uses ``sign``."""
     from linopy.expressions import LinearExpression
 
     link_dim = "_pwl_var"
@@ -1005,16 +1180,20 @@ def _add_disjunctive(
             "NaN values must only appear at the end of the breakpoint sequence."
         )
 
-    # Stack expressions along link dimension
-    stacked_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
-    target_expr = LinearExpression(stacked_data, model)
-
-    # Compute stacked mask
-    stacked_mask = None
-    if bp_mask is not None:
-        stacked_mask = _stack_along_link(
-            [bp_mask] * len(link_coords), link_coords, link_dim
-        )
+    # When sign="==", a single stacked link covers all tuples (cheaper, same math).
+    # When sign != EQUAL, split: output (FIRST, signed) + inputs (stacked, equality).
+    if sign == EQUAL:
+        inputs_exprs = lin_exprs
+        inputs_bp = bp_list
+        inputs_coords = link_coords
+        output_expr = None
+        output_bp = None
+    else:
+        output_expr = lin_exprs[0]
+        output_bp = bp_list[0]
+        inputs_exprs = lin_exprs[1:]
+        inputs_bp = bp_list[1:]
+        inputs_coords = link_coords[1:]
 
     dim = BREAKPOINT_DIM
     extra = _var_coords_from(stacked_bp, exclude={dim, SEGMENT_DIM, link_dim})
@@ -1026,35 +1205,97 @@ def _add_disjunctive(
         pd.Index(stacked_bp.coords[SEGMENT_DIM].values, name=SEGMENT_DIM),
     ]
 
-    # Masks
-    lambda_mask = None
-    binary_mask = None
-    if stacked_mask is not None:
-        # Aggregate across link_dim — all variables must be valid
-        agg_mask = stacked_mask.all(dim=link_dim)
-        lambda_mask = agg_mask
-        binary_mask = agg_mask.any(dim=dim)
+    lambda_mask = bp_mask
+    binary_mask = bp_mask.any(dim=dim) if bp_mask is not None else None
 
     binary_name = f"{name}{PWL_SEGMENT_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
     link_name = f"{name}{PWL_LINK_SUFFIX}"
+    output_link_name = f"{name}{PWL_OUTPUT_LINK_SUFFIX}"
 
     binary_var = model.add_variables(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
     )
-
     rhs = active if active is not None else 1
     model.add_constraints(binary_var.sum(dim=SEGMENT_DIM) == rhs, name=select_name)
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
     )
-
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
-
     model.add_constraints(lambda_var.sum(dim=dim) == binary_var, name=convex_name)
 
-    weighted = (lambda_var * stacked_bp).sum(dim=[SEGMENT_DIM, dim])
-    return model.add_constraints(target_expr == weighted, name=link_name)
+    # Input link (equality)
+    if inputs_exprs:
+        stacked_input_bp = _stack_along_link(inputs_bp, inputs_coords, link_dim)
+        stacked_input_data = _stack_along_link(
+            [e.data for e in inputs_exprs], inputs_coords, link_dim
+        )
+        stacked_input_expr = LinearExpression(stacked_input_data, model)
+        input_weighted = (lambda_var * stacked_input_bp).sum(dim=[SEGMENT_DIM, dim])
+        model.add_constraints(stacked_input_expr == input_weighted, name=link_name)
+
+    # Output link (respects sign) — only when sign != EQUAL
+    if output_expr is not None and output_bp is not None:
+        output_weighted = (lambda_var * output_bp).sum(dim=[SEGMENT_DIM, dim])
+        _add_signed_link(model, output_expr, output_weighted, sign, output_link_name)
+
+
+def _add_signed_link(
+    model: Model,
+    lhs: LinearExpression,
+    rhs: LinearExpression,
+    sign: str,
+    name: str,
+) -> Constraint:
+    """Add a link constraint with the requested sign."""
+    if sign == EQUAL:
+        return model.add_constraints(lhs == rhs, name=name)
+    elif sign == LESS_EQUAL:
+        return model.add_constraints(lhs <= rhs, name=name)
+    else:  # ">="
+        return model.add_constraints(lhs >= rhs, name=name)
+
+
+def _add_lp(
+    model: Model,
+    name: str,
+    x_expr: LinearExpression,
+    y_expr: LinearExpression,
+    x_points: DataArray,
+    y_points: DataArray,
+    sign: str,
+) -> None:
+    """
+    LP tangent-line formulation (no auxiliary variables).
+
+    Adds one chord constraint per segment plus domain bounds on x.
+    """
+    dx = x_points.diff(BREAKPOINT_DIM)
+    dy = y_points.diff(BREAKPOINT_DIM)
+    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
+
+    slopes = _rename_to_segments(dy / dx, seg_index)
+    x_base = _rename_to_segments(
+        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
+    y_base = _rename_to_segments(
+        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
+    intercepts = y_base - slopes * x_base
+    tangents = slopes * x_expr + intercepts
+
+    lp_name = f"{name}{PWL_LP_SUFFIX}"
+    _add_signed_link(model, y_expr, tangents, sign, lp_name)
+
+    # Domain bounds: x ∈ [x_min, x_max]
+    x_min = x_points.min(dim=BREAKPOINT_DIM)
+    x_max = x_points.max(dim=BREAKPOINT_DIM)
+    model.add_constraints(
+        x_expr >= x_min, name=f"{name}{PWL_DOMAIN_LO_SUFFIX}"
+    )
+    model.add_constraints(
+        x_expr <= x_max, name=f"{name}{PWL_DOMAIN_HI_SUFFIX}"
+    )

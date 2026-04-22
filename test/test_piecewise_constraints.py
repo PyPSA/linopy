@@ -25,10 +25,14 @@ from linopy.constants import (
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
+    PWL_DOMAIN_HI_SUFFIX,
+    PWL_DOMAIN_LO_SUFFIX,
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
+    PWL_LP_SUFFIX,
     PWL_ORDER_BINARY_SUFFIX,
+    PWL_OUTPUT_LINK_SUFFIX,
     PWL_SEGMENT_BINARY_SUFFIX,
     PWL_SELECT_SUFFIX,
     SEGMENT_DIM,
@@ -1370,3 +1374,166 @@ class TestValidationEdgeCases:
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+
+
+# ===========================================================================
+# Sign parameter (inequality bounds)
+# ===========================================================================
+
+
+class TestSignParameter:
+    """Tests for sign="<=" / ">=" with the first-tuple convention."""
+
+    def test_default_is_equality(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation((x, [0, 10, 50]), (y, [0, 5, 20]))
+        # no output_link for equality — single stacked link only
+        assert f"pwl0{PWL_OUTPUT_LINK_SUFFIX}" not in m.constraints
+
+    def test_invalid_sign_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="sign must be"):
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="!")  # type: ignore
+
+    def test_lp_with_equality_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="LP"):
+            m.add_piecewise_formulation((x, [0, 10, 50]), (y, [0, 5, 20]), method="lp")
+
+    def test_auto_picks_lp_for_concave_le(self) -> None:
+        """Concave curve + sign='<=' + auto → LP tangent lines (no aux vars)."""
+        m = Model()
+        power = m.add_variables(lower=0, upper=30, name="power")
+        fuel = m.add_variables(lower=0, upper=40, name="fuel")
+        # Concave: slopes 2, 1, 0.5
+        m.add_piecewise_formulation(
+            (fuel, [0, 20, 30, 35]),
+            (power, [0, 10, 20, 30]),
+            sign="<=",
+        )
+        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_DOMAIN_LO_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_DOMAIN_HI_SUFFIX}" in m.constraints
+        # No SOS2 lambdas for LP
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
+
+    def test_auto_picks_lp_for_convex_ge(self) -> None:
+        """Convex curve + sign='>=' + auto → LP tangent lines."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=100, name="y")
+        # Convex: slopes 1, 2, 3
+        m.add_piecewise_formulation(
+            (y, [0, 10, 30, 60]),
+            (x, [0, 10, 20, 30]),
+            sign=">=",
+        )
+        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
+
+    def test_auto_falls_back_to_sos2_for_nonmonotonic(self) -> None:
+        """Non-monotonic x + sign='<=' + auto → SOS2 with signed output link."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        # Non-monotonic x
+        m.add_piecewise_formulation(
+            (y, [0, 5, 2, 20]),
+            (x, [0, 10, 5, 50]),
+            sign="<=",
+        )
+        assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+        assert f"pwl0{PWL_OUTPUT_LINK_SUFFIX}" in m.constraints
+
+    def test_lp_nonmatching_convexity_raises(self) -> None:
+        """Explicit LP with sign='<=' on a convex curve → error."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        # Convex curve, sign='<=' mismatch
+        with pytest.raises(ValueError, match="concave"):
+            m.add_piecewise_formulation(
+                (y, [0, 10, 30, 60]),  # convex
+                (x, [0, 10, 20, 30]),
+                sign="<=",
+                method="lp",
+            )
+
+    def test_sos2_sign_le_has_output_link(self) -> None:
+        """Explicit SOS2 with sign='<=' gets a signed output link."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),
+            sign="<=",
+            method="sos2",
+        )
+        link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
+        assert (link.sign == "<=").all().item()
+
+    def test_incremental_sign_le(self) -> None:
+        """Incremental method honours sign on output link."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),
+            sign="<=",
+            method="incremental",
+        )
+        assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
+        link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
+        assert (link.sign == "<=").all().item()
+
+    def test_nvar_inequality_bounds_first_tuple(self) -> None:
+        """N-variable: first tuple is bounded, others on curve."""
+        m = Model()
+        fuel = m.add_variables(name="fuel")
+        power = m.add_variables(name="power")
+        heat = m.add_variables(name="heat")
+        m.add_piecewise_formulation(
+            (fuel, [0, 40, 85, 160]),    # bounded
+            (power, [0, 30, 60, 100]),   # input ==
+            (heat, [0, 25, 55, 95]),     # input ==
+            sign="<=",
+            method="sos2",
+        )
+        # inputs stacked, output signed
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
+        output_link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
+        assert "_pwl_var" in link.labels.dims  # stacked inputs
+        assert "_pwl_var" not in output_link.labels.dims  # single output
+        assert (output_link.sign == "<=").all().item()
+
+    def test_lp_consistency_with_sos2(self) -> None:
+        """LP and SOS2 give the same fuel at a fixed power (within domain)."""
+        x_pts = [0, 10, 20, 30]
+        y_pts = [0, 20, 30, 35]  # concave
+
+        solutions = {}
+        for method in ["lp", "sos2", "incremental"]:
+            m = Model()
+            power = m.add_variables(lower=0, upper=30, name="power")
+            fuel = m.add_variables(lower=0, upper=40, name="fuel")
+            m.add_piecewise_formulation(
+                (fuel, y_pts),
+                (power, x_pts),
+                sign="<=",
+                method=method,
+            )
+            m.add_constraints(power == 15)
+            m.add_objective(-fuel)  # maximize fuel
+            m.solve()
+            solutions[method] = float(m.solution["fuel"])
+
+        # all methods should max out at f(15) = 25
+        for method, val in solutions.items():
+            assert abs(val - 25.0) < 1e-4, f"{method}: got {val}"
