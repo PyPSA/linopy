@@ -1450,6 +1450,43 @@ class TestSignParameter:
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_OUTPUT_LINK_SUFFIX}" in m.constraints
 
+    def test_auto_concave_ge_falls_back_from_lp(self) -> None:
+        """Concave + sign='>=' is LP-loose → auto must not pick LP."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        f = m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),  # concave
+            (x, [0, 10, 20, 30]),
+            sign=">=",
+        )
+        assert f.method != "lp"  # fallback (sos2 or incremental)
+
+    def test_auto_convex_le_falls_back_from_lp(self) -> None:
+        """Convex + sign='<=' is LP-loose → auto must not pick LP."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        f = m.add_piecewise_formulation(
+            (y, [0, 10, 30, 60]),  # convex
+            (x, [0, 10, 20, 30]),
+            sign="<=",
+        )
+        assert f.method != "lp"
+
+    def test_lp_concave_ge_raises(self) -> None:
+        """Explicit LP + sign='>=' on concave curve is loose → raise."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="convex"):
+            m.add_piecewise_formulation(
+                (y, [0, 20, 30, 35]),  # concave
+                (x, [0, 10, 20, 30]),
+                sign=">=",
+                method="lp",
+            )
+
     def test_lp_nonmatching_convexity_raises(self) -> None:
         """Explicit LP with sign='<=' on a convex curve → error."""
         m = Model()
