@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -599,6 +600,27 @@ class TestDisjunctive:
         # Single link constraint with _pwl_var dimension
         link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
         assert "_pwl_var" in [str(d) for d in link.dims]
+
+    @pytest.mark.skipif(
+        not _sos2_solvers, reason="no SOS2-capable solver available"
+    )
+    def test_sign_le_respected_by_solver(self) -> None:
+        """Disjunctive + sign='<=' must actually bound the solved output
+        (not just structurally wire up the output link)."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=40, name="y")
+        # Two segments forming a concave profile: (0,0)→(10,20), (10,20)→(20,30)
+        m.add_piecewise_formulation(
+            (y, segments([[0.0, 20.0], [20.0, 30.0]])),
+            (x, segments([[0.0, 10.0], [10.0, 20.0]])),
+            sign="<=",
+        )
+        m.add_constraints(x == 15)
+        m.add_objective(-y)  # maximise y
+        m.solve()
+        # f(15) = 20 + (30-20)*0.5 = 25
+        assert m.solution["y"].item() == pytest.approx(25.0, abs=1e-3)
 
 
 # ===========================================================================
@@ -1722,6 +1744,125 @@ class TestSignParameter:
         assert m.solution["y"].item() == pytest.approx(-100.0, abs=1e-6)
         assert m.solution["x"].item() == pytest.approx(0.0, abs=1e-6)
 
+    def test_lp_active_explicit_raises(self) -> None:
+        """method='lp' + active is ValueError (silently ignoring active
+        would produce a wrong model)."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        u = m.add_variables(binary=True, name="u")
+        with pytest.raises(ValueError, match="active"):
+            m.add_piecewise_formulation(
+                (y, [0, 20, 30, 35]),
+                (x, [0, 10, 20, 30]),
+                sign="<=",
+                method="lp",
+                active=u,
+            )
+
+    def test_lp_accepts_linear_curve(self) -> None:
+        """A linear curve is both convex and concave per detection, so
+        LP must accept it with either sign and build the formulation."""
+        for sign in ["<=", ">="]:
+            m = Model()
+            x = m.add_variables(lower=0, upper=30, name="x")
+            y = m.add_variables(lower=0, upper=60, name="y")
+            f = m.add_piecewise_formulation(
+                (y, [0, 10, 20, 30]),  # linear (all slopes = 1)
+                (x, [0, 10, 20, 30]),
+                sign=sign,
+                method="lp",
+            )
+            assert f.method == "lp"
+            assert f.convexity == "linear"
+
+    def test_auto_logs_when_lp_is_skipped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """method='auto' on a non-LP-eligible case emits an INFO log
+        explaining why LP was passed over."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with caplog.at_level(logging.INFO, logger="linopy.piecewise"):
+            m.add_piecewise_formulation(
+                (y, [0, 20, 30, 35]),  # concave + sign='>=' → LP skipped
+                (x, [0, 10, 20, 30]),
+                sign=">=",
+            )
+        assert "LP not applicable" in caplog.text
+
+    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
+    def test_lp_domain_bound_infeasible_when_x_out_of_range(self) -> None:
+        """LP's x ∈ [x_min, x_max] domain bound bites — forcing x beyond
+        the breakpoint range must make the model infeasible."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=100, name="x")
+        y = m.add_variables(lower=0, upper=100, name="y")
+        m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),  # x_max = 30
+            sign="<=",
+            method="lp",
+        )
+        m.add_constraints(x >= 50)
+        m.add_objective(-y)
+        status, _ = m.solve()
+        assert status != "ok"
+
+    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
+    def test_lp_matches_sos2_on_multi_dim_variables(self) -> None:
+        """LP with an entity dimension beyond BREAKPOINT_DIM must match
+        the SOS2 solution per entity."""
+        entities = pd.Index(["a", "b"], name="entity")
+        bp_x = pd.DataFrame(
+            [[0, 10, 20, 30], [0, 10, 20, 30]], index=["a", "b"]
+        )
+        bp_y = pd.DataFrame(
+            [[0, 20, 30, 35], [0, 15, 25, 30]], index=["a", "b"]
+        )
+        ys: dict[str, xr.DataArray] = {}
+        for method in ["lp", "sos2"]:
+            m = Model()
+            x = m.add_variables(lower=0, upper=30, coords=[entities], name="x")
+            y = m.add_variables(lower=0, upper=40, coords=[entities], name="y")
+            m.add_piecewise_formulation(
+                (y, breakpoints(bp_y, dim="entity")),
+                (x, breakpoints(bp_x, dim="entity")),
+                sign="<=",
+                method=method,
+            )
+            m.add_constraints(x.sel(entity="a") == 15)
+            m.add_constraints(x.sel(entity="b") == 5)
+            m.add_objective(-y.sum())
+            m.solve()
+            ys[method] = y.solution
+        for entity in ["a", "b"]:
+            assert float(ys["lp"].sel(entity=entity)) == pytest.approx(
+                float(ys["sos2"].sel(entity=entity)), abs=1e-3
+            )
+
+    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
+    def test_lp_consistency_with_sos2_both_directions(self) -> None:
+        """Extends test_lp_consistency_with_sos2 to also probe the
+        minimisation side of y ≤ f(x)."""
+        x_pts = [0, 10, 20, 30]
+        y_pts = [0, 20, 30, 35]  # concave
+        for obj_sign in [-1.0, +1.0]:
+            sols: dict[str, float] = {}
+            for method in ["lp", "sos2"]:
+                m = Model()
+                p = m.add_variables(lower=0, upper=30, name="p")
+                f = m.add_variables(lower=0, upper=50, name="f")
+                m.add_piecewise_formulation(
+                    (f, y_pts), (p, x_pts), sign="<=", method=method
+                )
+                m.add_constraints(p == 15)
+                m.add_objective(obj_sign * f)
+                m.solve()
+                sols[method] = float(m.solution["f"])
+            assert sols["lp"] == pytest.approx(sols["sos2"], abs=1e-3)
+
 
 def _bp(values: list[float]) -> xr.DataArray:
     """Small helper: plain 1-D breakpoint DataArray for convexity tests."""
@@ -1849,3 +1990,5 @@ class TestDetectConvexity:
             )
             == "mixed"
         )
+
+
