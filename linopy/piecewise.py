@@ -903,6 +903,36 @@ def _stack_along_link(
     return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
 
 
+def _lp_eligibility(
+    lin_exprs: list[LinearExpression],
+    bp_list: list[DataArray],
+    sign: str,
+    active: LinearExpression | None,
+) -> tuple[bool, str]:
+    """Check whether LP tangent-lines dispatch is applicable.
+
+    Returns ``(True, "")`` if LP is applicable, else ``(False, reason)``
+    with a short string describing why.  Used for both auto-dispatch
+    and for an informational log when LP is skipped.
+    """
+    if len(lin_exprs) != 2:
+        return False, f"{len(lin_exprs)} expressions (LP supports only 2)"
+    if active is not None:
+        return False, "active=... is not supported by LP"
+    x_pts = bp_list[1]
+    y_pts = bp_list[0]
+    if not _check_strict_monotonicity(x_pts):
+        return False, "x breakpoints are not strictly monotonic"
+    if not _has_trailing_nan_only(x_pts):
+        return False, "x breakpoints contain non-trailing NaN"
+    convexity = _detect_convexity(x_pts, y_pts)
+    if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
+        return False, f"sign='<=' needs concave/linear curvature, got '{convexity}'"
+    if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
+        return False, f"sign='>=' needs convex/linear curvature, got '{convexity}'"
+    return True, ""
+
+
 def _add_continuous(
     model: Model,
     name: str,
@@ -928,25 +958,19 @@ def _add_continuous(
 
     # Auto-dispatch: try LP for 2-var inequality with matching convexity
     if method == "auto" and sign != EQUAL:
-        if len(lin_exprs) == 2:
-            y_expr, x_expr = lin_exprs[0], lin_exprs[1]
-            y_pts, x_pts = bp_list[0], bp_list[1]
-            if _check_strict_monotonicity(x_pts) and _has_trailing_nan_only(x_pts):
-                convexity = _detect_convexity(x_pts, y_pts)
-                if (sign == LESS_EQUAL and convexity in ("concave", "linear")) or (
-                    sign == GREATER_EQUAL and convexity in ("convex", "linear")
-                ):
-                    if active is None:
-                        _add_lp(
-                            model,
-                            name,
-                            x_expr,
-                            y_expr,
-                            x_pts,
-                            y_pts,
-                            sign,
-                        )
-                        return "lp"
+        ok, reason = _lp_eligibility(lin_exprs, bp_list, sign, active)
+        if ok:
+            _add_lp(
+                model, name, lin_exprs[1], lin_exprs[0],
+                bp_list[1], bp_list[0], sign,
+            )
+            return "lp"
+        else:
+            logger.info(
+                "piecewise formulation '%s': LP not applicable (%s); "
+                "will use SOS2/incremental instead",
+                name, reason,
+            )
 
     # Explicit LP method
     if method == "lp":
