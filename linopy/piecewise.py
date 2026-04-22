@@ -779,8 +779,8 @@ def add_piecewise_formulation(
         ``sign != EQUAL`` the **first** pair is the bounded output; all
         later pairs are treated as inputs forced to equality.
     sign : {"==", "<=", ">="}, default "=="
-        Constraint sign applied to the *last* tuple's link constraint.
-        Earlier tuples always use equality.  See description above.
+        Constraint sign applied to the *first* tuple's link constraint.
+        Later tuples always use equality.  See description above.
     method : {"auto", "sos2", "incremental", "lp"}, default "auto"
         Formulation method.
         ``"lp"`` uses tangent lines (pure LP, no variables) and requires
