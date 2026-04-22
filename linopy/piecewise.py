@@ -27,6 +27,7 @@ from linopy.constants import (
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
+    PWL_CHORD_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_CONVEXITIES,
     PWL_DELTA_BOUND_SUFFIX,
@@ -36,7 +37,6 @@ from linopy.constants import (
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
-    PWL_LP_SUFFIX,
     PWL_METHODS,
     PWL_ORDER_BINARY_SUFFIX,
     PWL_OUTPUT_LINK_SUFFIX,
@@ -1416,8 +1416,10 @@ def _add_lp(
     seg_mask: DataArray | None = None if bool(full_mask.all()) else full_mask
 
     tangents = tangent_lines(x_expr, x_points, y_points)
-    lp_name = f"{name}{PWL_LP_SUFFIX}"
-    _add_signed_link(model, y_expr, tangents, sign, lp_name, mask=seg_mask)
+    _add_signed_link(
+        model, y_expr, tangents, sign, f"{name}{PWL_CHORD_SUFFIX}",
+        mask=seg_mask,
+    )
 
     # Domain bounds: x ∈ [x_min, x_max] (skipna by default).
     x_min = x_points.min(dim=BREAKPOINT_DIM)

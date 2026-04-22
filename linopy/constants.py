@@ -50,7 +50,7 @@ PWL_DELTA_BOUND_SUFFIX = "_delta_bound"
 PWL_BINARY_ORDER_SUFFIX = "_binary_order"
 PWL_ACTIVE_BOUND_SUFFIX = "_active_bound"
 PWL_OUTPUT_LINK_SUFFIX = "_output_link"
-PWL_LP_SUFFIX = "_lp"
+PWL_CHORD_SUFFIX = "_chord"
 PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
 

@@ -23,6 +23,7 @@ from linopy.constants import (
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
+    PWL_CHORD_SUFFIX,
     PWL_CONVEX_SUFFIX,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
@@ -31,7 +32,6 @@ from linopy.constants import (
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
-    PWL_LP_SUFFIX,
     PWL_ORDER_BINARY_SUFFIX,
     PWL_OUTPUT_LINK_SUFFIX,
     PWL_SEGMENT_BINARY_SUFFIX,
@@ -1439,7 +1439,7 @@ class TestSignParameter:
             (power, [0, 10, 20, 30]),
             sign="<=",
         )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_CHORD_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_DOMAIN_LO_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_DOMAIN_HI_SUFFIX}" in m.constraints
         # No SOS2 lambdas for LP
@@ -1456,7 +1456,7 @@ class TestSignParameter:
             (x, [0, 10, 20, 30]),
             sign=">=",
         )
-        assert f"pwl0{PWL_LP_SUFFIX}" in m.constraints
+        assert f"pwl0{PWL_CHORD_SUFFIX}" in m.constraints
 
     def test_auto_falls_back_to_sos2_for_nonmonotonic(self) -> None:
         """Non-monotonic x + sign='<=' + auto → SOS2 with signed output link."""
