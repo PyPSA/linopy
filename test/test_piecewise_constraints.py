@@ -1643,3 +1643,131 @@ class TestSignParameter:
                 sign=">=",
                 method="lp",
             )
+
+
+def _bp(values: list[float]) -> xr.DataArray:
+    """Small helper: plain 1-D breakpoint DataArray for convexity tests."""
+    return breakpoints(values)
+
+
+class TestDetectConvexity:
+    """Direct unit tests for the _detect_convexity classifier."""
+
+    def test_convex(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        x = _bp([0, 1, 2, 3])
+        y = _bp([0, 1, 4, 9])  # y = x^2
+        assert _detect_convexity(x, y) == "convex"
+
+    def test_concave(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        x = _bp([0, 1, 2, 3])
+        y = _bp([0, 1, 1.5, 1.75])  # diminishing returns
+        assert _detect_convexity(x, y) == "concave"
+
+    def test_linear_exact(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        x = _bp([0, 1, 2, 3])
+        y = _bp([0, 2, 4, 6])
+        assert _detect_convexity(x, y) == "linear"
+
+    def test_linear_within_tol(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        # Tiny slope wobble within 1e-10 tolerance
+        x = _bp([0, 1, 2, 3])
+        y = _bp([0, 2.0, 4.0 + 1e-12, 6.0 + 2e-12])
+        assert _detect_convexity(x, y) == "linear"
+
+    def test_mixed(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        x = _bp([0, 1, 2, 3, 4])
+        y = _bp([0, 1, 4, 5, 4])  # convex then concave
+        assert _detect_convexity(x, y) == "mixed"
+
+    def test_too_few_points_returns_linear(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        # Only two points — no second difference to examine
+        x = _bp([0, 1])
+        y = _bp([0, 2])
+        assert _detect_convexity(x, y) == "linear"
+
+    def test_decreasing_x_matches_ascending(self) -> None:
+        """Reversing the breakpoint order must not change the label."""
+        from linopy.piecewise import _detect_convexity
+
+        # convex
+        assert _detect_convexity(_bp([0, 1, 2, 3]), _bp([0, 1, 4, 9])) == "convex"
+        assert (
+            _detect_convexity(_bp([3, 2, 1, 0]), _bp([9, 4, 1, 0])) == "convex"
+        )
+        # concave
+        assert (
+            _detect_convexity(_bp([0, 10, 20, 30]), _bp([0, 20, 30, 35]))
+            == "concave"
+        )
+        assert (
+            _detect_convexity(_bp([30, 20, 10, 0]), _bp([35, 30, 20, 0]))
+            == "concave"
+        )
+
+    def test_trailing_nan_ignored(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        # Concave curve with a trailing NaN padding
+        x = _bp([0.0, 1.0, 2.0, np.nan])
+        y = _bp([0.0, 1.0, 1.5, np.nan])
+        assert _detect_convexity(x, y) == "concave"
+
+    def test_multi_entity_same_shape(self) -> None:
+        from linopy.piecewise import _detect_convexity
+
+        # Both rows convex
+        bp_x = pd.DataFrame([[0, 1, 2, 3], [0, 1, 2, 3]], index=["a", "b"])
+        bp_y = pd.DataFrame([[0, 1, 4, 9], [0, 2, 8, 18]], index=["a", "b"])
+        assert (
+            _detect_convexity(
+                breakpoints(bp_x, dim="entity"),
+                breakpoints(bp_y, dim="entity"),
+            )
+            == "convex"
+        )
+
+    def test_multi_entity_mixed_direction(self) -> None:
+        """Same concave curve, one entity ascending, one descending."""
+        from linopy.piecewise import _detect_convexity
+
+        bp_x = pd.DataFrame(
+            [[0, 10, 20, 30], [30, 20, 10, 0]], index=["a", "b"]
+        )
+        bp_y = pd.DataFrame(
+            [[0, 20, 30, 35], [35, 30, 20, 0]], index=["a", "b"]
+        )
+        assert (
+            _detect_convexity(
+                breakpoints(bp_x, dim="entity"),
+                breakpoints(bp_y, dim="entity"),
+            )
+            == "concave"
+        )
+
+    def test_multi_entity_mixed_curvatures(self) -> None:
+        """One convex, one concave across entities → mixed."""
+        from linopy.piecewise import _detect_convexity
+
+        bp_x = pd.DataFrame([[0, 1, 2, 3], [0, 1, 2, 3]], index=["a", "b"])
+        bp_y = pd.DataFrame(
+            [[0, 1, 4, 9], [0, 1, 1.5, 1.75]], index=["a", "b"]
+        )
+        assert (
+            _detect_convexity(
+                breakpoints(bp_x, dim="entity"),
+                breakpoints(bp_y, dim="entity"),
+            )
+            == "mixed"
+        )

@@ -603,50 +603,31 @@ def _detect_convexity(
     x_points: DataArray, y_points: DataArray
 ) -> Literal["convex", "concave", "linear", "mixed"]:
     """
-    Classify the shape of a piecewise function from its breakpoints.
+    Classify the shape of a single piecewise curve ``y = f(x)``.
 
-    Sorts each entity's breakpoints by ``x`` ascending (NaN trailing) so
-    that decreasing-x input produces the same classification as
-    increasing-x.  Returns one of the strings in :data:`PWL_CONVEXITIES`.
+    Invariant to whether breakpoints are listed ascending or descending in
+    x — same graph, same label.  Multi-entity inputs are aggregated across
+    entities; to classify per entity, iterate at the call site (see
+    :data:`PWL_CONVEXITIES` for the possible labels).  Callers must
+    enforce strict x-monotonicity per slice upstream.
     """
-    bp_axis = x_points.dims.index(BREAKPOINT_DIM)
-    x_arr = np.moveaxis(x_points.values, bp_axis, -1)
-    y_arr = np.moveaxis(y_points.values, bp_axis, -1)
-    x_flat = x_arr.reshape(-1, x_arr.shape[-1])
-    y_flat = y_arr.reshape(-1, y_arr.shape[-1])
+    dx = x_points.diff(BREAKPOINT_DIM)
+    slopes = y_points.diff(BREAKPOINT_DIM) / dx
+    # Flip sign when x descends so the classification matches the
+    # ascending-x traversal.  All dx in a strictly-monotonic slice share
+    # a sign, so the sum resolves direction per entity.
+    sd = slopes.diff(BREAKPOINT_DIM) * np.sign(dx.sum(BREAKPOINT_DIM))
 
+    if int((~sd.isnull()).sum()) == 0:
+        return "linear"
     tol = 1e-10
-    all_nonneg = True
-    all_nonpos = True
-    has_curvature_data = False
-
-    for x_i, y_i in zip(x_flat, y_flat):
-        valid = ~(np.isnan(x_i) | np.isnan(y_i))
-        if valid.sum() < 3:
-            continue
-        x_v = x_i[valid]
-        y_v = y_i[valid]
-        order = np.argsort(x_v)
-        xs = x_v[order]
-        ys = y_v[order]
-        dx = np.diff(xs)
-        if not (dx > 0).all():
-            continue
-        slopes = np.diff(ys) / dx
-        sd = np.diff(slopes)
-        if sd.size == 0:
-            continue
-        has_curvature_data = True
-        all_nonneg &= bool(np.all(sd >= -tol))
-        all_nonpos &= bool(np.all(sd <= tol))
-
-    if not has_curvature_data:
+    nonneg = bool(((sd >= -tol) | sd.isnull()).all())
+    nonpos = bool(((sd <= tol) | sd.isnull()).all())
+    if nonneg and nonpos:
         return "linear"
-    if all_nonneg and all_nonpos:
-        return "linear"
-    if all_nonneg:
+    if nonneg:
         return "convex"
-    if all_nonpos:
+    if nonpos:
         return "concave"
     return "mixed"
 
