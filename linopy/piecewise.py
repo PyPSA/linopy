@@ -7,6 +7,7 @@ constraint methods for use with linopy.Model.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from numbers import Real
 from typing import TYPE_CHECKING, Literal, TypeAlias
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
     from linopy.model import Model
     from linopy.types import LinExprLike
     from linopy.variables import Variables
+
+logger = logging.getLogger(__name__)
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
@@ -869,6 +872,13 @@ def add_piecewise_formulation(
     # Collect newly created variable and constraint names
     new_vars = [n for n in model.variables if n not in vars_before]
     new_cons = [n for n in model.constraints if n not in cons_before]
+
+    if method == "auto":
+        logger.info(
+            "piecewise formulation '%s': auto selected method='%s' "
+            "(sign='%s', %d pair%s)",
+            name, resolved_method, sign, len(pairs), "" if len(pairs) == 1 else "s",
+        )
 
     result = PiecewiseFormulation(
         name=name,
