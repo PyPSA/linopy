@@ -53,6 +53,9 @@ PWL_OUTPUT_LINK_SUFFIX = "_output_link"
 PWL_LP_SUFFIX = "_lp"
 PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
+
+PWL_METHODS: set[str] = {"sos2", "lp", "incremental", "auto"}
+PWL_CONVEXITIES: set[str] = {"convex", "concave", "linear", "mixed"}
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_SEG_DIM = f"{BREAKPOINT_DIM}_seg"

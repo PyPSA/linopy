@@ -27,6 +27,7 @@ from linopy.constants import (
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CONVEX_SUFFIX,
+    PWL_CONVEXITIES,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_DOMAIN_HI_SUFFIX,
@@ -35,6 +36,7 @@ from linopy.constants import (
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
     PWL_LP_SUFFIX,
+    PWL_METHODS,
     PWL_ORDER_BINARY_SUFFIX,
     PWL_OUTPUT_LINK_SUFFIX,
     PWL_SEGMENT_BINARY_SUFFIX,
@@ -79,9 +81,30 @@ class PiecewiseFormulation:
     Groups all auxiliary variables and constraints created by a single
     piecewise formulation. Stores only names internally; ``variables``
     and ``constraints`` properties return live views from the model.
+
+    Attributes
+    ----------
+    name : str
+        Formulation name (used as prefix for auxiliary variables and
+        constraints).
+    method : str
+        Resolved method — one of ``{"sos2", "incremental", "lp"}``.  Never
+        ``"auto"``; if the caller passed ``method="auto"``, this holds the
+        method actually chosen.
+    convexity : {"convex", "concave", "linear", "mixed"} or None
+        Shape of the piecewise curve along the breakpoint axis when it is
+        well-defined (exactly two expressions, non-disjunctive, strictly
+        monotonic ``x`` breakpoints).  ``None`` otherwise.
     """
 
-    __slots__ = ("name", "method", "variable_names", "constraint_names", "_model")
+    __slots__ = (
+        "name",
+        "method",
+        "convexity",
+        "variable_names",
+        "constraint_names",
+        "_model",
+    )
 
     def __init__(
         self,
@@ -90,9 +113,11 @@ class PiecewiseFormulation:
         variable_names: list[str],
         constraint_names: list[str],
         model: Model,
+        convexity: Literal["convex", "concave", "linear", "mixed"] | None = None,
     ) -> None:
         self.name = name
         self.method = method
+        self.convexity = convexity
         self.variable_names = variable_names
         self.constraint_names = constraint_names
         self._model = model
@@ -119,7 +144,10 @@ class PiecewiseFormulation:
         header = f"PiecewiseFormulation `{self.name}`"
         if dims_str:
             header += f" [{dims_str}]"
-        r = f"{header} — {self.method}\n"
+        suffix = self.method
+        if self.convexity is not None:
+            suffix += f", {self.convexity}"
+        r = f"{header} — {suffix}\n"
         r += "  Variables:\n"
         for vname, var in self.variables.items():
             dims = ", ".join(str(d) for d in var.coords) if var.coords else ""
@@ -578,7 +606,8 @@ def _detect_convexity(
     Classify the shape of a piecewise function from its breakpoints.
 
     Requires strictly increasing ``x_points``. Computes segment slopes and
-    checks the sign of second differences.
+    checks the sign of second differences. Returns one of the strings in
+    :data:`PWL_CONVEXITIES`.
     """
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
@@ -756,13 +785,15 @@ def add_piecewise_formulation(
     -------
     PiecewiseFormulation
     """
-    # Normalize sign (accept "==" or "=" for equality, etc.)
-    sign = sign_replace_dict.get(sign, sign)
+    # Normalize sign (accept "==" or "=" for equality, etc.).  The Literal
+    # annotation above covers the user-facing forms; after normalization
+    # ``sign`` holds one of the canonical values in :data:`SIGNS`.
+    sign = sign_replace_dict.get(sign, sign)  # type: ignore[assignment]
     if sign not in SIGNS:
         raise ValueError(f"sign must be one of {sorted(SIGNS)}, got '{sign}'")
-    if method not in ("sos2", "incremental", "auto", "lp"):
+    if method not in PWL_METHODS:
         raise ValueError(
-            f"method must be 'sos2', 'incremental', 'auto', or 'lp', got '{method}'"
+            f"method must be one of {sorted(PWL_METHODS)}, got '{method}'"
         )
     if method == "lp" and sign == EQUAL:
         raise ValueError("method='lp' requires sign='<=' or '>='.")
@@ -842,7 +873,8 @@ def add_piecewise_formulation(
             )
         if method == "lp":
             raise ValueError(
-                "method='lp' is not supported for disjunctive (segment) breakpoints"
+                "method='lp' is not supported for disjunctive "
+                f"(segment) breakpoints"
             )
         _add_disjunctive(
             model,
@@ -880,12 +912,21 @@ def add_piecewise_formulation(
             name, resolved_method, sign, len(pairs), "" if len(pairs) == 1 else "s",
         )
 
+    # Compute convexity when well-defined: exactly two tuples (y, x),
+    # non-disjunctive, and strictly monotonic x breakpoints.
+    convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
+    if len(bp_list) == 2 and not disjunctive:
+        x_pts, y_pts = bp_list[1], bp_list[0]
+        if _check_strict_monotonicity(x_pts):
+            convexity = _detect_convexity(x_pts, y_pts)
+
     result = PiecewiseFormulation(
         name=name,
         method=resolved_method,
         variable_names=new_vars,
         constraint_names=new_cons,
         model=model,
+        convexity=convexity,
     )
     model._piecewise_formulations[name] = result
     return result
@@ -976,23 +1017,26 @@ def _add_continuous(
     if method == "lp":
         if len(lin_exprs) != 2:
             raise ValueError(
-                "method='lp' requires exactly 2 (expression, breakpoints) pairs."
+                "method='lp' requires exactly 2 "
+                f"(expression, breakpoints) pairs."
             )
         if active is not None:
             raise ValueError("method='lp' is not compatible with active=...")
         y_expr, x_expr = lin_exprs[0], lin_exprs[1]
         y_pts, x_pts = bp_list[0], bp_list[1]
         if not _check_strict_monotonicity(x_pts):
-            raise ValueError("method='lp' requires strictly monotonic x breakpoints.")
+            raise ValueError(
+                "method='lp' requires strictly monotonic x breakpoints."
+            )
         convexity = _detect_convexity(x_pts, y_pts)
         if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
             raise ValueError(
-                f"method='lp' with sign='<=' requires concave or linear "
+                "method='lp' with sign='<=' requires concave or linear "
                 f"curvature; got '{convexity}'. Use method='auto'."
             )
         if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
             raise ValueError(
-                f"method='lp' with sign='>=' requires convex or linear "
+                "method='lp' with sign='>=' requires convex or linear "
                 f"curvature; got '{convexity}'. Use method='auto'."
             )
         _add_lp(model, name, x_expr, y_expr, x_pts, y_pts, sign)
@@ -1005,7 +1049,9 @@ def _add_continuous(
     if method in ("incremental", "auto"):
         is_monotonic = _check_strict_monotonicity(stacked_bp)
         if method == "auto":
-            method = "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
+            method = (
+                "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
+            )
         elif not is_monotonic:
             raise ValueError(
                 "Incremental method requires strictly monotonic breakpoints."
@@ -1086,10 +1132,10 @@ def _add_sos2(
     model: Model,
     name: str,
     input_expr: LinearExpression | None,
-    output_expr: LinearExpression,
+    output_expr: LinearExpression | None,
     stacked_bp: DataArray,
     input_stacked_bp: DataArray | None,
-    output_bp: DataArray,
+    output_bp: DataArray | None,
     bp_mask: DataArray | None,
     link_dim: str,
     rhs: LinearExpression | int,
@@ -1127,10 +1173,10 @@ def _add_incremental(
     model: Model,
     name: str,
     input_expr: LinearExpression | None,
-    output_expr: LinearExpression,
+    output_expr: LinearExpression | None,
     stacked_bp: DataArray,
     input_stacked_bp: DataArray | None,
-    output_bp: DataArray,
+    output_bp: DataArray | None,
     bp_mask: DataArray | None,
     link_dim: str,
     rhs: LinearExpression | int,
