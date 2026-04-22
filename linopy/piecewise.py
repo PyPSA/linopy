@@ -21,24 +21,25 @@ from linopy.constants import (
     HELPER_DIMS,
     LP_SEG_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
-    PWL_BINARY_SUFFIX,
+    PWL_BINARY_ORDER_SUFFIX,
     PWL_CONVEX_SUFFIX,
+    PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
-    PWL_FILL_SUFFIX,
-    PWL_INC_BINARY_SUFFIX,
-    PWL_INC_LINK_SUFFIX,
-    PWL_INC_ORDER_SUFFIX,
+    PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LINK_SUFFIX,
+    PWL_ORDER_BINARY_SUFFIX,
+    PWL_SEGMENT_BINARY_SUFFIX,
     PWL_SELECT_SUFFIX,
-    PWL_X_LINK_SUFFIX,
     SEGMENT_DIM,
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import Constraint
+    from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model
     from linopy.types import LinExprLike
+    from linopy.variables import Variables
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
@@ -52,6 +53,70 @@ SegmentsLike: TypeAlias = (
     | pd.DataFrame
     | dict[str, Sequence[Sequence[float]]]
 )
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+
+class PiecewiseFormulation:
+    """
+    Result of ``add_piecewise_formulation``.
+
+    Groups all auxiliary variables and constraints created by a single
+    piecewise formulation. Stores only names internally; ``variables``
+    and ``constraints`` properties return live views from the model.
+    """
+
+    __slots__ = ("name", "method", "variable_names", "constraint_names", "_model")
+
+    def __init__(
+        self,
+        name: str,
+        method: str,
+        variable_names: list[str],
+        constraint_names: list[str],
+        model: Model,
+    ) -> None:
+        self.name = name
+        self.method = method
+        self.variable_names = variable_names
+        self.constraint_names = constraint_names
+        self._model = model
+
+    @property
+    def variables(self) -> Variables:
+        """View of the auxiliary variables in this formulation."""
+        return self._model.variables[self.variable_names]
+
+    @property
+    def constraints(self) -> Constraints:
+        """View of the auxiliary constraints in this formulation."""
+        return self._model.constraints[self.constraint_names]
+
+    def __repr__(self) -> str:
+        # Collect user-facing dims with sizes (skip internal _ prefixed dims)
+        user_dims: dict[str, int] = {}
+        for var in self.variables.data.values():
+            for d in var.coords:
+                ds = str(d)
+                if not ds.startswith("_") and ds not in user_dims:
+                    user_dims[ds] = var.data.sizes[d]
+        dims_str = ", ".join(f"{d}: {s}" for d, s in user_dims.items())
+        header = f"PiecewiseFormulation `{self.name}`"
+        if dims_str:
+            header += f" [{dims_str}]"
+        r = f"{header} — {self.method}\n"
+        r += "  Variables:\n"
+        for vname, var in self.variables.items():
+            dims = ", ".join(str(d) for d in var.coords) if var.coords else ""
+            r += f"    * {vname} ({dims})\n" if dims else f"    * {vname}\n"
+        r += "  Constraints:\n"
+        for cname, con in self.constraints.items():
+            dims = ", ".join(str(d) for d in con.coords) if con.coords else ""
+            r += f"    * {cname} ({dims})\n" if dims else f"    * {cname}\n"
+        return r
 
 
 # ---------------------------------------------------------------------------
@@ -559,13 +624,13 @@ def _broadcast_points(
 # ---------------------------------------------------------------------------
 
 
-def add_piecewise_constraints(
+def add_piecewise_formulation(
     model: Model,
     *pairs: tuple[LinExprLike, BreaksLike],
     method: Literal["sos2", "incremental", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
-) -> Constraint:
+) -> PiecewiseFormulation:
     r"""
     Add piecewise linear equality constraints.
 
@@ -576,14 +641,14 @@ def add_piecewise_constraints(
 
     Example — 2 variables::
 
-        m.add_piecewise_constraints(
+        m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
             (fuel,  [0, 36, 84, 170]),
         )
 
     Example — 3 variables (CHP plant)::
 
-        m.add_piecewise_constraints(
+        m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
             (fuel,  [0, 40, 85, 160]),
             (heat,  [0, 25, 55, 95]),
@@ -609,7 +674,7 @@ def add_piecewise_constraints(
 
     Returns
     -------
-    Constraint
+    PiecewiseFormulation
     """
     if method not in ("sos2", "incremental", "auto"):
         raise ValueError(
@@ -618,7 +683,7 @@ def add_piecewise_constraints(
 
     if len(pairs) < 2:
         raise TypeError(
-            "add_piecewise_constraints() requires at least 2 "
+            "add_piecewise_formulation() requires at least 2 "
             "(expression, breakpoints) pairs."
         )
 
@@ -680,12 +745,16 @@ def add_piecewise_constraints(
     lin_exprs = [_to_linexpr(expr) for expr in all_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
 
+    # Snapshot existing names to detect what the formulation adds
+    vars_before = set(model.variables)
+    cons_before = set(model.constraints)
+
     if disjunctive:
         if method == "incremental":
             raise ValueError(
                 "Incremental method is not supported for disjunctive constraints"
             )
-        return _add_disjunctive(
+        _add_disjunctive(
             model,
             name,
             lin_exprs,
@@ -694,18 +763,33 @@ def add_piecewise_constraints(
             bp_mask,
             active_expr,
         )
+        resolved_method = "sos2"
+    else:
+        # Continuous: stack into N-variable formulation
+        resolved_method = _add_continuous(
+            model,
+            name,
+            lin_exprs,
+            bp_list,
+            link_coords,
+            bp_mask,
+            method,
+            active_expr,
+        )
 
-    # Continuous: stack into N-variable formulation
-    return _add_continuous(
-        model,
-        name,
-        lin_exprs,
-        bp_list,
-        link_coords,
-        bp_mask,
-        method,
-        active_expr,
+    # Collect newly created variable and constraint names
+    new_vars = [n for n in model.variables if n not in vars_before]
+    new_cons = [n for n in model.constraints if n not in cons_before]
+
+    result = PiecewiseFormulation(
+        name=name,
+        method=resolved_method,
+        variable_names=new_vars,
+        constraint_names=new_cons,
+        model=model,
     )
+    model._piecewise_formulations[name] = result
+    return result
 
 
 def _stack_along_link(
@@ -729,8 +813,12 @@ def _add_continuous(
     bp_mask: DataArray | None,
     method: str,
     active: LinearExpression | None = None,
-) -> Constraint:
-    """Dispatch continuous piecewise equality to SOS2 or incremental."""
+) -> str:
+    """
+    Dispatch continuous piecewise equality to SOS2 or incremental.
+
+    Returns the resolved method name ("sos2" or "incremental").
+    """
     from linopy.expressions import LinearExpression
 
     link_dim = "_pwl_var"
@@ -774,7 +862,7 @@ def _add_continuous(
     rhs = active if active is not None else 1
 
     if method == "sos2":
-        return _add_sos2(
+        _add_sos2(
             model,
             name,
             target_expr,
@@ -783,8 +871,9 @@ def _add_continuous(
             link_dim,
             rhs,
         )
+        return method
     else:
-        return _add_incremental(
+        _add_incremental(
             model,
             name,
             target_expr,
@@ -794,6 +883,7 @@ def _add_continuous(
             rhs,
             active,
         )
+        return method
 
 
 def _add_sos2(
@@ -813,7 +903,7 @@ def _add_sos2(
 
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
 
     lambda_var = model.add_variables(
         lower=0, upper=1, coords=lambda_coords, name=lambda_name, mask=lambda_mask
@@ -840,11 +930,11 @@ def _add_incremental(
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
 
     delta_name = f"{name}{PWL_DELTA_SUFFIX}"
-    fill_name = f"{name}{PWL_FILL_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
-    inc_binary_name = f"{name}{PWL_INC_BINARY_SUFFIX}"
-    inc_link_name = f"{name}{PWL_INC_LINK_SUFFIX}"
-    inc_order_name = f"{name}{PWL_INC_ORDER_SUFFIX}"
+    fill_order_name = f"{name}{PWL_FILL_ORDER_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
+    order_binary_name = f"{name}{PWL_ORDER_BINARY_SUFFIX}"
+    delta_bound_name = f"{name}{PWL_DELTA_BOUND_SUFFIX}"
+    binary_order_name = f"{name}{PWL_BINARY_ORDER_SUFFIX}"
 
     n_segments = stacked_bp.sizes[dim] - 1
     seg_dim = f"{dim}_seg"
@@ -873,17 +963,17 @@ def _add_incremental(
         model.add_constraints(delta_var <= active, name=active_bound_name)
 
     binary_var = model.add_variables(
-        binary=True, coords=delta_coords, name=inc_binary_name, mask=delta_mask
+        binary=True, coords=delta_coords, name=order_binary_name, mask=delta_mask
     )
-    model.add_constraints(delta_var <= binary_var, name=inc_link_name)
+    model.add_constraints(delta_var <= binary_var, name=delta_bound_name)
 
     if n_segments >= 2:
         delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
         delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
-        model.add_constraints(delta_hi <= delta_lo, name=fill_name)
+        model.add_constraints(delta_hi <= delta_lo, name=fill_order_name)
 
         binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
-        model.add_constraints(binary_hi <= delta_lo, name=inc_order_name)
+        model.add_constraints(binary_hi <= delta_lo, name=binary_order_name)
 
     bp0 = stacked_bp.isel({dim: 0})
     bp0_term: DataArray | LinearExpression = bp0
@@ -945,11 +1035,11 @@ def _add_disjunctive(
         lambda_mask = agg_mask
         binary_mask = agg_mask.any(dim=dim)
 
-    binary_name = f"{name}{PWL_BINARY_SUFFIX}"
+    binary_name = f"{name}{PWL_SEGMENT_BINARY_SUFFIX}"
     select_name = f"{name}{PWL_SELECT_SUFFIX}"
     lambda_name = f"{name}{PWL_LAMBDA_SUFFIX}"
     convex_name = f"{name}{PWL_CONVEX_SUFFIX}"
-    link_name = f"{name}{PWL_X_LINK_SUFFIX}"
+    link_name = f"{name}{PWL_LINK_SUFFIX}"
 
     binary_var = model.add_variables(
         binary=True, coords=binary_coords, name=binary_name, mask=binary_mask
