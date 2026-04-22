@@ -763,10 +763,7 @@ def add_piecewise_formulation(
             f"got '{method}'"
         )
     if method == "lp" and sign == EQUAL:
-        raise ValueError(
-            "method='lp' requires sign='<=' or '>='. "
-            "LP tangent lines cannot enforce equality on a piecewise curve."
-        )
+        raise ValueError("method='lp' requires sign='<=' or '>='.")
 
     if len(pairs) < 2:
         raise TypeError(
@@ -952,25 +949,15 @@ def _add_continuous(
                 "method='lp' requires strictly monotonic x breakpoints."
             )
         convexity = _detect_convexity(x_pts, y_pts)
-        _hint = (
-            "Use method='auto' to automatically fall back to SOS2/incremental "
-            "(which give an exact bound). If you specifically want the chord "
-            "expressions (e.g. for a custom outer approximation), call "
-            "linopy.tangent_lines() directly."
-        )
         if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
             raise ValueError(
-                f"method='lp' with sign='<=' is only valid for a concave or "
-                f"linear curve — tangent lines on a '{convexity}' curve "
-                f"produce a feasible region that is a strict subset of the "
-                f"true hypograph (i.e. wrong, not merely loose). " + _hint
+                f"method='lp' with sign='<=' requires concave or linear "
+                f"curvature; got '{convexity}'. Use method='auto'."
             )
         if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
             raise ValueError(
-                f"method='lp' with sign='>=' is only valid for a convex or "
-                f"linear curve — tangent lines on a '{convexity}' curve "
-                f"produce a feasible region that is a strict subset of the "
-                f"true epigraph (i.e. wrong, not merely loose). " + _hint
+                f"method='lp' with sign='>=' requires convex or linear "
+                f"curvature; got '{convexity}'. Use method='auto'."
             )
         _add_lp(model, name, x_expr, y_expr, x_pts, y_pts, sign)
         return "lp"

@@ -1403,7 +1403,7 @@ class TestSignParameter:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
-        with pytest.raises(ValueError, match="LP"):
+        with pytest.raises(ValueError, match="method='lp'"):
             m.add_piecewise_formulation((x, [0, 10, 50]), (y, [0, 5, 20]), method="lp")
 
     def test_auto_picks_lp_for_concave_le(self) -> None:
