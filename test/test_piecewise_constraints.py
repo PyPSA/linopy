@@ -1574,3 +1574,40 @@ class TestSignParameter:
         # all methods should max out at f(15) = 25
         for method, val in solutions.items():
             assert abs(val - 25.0) < 1e-4, f"{method}: got {val}"
+
+    def test_convexity_invariant_to_x_direction(self) -> None:
+        """Decreasing x must classify the same curve identically to ascending x."""
+        m_asc = Model()
+        xa = m_asc.add_variables(name="x")
+        ya = m_asc.add_variables(name="y")
+        f_asc = m_asc.add_piecewise_formulation(
+            (ya, [0, 20, 30, 35]),
+            (xa, [0, 10, 20, 30]),
+            sign=">=",
+        )
+        m_desc = Model()
+        xd = m_desc.add_variables(name="x")
+        yd = m_desc.add_variables(name="y")
+        f_desc = m_desc.add_piecewise_formulation(
+            (yd, [35, 30, 20, 0]),
+            (xd, [30, 20, 10, 0]),
+            sign=">=",
+        )
+        assert f_asc.convexity == f_desc.convexity == "concave"
+        # concave + >= must fall back from LP
+        assert f_asc.method != "lp"
+        assert f_desc.method != "lp"
+
+    def test_lp_rejects_decreasing_x_concave_ge(self) -> None:
+        """Explicit LP on a concave curve with sign='>=' must raise, even
+        when x is specified in decreasing order (bug-1 regression)."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="convex"):
+            m.add_piecewise_formulation(
+                (y, [35, 30, 20, 0]),  # same concave curve
+                (x, [30, 20, 10, 0]),  # decreasing x
+                sign=">=",
+                method="lp",
+            )

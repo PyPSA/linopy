@@ -605,29 +605,43 @@ def _detect_convexity(
     """
     Classify the shape of a piecewise function from its breakpoints.
 
-    Requires strictly increasing ``x_points``. Computes segment slopes and
-    checks the sign of second differences. Returns one of the strings in
-    :data:`PWL_CONVEXITIES`.
+    Sorts each entity's breakpoints by ``x`` ascending (NaN trailing) so
+    that decreasing-x input produces the same classification as
+    increasing-x.  Returns one of the strings in :data:`PWL_CONVEXITIES`.
     """
-    dx = x_points.diff(BREAKPOINT_DIM)
-    dy = y_points.diff(BREAKPOINT_DIM)
-    valid = ~(dx.isnull() | dy.isnull() | (dx == 0))
-    slopes = dy / dx
+    bp_axis = x_points.dims.index(BREAKPOINT_DIM)
+    x_arr = np.moveaxis(x_points.values, bp_axis, -1)
+    y_arr = np.moveaxis(y_points.values, bp_axis, -1)
+    x_flat = x_arr.reshape(-1, x_arr.shape[-1])
+    y_flat = y_arr.reshape(-1, y_arr.shape[-1])
 
-    if slopes.sizes[BREAKPOINT_DIM] < 2:
-        return "linear"
-
-    slope_diffs = slopes.diff(BREAKPOINT_DIM)
-    valid_lo = valid.isel({BREAKPOINT_DIM: slice(None, -1)})
-    valid_hi = valid.isel({BREAKPOINT_DIM: slice(1, None)})
-    valid_diffs = valid_lo.values & valid_hi.values
-    sd_values = slope_diffs.values
-    if valid_diffs.size == 0 or not valid_diffs.any():
-        return "linear"
-    valid_sd = sd_values[valid_diffs]
     tol = 1e-10
-    all_nonneg = bool(np.all(valid_sd >= -tol))
-    all_nonpos = bool(np.all(valid_sd <= tol))
+    all_nonneg = True
+    all_nonpos = True
+    has_curvature_data = False
+
+    for x_i, y_i in zip(x_flat, y_flat):
+        valid = ~(np.isnan(x_i) | np.isnan(y_i))
+        if valid.sum() < 3:
+            continue
+        x_v = x_i[valid]
+        y_v = y_i[valid]
+        order = np.argsort(x_v)
+        xs = x_v[order]
+        ys = y_v[order]
+        dx = np.diff(xs)
+        if not (dx > 0).all():
+            continue
+        slopes = np.diff(ys) / dx
+        sd = np.diff(slopes)
+        if sd.size == 0:
+            continue
+        has_curvature_data = True
+        all_nonneg &= bool(np.all(sd >= -tol))
+        all_nonpos &= bool(np.all(sd <= tol))
+
+    if not has_curvature_data:
+        return "linear"
     if all_nonneg and all_nonpos:
         return "linear"
     if all_nonneg:
