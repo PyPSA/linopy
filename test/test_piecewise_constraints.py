@@ -1644,6 +1644,32 @@ class TestSignParameter:
                 method="lp",
             )
 
+    @pytest.mark.skipif(
+        not _sos2_solvers, reason="no SOS2-capable solver available"
+    )
+    def test_active_off_with_sign_le_leaves_lower_open(self) -> None:
+        """Documents the asymmetry between sign='==' and sign='<=' under
+        active=0: equality forces y=0, but '<=' only bounds y ≤ 0 — the
+        lower side still comes from the variable's own bounds.  A future
+        change to add the complementary bound automatically should flip
+        this test."""
+        m = Model()
+        x = m.add_variables(lower=-100, upper=100, name="x")
+        y = m.add_variables(lower=-100, upper=100, name="y")
+        active = m.add_variables(binary=True, name="active")
+        m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),
+            sign="<=",
+            method="sos2",
+            active=active,
+        )
+        m.add_constraints(active == 0)
+        m.add_objective(y)  # minimize y
+        m.solve()
+        # y hits its own lower bound, not 0 — matches docstring note.
+        assert m.solution["y"].item() == pytest.approx(-100.0, abs=1e-6)
+
 
 def _bp(values: list[float]) -> xr.DataArray:
     """Small helper: plain 1-D breakpoint DataArray for convexity tests."""

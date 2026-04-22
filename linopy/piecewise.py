@@ -773,6 +773,15 @@ def add_piecewise_formulation(
         Binary variable that gates the piecewise function.  When
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
+
+        With ``sign="=="`` (the default), the output is then pinned to
+        ``0``.  With ``sign="<="`` / ``">="``, deactivation only pushes
+        the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
+        respectively) — the complementary bound still comes from the
+        output variable's own lower/upper.  If you need strict ``y=0``
+        when deactivated under a non-equality sign, add that equality
+        yourself (e.g., ``y >= 0`` or couple ``y`` with ``active``
+        through a big-M).
     name : str, optional
         Base name for generated variables/constraints.
 
