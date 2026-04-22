@@ -29,7 +29,6 @@ from linopy.constants import (
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CHORD_SUFFIX,
     PWL_CONVEX_SUFFIX,
-    PWL_CONVEXITIES,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_DOMAIN_HI_SUFFIX,
@@ -800,9 +799,7 @@ def add_piecewise_formulation(
     if sign not in SIGNS:
         raise ValueError(f"sign must be one of {sorted(SIGNS)}, got '{sign}'")
     if method not in PWL_METHODS:
-        raise ValueError(
-            f"method must be one of {sorted(PWL_METHODS)}, got '{method}'"
-        )
+        raise ValueError(f"method must be one of {sorted(PWL_METHODS)}, got '{method}'")
     if method == "lp" and sign == EQUAL:
         raise ValueError("method='lp' requires sign='<=' or '>='.")
 
@@ -881,8 +878,7 @@ def add_piecewise_formulation(
             )
         if method == "lp":
             raise ValueError(
-                "method='lp' is not supported for disjunctive "
-                f"(segment) breakpoints"
+                "method='lp' is not supported for disjunctive (segment) breakpoints"
             )
         _add_disjunctive(
             model,
@@ -917,7 +913,11 @@ def add_piecewise_formulation(
         logger.info(
             "piecewise formulation '%s': auto selected method='%s' "
             "(sign='%s', %d pair%s)",
-            name, resolved_method, sign, len(pairs), "" if len(pairs) == 1 else "s",
+            name,
+            resolved_method,
+            sign,
+            len(pairs),
+            "" if len(pairs) == 1 else "s",
         )
 
     # Compute convexity when well-defined: exactly two tuples (y, x),
@@ -958,7 +958,8 @@ def _lp_eligibility(
     sign: str,
     active: LinearExpression | None,
 ) -> tuple[bool, str]:
-    """Check whether LP tangent-lines dispatch is applicable.
+    """
+    Check whether LP tangent-lines dispatch is applicable.
 
     Returns ``(True, "")`` if LP is applicable, else ``(False, reason)``
     with a short string describing why.  Used for both auto-dispatch
@@ -1087,9 +1088,7 @@ def _try_lp(
             raise ValueError("method='lp' is not compatible with active=...")
         y_pts, x_pts = bp_list[0], bp_list[1]
         if not _check_strict_monotonicity(x_pts):
-            raise ValueError(
-                "method='lp' requires strictly monotonic x breakpoints."
-            )
+            raise ValueError("method='lp' requires strictly monotonic x breakpoints.")
         convexity = _detect_convexity(x_pts, y_pts)
         if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
             raise ValueError(
