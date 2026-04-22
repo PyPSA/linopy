@@ -1359,14 +1359,15 @@ def _add_signed_link(
     rhs: LinearExpression,
     sign: str,
     name: str,
+    mask: DataArray | None = None,
 ) -> Constraint:
     """Add a link constraint with the requested sign."""
     if sign == EQUAL:
-        return model.add_constraints(lhs == rhs, name=name)
+        return model.add_constraints(lhs == rhs, name=name, mask=mask)
     elif sign == LESS_EQUAL:
-        return model.add_constraints(lhs <= rhs, name=name)
+        return model.add_constraints(lhs <= rhs, name=name, mask=mask)
     else:  # ">="
-        return model.add_constraints(lhs >= rhs, name=name)
+        return model.add_constraints(lhs >= rhs, name=name, mask=mask)
 
 
 def _add_lp(
@@ -1382,25 +1383,25 @@ def _add_lp(
     LP tangent-line formulation (no auxiliary variables).
 
     Adds one chord constraint per segment plus domain bounds on x.
+    Trailing-NaN segments (per-entity short curves) are masked out so
+    they do not contribute spurious ``y ≤ 0`` constraints.
     """
-    dx = x_points.diff(BREAKPOINT_DIM)
-    dy = y_points.diff(BREAKPOINT_DIM)
-    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
+    # Per-segment validity: both endpoints must be non-NaN.
+    bp_valid = ~(x_points.isnull() | y_points.isnull())
+    seg_count = x_points.sizes[BREAKPOINT_DIM] - 1
+    seg_index = np.arange(seg_count)
+    seg_mask = bp_valid.isel(
+        {BREAKPOINT_DIM: slice(None, -1)}
+    ) & bp_valid.isel({BREAKPOINT_DIM: slice(1, None)}).values
+    seg_mask = _rename_to_segments(seg_mask, seg_index)
+    if bool(seg_mask.all()):
+        seg_mask = None  # no masking needed
 
-    slopes = _rename_to_segments(dy / dx, seg_index)
-    x_base = _rename_to_segments(
-        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
-    )
-    y_base = _rename_to_segments(
-        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
-    )
-    intercepts = y_base - slopes * x_base
-    tangents = slopes * x_expr + intercepts
-
+    tangents = tangent_lines(x_expr, x_points, y_points)
     lp_name = f"{name}{PWL_LP_SUFFIX}"
-    _add_signed_link(model, y_expr, tangents, sign, lp_name)
+    _add_signed_link(model, y_expr, tangents, sign, lp_name, mask=seg_mask)
 
-    # Domain bounds: x ∈ [x_min, x_max]
+    # Domain bounds: x ∈ [x_min, x_max] (skipna by default).
     x_min = x_points.min(dim=BREAKPOINT_DIM)
     x_max = x_points.max(dim=BREAKPOINT_DIM)
     model.add_constraints(x_expr >= x_min, name=f"{name}{PWL_DOMAIN_LO_SUFFIX}")
