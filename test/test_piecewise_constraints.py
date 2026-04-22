@@ -1680,6 +1680,30 @@ class TestSignParameter:
     @pytest.mark.skipif(
         not _sos2_solvers, reason="no SOS2-capable solver available"
     )
+    def test_active_off_with_sign_le_and_lower_zero_pins_output(self) -> None:
+        """Docstring recipe: with ``y.lower = 0`` (the common case for
+        fuel/cost/heat outputs), the sign='<=' + active=0 asymmetry
+        disappears — the variable bound combined with y ≤ 0 forces
+        y = 0 automatically."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=100, name="y")  # the recipe
+        active = m.add_variables(binary=True, name="active")
+        m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),
+            sign="<=",
+            method="sos2",
+            active=active,
+        )
+        m.add_constraints(active == 0)
+        m.add_objective(y, sense="max")  # try to push y up
+        m.solve()
+        assert m.solution["y"].item() == pytest.approx(0.0, abs=1e-6)
+
+    @pytest.mark.skipif(
+        not _sos2_solvers, reason="no SOS2-capable solver available"
+    )
     def test_active_off_with_sign_le_disjunctive(self) -> None:
         """Same asymmetry applies to the disjunctive (segments) path."""
         m = Model()

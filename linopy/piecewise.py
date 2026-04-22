@@ -778,10 +778,13 @@ def add_piecewise_formulation(
         ``0``.  With ``sign="<="`` / ``">="``, deactivation only pushes
         the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
         respectively) — the complementary bound still comes from the
-        output variable's own lower/upper.  If you need strict ``y=0``
-        when deactivated under a non-equality sign, add that equality
-        yourself (e.g., ``y >= 0`` or couple ``y`` with ``active``
-        through a big-M).
+        output variable's own lower/upper.  In the common case where
+        the output is naturally non-negative (fuel, cost, heat, …),
+        just set ``lower=0`` on that variable: combined with the
+        ``y ≤ 0`` constraint from deactivation, this forces ``y = 0``
+        automatically.  For outputs that genuinely need both signs you
+        must add the complementary bound yourself (e.g., a big-M
+        coupling ``y`` with ``active``).
     name : str, optional
         Base name for generated variables/constraints.
 
