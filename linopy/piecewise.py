@@ -985,7 +985,8 @@ def _lp_eligibility(
 
 @dataclass
 class _PwlLinks:
-    """Packaged link expressions for a SOS2/incremental/disjunctive builder.
+    """
+    Packaged link expressions for a SOS2/incremental/disjunctive builder.
 
     ``stacked_bp`` spans *all* tuples — used to size lambda/delta variables.
     ``eq_expr`` / ``eq_bp`` form the equality link (stacks all tuples when
@@ -1014,16 +1015,16 @@ def _build_links(
     sign: str,
     bp_mask: DataArray | None,
 ) -> _PwlLinks:
-    """Split (or stack) ``lin_exprs``/``bp_list`` into the equality and
-    signed link components dictated by ``sign``."""
+    """
+    Split (or stack) ``lin_exprs``/``bp_list`` into the equality and
+    signed link components dictated by ``sign``.
+    """
     from linopy.expressions import LinearExpression
 
     stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
 
     if sign == EQUAL:
-        eq_data = _stack_along_link(
-            [e.data for e in lin_exprs], link_coords, link_dim
-        )
+        eq_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
         return _PwlLinks(
             stacked_bp=stacked_bp,
             link_dim=link_dim,
@@ -1045,9 +1046,7 @@ def _build_links(
             [e.data for e in inputs_exprs], inputs_coords, link_dim
         )
         eq_expr: LinearExpression | None = LinearExpression(eq_data, model)
-        eq_bp: DataArray | None = _stack_along_link(
-            inputs_bp, inputs_coords, link_dim
-        )
+        eq_bp: DataArray | None = _stack_along_link(inputs_bp, inputs_coords, link_dim)
     else:
         eq_expr = None
         eq_bp = None
@@ -1073,7 +1072,8 @@ def _try_lp(
     sign: str,
     active: LinearExpression | None,
 ) -> bool:
-    """Dispatch the LP formulation if requested/eligible.
+    """
+    Dispatch the LP formulation if requested/eligible.
 
     Returns ``True`` when LP was built (caller should return ``"lp"``),
     ``False`` when the caller should fall through to SOS2/incremental.
@@ -1107,21 +1107,29 @@ def _try_lp(
         ok, reason = _lp_eligibility(lin_exprs, bp_list, sign, active)
         if ok:
             _add_lp(
-                model, name, lin_exprs[1], lin_exprs[0],
-                bp_list[1], bp_list[0], sign,
+                model,
+                name,
+                lin_exprs[1],
+                lin_exprs[0],
+                bp_list[1],
+                bp_list[0],
+                sign,
             )
             return True
         logger.info(
             "piecewise formulation '%s': LP not applicable (%s); "
             "will use SOS2/incremental instead",
-            name, reason,
+            name,
+            reason,
         )
     return False
 
 
 def _resolve_sos2_vs_incremental(method: str, stacked_bp: DataArray) -> str:
-    """Validate and (for ``method="auto"``) pick between SOS2 and
-    incremental based on monotonicity and NaN layout."""
+    """
+    Validate and (for ``method="auto"``) pick between SOS2 and
+    incremental based on monotonicity and NaN layout.
+    """
     trailing_nan_only = _has_trailing_nan_only(stacked_bp)
     is_monotonic = _check_strict_monotonicity(stacked_bp)
 
@@ -1190,16 +1198,21 @@ def _add_sos2(
     links: _PwlLinks,
     rhs: LinearExpression | int,
 ) -> None:
-    """SOS2 formulation.  ``links.eq_expr`` is the equality side;
-    ``links.signed_expr`` (if any) is the output-side link."""
+    """
+    SOS2 formulation.  ``links.eq_expr`` is the equality side;
+    ``links.signed_expr`` (if any) is the output-side link.
+    """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
     extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
     lambda_coords = extra + [pd.Index(stacked_bp.coords[dim].values, name=dim)]
 
     lambda_var = model.add_variables(
-        lower=0, upper=1, coords=lambda_coords,
-        name=f"{name}{PWL_LAMBDA_SUFFIX}", mask=links.bp_mask,
+        lower=0,
+        upper=1,
+        coords=lambda_coords,
+        name=f"{name}{PWL_LAMBDA_SUFFIX}",
+        mask=links.bp_mask,
     )
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
     model.add_constraints(
@@ -1215,7 +1228,10 @@ def _add_sos2(
     if links.signed_expr is not None and links.signed_bp is not None:
         output_weighted = (lambda_var * links.signed_bp).sum(dim=dim)
         _add_signed_link(
-            model, links.signed_expr, output_weighted, links.sign,
+            model,
+            links.signed_expr,
+            output_weighted,
+            links.sign,
             f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
         )
 
@@ -1226,8 +1242,10 @@ def _add_incremental(
     links: _PwlLinks,
     active: LinearExpression | None,
 ) -> None:
-    """Incremental formulation.  ``links.eq_expr`` is the equality side;
-    ``links.signed_expr`` (if any) is the output-side link."""
+    """
+    Incremental formulation.  ``links.eq_expr`` is the equality side;
+    ``links.signed_expr`` (if any) is the output-side link.
+    """
     dim = BREAKPOINT_DIM
     stacked_bp = links.stacked_bp
     extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
@@ -1247,8 +1265,11 @@ def _add_incremental(
         delta_mask = None
 
     delta_var = model.add_variables(
-        lower=0, upper=1, coords=delta_coords,
-        name=f"{name}{PWL_DELTA_SUFFIX}", mask=delta_mask,
+        lower=0,
+        upper=1,
+        coords=delta_coords,
+        name=f"{name}{PWL_DELTA_SUFFIX}",
+        mask=delta_mask,
     )
 
     if active is not None:
@@ -1257,8 +1278,10 @@ def _add_incremental(
         )
 
     binary_var = model.add_variables(
-        binary=True, coords=delta_coords,
-        name=f"{name}{PWL_ORDER_BINARY_SUFFIX}", mask=delta_mask,
+        binary=True,
+        coords=delta_coords,
+        name=f"{name}{PWL_ORDER_BINARY_SUFFIX}",
+        mask=delta_mask,
     )
     model.add_constraints(
         delta_var <= binary_var, name=f"{name}{PWL_DELTA_BOUND_SUFFIX}"
@@ -1292,8 +1315,11 @@ def _add_incremental(
 
     if links.signed_expr is not None and links.signed_bp is not None:
         _add_signed_link(
-            model, links.signed_expr, _incremental_weighted(links.signed_bp),
-            links.sign, f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
+            model,
+            links.signed_expr,
+            _incremental_weighted(links.signed_bp),
+            links.sign,
+            f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
         )
 
 
@@ -1307,9 +1333,11 @@ def _add_disjunctive(
     sign: str,
     active: LinearExpression | None = None,
 ) -> None:
-    """Disjunctive SOS2 formulation.  Uses the shared ``_build_links``
+    """
+    Disjunctive SOS2 formulation.  Uses the shared ``_build_links``
     split: equality on inputs (all tuples when sign='=='), signed link
-    on the first tuple when sign != '=='."""
+    on the first tuple when sign != '=='.
+    """
     link_dim = "_pwl_var"
     links = _build_links(
         model, lin_exprs, bp_list, link_coords, link_dim, sign, bp_mask
@@ -1335,8 +1363,10 @@ def _add_disjunctive(
     binary_mask = bp_mask.any(dim=dim) if bp_mask is not None else None
 
     binary_var = model.add_variables(
-        binary=True, coords=binary_coords,
-        name=f"{name}{PWL_SEGMENT_BINARY_SUFFIX}", mask=binary_mask,
+        binary=True,
+        coords=binary_coords,
+        name=f"{name}{PWL_SEGMENT_BINARY_SUFFIX}",
+        mask=binary_mask,
     )
     rhs = active if active is not None else 1
     model.add_constraints(
@@ -1345,8 +1375,11 @@ def _add_disjunctive(
     )
 
     lambda_var = model.add_variables(
-        lower=0, upper=1, coords=lambda_coords,
-        name=f"{name}{PWL_LAMBDA_SUFFIX}", mask=bp_mask,
+        lower=0,
+        upper=1,
+        coords=lambda_coords,
+        name=f"{name}{PWL_LAMBDA_SUFFIX}",
+        mask=bp_mask,
     )
     model.add_sos_constraints(lambda_var, sos_type=2, sos_dim=dim)
     model.add_constraints(
@@ -1361,11 +1394,12 @@ def _add_disjunctive(
         )
 
     if links.signed_expr is not None and links.signed_bp is not None:
-        output_weighted = (lambda_var * links.signed_bp).sum(
-            dim=[SEGMENT_DIM, dim]
-        )
+        output_weighted = (lambda_var * links.signed_bp).sum(dim=[SEGMENT_DIM, dim])
         _add_signed_link(
-            model, links.signed_expr, output_weighted, links.sign,
+            model,
+            links.signed_expr,
+            output_weighted,
+            links.sign,
             f"{name}{PWL_OUTPUT_LINK_SUFFIX}",
         )
 
@@ -1416,7 +1450,11 @@ def _add_lp(
 
     tangents = tangent_lines(x_expr, x_points, y_points)
     _add_signed_link(
-        model, y_expr, tangents, sign, f"{name}{PWL_CHORD_SUFFIX}",
+        model,
+        y_expr,
+        tangents,
+        sign,
+        f"{name}{PWL_CHORD_SUFFIX}",
         mask=seg_mask,
     )
 

@@ -601,12 +601,12 @@ class TestDisjunctive:
         link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
         assert "_pwl_var" in [str(d) for d in link.dims]
 
-    @pytest.mark.skipif(
-        not _sos2_solvers, reason="no SOS2-capable solver available"
-    )
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     def test_sign_le_respected_by_solver(self) -> None:
-        """Disjunctive + sign='<=' must actually bound the solved output
-        (not just structurally wire up the output link)."""
+        """
+        Disjunctive + sign='<=' must actually bound the solved output
+        (not just structurally wire up the output link).
+        """
         m = Model()
         x = m.add_variables(lower=0, upper=30, name="x")
         y = m.add_variables(lower=0, upper=40, name="y")
@@ -1621,17 +1621,15 @@ class TestSignParameter:
         assert f_desc.method != "lp"
 
     def test_lp_per_entity_nan_padding(self) -> None:
-        """Per-entity NaN-padded breakpoints with method='lp': padded
+        """
+        Per-entity NaN-padded breakpoints with method='lp': padded
         segments must be masked out so they don't create spurious
-        ``y ≤ 0`` constraints (bug-2 regression)."""
+        ``y ≤ 0`` constraints (bug-2 regression).
+        """
         from linopy.piecewise import breakpoints
 
-        bp_y = pd.DataFrame(
-            [[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"]
-        )
-        bp_x = pd.DataFrame(
-            [[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"]
-        )
+        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
+        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
         results: dict[str, float] = {}
         for method in ["lp", "sos2"]:
             m = Model()
@@ -1653,8 +1651,10 @@ class TestSignParameter:
         assert abs(results["sos2"] - results["lp"]) < 1e-3
 
     def test_lp_rejects_decreasing_x_concave_ge(self) -> None:
-        """Explicit LP on a concave curve with sign='>=' must raise, even
-        when x is specified in decreasing order (bug-1 regression)."""
+        """
+        Explicit LP on a concave curve with sign='>=' must raise, even
+        when x is specified in decreasing order (bug-1 regression).
+        """
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
@@ -1666,20 +1666,16 @@ class TestSignParameter:
                 method="lp",
             )
 
-    @pytest.mark.skipif(
-        not _sos2_solvers, reason="no SOS2-capable solver available"
-    )
-    @pytest.mark.parametrize(
-        "method", ["sos2", "incremental"]
-    )
-    def test_active_off_with_sign_le_leaves_lower_open(
-        self, method: str
-    ) -> None:
-        """Documents the asymmetry between sign='==' and sign='<=' under
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
+    @pytest.mark.parametrize("method", ["sos2", "incremental"])
+    def test_active_off_with_sign_le_leaves_lower_open(self, method: str) -> None:
+        """
+        Documents the asymmetry between sign='==' and sign='<=' under
         active=0: equality forces y=0, but '<=' only bounds y ≤ 0 — the
         lower side still comes from the variable's own bounds.  Verified
         uniform across sos2 and incremental.  A future change to add the
-        complementary bound automatically should flip this test."""
+        complementary bound automatically should flip this test.
+        """
         m = Model()
         x = m.add_variables(lower=-100, upper=100, name="x")
         y = m.add_variables(lower=-100, upper=100, name="y")
@@ -1699,14 +1695,14 @@ class TestSignParameter:
         # Input x is still pinned to 0 by the equality input link.
         assert m.solution["x"].item() == pytest.approx(0.0, abs=1e-6)
 
-    @pytest.mark.skipif(
-        not _sos2_solvers, reason="no SOS2-capable solver available"
-    )
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     def test_active_off_with_sign_le_and_lower_zero_pins_output(self) -> None:
-        """Docstring recipe: with ``y.lower = 0`` (the common case for
+        """
+        Docstring recipe: with ``y.lower = 0`` (the common case for
         fuel/cost/heat outputs), the sign='<=' + active=0 asymmetry
         disappears — the variable bound combined with y ≤ 0 forces
-        y = 0 automatically."""
+        y = 0 automatically.
+        """
         m = Model()
         x = m.add_variables(lower=0, upper=30, name="x")
         y = m.add_variables(lower=0, upper=100, name="y")  # the recipe
@@ -1723,9 +1719,7 @@ class TestSignParameter:
         m.solve()
         assert m.solution["y"].item() == pytest.approx(0.0, abs=1e-6)
 
-    @pytest.mark.skipif(
-        not _sos2_solvers, reason="no SOS2-capable solver available"
-    )
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     def test_active_off_with_sign_le_disjunctive(self) -> None:
         """Same asymmetry applies to the disjunctive (segments) path."""
         m = Model()
@@ -1745,8 +1739,10 @@ class TestSignParameter:
         assert m.solution["x"].item() == pytest.approx(0.0, abs=1e-6)
 
     def test_lp_active_explicit_raises(self) -> None:
-        """method='lp' + active is ValueError (silently ignoring active
-        would produce a wrong model)."""
+        """
+        method='lp' + active is ValueError (silently ignoring active
+        would produce a wrong model).
+        """
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
@@ -1761,8 +1757,10 @@ class TestSignParameter:
             )
 
     def test_lp_accepts_linear_curve(self) -> None:
-        """A linear curve is both convex and concave per detection, so
-        LP must accept it with either sign and build the formulation."""
+        """
+        A linear curve is both convex and concave per detection, so
+        LP must accept it with either sign and build the formulation.
+        """
         for sign in ["<=", ">="]:
             m = Model()
             x = m.add_variables(lower=0, upper=30, name="x")
@@ -1779,8 +1777,10 @@ class TestSignParameter:
     def test_auto_logs_when_lp_is_skipped(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """method='auto' on a non-LP-eligible case emits an INFO log
-        explaining why LP was passed over."""
+        """
+        method='auto' on a non-LP-eligible case emits an INFO log
+        explaining why LP was passed over.
+        """
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
@@ -1794,8 +1794,10 @@ class TestSignParameter:
 
     @pytest.mark.skipif(not _any_solvers, reason="no solver available")
     def test_lp_domain_bound_infeasible_when_x_out_of_range(self) -> None:
-        """LP's x ∈ [x_min, x_max] domain bound bites — forcing x beyond
-        the breakpoint range must make the model infeasible."""
+        """
+        LP's x ∈ [x_min, x_max] domain bound bites — forcing x beyond
+        the breakpoint range must make the model infeasible.
+        """
         m = Model()
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(lower=0, upper=100, name="y")
@@ -1812,15 +1814,13 @@ class TestSignParameter:
 
     @pytest.mark.skipif(not _any_solvers, reason="no solver available")
     def test_lp_matches_sos2_on_multi_dim_variables(self) -> None:
-        """LP with an entity dimension beyond BREAKPOINT_DIM must match
-        the SOS2 solution per entity."""
+        """
+        LP with an entity dimension beyond BREAKPOINT_DIM must match
+        the SOS2 solution per entity.
+        """
         entities = pd.Index(["a", "b"], name="entity")
-        bp_x = pd.DataFrame(
-            [[0, 10, 20, 30], [0, 10, 20, 30]], index=["a", "b"]
-        )
-        bp_y = pd.DataFrame(
-            [[0, 20, 30, 35], [0, 15, 25, 30]], index=["a", "b"]
-        )
+        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 10, 20, 30]], index=["a", "b"])
+        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 15, 25, 30]], index=["a", "b"])
         ys: dict[str, xr.DataArray] = {}
         for method in ["lp", "sos2"]:
             m = Model()
@@ -1844,8 +1844,10 @@ class TestSignParameter:
 
     @pytest.mark.skipif(not _any_solvers, reason="no solver available")
     def test_lp_consistency_with_sos2_both_directions(self) -> None:
-        """Extends test_lp_consistency_with_sos2 to also probe the
-        minimisation side of y ≤ f(x)."""
+        """
+        Extends test_lp_consistency_with_sos2 to also probe the
+        minimisation side of y ≤ f(x).
+        """
         x_pts = [0, 10, 20, 30]
         y_pts = [0, 20, 30, 35]  # concave
         for obj_sign in [-1.0, +1.0]:
@@ -1922,17 +1924,13 @@ class TestDetectConvexity:
 
         # convex
         assert _detect_convexity(_bp([0, 1, 2, 3]), _bp([0, 1, 4, 9])) == "convex"
-        assert (
-            _detect_convexity(_bp([3, 2, 1, 0]), _bp([9, 4, 1, 0])) == "convex"
-        )
+        assert _detect_convexity(_bp([3, 2, 1, 0]), _bp([9, 4, 1, 0])) == "convex"
         # concave
         assert (
-            _detect_convexity(_bp([0, 10, 20, 30]), _bp([0, 20, 30, 35]))
-            == "concave"
+            _detect_convexity(_bp([0, 10, 20, 30]), _bp([0, 20, 30, 35])) == "concave"
         )
         assert (
-            _detect_convexity(_bp([30, 20, 10, 0]), _bp([35, 30, 20, 0]))
-            == "concave"
+            _detect_convexity(_bp([30, 20, 10, 0]), _bp([35, 30, 20, 0])) == "concave"
         )
 
     def test_trailing_nan_ignored(self) -> None:
@@ -1961,12 +1959,8 @@ class TestDetectConvexity:
         """Same concave curve, one entity ascending, one descending."""
         from linopy.piecewise import _detect_convexity
 
-        bp_x = pd.DataFrame(
-            [[0, 10, 20, 30], [30, 20, 10, 0]], index=["a", "b"]
-        )
-        bp_y = pd.DataFrame(
-            [[0, 20, 30, 35], [35, 30, 20, 0]], index=["a", "b"]
-        )
+        bp_x = pd.DataFrame([[0, 10, 20, 30], [30, 20, 10, 0]], index=["a", "b"])
+        bp_y = pd.DataFrame([[0, 20, 30, 35], [35, 30, 20, 0]], index=["a", "b"])
         assert (
             _detect_convexity(
                 breakpoints(bp_x, dim="entity"),
@@ -1980,9 +1974,7 @@ class TestDetectConvexity:
         from linopy.piecewise import _detect_convexity
 
         bp_x = pd.DataFrame([[0, 1, 2, 3], [0, 1, 2, 3]], index=["a", "b"])
-        bp_y = pd.DataFrame(
-            [[0, 1, 4, 9], [0, 1, 1.5, 1.75]], index=["a", "b"]
-        )
+        bp_y = pd.DataFrame([[0, 1, 4, 9], [0, 1, 1.5, 1.75]], index=["a", "b"])
         assert (
             _detect_convexity(
                 breakpoints(bp_x, dim="entity"),
@@ -1990,5 +1982,3 @@ class TestDetectConvexity:
             )
             == "mixed"
         )
-
-
