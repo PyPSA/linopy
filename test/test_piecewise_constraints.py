@@ -1433,7 +1433,7 @@ class TestSignParameter:
         assert (link.sign == "<=").all().item()
 
     def test_sign_nvariable(self) -> None:
-        """sign applies uniformly to all N variables."""
+        """Sign applies uniformly to all N variables."""
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
