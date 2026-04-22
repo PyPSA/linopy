@@ -39,7 +39,7 @@ Quick Start
     # (pure LP with chord constraints when the curve's curvature matches
     # the requested sign; SOS2/incremental otherwise).
     m.add_piecewise_formulation(
-        (fuel, [0, 20, 30, 35]),   # bounded output listed FIRST
+        (fuel, [0, 20, 30, 35]),  # bounded output listed FIRST
         (power, [0, 10, 20, 30]),  # input always on the curve
         sign="<=",
     )
@@ -61,10 +61,10 @@ API
         (expr1, breakpoints1),
         (expr2, breakpoints2),
         ...,
-        sign="==",     # "==", "<=", or ">="
-        method="auto", # "auto", "sos2", "incremental", or "lp"
-        active=None,   # binary variable to gate the constraint
-        name=None,     # base name for generated variables/constraints
+        sign="==",  # "==", "<=", or ">="
+        method="auto",  # "auto", "sos2", "incremental", or "lp"
+        active=None,  # binary variable to gate the constraint
+        name=None,  # base name for generated variables/constraints
     )
 
 Creates auxiliary variables and constraints that enforce either an equality
@@ -78,10 +78,10 @@ Factory functions that create DataArrays with the correct dimension names:
 
 .. code-block:: python
 
-    linopy.breakpoints([0, 50, 100])                                  # list
-    linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen") # per-entity
-    linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0) # from slopes
-    linopy.segments([(0, 10), (50, 100)])                             # disjunctive
+    linopy.breakpoints([0, 50, 100])  # list
+    linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")  # per-entity
+    linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0)  # from slopes
+    linopy.segments([(0, 10), (50, 100)])  # disjunctive
     linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")
 
 
