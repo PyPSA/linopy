@@ -1982,3 +1982,35 @@ class TestDetectConvexity:
             )
             == "mixed"
         )
+
+
+# ===========================================================================
+# netCDF round-trip
+# ===========================================================================
+
+
+class TestPiecewiseNetCDFRoundtrip:
+    def test_formulation_survives_netcdf(self, tmp_path: Path) -> None:
+        from linopy import read_netcdf
+        from linopy.piecewise import PiecewiseFormulation
+
+        m = Model()
+        y = m.add_variables(name="y")
+        x = m.add_variables(lower=0, upper=30, name="x")
+        f = m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35]),
+            (x, [0, 10, 20, 30]),
+            name="pwl",
+        )
+        assert f.convexity == "concave"
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+        f2 = read_netcdf(path)._piecewise_formulations["pwl"]
+
+        # Compare every slot except the back-reference to the model, so this
+        # test auto-catches any future field that IO forgets to persist.
+        fields = [s for s in PiecewiseFormulation.__slots__ if s != "_model"]
+        before = {s: getattr(f, s) for s in fields}
+        after = {s: getattr(f2, s) for s in fields}
+        assert before == after
