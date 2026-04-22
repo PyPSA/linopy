@@ -1370,3 +1370,92 @@ class TestValidationEdgeCases:
             method="sos2",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
+
+
+# ===========================================================================
+# Sign parameter (inequality)
+# ===========================================================================
+
+
+class TestSignParameter:
+    def test_default_is_equality(self) -> None:
+        """Default sign is ==."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 50]),
+            (y, [0, 5, 20]),
+            method="sos2",
+        )
+        # No exception — equality works
+
+    def test_sign_le_sos2(self) -> None:
+        """sign='<=' produces <= link constraint with SOS2."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 50, 30]),  # non-monotonic forces SOS2
+            (y, [0, 5, 20, 15]),
+            sign="<=",
+            method="sos2",
+        )
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
+        assert (link.sign == "<=").all().item()
+
+    def test_sign_ge_sos2(self) -> None:
+        """sign='>=' produces >= link constraint."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 50, 30]),
+            (y, [0, 5, 20, 15]),
+            sign=">=",
+            method="sos2",
+        )
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
+        assert (link.sign == ">=").all().item()
+
+    def test_sign_le_incremental(self) -> None:
+        """sign='<=' also works with incremental method."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 50]),
+            (y, [0, 5, 20]),
+            sign="<=",
+            method="incremental",
+        )
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
+        assert (link.sign == "<=").all().item()
+
+    def test_sign_nvariable(self) -> None:
+        """sign applies uniformly to all N variables."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 50, 30]),
+            (y, [0, 5, 20, 15]),
+            (z, [0, 2, 10, 8]),
+            sign="<=",
+            method="sos2",
+        )
+        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
+        assert (link.sign == "<=").all().item()
+
+    def test_invalid_sign_raises(self) -> None:
+        """Invalid sign raises ValueError."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="sign must be"):
+            m.add_piecewise_formulation(
+                (x, [0, 10, 50]),
+                (y, [0, 5, 20]),
+                sign="<",  # type: ignore
+            )

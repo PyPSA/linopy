@@ -627,12 +627,13 @@ def _broadcast_points(
 def add_piecewise_formulation(
     model: Model,
     *pairs: tuple[LinExprLike, BreaksLike],
+    sign: Literal["==", "<=", ">="] = "==",
     method: Literal["sos2", "incremental", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
 ) -> PiecewiseFormulation:
     r"""
-    Add piecewise linear equality constraints.
+    Add piecewise linear constraints.
 
     Each positional argument is a ``(expression, breakpoints)`` tuple.
     All expressions are linked through shared interpolation weights so
@@ -654,9 +655,13 @@ def add_piecewise_formulation(
             (heat,  [0, 25, 55, 95]),
         )
 
-    For inequality constraints (:math:`y \le f(x)` or
-    :math:`y \ge f(x)`), use :func:`tangent_lines` with regular
-    ``add_constraints`` instead.
+    Inequality (operating point below the surface)::
+
+        m.add_piecewise_formulation(
+            (power, [0, 30, 60, 100]),
+            (fuel,  [0, 36, 84, 170]),
+            sign="<=",
+        )
 
     Parameters
     ----------
@@ -664,6 +669,17 @@ def add_piecewise_formulation(
         Each pair links an expression (Variable or LinearExpression)
         to its breakpoint values (list, DataArray, etc.).  At least
         two pairs are required.
+    sign : {"==", "<=", ">="}, default "=="
+        Constraint sign applied uniformly to all expressions.
+        ``"=="`` forces each expression to its interpolated value
+        (operating point on the piecewise curve).
+        ``"<="`` bounds each expression above by its interpolated value
+        (operating point below the piecewise surface).
+        ``">="`` bounds each expression below by its interpolated value
+        (operating point above the piecewise surface).
+        For 2-variable inequality bounds on convex/concave functions,
+        consider :func:`tangent_lines` for a pure LP formulation without
+        auxiliary variables.
     method : {"auto", "sos2", "incremental"}, default "auto"
         Formulation method.
     active : Variable or LinearExpression, optional
@@ -676,6 +692,8 @@ def add_piecewise_formulation(
     -------
     PiecewiseFormulation
     """
+    if sign not in ("==", "<=", ">="):
+        raise ValueError(f"sign must be '==', '<=', or '>=', got '{sign}'")
     if method not in ("sos2", "incremental", "auto"):
         raise ValueError(
             f"method must be 'sos2', 'incremental', or 'auto', got '{method}'"
@@ -761,6 +779,7 @@ def add_piecewise_formulation(
             bp_list,
             link_coords,
             bp_mask,
+            sign,
             active_expr,
         )
         resolved_method = "sos2"
@@ -774,6 +793,7 @@ def add_piecewise_formulation(
             link_coords,
             bp_mask,
             method,
+            sign,
             active_expr,
         )
 
@@ -804,6 +824,22 @@ def _stack_along_link(
     return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
 
 
+def _add_link_constraint(
+    model: Model,
+    lhs: LinearExpression,
+    rhs: LinearExpression,
+    sign: str,
+    name: str,
+) -> Constraint:
+    """Add the final link constraint with the requested sign."""
+    if sign == "==":
+        return model.add_constraints(lhs == rhs, name=name)
+    elif sign == "<=":
+        return model.add_constraints(lhs <= rhs, name=name)
+    else:  # ">="
+        return model.add_constraints(lhs >= rhs, name=name)
+
+
 def _add_continuous(
     model: Model,
     name: str,
@@ -812,10 +848,11 @@ def _add_continuous(
     link_coords: list[str],
     bp_mask: DataArray | None,
     method: str,
+    sign: str,
     active: LinearExpression | None = None,
 ) -> str:
     """
-    Dispatch continuous piecewise equality to SOS2 or incremental.
+    Dispatch continuous piecewise to SOS2 or incremental.
 
     Returns the resolved method name ("sos2" or "incremental").
     """
@@ -870,6 +907,7 @@ def _add_continuous(
             stacked_mask,
             link_dim,
             rhs,
+            sign,
         )
         return method
     else:
@@ -882,6 +920,7 @@ def _add_continuous(
             link_dim,
             rhs,
             active,
+            sign,
         )
         return method
 
@@ -894,8 +933,9 @@ def _add_sos2(
     stacked_mask: DataArray | None,
     link_dim: str,
     rhs: LinearExpression | int,
+    sign: str,
 ) -> Constraint:
-    """SOS2 formulation for N-variable continuous piecewise equality."""
+    """SOS2 formulation for N-variable continuous piecewise constraint."""
     dim = BREAKPOINT_DIM
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
     lambda_mask = stacked_mask.any(dim=link_dim) if stacked_mask is not None else None
@@ -912,7 +952,7 @@ def _add_sos2(
     model.add_constraints(lambda_var.sum(dim=dim) == rhs, name=convex_name)
 
     weighted_sum = (lambda_var * stacked_bp).sum(dim=dim)
-    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+    return _add_link_constraint(model, target_expr, weighted_sum, sign, link_name)
 
 
 def _add_incremental(
@@ -924,8 +964,9 @@ def _add_incremental(
     link_dim: str,
     rhs: LinearExpression | int,
     active: LinearExpression | None,
+    sign: str,
 ) -> Constraint:
-    """Incremental formulation for N-variable continuous piecewise equality."""
+    """Incremental formulation for N-variable continuous piecewise constraint."""
     dim = BREAKPOINT_DIM
     extra = _var_coords_from(stacked_bp, exclude={dim, link_dim})
 
@@ -980,7 +1021,7 @@ def _add_incremental(
     if active is not None:
         bp0_term = bp0 * active
     weighted_sum = (delta_var * steps).sum(dim=seg_dim) + bp0_term
-    return model.add_constraints(target_expr == weighted_sum, name=link_name)
+    return _add_link_constraint(model, target_expr, weighted_sum, sign, link_name)
 
 
 def _add_disjunctive(
@@ -990,9 +1031,10 @@ def _add_disjunctive(
     bp_list: list[DataArray],
     link_coords: list[str],
     bp_mask: DataArray | None,
+    sign: str,
     active: LinearExpression | None = None,
 ) -> Constraint:
-    """Disjunctive SOS2 formulation for N-variable piecewise equality."""
+    """Disjunctive SOS2 formulation for N-variable piecewise constraint."""
     from linopy.expressions import LinearExpression
 
     link_dim = "_pwl_var"
@@ -1057,4 +1099,4 @@ def _add_disjunctive(
     model.add_constraints(lambda_var.sum(dim=dim) == binary_var, name=convex_name)
 
     weighted = (lambda_var * stacked_bp).sum(dim=[SEGMENT_DIM, dim])
-    return model.add_constraints(target_expr == weighted, name=link_name)
+    return _add_link_constraint(model, target_expr, weighted, sign, link_name)
