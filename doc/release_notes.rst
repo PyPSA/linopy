@@ -11,7 +11,7 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_formulation()`` for piecewise linear equality constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, and unit commitment via the ``active`` parameter.
+* Add ``add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, LP (tangent lines), and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, and unit commitment via the ``active`` parameter. Accepts ``sign="=="/"<="/">="`` for equality or one-sided bounds (first-tuple convention: the first tuple is the output, the rest are inputs forced to equality). ``method="auto"`` automatically dispatches to a pure-LP tangent-line formulation for 2-variable convex/concave inequalities.
 * Add ``tangent_lines()`` for piecewise linear inequality bounds — returns a ``LinearExpression`` with one tangent line per segment, no auxiliary variables. Use with regular ``add_constraints``.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
