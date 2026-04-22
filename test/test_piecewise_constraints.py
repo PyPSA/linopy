@@ -1537,9 +1537,9 @@ class TestSignParameter:
         power = m.add_variables(name="power")
         heat = m.add_variables(name="heat")
         m.add_piecewise_formulation(
-            (fuel, [0, 40, 85, 160]),    # bounded
-            (power, [0, 30, 60, 100]),   # input ==
-            (heat, [0, 25, 55, 95]),     # input ==
+            (fuel, [0, 40, 85, 160]),  # bounded
+            (power, [0, 30, 60, 100]),  # input ==
+            (heat, [0, 25, 55, 95]),  # input ==
             sign="<=",
             method="sos2",
         )

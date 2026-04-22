@@ -759,8 +759,7 @@ def add_piecewise_formulation(
         raise ValueError(f"sign must be one of {sorted(SIGNS)}, got '{sign}'")
     if method not in ("sos2", "incremental", "auto", "lp"):
         raise ValueError(
-            f"method must be 'sos2', 'incremental', 'auto', or 'lp', "
-            f"got '{method}'"
+            f"method must be 'sos2', 'incremental', 'auto', or 'lp', got '{method}'"
         )
     if method == "lp" and sign == EQUAL:
         raise ValueError("method='lp' requires sign='<=' or '>='.")
@@ -929,8 +928,13 @@ def _add_continuous(
                 ):
                     if active is None:
                         _add_lp(
-                            model, name, x_expr, y_expr,
-                            x_pts, y_pts, sign,
+                            model,
+                            name,
+                            x_expr,
+                            y_expr,
+                            x_pts,
+                            y_pts,
+                            sign,
                         )
                         return "lp"
 
@@ -945,9 +949,7 @@ def _add_continuous(
         y_expr, x_expr = lin_exprs[0], lin_exprs[1]
         y_pts, x_pts = bp_list[0], bp_list[1]
         if not _check_strict_monotonicity(x_pts):
-            raise ValueError(
-                "method='lp' requires strictly monotonic x breakpoints."
-            )
+            raise ValueError("method='lp' requires strictly monotonic x breakpoints.")
         convexity = _detect_convexity(x_pts, y_pts)
         if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
             raise ValueError(
@@ -1015,16 +1017,33 @@ def _add_continuous(
 
     if method == "sos2":
         _add_sos2(
-            model, name, linked_expr, output_expr,
-            stacked_bp, linked_bp, output_bp,
-            bp_mask, link_dim, rhs, sign,
+            model,
+            name,
+            linked_expr,
+            output_expr,
+            stacked_bp,
+            linked_bp,
+            output_bp,
+            bp_mask,
+            link_dim,
+            rhs,
+            sign,
         )
         return method
     else:
         _add_incremental(
-            model, name, linked_expr, output_expr,
-            stacked_bp, linked_bp, output_bp,
-            bp_mask, link_dim, rhs, active, sign,
+            model,
+            name,
+            linked_expr,
+            output_expr,
+            stacked_bp,
+            linked_bp,
+            output_bp,
+            bp_mask,
+            link_dim,
+            rhs,
+            active,
+            sign,
         )
         return method
 
@@ -1290,9 +1309,5 @@ def _add_lp(
     # Domain bounds: x ∈ [x_min, x_max]
     x_min = x_points.min(dim=BREAKPOINT_DIM)
     x_max = x_points.max(dim=BREAKPOINT_DIM)
-    model.add_constraints(
-        x_expr >= x_min, name=f"{name}{PWL_DOMAIN_LO_SUFFIX}"
-    )
-    model.add_constraints(
-        x_expr <= x_max, name=f"{name}{PWL_DOMAIN_HI_SUFFIX}"
-    )
+    model.add_constraints(x_expr >= x_min, name=f"{name}{PWL_DOMAIN_LO_SUFFIX}")
+    model.add_constraints(x_expr <= x_max, name=f"{name}{PWL_DOMAIN_HI_SUFFIX}")
