@@ -2404,7 +2404,7 @@ def merge(
     has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
     has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
-        cls = QuadraticExpression if has_quad_expression else LinearExpression
+        cls = QuadraticExpression if has_quad_expression else LinearExpression  # type: ignore[assignment]
 
     if (
         issubclass(cls, QuadraticExpression)

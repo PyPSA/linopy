@@ -50,6 +50,7 @@ from linopy.constants import (
     TerminationCondition,
 )
 from linopy.constraints import AnonymousScalarConstraint, Constraint, Constraints
+from linopy.dual import bounds_to_constraints, dualize
 from linopy.expressions import (
     LinearExpression,
     QuadraticExpression,
@@ -1996,3 +1997,7 @@ class Model:
     to_cupdlpx = to_cupdlpx
 
     to_block_files = to_block_files
+
+    bounds_to_constraints = bounds_to_constraints
+
+    dualize = dualize
