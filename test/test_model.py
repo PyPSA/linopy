@@ -6,6 +6,7 @@ Test function defined in the Model class.
 from __future__ import annotations
 
 import copy as pycopy
+import weakref
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -39,6 +40,25 @@ def test_model_solver_dir() -> None:
     d: str = gettempdir()
     m: Model = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
+
+
+def test_model_is_weakrefable() -> None:
+    m: Model = Model()
+    ref = weakref.ref(m)
+    assert ref() is m
+
+
+def test_model_weakkeydict_use_case() -> None:
+    # third-party extensions rely on WeakKeyDictionary for per-instance storage
+    registry: weakref.WeakKeyDictionary[Model, str] = weakref.WeakKeyDictionary()
+    m: Model = Model()
+    registry[m] = "extension-state"
+    assert registry[m] == "extension-state"
+    del m
+    import gc
+
+    gc.collect()
+    assert len(registry) == 0
 
 
 def test_model_variable_getitem() -> None:
