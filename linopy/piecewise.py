@@ -477,14 +477,19 @@ def tangent_lines(
     y_points: BreaksLike,
 ) -> LinearExpression:
     r"""
-    Compute tangent-line expressions for a piecewise linear function.
+    Compute tangent-line (chord) expressions for a piecewise linear function.
 
-    Returns a :class:`~linopy.expressions.LinearExpression` with an extra
-    segment dimension.  Each element along the segment dimension is the
-    tangent line of one segment: :math:`m_k \cdot x + c_k`.
+    Low-level helper returning a :class:`~linopy.expressions.LinearExpression`
+    with an extra segment dimension.  Each element along the segment dimension
+    is the chord of one segment: :math:`m_k \cdot x + c_k`.  No auxiliary
+    variables are created.
 
-    Use the result in a regular constraint to create an upper or lower
-    bound:
+    For most users: prefer :func:`add_piecewise_formulation` with
+    ``sign="<="`` / ``">="`` — it builds on this helper and adds the
+    ``x ∈ [x_min, x_max]`` domain bound plus a curvature-vs-sign check
+    that catches the "wrong region" case.  Use ``tangent_lines`` directly
+    only when you need to compose the chord expressions manually (e.g. with
+    other linear terms, or without the domain bound).
 
     .. code-block:: python
 
@@ -492,14 +497,13 @@ def tangent_lines(
         m.add_constraints(fuel <= t)  # upper bound (concave f)
         m.add_constraints(fuel >= t)  # lower bound (convex f)
 
-    No auxiliary variables are created — the result is purely linear.
-
     Parameters
     ----------
     x : Variable or LinearExpression
         The input expression.
     x_points : BreaksLike
-        Breakpoint x-coordinates (must be strictly increasing).
+        Breakpoint x-coordinates (must be strictly monotonic; both
+        ascending and descending are accepted).
     y_points : BreaksLike
         Breakpoint y-coordinates.
 
@@ -1025,6 +1029,9 @@ def _build_links(
 
     if sign == EQUAL:
         eq_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
+        # eq_bp is deliberately aliased to stacked_bp here — all tuples are
+        # already on the equality side, so the "full stack" and the "equality
+        # stack" are the same array.
         return _PwlLinks(
             stacked_bp=stacked_bp,
             link_dim=link_dim,
