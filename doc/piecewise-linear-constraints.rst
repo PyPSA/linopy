@@ -103,10 +103,16 @@ one designated output; the other tuples parameterise the curve.
 
 **When is a one-sided bound wanted?**
 
-The primary reason to reach for ``sign="<="`` / ``">="`` is to unlock the
-**LP chord formulation** — no SOS2, no binaries, just pure LP.  On a
-convex/concave curve with a matching sign, the chord inequalities are as
-tight as SOS2, so you get the same optimum with a cheaper model.
+For *continuous* curves, the main reason to reach for ``sign="<="`` /
+``">="`` is to unlock the **LP chord formulation** — no SOS2, no
+binaries, just pure LP.  On a convex/concave curve with a matching sign,
+the chord inequalities are as tight as SOS2, so you get the same optimum
+with a cheaper model.
+
+For *disjunctive* curves (``segments(...)``), ``sign`` is a first-class
+tool in its own right: disconnected operating regions with a bounded
+output, always exact regardless of segment curvature (see the
+disjunctive section below).
 
 Beyond that: fuel-on-efficiency-envelope modelling (extra burn above the
 curve is admissible, cost is still bounded), emissions caps where the curve
@@ -376,6 +382,15 @@ indicators :math:`z_k` select exactly one segment; SOS2 applies within it:
    e_j = \sum_{k} \sum_{i} \lambda_{k,i} \, B_{j,k,i}
 
 No big-M constants are needed, giving a tight LP relaxation.
+
+**Disjunctive + ``sign``.**  ``sign="<="`` / ``">="`` works here too,
+applied to the first tuple exactly as for the continuous methods.
+Because the disjunctive machinery already carries a per-segment binary,
+there is **no curvature requirement** on the segments — inequality is
+always exact on the hypograph (or epigraph) of the active segment,
+whatever its slope pattern.  This makes disjunctive + sign a first-class
+tool for "bounded output on disconnected operating regions" that
+``method="lp"`` cannot handle.
 
 
 Advanced Features

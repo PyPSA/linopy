@@ -110,6 +110,18 @@ norecursedirs = ["dev-scripts", "doc", "examples", "benchmark", "benchmarks"]
 markers = [
     "gpu: marks tests as requiring GPU hardware (deselect with '-m \"not gpu\"')",
 ]
+filterwarnings = [
+    # Silence our own EvolvingAPIWarning inside the test suite so the
+    # piecewise tests don't emit 500+ warnings.  Users still see them.
+    # Match by message prefix on the builtin FutureWarning base class
+    # rather than on ``linopy.EvolvingAPIWarning`` directly — using the
+    # class reference here would force pytest to import linopy at
+    # config-parse time, which loads ``linopy.variables`` from
+    # site-packages and then conflicts with ``--doctest-modules``
+    # collection of ``linopy/variables.py`` in the source tree on
+    # Windows CI.
+    "ignore:piecewise:FutureWarning",
+]
 
 [tool.coverage.run]
 branch = true

@@ -79,6 +79,32 @@ SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
 
 
+class EvolvingAPIWarning(FutureWarning):
+    """
+    Signals a newly-added API whose details may evolve in minor releases.
+
+    Subclasses :class:`FutureWarning` so it is visible by default.  Each
+    emit prefixes its message with the affected feature (e.g.
+    ``"piecewise: ..."``) so message-regex filters can target a single
+    feature without hiding warnings from other features.
+
+    Silence globally with::
+
+        import warnings
+        import linopy
+
+        warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)
+
+    Or only one feature::
+
+        warnings.filterwarnings(
+            "ignore",
+            category=linopy.EvolvingAPIWarning,
+            message=r"^piecewise:",
+        )
+    """
+
+
 class ModelStatus(Enum):
     """
     Model status.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -39,6 +40,9 @@ from linopy.constants import (
     SEGMENT_DIM,
 )
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
+
+Sign: TypeAlias = Literal["==", "<=", ">="]
+Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
 
 _sos2_solvers = get_available_solvers_with_feature(
     SolverFeature.SOS_CONSTRAINTS, available_solvers
@@ -621,6 +625,61 @@ class TestDisjunctive:
         m.solve()
         # f(15) = 20 + (30-20)*0.5 = 25
         assert m.solution["y"].item() == pytest.approx(25.0, abs=1e-3)
+
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
+    @pytest.mark.parametrize(
+        "x_fix, expected_y",
+        [
+            # Segment 0: (0, 0) → (5, 10), slope 2.  At x=2.5, interp y = 5.0.
+            (2.5, 5.0),
+            (0.0, 0.0),  # segment 0 left edge
+            (5.0, 10.0),  # segment 0 right edge
+            # Segment 1: (15, 20) → (25, 35), slope 1.5.  At x=20, interp y = 27.5.
+            (20.0, 27.5),
+            (15.0, 20.0),  # segment 1 left edge
+            (25.0, 35.0),  # segment 1 right edge
+        ],
+    )
+    def test_sign_le_hits_correct_segment(
+        self, x_fix: float, expected_y: float
+    ) -> None:
+        """
+        Disjunctive + sign='<=' picks the **right** segment's interpolation.
+
+        With two segments of different slopes, the bound at ``x_fix``
+        depends on which segment ``x_fix`` falls in.  The solver must
+        select the binary for that segment and bound ``y`` by *that*
+        segment's interpolation, not the other.  Probes the binary-
+        select + signed-output-link combination.
+        """
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=50, name="y")
+        m.add_piecewise_formulation(
+            (y, segments([[0.0, 10.0], [20.0, 35.0]])),  # two slopes: 2 and 1.5
+            (x, segments([[0.0, 5.0], [15.0, 25.0]])),
+            sign="<=",
+        )
+        m.add_constraints(x == x_fix)
+        m.add_objective(-y)
+        m.solve()
+        assert m.solution["y"].item() == pytest.approx(expected_y, abs=1e-3)
+
+    @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
+    def test_sign_le_in_forbidden_zone_infeasible(self) -> None:
+        """X in the gap between segments must be infeasible under sign='<='."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=50, name="y")
+        m.add_piecewise_formulation(
+            (y, segments([[0.0, 10.0], [20.0, 35.0]])),
+            (x, segments([[0.0, 5.0], [15.0, 25.0]])),
+            sign="<=",
+        )
+        m.add_constraints(x == 10.0)  # in the gap (5, 15)
+        m.add_objective(-y)
+        status, _ = m.solve()
+        assert status != "ok"
 
 
 # ===========================================================================
@@ -1578,7 +1637,8 @@ class TestSignParameter:
         y_pts = [0, 20, 30, 35]  # concave
 
         solutions = {}
-        for method in ["lp", "sos2", "incremental"]:
+        methods: list[Method] = ["lp", "sos2", "incremental"]
+        for method in methods:
             m = Model()
             power = m.add_variables(lower=0, upper=30, name="power")
             fuel = m.add_variables(lower=0, upper=40, name="fuel")
@@ -1631,7 +1691,8 @@ class TestSignParameter:
         bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
         bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
         results: dict[str, float] = {}
-        for method in ["lp", "sos2"]:
+        methods: list[Method] = ["lp", "sos2"]
+        for method in methods:
             m = Model()
             coord = pd.Index(["a", "b"], name="entity")
             x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
@@ -1668,7 +1729,7 @@ class TestSignParameter:
 
     @pytest.mark.skipif(not _sos2_solvers, reason="no SOS2-capable solver available")
     @pytest.mark.parametrize("method", ["sos2", "incremental"])
-    def test_active_off_with_sign_le_leaves_lower_open(self, method: str) -> None:
+    def test_active_off_with_sign_le_leaves_lower_open(self, method: Method) -> None:
         """
         Documents the asymmetry between sign='==' and sign='<=' under
         active=0: equality forces y=0, but '<=' only bounds y ≤ 0 — the
@@ -1761,7 +1822,8 @@ class TestSignParameter:
         A linear curve is both convex and concave per detection, so
         LP must accept it with either sign and build the formulation.
         """
-        for sign in ["<=", ">="]:
+        signs: list[Sign] = ["<=", ">="]
+        for sign in signs:
             m = Model()
             x = m.add_variables(lower=0, upper=30, name="x")
             y = m.add_variables(lower=0, upper=60, name="y")
@@ -1822,7 +1884,8 @@ class TestSignParameter:
         bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 10, 20, 30]], index=["a", "b"])
         bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 15, 25, 30]], index=["a", "b"])
         ys: dict[str, xr.DataArray] = {}
-        for method in ["lp", "sos2"]:
+        methods: list[Method] = ["lp", "sos2"]
+        for method in methods:
             m = Model()
             x = m.add_variables(lower=0, upper=30, coords=[entities], name="x")
             y = m.add_variables(lower=0, upper=40, coords=[entities], name="y")
@@ -1850,9 +1913,10 @@ class TestSignParameter:
         """
         x_pts = [0, 10, 20, 30]
         y_pts = [0, 20, 30, 35]  # concave
+        methods: list[Method] = ["lp", "sos2"]
         for obj_sign in [-1.0, +1.0]:
             sols: dict[str, float] = {}
-            for method in ["lp", "sos2"]:
+            for method in methods:
                 m = Model()
                 p = m.add_variables(lower=0, upper=30, name="p")
                 f = m.add_variables(lower=0, upper=50, name="f")

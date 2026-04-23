@@ -8,6 +8,7 @@ constraint methods for use with linopy.Model.
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Real
@@ -43,6 +44,7 @@ from linopy.constants import (
     PWL_SELECT_SUFFIX,
     SEGMENT_DIM,
     SIGNS,
+    EvolvingAPIWarning,
     sign_replace_dict,
 )
 
@@ -471,6 +473,43 @@ def segments(
     return _coerce_segments(values, dim)
 
 
+def _tangent_lines_impl(
+    x: LinExprLike,
+    x_points: BreaksLike,
+    y_points: BreaksLike,
+) -> LinearExpression:
+    """
+    Chord-expression math — the body of ``tangent_lines`` without the
+    :class:`EvolvingAPIWarning`.  Called internally by ``_add_lp`` so a
+    single ``add_piecewise_formulation(sign="<=")`` emits exactly one
+    warning, not two.
+    """
+    from linopy.expressions import LinearExpression as LinExpr
+    from linopy.variables import Variable
+
+    x_points = _coerce_breaks(x_points)
+    y_points = _coerce_breaks(y_points)
+
+    dx = x_points.diff(BREAKPOINT_DIM)
+    dy = y_points.diff(BREAKPOINT_DIM)
+    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
+
+    slopes = _rename_to_segments(dy / dx, seg_index)
+    x_base = _rename_to_segments(
+        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
+    y_base = _rename_to_segments(
+        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    )
+
+    intercepts = y_base - slopes * x_base
+
+    if not isinstance(x, Variable | LinExpr):
+        raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
+
+    return slopes * _to_linexpr(x) + intercepts
+
+
 def tangent_lines(
     x: LinExprLike,
     x_points: BreaksLike,
@@ -512,31 +551,26 @@ def tangent_lines(
     LinearExpression
         Expression with an additional ``_breakpoint_seg`` dimension
         (one entry per segment).
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        ``tangent_lines`` is part of the newly-added piecewise API; the
+        returned expression shape and segment-dim name may be refined.
+        Silence with ``warnings.filterwarnings("ignore",
+        category=linopy.EvolvingAPIWarning)``.
     """
-    from linopy.expressions import LinearExpression as LinExpr
-    from linopy.variables import Variable
-
-    x_points = _coerce_breaks(x_points)
-    y_points = _coerce_breaks(y_points)
-
-    dx = x_points.diff(BREAKPOINT_DIM)
-    dy = y_points.diff(BREAKPOINT_DIM)
-    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
-
-    slopes = _rename_to_segments(dy / dx, seg_index)
-    x_base = _rename_to_segments(
-        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    warnings.warn(
+        "piecewise: tangent_lines is a new API; the returned expression "
+        "shape and the segment-dim name may be refined in minor releases. "
+        "Please share your use cases or concerns at "
+        "https://github.com/PyPSA/linopy/issues — your feedback shapes "
+        "what stabilises.  Silence with "
+        '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
+        category=EvolvingAPIWarning,
+        stacklevel=2,
     )
-    y_base = _rename_to_segments(
-        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
-    )
-
-    intercepts = y_base - slopes * x_base
-
-    if not isinstance(x, Variable | LinExpr):
-        raise TypeError(f"x must be a Variable or LinearExpression, got {type(x)}")
-
-    return slopes * _to_linexpr(x) + intercepts
+    return _tangent_lines_impl(x, x_points, y_points)
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +829,27 @@ def add_piecewise_formulation(
     Returns
     -------
     PiecewiseFormulation
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        ``add_piecewise_formulation`` is a newly-added API; details such
+        as the ``sign``/first-tuple convention and ``active`` + non-equality
+        sign semantics may be refined based on user feedback.  Silence
+        with ``warnings.filterwarnings("ignore",
+        category=linopy.EvolvingAPIWarning)``.
     """
+    warnings.warn(
+        "piecewise: add_piecewise_formulation is a new API; some details "
+        "(e.g. the sign/first-tuple convention, active+sign semantics) "
+        "may be refined in minor releases.  Please share your use cases "
+        "or concerns at https://github.com/PyPSA/linopy/issues — your "
+        "feedback shapes what stabilises.  Silence with "
+        '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
+        category=EvolvingAPIWarning,
+        stacklevel=2,
+    )
+
     # Normalize sign (accept "==" or "=" for equality, etc.).  The Literal
     # annotation above covers the user-facing forms; after normalization
     # ``sign`` holds one of the canonical values in :data:`SIGNS`.
@@ -1455,7 +1509,9 @@ def _add_lp(
     )
     seg_mask: DataArray | None = None if bool(full_mask.all()) else full_mask
 
-    tangents = tangent_lines(x_expr, x_points, y_points)
+    # Use the internal impl so we don't fire a second EvolvingAPIWarning —
+    # ``add_piecewise_formulation`` already warned on entry.
+    tangents = _tangent_lines_impl(x_expr, x_points, y_points)
     _add_signed_link(
         model,
         y_expr,
