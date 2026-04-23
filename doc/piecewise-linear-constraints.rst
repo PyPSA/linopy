@@ -91,15 +91,56 @@ The ``sign`` parameter — equality vs inequality
 The ``sign`` argument of ``add_piecewise_formulation`` chooses whether all
 expressions are locked onto the curve or whether the first one is bounded:
 
-- ``sign="=="`` (default): every expression lies *exactly* on the piecewise
-  curve — joint equality.  All tuples are symmetric.
-- ``sign="<="``: the **first** tuple's expression is bounded **above** by its
-  interpolated value; the remaining tuples are forced to equality (inputs on
-  the curve).  Reads as *"first expression ≤ f(the rest)"*.
-- ``sign=">="``: same but the first is bounded **below**.
+- ``sign="=="`` (default): **every** expression lies *exactly* on the
+  piecewise curve — joint equality.  All tuples are symmetric.  The feasible
+  region is a 1-D curve in N-space.
+- ``sign="<="``: **N−1 tuples are pinned** to the curve (moving together along
+  it), and the **first** tuple's expression is **bounded above** by its
+  interpolated value at that shared curve position — it can undershoot.
+- ``sign=">="``: same split, but the first is bounded **below** (overshoots
+  admitted).
 
-This is the *first-tuple convention* — a single inequality direction applies to
-one designated output; the other tuples parameterise the curve.
+Inequality relaxes **one** tuple's curve-equality into a one-sided bound.  The
+others keep moving together along the curve in lockstep — this is the
+*first-tuple convention*.
+
+**What this means geometrically.**
+
+For 2 variables (``(y, yp), (x, xp)``, ``sign="<="``), "N−1 pinned, 1 bounded"
+reduces to the familiar **hypograph**: ``x`` moves along the breakpoint axis,
+``y`` ranges from its lower bound up to ``f(x)``.
+
+For 3+ variables, the N−1 pinned tuples are **jointly constrained** to a
+single segment position on the piecewise curve.  In a CHP characteristic
+``(power, fuel, heat)`` with ``sign="<="``, ``fuel`` and ``heat`` trace the
+curve simultaneously: specifying ``fuel = 85`` determines the segment
+position, which in turn fixes ``heat`` to its curve value at that position.
+Assigning ``heat`` to any value inconsistent with the same segment renders
+the system infeasible.
+
+The feasible region in N-space is a 2-dimensional manifold: the 1-D
+parametric curve at its upper boundary (for ``"<="``), extended along the
+first tuple's axis down to that variable's lower bound.
+
+**Choice of bounded tuple.**  The first tuple should correspond to a
+quantity with a mechanism for below-curve operation — typically a
+controllable dissipation path: heat rejection via cooling tower (also
+called *thermal curtailment*), electrical curtailment, or emissions after
+post-treatment.  Placing a consumption-side variable such as fuel intake
+in the bounded position yields a valid but **loose** formulation: the
+characteristic curve fixes fuel draw at a given load, so ``sign="<="`` on
+fuel admits operating points the plant cannot physically realise.  An
+objective that rewards lower fuel may then find a non-physical optimum
+— safe only when no such objective pressure exists.
+
+Relatedly, inequality formulations can also be **faster to solve**: with
+2 variables and matching curvature, ``method="auto"`` dispatches to the
+pure-LP chord formulation (no SOS2, no binaries).  For N≥3 the solver
+still reaches for SOS2/incremental, but the relaxed feasible region
+often tightens the LP relaxation and reduces branch-and-bound work.
+Choose ``sign="=="`` when you want strict curve adherence (the
+tightest feasible region) and ``sign="<="`` / ``">="`` when either the
+physics admits dissipation or the speedup is worth the relaxation.
 
 **When is a one-sided bound wanted?**
 
