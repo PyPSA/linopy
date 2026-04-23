@@ -115,6 +115,7 @@ This package is published under MIT license.
    sos-constraints
    piecewise-linear-constraints
    piecewise-linear-constraints-tutorial
+   piecewise-inequality-bounds-tutorial
    manipulating-models
    testing-framework
    transport-tutorial
