@@ -799,10 +799,11 @@ def add_piecewise_formulation(
 
     - At most one tuple may carry a non-equality sign.  All other tuples
       default to ``"=="``.
-    - With **3 or more** tuples, all signs must be ``"=="`` (the
-      multi-input bounded case is not supported yet — the natural reading
-      ``z ≥ f(x, y)`` belongs to a future bivariate / triangulated
-      piecewise API).
+    - With **3 or more** tuples, all signs must be ``"=="``.
+
+    Multi-bounded and N≥3-inequality use cases aren't supported yet.  If
+    you have a concrete use case, please open an issue at
+    https://github.com/PyPSA/linopy/issues so we can scope it properly.
 
     Parameters
     ----------
@@ -919,8 +920,8 @@ def add_piecewise_formulation(
         raise ValueError(
             "Non-equality signs are not supported with 3+ tuples. "
             "Use sign='==' on all tuples (the default), or reduce to 2 tuples. "
-            "The multi-input bounded case is reserved for a future "
-            "bivariate / triangulated piecewise API."
+            "If you have a concrete use case, please open an issue at "
+            "https://github.com/PyPSA/linopy/issues."
         )
 
     signed_idx: int | None

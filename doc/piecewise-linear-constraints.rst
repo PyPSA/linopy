@@ -108,12 +108,14 @@ stays pinned.
     # 3-variable equality (CHP heat/power/fuel): all three on one curve.
     m.add_piecewise_formulation((power, p_pts), (fuel, f_pts), (heat, h_pts))
 
-**Restrictions:**
+**Restrictions (current):**
 
 - At most one tuple may carry a non-equality sign — a single bounded side.
-- With **3 or more** tuples, all signs must be ``"=="``.  The multi-input
-  bounded case is reserved for a future bivariate / triangulated piecewise
-  API.
+- With **3 or more** tuples, all signs must be ``"=="``.
+
+Multi-bounded and N≥3-inequality use cases aren't supported yet.  If you
+have a concrete use case, please open an issue at
+https://github.com/PyPSA/linopy/issues so we can scope it properly.
 
 **Geometry.**  For 2 variables with ``sign="<="`` on a concave curve
 :math:`f`, the feasible region is the **hypograph** of :math:`f` on its
@@ -274,8 +276,9 @@ Link any number of variables through shared breakpoints (joint equality):
 
 All variables are symmetric here; every feasible point is the same
 ``λ``-weighted combination of breakpoints across all three.  With 3 or
-more tuples, only ``"=="`` signs are accepted — see the per-tuple sign
-section above.
+more tuples, only ``"=="`` signs are accepted — bounding one expression
+by a multi-input curve isn't supported yet; see the per-tuple sign
+section above for the issue link.
 
 
 Formulation Methods
@@ -539,10 +542,10 @@ each formulation creates a predictable set of names:
 
 - ``{N}_lambda`` — variable, interpolation weights
 - ``{N}_convex`` — constraint, ``sum(lambda) == 1`` (or ``== active``)
-- ``{N}_link`` — constraint, equality link (stacked inputs when
-  ``sign != "=="``, all tuples when ``sign="=="``)
-- ``{N}_output_link`` — constraint, signed link on the first tuple
-  *(only when* ``sign != "=="`` *)*
+- ``{N}_link`` — constraint, equality link (pinned tuples when one tuple
+  is bounded; all tuples when all are equality)
+- ``{N}_output_link`` — constraint, signed link on the bounded tuple
+  *(only when one tuple carries* ``"<="`` */* ``">="`` *)*
 
 **Incremental** (``method="incremental"``):
 
@@ -575,6 +578,6 @@ See Also
 
 - :doc:`piecewise-linear-constraints-tutorial` — worked examples of the
   equality API (notebook)
-- :doc:`piecewise-inequality-bounds-tutorial` — the ``sign`` parameter, the LP
-  formulation and the first-tuple convention (notebook)
+- :doc:`piecewise-inequality-bounds-tutorial` — per-tuple sign and the LP
+  formulation (notebook)
 - :doc:`sos-constraints` — low-level SOS1/SOS2 constraint API
