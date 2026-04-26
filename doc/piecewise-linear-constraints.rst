@@ -549,7 +549,7 @@ conventions:
 .. code-block:: python
 
     f = m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
-    print(f)                       # method, convexity, vars/cons summary
+    print(f)  # method, convexity, vars/cons summary
 
 The comparison table above describes the *kind* of auxiliary objects each
 method creates (continuous + SOS2, binary + SOS2, none, …); exact name
