@@ -616,9 +616,8 @@ class TestDisjunctive:
         y = m.add_variables(lower=0, upper=40, name="y")
         # Two segments forming a concave profile: (0,0)→(10,20), (10,20)→(20,30)
         m.add_piecewise_formulation(
-            (y, segments([[0.0, 20.0], [20.0, 30.0]])),
+            (y, segments([[0.0, 20.0], [20.0, 30.0]]), "<="),
             (x, segments([[0.0, 10.0], [10.0, 20.0]])),
-            sign="<=",
         )
         m.add_constraints(x == 15)
         m.add_objective(-y)  # maximise y
@@ -656,9 +655,8 @@ class TestDisjunctive:
         x = m.add_variables(lower=0, upper=30, name="x")
         y = m.add_variables(lower=0, upper=50, name="y")
         m.add_piecewise_formulation(
-            (y, segments([[0.0, 10.0], [20.0, 35.0]])),  # two slopes: 2 and 1.5
+            (y, segments([[0.0, 10.0], [20.0, 35.0]]), "<="),  # two slopes: 2 and 1.5
             (x, segments([[0.0, 5.0], [15.0, 25.0]])),
-            sign="<=",
         )
         m.add_constraints(x == x_fix)
         m.add_objective(-y)
@@ -672,9 +670,8 @@ class TestDisjunctive:
         x = m.add_variables(lower=0, upper=30, name="x")
         y = m.add_variables(lower=0, upper=50, name="y")
         m.add_piecewise_formulation(
-            (y, segments([[0.0, 10.0], [20.0, 35.0]])),
+            (y, segments([[0.0, 10.0], [20.0, 35.0]]), "<="),
             (x, segments([[0.0, 5.0], [15.0, 25.0]])),
-            sign="<=",
         )
         m.add_constraints(x == 10.0)  # in the gap (5, 15)
         m.add_objective(-y)
@@ -1463,7 +1460,7 @@ class TestValidationEdgeCases:
 
 
 class TestSignParameter:
-    """Tests for sign="<=" / ">=" with the first-tuple convention."""
+    """Tests for per-tuple sign on add_piecewise_formulation."""
 
     def test_default_is_equality(self) -> None:
         m = Model()
@@ -1473,12 +1470,50 @@ class TestSignParameter:
         # no output_link for equality — single stacked link only
         assert f"pwl0{PWL_OUTPUT_LINK_SUFFIX}" not in m.constraints
 
-    def test_invalid_sign_raises(self) -> None:
+    def test_invalid_per_tuple_sign_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="sign must be"):
-            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="!")  # type: ignore
+            m.add_piecewise_formulation((x, [0, 10], "!"), (y, [0, 5]))  # type: ignore
+
+    def test_old_sign_kwarg_raises_with_migration_help(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(TypeError, match="sign=.*has been removed"):
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="<=")  # type: ignore[call-arg]
+
+    def test_two_bounded_tuples_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="At most one tuple"):
+            m.add_piecewise_formulation((x, [0, 10], "<="), (y, [0, 5], ">="))
+
+    def test_three_tuples_with_inequality_raises(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        with pytest.raises(ValueError, match="3\\+ tuples"):
+            m.add_piecewise_formulation(
+                (x, [0, 10], "<="),
+                (y, [0, 5]),
+                (z, [0, 1]),
+            )
+
+    def test_bounded_tuple_in_second_position(self) -> None:
+        """User's tuple order is preserved — bounded tuple need not be first."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=40, name="y")
+        f = m.add_piecewise_formulation(
+            (x, [0, 10, 20, 30]),
+            (y, [0, 20, 30, 35], "<="),
+        )
+        # LP fast-path still triggers regardless of tuple position
+        assert f.method == "lp"
 
     def test_lp_with_equality_raises(self) -> None:
         m = Model()
@@ -1494,9 +1529,8 @@ class TestSignParameter:
         fuel = m.add_variables(lower=0, upper=40, name="fuel")
         # Concave: slopes 2, 1, 0.5
         m.add_piecewise_formulation(
-            (fuel, [0, 20, 30, 35]),
+            (fuel, [0, 20, 30, 35], "<="),
             (power, [0, 10, 20, 30]),
-            sign="<=",
         )
         assert f"pwl0{PWL_CHORD_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_DOMAIN_LO_SUFFIX}" in m.constraints
@@ -1511,9 +1545,8 @@ class TestSignParameter:
         y = m.add_variables(lower=0, upper=100, name="y")
         # Convex: slopes 1, 2, 3
         m.add_piecewise_formulation(
-            (y, [0, 10, 30, 60]),
+            (y, [0, 10, 30, 60], ">="),
             (x, [0, 10, 20, 30]),
-            sign=">=",
         )
         assert f"pwl0{PWL_CHORD_SUFFIX}" in m.constraints
 
@@ -1524,9 +1557,8 @@ class TestSignParameter:
         y = m.add_variables(name="y")
         # Non-monotonic x
         m.add_piecewise_formulation(
-            (y, [0, 5, 2, 20]),
+            (y, [0, 5, 2, 20], "<="),
             (x, [0, 10, 5, 50]),
-            sign="<=",
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
         assert f"pwl0{PWL_OUTPUT_LINK_SUFFIX}" in m.constraints
@@ -1537,9 +1569,8 @@ class TestSignParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         f = m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),  # concave
+            (y, [0, 20, 30, 35], ">="),  # concave
             (x, [0, 10, 20, 30]),
-            sign=">=",
         )
         assert f.method != "lp"  # fallback (sos2 or incremental)
 
@@ -1549,9 +1580,8 @@ class TestSignParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         f = m.add_piecewise_formulation(
-            (y, [0, 10, 30, 60]),  # convex
+            (y, [0, 10, 30, 60], "<="),  # convex
             (x, [0, 10, 20, 30]),
-            sign="<=",
         )
         assert f.method != "lp"
 
@@ -1562,9 +1592,8 @@ class TestSignParameter:
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="convex"):
             m.add_piecewise_formulation(
-                (y, [0, 20, 30, 35]),  # concave
+                (y, [0, 20, 30, 35], ">="),  # concave
                 (x, [0, 10, 20, 30]),
-                sign=">=",
                 method="lp",
             )
 
@@ -1576,9 +1605,8 @@ class TestSignParameter:
         # Convex curve, sign='<=' mismatch
         with pytest.raises(ValueError, match="concave"):
             m.add_piecewise_formulation(
-                (y, [0, 10, 30, 60]),  # convex
+                (y, [0, 10, 30, 60], "<="),  # convex
                 (x, [0, 10, 20, 30]),
-                sign="<=",
                 method="lp",
             )
 
@@ -1588,9 +1616,8 @@ class TestSignParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),
+            (y, [0, 20, 30, 35], "<="),
             (x, [0, 10, 20, 30]),
-            sign="<=",
             method="sos2",
         )
         link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
@@ -1602,34 +1629,13 @@ class TestSignParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),
+            (y, [0, 20, 30, 35], "<="),
             (x, [0, 10, 20, 30]),
-            sign="<=",
             method="incremental",
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
         assert (link.sign == "<=").all().item()
-
-    def test_nvar_inequality_bounds_first_tuple(self) -> None:
-        """N-variable: first tuple is bounded, others on curve."""
-        m = Model()
-        fuel = m.add_variables(name="fuel")
-        power = m.add_variables(name="power")
-        heat = m.add_variables(name="heat")
-        m.add_piecewise_formulation(
-            (fuel, [0, 40, 85, 160]),  # bounded
-            (power, [0, 30, 60, 100]),  # input ==
-            (heat, [0, 25, 55, 95]),  # input ==
-            sign="<=",
-            method="sos2",
-        )
-        # inputs stacked, output signed
-        link = m.constraints[f"pwl0{PWL_LINK_SUFFIX}"]
-        output_link = m.constraints[f"pwl0{PWL_OUTPUT_LINK_SUFFIX}"]
-        assert "_pwl_var" in link.labels.dims  # stacked inputs
-        assert "_pwl_var" not in output_link.labels.dims  # single output
-        assert (output_link.sign == "<=").all().item()
 
     def test_lp_consistency_with_sos2(self) -> None:
         """LP and SOS2 give the same fuel at a fixed power (within domain)."""
@@ -1643,9 +1649,8 @@ class TestSignParameter:
             power = m.add_variables(lower=0, upper=30, name="power")
             fuel = m.add_variables(lower=0, upper=40, name="fuel")
             m.add_piecewise_formulation(
-                (fuel, y_pts),
+                (fuel, y_pts, "<="),
                 (power, x_pts),
-                sign="<=",
                 method=method,
             )
             m.add_constraints(power == 15)
@@ -1663,17 +1668,15 @@ class TestSignParameter:
         xa = m_asc.add_variables(name="x")
         ya = m_asc.add_variables(name="y")
         f_asc = m_asc.add_piecewise_formulation(
-            (ya, [0, 20, 30, 35]),
+            (ya, [0, 20, 30, 35], ">="),
             (xa, [0, 10, 20, 30]),
-            sign=">=",
         )
         m_desc = Model()
         xd = m_desc.add_variables(name="x")
         yd = m_desc.add_variables(name="y")
         f_desc = m_desc.add_piecewise_formulation(
-            (yd, [35, 30, 20, 0]),
+            (yd, [35, 30, 20, 0], ">="),
             (xd, [30, 20, 10, 0]),
-            sign=">=",
         )
         assert f_asc.convexity == f_desc.convexity == "concave"
         # concave + >= must fall back from LP
@@ -1698,9 +1701,8 @@ class TestSignParameter:
             x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
             y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
             m.add_piecewise_formulation(
-                (y, breakpoints(bp_y, dim="entity")),
+                (y, breakpoints(bp_y, dim="entity"), "<="),
                 (x, breakpoints(bp_x, dim="entity")),
-                sign="<=",
                 method=method,
             )
             m.add_constraints(x.sel(entity="b") == 10)
@@ -1721,9 +1723,8 @@ class TestSignParameter:
         y = m.add_variables(name="y")
         with pytest.raises(ValueError, match="convex"):
             m.add_piecewise_formulation(
-                (y, [35, 30, 20, 0]),  # same concave curve
+                (y, [35, 30, 20, 0], ">="),  # same concave curve
                 (x, [30, 20, 10, 0]),  # decreasing x
-                sign=">=",
                 method="lp",
             )
 
@@ -1742,9 +1743,8 @@ class TestSignParameter:
         y = m.add_variables(lower=-100, upper=100, name="y")
         active = m.add_variables(binary=True, name="active")
         m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),
+            (y, [0, 20, 30, 35], "<="),
             (x, [0, 10, 20, 30]),
-            sign="<=",
             method=method,
             active=active,
         )
@@ -1769,9 +1769,8 @@ class TestSignParameter:
         y = m.add_variables(lower=0, upper=100, name="y")  # the recipe
         active = m.add_variables(binary=True, name="active")
         m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),
+            (y, [0, 20, 30, 35], "<="),
             (x, [0, 10, 20, 30]),
-            sign="<=",
             method="sos2",
             active=active,
         )
@@ -1788,9 +1787,8 @@ class TestSignParameter:
         y = m.add_variables(lower=-100, upper=100, name="y")
         active = m.add_variables(binary=True, name="active")
         m.add_piecewise_formulation(
-            (y, segments([[0.0, 20.0], [20.0, 35.0]])),
+            (y, segments([[0.0, 20.0], [20.0, 35.0]]), "<="),
             (x, segments([[0.0, 10.0], [10.0, 30.0]])),
-            sign="<=",
             active=active,
         )
         m.add_constraints(active == 0)
@@ -1810,9 +1808,8 @@ class TestSignParameter:
         u = m.add_variables(binary=True, name="u")
         with pytest.raises(ValueError, match="active"):
             m.add_piecewise_formulation(
-                (y, [0, 20, 30, 35]),
+                (y, [0, 20, 30, 35], "<="),
                 (x, [0, 10, 20, 30]),
-                sign="<=",
                 method="lp",
                 active=u,
             )
@@ -1828,9 +1825,8 @@ class TestSignParameter:
             x = m.add_variables(lower=0, upper=30, name="x")
             y = m.add_variables(lower=0, upper=60, name="y")
             f = m.add_piecewise_formulation(
-                (y, [0, 10, 20, 30]),  # linear (all slopes = 1)
+                (y, [0, 10, 20, 30], sign),  # linear (all slopes = 1)
                 (x, [0, 10, 20, 30]),
-                sign=sign,
                 method="lp",
             )
             assert f.method == "lp"
@@ -1848,9 +1844,8 @@ class TestSignParameter:
         y = m.add_variables(name="y")
         with caplog.at_level(logging.INFO, logger="linopy.piecewise"):
             m.add_piecewise_formulation(
-                (y, [0, 20, 30, 35]),  # concave + sign='>=' → LP skipped
+                (y, [0, 20, 30, 35], ">="),  # concave + sign='>=' → LP skipped
                 (x, [0, 10, 20, 30]),
-                sign=">=",
             )
         assert "LP not applicable" in caplog.text
 
@@ -1864,9 +1859,8 @@ class TestSignParameter:
         x = m.add_variables(lower=0, upper=100, name="x")
         y = m.add_variables(lower=0, upper=100, name="y")
         m.add_piecewise_formulation(
-            (y, [0, 20, 30, 35]),
+            (y, [0, 20, 30, 35], "<="),
             (x, [0, 10, 20, 30]),  # x_max = 30
-            sign="<=",
             method="lp",
         )
         m.add_constraints(x >= 50)
@@ -1890,9 +1884,8 @@ class TestSignParameter:
             x = m.add_variables(lower=0, upper=30, coords=[entities], name="x")
             y = m.add_variables(lower=0, upper=40, coords=[entities], name="y")
             m.add_piecewise_formulation(
-                (y, breakpoints(bp_y, dim="entity")),
+                (y, breakpoints(bp_y, dim="entity"), "<="),
                 (x, breakpoints(bp_x, dim="entity")),
-                sign="<=",
                 method=method,
             )
             m.add_constraints(x.sel(entity="a") == 15)
@@ -1920,9 +1913,7 @@ class TestSignParameter:
                 m = Model()
                 p = m.add_variables(lower=0, upper=30, name="p")
                 f = m.add_variables(lower=0, upper=50, name="f")
-                m.add_piecewise_formulation(
-                    (f, y_pts), (p, x_pts), sign="<=", method=method
-                )
+                m.add_piecewise_formulation((f, y_pts, "<="), (p, x_pts), method=method)
                 m.add_constraints(p == 15)
                 m.add_objective(obj_sign * f)
                 m.solve()

@@ -481,8 +481,8 @@ def _tangent_lines_impl(
     """
     Chord-expression math — the body of ``tangent_lines`` without the
     :class:`EvolvingAPIWarning`.  Called internally by ``_add_lp`` so a
-    single ``add_piecewise_formulation(sign="<=")`` emits exactly one
-    warning, not two.
+    single ``add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))``
+    emits exactly one warning, not two.
     """
     from linopy.expressions import LinearExpression as LinExpr
     from linopy.variables import Variable
@@ -523,12 +523,13 @@ def tangent_lines(
     is the chord of one segment: :math:`m_k \cdot x + c_k`.  No auxiliary
     variables are created.
 
-    For most users: prefer :func:`add_piecewise_formulation` with
-    ``sign="<="`` / ``">="`` — it builds on this helper and adds the
-    ``x ∈ [x_min, x_max]`` domain bound plus a curvature-vs-sign check
-    that catches the "wrong region" case.  Use ``tangent_lines`` directly
-    only when you need to compose the chord expressions manually (e.g. with
-    other linear terms, or without the domain bound).
+    For most users: prefer :func:`add_piecewise_formulation` with a
+    bounded tuple ``(y, y_pts, "<=")`` / ``(y, y_pts, ">=")`` — it builds
+    on this helper and adds the ``x ∈ [x_min, x_max]`` domain bound plus
+    a curvature-vs-sign check that catches the "wrong region" case.  Use
+    ``tangent_lines`` directly only when you need to compose the chord
+    expressions manually (e.g. with other linear terms, or without the
+    domain bound).
 
     .. code-block:: python
 
@@ -737,28 +738,30 @@ def _broadcast_points(
 
 def add_piecewise_formulation(
     model: Model,
-    *pairs: tuple[LinExprLike, BreaksLike],
-    sign: Literal["==", "<=", ">="] = "==",
+    *pairs: tuple[LinExprLike, BreaksLike]
+    | tuple[LinExprLike, BreaksLike, Literal["==", "<=", ">="]],
     method: Literal["sos2", "incremental", "lp", "auto"] = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
+    **kwargs: object,
 ) -> PiecewiseFormulation:
     r"""
     Add piecewise linear constraints.
 
-    Each positional argument is a ``(expression, breakpoints)`` tuple.
-    All expressions are linked through shared interpolation weights so
-    that every operating point lies on the same segment of the piecewise
-    curve.
+    Each positional argument is a ``(expression, breakpoints)`` tuple, or
+    ``(expression, breakpoints, sign)`` to mark that expression as bounded
+    by the piecewise curve rather than pinned to it.  All expressions are
+    linked through shared interpolation weights so that every operating
+    point lies on the same segment of the piecewise curve.
 
-    Example — 2 variables::
+    Example — 2 variables (joint equality, the default)::
 
         m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
             (fuel,  [0, 36, 84, 170]),
         )
 
-    Example — 3 variables (CHP plant)::
+    Example — 3 variables, CHP plant (joint equality)::
 
         m.add_piecewise_formulation(
             (power, [0, 30, 60, 100]),
@@ -766,45 +769,55 @@ def add_piecewise_formulation(
             (heat,  [0, 25, 55, 95]),
         )
 
-    **Sign — inequality bounds:**
+    **Per-tuple sign — inequality bounds:**
 
-    The ``sign`` parameter follows the *first-tuple convention*:
+    Add ``"<="`` or ``">="`` as a third tuple element to mark a single
+    expression as bounded by the curve instead of pinned to it.  The
+    remaining tuples are still forced to equality (input on the curve).
+    Reads directly as the relation it encodes:
 
-    - ``sign="=="`` (default): all expressions must lie exactly on the
-      piecewise curve (joint equality).
-    - ``sign="<="``: the **first** tuple's expression is **bounded above**
-      by its interpolated value; all other tuples are forced to equality
-      (inputs on the curve).  Reads as *"first expression ≤ f(the rest)"*.
-    - ``sign=">="``: same but the first is bounded **below**.
+    .. code-block:: python
+
+        # fuel <= f(power) — concave curve, bounded above
+        m.add_piecewise_formulation(
+            (fuel,  y_pts, "<="),
+            (power, x_pts),
+        )
+
+        # cost >= g(load) — convex curve, bounded below
+        m.add_piecewise_formulation(
+            (cost, y_pts, ">="),
+            (load, x_pts),
+        )
 
     For 2-variable inequality on convex/concave curves, ``method="auto"``
     automatically selects a pure-LP tangent-line formulation (no auxiliary
     variables).  Non-convex curves fall back to SOS2/incremental with the
-    sign applied to the first tuple's link constraint.
+    sign applied to the bounded tuple's link constraint.
 
-    Example — ``fuel ≤ f(power)`` on a concave curve::
+    **Restrictions on per-tuple sign:**
 
-        m.add_piecewise_formulation(
-            (fuel,  y_pts),    # bounded output, listed first
-            (power, x_pts),    # input, always equality
-            sign="<=",
-        )
+    - At most one tuple may carry a non-equality sign.  All other tuples
+      default to ``"=="``.
+    - With **3 or more** tuples, all signs must be ``"=="`` (the
+      multi-input bounded case is not supported yet — the natural reading
+      ``z ≥ f(x, y)`` belongs to a future bivariate / triangulated
+      piecewise API).
 
     Parameters
     ----------
-    *pairs : tuple of (expression, breakpoints)
+    *pairs : tuple of (expression, breakpoints) or (expression, breakpoints, sign)
         Each pair links an expression (Variable or LinearExpression) to
-        its breakpoint values.  At least two pairs are required.  With
-        ``sign != EQUAL`` the **first** pair is the bounded output; all
-        later pairs are treated as inputs forced to equality.
-    sign : {"==", "<=", ">="}, default "=="
-        Constraint sign applied to the *first* tuple's link constraint.
-        Later tuples always use equality.  See description above.
+        its breakpoint values.  An optional third element ``"<="`` or
+        ``">="`` marks that expression as bounded by the curve; if
+        omitted, the expression is pinned (``"=="``).  At least two pairs
+        are required; at most one may carry a non-equality sign; with
+        3+ pairs all signs must be ``"=="``.
     method : {"auto", "sos2", "incremental", "lp"}, default "auto"
         Formulation method.
         ``"lp"`` uses tangent lines (pure LP, no variables) and requires
-        ``sign != EQUAL`` plus a matching-convexity curve with exactly
-        two tuples.
+        exactly one tuple with ``"<="`` or ``">="`` plus a matching-curvature
+        curve with exactly two tuples.
         ``"auto"`` picks ``"lp"`` when applicable, otherwise
         ``"incremental"`` (monotonic breakpoints) or ``"sos2"``.
     active : Variable or LinearExpression, optional
@@ -812,9 +825,9 @@ def add_piecewise_formulation(
         ``active=0``, all auxiliary variables are forced to zero.
         Not supported with ``method="lp"``.
 
-        With ``sign="=="`` (the default), the output is then pinned to
-        ``0``.  With ``sign="<="`` / ``">="``, deactivation only pushes
-        the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
+        With all-equality tuples (the default), the output is then pinned
+        to ``0``.  With a bounded tuple (``"<="`` / ``">="``), deactivation
+        only pushes the signed bound to ``0`` (the output is ≤ 0 or ≥ 0
         respectively) — the complementary bound still comes from the
         output variable's own lower/upper.  In the common case where
         the output is naturally non-negative (fuel, cost, heat, …),
@@ -834,14 +847,14 @@ def add_piecewise_formulation(
     -----
     EvolvingAPIWarning
         ``add_piecewise_formulation`` is a newly-added API; details such
-        as the ``sign``/first-tuple convention and ``active`` + non-equality
+        as the per-tuple sign convention and ``active`` + non-equality
         sign semantics may be refined based on user feedback.  Silence
         with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
     """
     warnings.warn(
         "piecewise: add_piecewise_formulation is a new API; some details "
-        "(e.g. the sign/first-tuple convention, active+sign semantics) "
+        "(e.g. the per-tuple sign convention, active+sign semantics) "
         "may be refined in minor releases.  Please share your use cases "
         "or concerns at https://github.com/PyPSA/linopy/issues — your "
         "feedback shapes what stabilises.  Silence with "
@@ -850,82 +863,142 @@ def add_piecewise_formulation(
         stacklevel=2,
     )
 
-    # Normalize sign (accept "==" or "=" for equality, etc.).  The Literal
-    # annotation above covers the user-facing forms; after normalization
-    # ``sign`` holds one of the canonical values in :data:`SIGNS`.
-    sign = sign_replace_dict.get(sign, sign)  # type: ignore[assignment]
-    if sign not in SIGNS:
-        raise ValueError(f"sign must be one of {sorted(SIGNS)}, got '{sign}'")
+    # Migration helper: explicit error for the removed sign= keyword.
+    if "sign" in kwargs:
+        raise TypeError(
+            "The `sign=` keyword has been removed from add_piecewise_formulation. "
+            "Specify the sign per-tuple as a third tuple element, e.g. "
+            "`(fuel, y_pts, '<=')` instead of `sign='<='`. "
+            "See doc/piecewise-linear-constraints.rst."
+        )
+    if kwargs:
+        raise TypeError(
+            "add_piecewise_formulation() got unexpected keyword argument(s): "
+            f"{sorted(kwargs)}"
+        )
+
     if method not in PWL_METHODS:
         raise ValueError(f"method must be one of {sorted(PWL_METHODS)}, got '{method}'")
-    if method == "lp" and sign == EQUAL:
-        raise ValueError("method='lp' requires sign='<=' or '>='.")
 
     if len(pairs) < 2:
         raise TypeError(
             "add_piecewise_formulation() requires at least 2 "
-            "(expression, breakpoints) pairs."
+            "(expression, breakpoints[, sign]) pairs."
         )
 
+    # Parse and normalise per-tuple signs.  Each pair is either
+    # (expr, bp) — sign defaults to "==" — or (expr, bp, sign).
+    parsed: list[tuple[LinExprLike, BreaksLike, str]] = []
     for i, pair in enumerate(pairs):
-        if not isinstance(pair, tuple) or len(pair) != 2:
+        if not isinstance(pair, tuple) or len(pair) not in (2, 3):
             raise TypeError(
-                f"Argument {i + 1} must be a (expression, breakpoints) tuple, "
-                f"got {type(pair)}."
+                f"Argument {i + 1} must be a (expression, breakpoints) "
+                f"or (expression, breakpoints, sign) tuple, got {pair!r}."
             )
+        if len(pair) == 2:
+            expr, bp = pair
+            tuple_sign: str = EQUAL
+        else:
+            expr, bp, raw_sign = pair
+            tuple_sign = sign_replace_dict.get(raw_sign, raw_sign)
+            if tuple_sign not in SIGNS:
+                raise ValueError(
+                    f"Argument {i + 1}: sign must be one of "
+                    f"{sorted(SIGNS)}, got {raw_sign!r}."
+                )
+        parsed.append((expr, bp, tuple_sign))
 
-    # Coerce all breakpoints.  Drop scalar coordinates (e.g. left over
-    # from bp.sel(var="power")) so they don't conflict when stacking.
-    coerced: list[tuple[LinExprLike, DataArray]] = []
-    for expr, bp in pairs:
+    # At most one non-equality sign; with 3+ tuples, none.
+    bounded_positions = [i for i, p in enumerate(parsed) if p[2] != EQUAL]
+    if len(bounded_positions) > 1:
+        raise ValueError(
+            "At most one tuple may carry a non-equality sign; got "
+            f"{len(bounded_positions)} (positions {bounded_positions})."
+        )
+    if len(parsed) >= 3 and bounded_positions:
+        raise ValueError(
+            "Non-equality signs are not supported with 3+ tuples. "
+            "Use sign='==' on all tuples (the default), or reduce to 2 tuples. "
+            "The multi-input bounded case is reserved for a future "
+            "bivariate / triangulated piecewise API."
+        )
+
+    signed_idx: int | None
+    if bounded_positions:
+        bidx = bounded_positions[0]
+        signed_idx = bidx
+        sign: str = parsed[bidx][2]
+    else:
+        signed_idx = None
+        sign = EQUAL
+
+    if method == "lp" and sign == EQUAL:
+        raise ValueError(
+            "method='lp' requires exactly one tuple with sign='<=' or '>='."
+        )
+
+    coerced_bps: list[DataArray] = []
+    for _, bp, _s in parsed:
         if not isinstance(bp, DataArray):
             bp = _coerce_breaks(bp)
         scalar_coords = [c for c in bp.coords if c not in bp.dims]
         if scalar_coords:
             bp = bp.drop_vars(scalar_coords)
-        coerced.append((expr, bp))
+        coerced_bps.append(bp)
 
-    # Check for disjunctive (segment dimension) on first pair
-    first_bp = coerced[0][1]
-    disjunctive = SEGMENT_DIM in first_bp.dims
+    disjunctive = SEGMENT_DIM in coerced_bps[0].dims
+    for i in range(1, len(coerced_bps)):
+        _validate_breakpoint_shapes(coerced_bps[0], coerced_bps[i])
 
-    # Validate all breakpoint pairs have compatible shapes.
-    # Checking each against the first is sufficient since the shape checks are transitive.
-    for i in range(1, len(coerced)):
-        _validate_breakpoint_shapes(first_bp, coerced[i][1])
-
-    # Broadcast all breakpoints to match all expression dimensions
-    all_exprs = [expr for expr, _ in coerced]
+    raw_exprs = [expr for expr, _, _ in parsed]
     bp_list = [
-        _broadcast_points(bp, *all_exprs, disjunctive=disjunctive) for _, bp in coerced
+        _broadcast_points(bp, *raw_exprs, disjunctive=disjunctive) for bp in coerced_bps
     ]
 
-    # Compute combined mask from all breakpoints
     combined_null = bp_list[0].isnull()
     for bp in bp_list[1:]:
         combined_null = combined_null | bp.isnull()
     bp_mask = ~combined_null if bool(combined_null.any()) else None
 
-    # Name
     if name is None:
         name = f"pwl{model._pwlCounter}"
         model._pwlCounter += 1
 
-    # Build link dimension coordinates from variable names
     from linopy.variables import Variable
 
     link_coords: list[str] = []
-    for i, expr in enumerate(all_exprs):
+    for i, expr in enumerate(raw_exprs):
         if isinstance(expr, Variable) and expr.name:
             link_coords.append(expr.name)
         else:
             link_coords.append(str(i))
 
-    # Convert expressions to LinearExpressions
-    lin_exprs = [_to_linexpr(expr) for expr in all_exprs]
+    lin_exprs = [_to_linexpr(expr) for expr in raw_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
 
-    # Snapshot existing names to detect what the formulation adds
+    if signed_idx is None:
+        inputs = _PwlInputs(
+            pinned_exprs=lin_exprs,
+            pinned_bps=bp_list,
+            pinned_coords=link_coords,
+            bounded_expr=None,
+            bounded_bp=None,
+            bounded_coord=None,
+            bounded_sign=EQUAL,
+            bp_mask=bp_mask,
+        )
+    else:
+        inputs = _PwlInputs(
+            pinned_exprs=[e for j, e in enumerate(lin_exprs) if j != signed_idx],
+            pinned_bps=[b for j, b in enumerate(bp_list) if j != signed_idx],
+            pinned_coords=[c for j, c in enumerate(link_coords) if j != signed_idx],
+            bounded_expr=lin_exprs[signed_idx],
+            bounded_bp=bp_list[signed_idx],
+            bounded_coord=link_coords[signed_idx],
+            bounded_sign=sign,
+            bp_mask=bp_mask,
+        )
+
     vars_before = set(model.variables)
     cons_before = set(model.constraints)
 
@@ -938,32 +1011,11 @@ def add_piecewise_formulation(
             raise ValueError(
                 "method='lp' is not supported for disjunctive (segment) breakpoints"
             )
-        _add_disjunctive(
-            model,
-            name,
-            lin_exprs,
-            bp_list,
-            link_coords,
-            bp_mask,
-            sign,
-            active_expr,
-        )
+        _add_disjunctive(model, name, inputs, active_expr)
         resolved_method = "sos2"
     else:
-        # Continuous: stack into N-variable formulation
-        resolved_method = _add_continuous(
-            model,
-            name,
-            lin_exprs,
-            bp_list,
-            link_coords,
-            bp_mask,
-            method,
-            sign,
-            active_expr,
-        )
+        resolved_method = _add_continuous(model, name, inputs, method, active_expr)
 
-    # Collect newly created variable and constraint names
     new_vars = [n for n in model.variables if n not in vars_before]
     new_cons = [n for n in model.constraints if n not in cons_before]
 
@@ -974,15 +1026,19 @@ def add_piecewise_formulation(
             name,
             resolved_method,
             sign,
-            len(pairs),
-            "" if len(pairs) == 1 else "s",
+            inputs.n_tuples,
+            "" if inputs.n_tuples == 1 else "s",
         )
 
-    # Compute convexity when well-defined: exactly two tuples (y, x),
-    # non-disjunctive, and strictly monotonic x breakpoints.
     convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
-    if len(bp_list) == 2 and not disjunctive:
-        x_pts, y_pts = bp_list[1], bp_list[0]
+    if inputs.n_tuples == 2 and not disjunctive:
+        if inputs.is_equality:
+            x_pts = inputs.pinned_bps[1]
+            y_pts: DataArray = inputs.pinned_bps[0]
+        else:
+            assert inputs.bounded_bp is not None
+            x_pts = inputs.pinned_bps[0]
+            y_pts = inputs.bounded_bp
         if _check_strict_monotonicity(x_pts):
             convexity = _detect_convexity(x_pts, y_pts)
 
@@ -1010,30 +1066,74 @@ def _stack_along_link(
     return xr.concat(expanded, dim=link_dim, coords="minimal")  # type: ignore
 
 
+@dataclass
+class _PwlInputs:
+    """
+    Categorised piecewise inputs (post-coercion, post-broadcast).
+
+    ``pinned_*`` are the equality tuples in the user's original order.
+    ``bounded_*`` is the single non-equality tuple, or ``None``.
+    ``bounded_sign`` is ``EQUAL`` iff ``bounded_expr is None``.
+    """
+
+    pinned_exprs: list[LinearExpression]
+    pinned_bps: list[DataArray]
+    pinned_coords: list[str]
+    bounded_expr: LinearExpression | None
+    bounded_bp: DataArray | None
+    bounded_coord: str | None
+    bounded_sign: str
+    bp_mask: DataArray | None
+    link_dim: str = "_pwl_var"
+
+    @property
+    def is_equality(self) -> bool:
+        return self.bounded_expr is None
+
+    @property
+    def n_tuples(self) -> int:
+        return len(self.pinned_exprs) + (0 if self.is_equality else 1)
+
+    def all_bps(self) -> list[DataArray]:
+        if self.bounded_bp is None:
+            return list(self.pinned_bps)
+        return [self.bounded_bp, *self.pinned_bps]
+
+    def all_coords(self) -> list[str]:
+        if self.bounded_coord is None:
+            return list(self.pinned_coords)
+        return [self.bounded_coord, *self.pinned_coords]
+
+    def all_exprs(self) -> list[LinearExpression]:
+        if self.bounded_expr is None:
+            return list(self.pinned_exprs)
+        return [self.bounded_expr, *self.pinned_exprs]
+
+
 def _lp_eligibility(
-    lin_exprs: list[LinearExpression],
-    bp_list: list[DataArray],
-    sign: str,
+    inputs: _PwlInputs,
     active: LinearExpression | None,
 ) -> tuple[bool, str]:
     """
     Check whether LP tangent-lines dispatch is applicable.
 
-    Returns ``(True, "")`` if LP is applicable, else ``(False, reason)``
-    with a short string describing why.  Used for both auto-dispatch
-    and for an informational log when LP is skipped.
+    Returns ``(True, "")`` if LP is applicable, else ``(False, reason)``.
     """
-    if len(lin_exprs) != 2:
-        return False, f"{len(lin_exprs)} expressions (LP supports only 2)"
+    if inputs.n_tuples != 2:
+        return False, f"{inputs.n_tuples} expressions (LP supports only 2)"
+    if inputs.is_equality:
+        return False, "all tuples are equality (LP needs one bounded tuple)"
     if active is not None:
         return False, "active=... is not supported by LP"
-    x_pts = bp_list[1]
-    y_pts = bp_list[0]
+    assert inputs.bounded_bp is not None  # narrowed by is_equality check
+    x_pts = inputs.pinned_bps[0]
+    y_pts = inputs.bounded_bp
     if not _check_strict_monotonicity(x_pts):
         return False, "x breakpoints are not strictly monotonic"
     if not _has_trailing_nan_only(x_pts):
         return False, "x breakpoints contain non-trailing NaN"
     convexity = _detect_convexity(x_pts, y_pts)
+    sign = inputs.bounded_sign
     if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
         return False, f"sign='<=' needs concave/linear curvature, got '{convexity}'"
     if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
@@ -1044,14 +1144,7 @@ def _lp_eligibility(
 @dataclass
 class _PwlLinks:
     """
-    Packaged link expressions for a SOS2/incremental/disjunctive builder.
-
-    ``stacked_bp`` spans *all* tuples — used to size lambda/delta variables.
-    ``eq_expr`` / ``eq_bp`` form the equality link (stacks all tuples when
-    ``sign == "=="``, inputs-only otherwise; may be ``None`` if there are no
-    inputs on the equality side).
-    ``signed_expr`` / ``signed_bp`` are the first tuple's output-side link
-    (``None`` iff ``sign == "=="``).
+    Stacked link expressions consumed by SOS2/incremental/disjunctive builders.
     """
 
     stacked_bp: DataArray
@@ -1064,93 +1157,82 @@ class _PwlLinks:
     signed_bp: DataArray | None
 
 
-def _build_links(
-    model: Model,
-    lin_exprs: list[LinearExpression],
-    bp_list: list[DataArray],
-    link_coords: list[str],
-    link_dim: str,
-    sign: str,
-    bp_mask: DataArray | None,
-) -> _PwlLinks:
-    """
-    Split (or stack) ``lin_exprs``/``bp_list`` into the equality and
-    signed link components dictated by ``sign``.
-    """
+def _build_links(model: Model, inputs: _PwlInputs) -> _PwlLinks:
+    """Stack ``inputs`` into the link representation."""
     from linopy.expressions import LinearExpression
 
-    stacked_bp = _stack_along_link(bp_list, link_coords, link_dim)
+    stacked_bp = _stack_along_link(
+        inputs.all_bps(), inputs.all_coords(), inputs.link_dim
+    )
 
-    if sign == EQUAL:
-        eq_data = _stack_along_link([e.data for e in lin_exprs], link_coords, link_dim)
-        # eq_bp is deliberately aliased to stacked_bp here — all tuples are
-        # already on the equality side, so the "full stack" and the "equality
-        # stack" are the same array.
+    if inputs.is_equality:
+        eq_data = _stack_along_link(
+            [e.data for e in inputs.pinned_exprs],
+            inputs.pinned_coords,
+            inputs.link_dim,
+        )
         return _PwlLinks(
             stacked_bp=stacked_bp,
-            link_dim=link_dim,
-            bp_mask=bp_mask,
-            sign=sign,
+            link_dim=inputs.link_dim,
+            bp_mask=inputs.bp_mask,
+            sign=EQUAL,
             eq_expr=LinearExpression(eq_data, model),
             eq_bp=stacked_bp,
             signed_expr=None,
             signed_bp=None,
         )
 
-    signed_expr = lin_exprs[0]
-    signed_bp = bp_list[0]
-    inputs_exprs = lin_exprs[1:]
-    inputs_bp = bp_list[1:]
-    inputs_coords = link_coords[1:]
-    if inputs_exprs:
+    if inputs.pinned_exprs:
         eq_data = _stack_along_link(
-            [e.data for e in inputs_exprs], inputs_coords, link_dim
+            [e.data for e in inputs.pinned_exprs],
+            inputs.pinned_coords,
+            inputs.link_dim,
         )
         eq_expr: LinearExpression | None = LinearExpression(eq_data, model)
-        eq_bp: DataArray | None = _stack_along_link(inputs_bp, inputs_coords, link_dim)
+        eq_bp: DataArray | None = _stack_along_link(
+            inputs.pinned_bps, inputs.pinned_coords, inputs.link_dim
+        )
     else:
         eq_expr = None
         eq_bp = None
 
     return _PwlLinks(
         stacked_bp=stacked_bp,
-        link_dim=link_dim,
-        bp_mask=bp_mask,
-        sign=sign,
+        link_dim=inputs.link_dim,
+        bp_mask=inputs.bp_mask,
+        sign=inputs.bounded_sign,
         eq_expr=eq_expr,
         eq_bp=eq_bp,
-        signed_expr=signed_expr,
-        signed_bp=signed_bp,
+        signed_expr=inputs.bounded_expr,
+        signed_bp=inputs.bounded_bp,
     )
 
 
 def _try_lp(
     model: Model,
     name: str,
-    lin_exprs: list[LinearExpression],
-    bp_list: list[DataArray],
+    inputs: _PwlInputs,
     method: str,
-    sign: str,
     active: LinearExpression | None,
 ) -> bool:
-    """
-    Dispatch the LP formulation if requested/eligible.
-
-    Returns ``True`` when LP was built (caller should return ``"lp"``),
-    ``False`` when the caller should fall through to SOS2/incremental.
-    Raises on explicit ``method="lp"`` with mismatched inputs.
-    """
+    """Dispatch the LP formulation if requested or eligible."""
     if method == "lp":
-        if len(lin_exprs) != 2:
+        if inputs.n_tuples != 2:
             raise ValueError(
-                "method='lp' requires exactly 2 (expression, breakpoints) pairs."
+                "method='lp' requires exactly 2 (expression, breakpoints[, sign]) pairs."
             )
+        if inputs.is_equality:
+            raise ValueError("method='lp' requires one tuple with sign='<=' or '>='.")
         if active is not None:
             raise ValueError("method='lp' is not compatible with active=...")
-        y_pts, x_pts = bp_list[0], bp_list[1]
+        assert inputs.bounded_bp is not None  # narrowed by is_equality check
+        assert inputs.bounded_expr is not None
+        x_pts = inputs.pinned_bps[0]
+        y_pts = inputs.bounded_bp
         if not _check_strict_monotonicity(x_pts):
             raise ValueError("method='lp' requires strictly monotonic x breakpoints.")
         convexity = _detect_convexity(x_pts, y_pts)
+        sign = inputs.bounded_sign
         if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
             raise ValueError(
                 "method='lp' with sign='<=' requires concave or linear "
@@ -1161,20 +1243,24 @@ def _try_lp(
                 "method='lp' with sign='>=' requires convex or linear "
                 f"curvature; got '{convexity}'. Use method='auto'."
             )
-        _add_lp(model, name, lin_exprs[1], lin_exprs[0], x_pts, y_pts, sign)
+        _add_lp(
+            model, name, inputs.pinned_exprs[0], inputs.bounded_expr, x_pts, y_pts, sign
+        )
         return True
 
-    if method == "auto" and sign != EQUAL:
-        ok, reason = _lp_eligibility(lin_exprs, bp_list, sign, active)
+    if method == "auto" and not inputs.is_equality:
+        ok, reason = _lp_eligibility(inputs, active)
         if ok:
+            assert inputs.bounded_expr is not None
+            assert inputs.bounded_bp is not None
             _add_lp(
                 model,
                 name,
-                lin_exprs[1],
-                lin_exprs[0],
-                bp_list[1],
-                bp_list[0],
-                sign,
+                inputs.pinned_exprs[0],
+                inputs.bounded_expr,
+                inputs.pinned_bps[0],
+                inputs.bounded_bp,
+                inputs.bounded_sign,
             )
             return True
         logger.info(
@@ -1222,27 +1308,15 @@ def _resolve_sos2_vs_incremental(method: str, stacked_bp: DataArray) -> str:
 def _add_continuous(
     model: Model,
     name: str,
-    lin_exprs: list[LinearExpression],
-    bp_list: list[DataArray],
-    link_coords: list[str],
-    bp_mask: DataArray | None,
+    inputs: _PwlInputs,
     method: str,
-    sign: str,
     active: LinearExpression | None = None,
 ) -> str:
-    """
-    Dispatch continuous piecewise constraints.
-
-    Returns the resolved method name ("lp", "sos2", or "incremental").
-    """
-    link_dim = "_pwl_var"
-
-    if _try_lp(model, name, lin_exprs, bp_list, method, sign, active):
+    """Returns the resolved method name (``"lp"``, ``"sos2"``, ``"incremental"``)."""
+    if _try_lp(model, name, inputs, method, active):
         return "lp"
 
-    links = _build_links(
-        model, lin_exprs, bp_list, link_coords, link_dim, sign, bp_mask
-    )
+    links = _build_links(model, inputs)
     method = _resolve_sos2_vs_incremental(method, links.stacked_bp)
 
     if method == "sos2":
@@ -1387,23 +1461,14 @@ def _add_incremental(
 def _add_disjunctive(
     model: Model,
     name: str,
-    lin_exprs: list[LinearExpression],
-    bp_list: list[DataArray],
-    link_coords: list[str],
-    bp_mask: DataArray | None,
-    sign: str,
+    inputs: _PwlInputs,
     active: LinearExpression | None = None,
 ) -> None:
-    """
-    Disjunctive SOS2 formulation.  Uses the shared ``_build_links``
-    split: equality on inputs (all tuples when sign='=='), signed link
-    on the first tuple when sign != '=='.
-    """
-    link_dim = "_pwl_var"
-    links = _build_links(
-        model, lin_exprs, bp_list, link_coords, link_dim, sign, bp_mask
-    )
+    """Disjunctive SOS2 formulation."""
+    link_dim = inputs.link_dim
+    links = _build_links(model, inputs)
     stacked_bp = links.stacked_bp
+    bp_mask = inputs.bp_mask
 
     _validate_numeric_breakpoint_coords(stacked_bp)
     if not _has_trailing_nan_only(stacked_bp):
