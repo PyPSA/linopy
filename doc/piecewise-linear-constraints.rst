@@ -40,7 +40,7 @@ Quick Start
     # the requested sign; SOS2/incremental otherwise).
     m.add_piecewise_formulation(
         (fuel, [0, 20, 30, 35], "<="),  # bounded by the curve
-        (power, [0, 10, 20, 30]),       # pinned to the curve
+        (power, [0, 10, 20, 30]),  # pinned to the curve
     )
 
 Each ``(expression, breakpoints[, sign])`` tuple pairs a variable with its
@@ -59,12 +59,12 @@ API
 .. code-block:: python
 
     m.add_piecewise_formulation(
-        (expr1, breakpoints1),               # pinned (sign defaults to "==")
-        (expr2, breakpoints2, "<="),         # or with an explicit sign
+        (expr1, breakpoints1),  # pinned (sign defaults to "==")
+        (expr2, breakpoints2, "<="),  # or with an explicit sign
         ...,
         method="auto",  # "auto", "sos2", "incremental", or "lp"
-        active=None,    # binary variable to gate the constraint
-        name=None,      # base name for generated variables/constraints
+        active=None,  # binary variable to gate the constraint
+        name=None,  # base name for generated variables/constraints
     )
 
 Creates auxiliary variables and constraints that enforce either a joint
@@ -106,9 +106,7 @@ stays pinned.
     m.add_piecewise_formulation((y, y_pts, ">="), (x, x_pts))
 
     # 3-variable equality (CHP heat/power/fuel): all three on one curve.
-    m.add_piecewise_formulation(
-        (power, p_pts), (fuel, f_pts), (heat, h_pts)
-    )
+    m.add_piecewise_formulation((power, p_pts), (fuel, f_pts), (heat, h_pts))
 
 **Restrictions:**
 

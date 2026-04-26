@@ -780,7 +780,7 @@ def add_piecewise_formulation(
 
         # fuel <= f(power) — concave curve, bounded above
         m.add_piecewise_formulation(
-            (fuel,  y_pts, "<="),
+            (fuel, y_pts, "<="),
             (power, x_pts),
         )
 
