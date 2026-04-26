@@ -74,14 +74,20 @@ equality (all tuples on the curve, the default) or a one-sided bound
 ``breakpoints`` and ``segments``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Factory functions that create DataArrays with the correct dimension names:
+Two factories with distinct geometric meaning:
+
+- ``breakpoints()`` — values along a single **connected** curve.  Linear
+  pieces between adjacent breakpoints are interpolated continuously.
+- ``segments()`` — **disjoint** operating regions with gaps between them
+  (e.g. forbidden zones).  Builds a 2-D array consumed by the
+  *disjunctive* formulation, where exactly one region is active at a time.
 
 .. code-block:: python
 
-    linopy.breakpoints([0, 50, 100])  # list
+    linopy.breakpoints([0, 50, 100])  # connected
     linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")  # per-entity
     linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0)  # from slopes
-    linopy.segments([(0, 10), (50, 100)])  # disjunctive
+    linopy.segments([(0, 10), (50, 100)])  # two disjoint regions
     linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")
 
 
@@ -304,9 +310,9 @@ At-a-glance comparison:
    :widths: 26 18 18 18 20
 
    * - Property
+     - ``lp``
      - ``sos2``
      - ``incremental``
-     - ``lp``
      - Disjunctive
    * - Segment layout
      - Connected
@@ -314,40 +320,84 @@ At-a-glance comparison:
      - Connected
      - Disconnected
    * - Supported per-tuple sign
-     - all ``==`` or one ``<=``/``>=``
-     - all ``==`` or one ``<=``/``>=``
      - one ``<=`` or ``>=`` (required)
      - all ``==`` or one ``<=``/``>=``
+     - all ``==`` or one ``<=``/``>=``
+     - all ``==`` or one ``<=``/``>=``
    * - Number of tuples
-     - ≥ 2 (3+ requires all ``==``)
-     - ≥ 2 (3+ requires all ``==``)
      - Exactly 2
      - ≥ 2 (3+ requires all ``==``)
+     - ≥ 2 (3+ requires all ``==``)
+     - ≥ 2 (3+ requires all ``==``)
    * - Breakpoint order
-     - Any
      - Strictly monotonic
+     - Any
      - Strictly monotonic
      - Any (per segment)
    * - Curvature requirement
-     - None
-     - None
      - Concave (``<=``) or convex (``>=``)
      - None
+     - None
+     - None
    * - Auxiliary variables
+     - **None**
      - Continuous + SOS2
      - Continuous + binary
-     - **None**
      - Binary + SOS2
    * - ``active=`` supported
-     - Yes
-     - Yes
      - No
      - Yes
+     - Yes
+     - Yes
    * - Solver requirement
+     - **Any LP solver**
      - SOS2-capable
      - MIP-capable
-     - **Any LP solver**
      - SOS2 + MIP
+
+LP (chord-line) Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For **2-variable inequality** on a **convex** or **concave** curve.  Adds one
+chord inequality per segment plus a domain bound — no auxiliary variables and
+no MIP relaxation:
+
+.. math::
+
+   &y \ \text{sign}\ m_k \cdot x + c_k
+   \quad \forall\ \text{segments } k
+
+   &x_0 \le x \le x_n
+
+where :math:`m_k = (y_{k+1} - y_k)/(x_{k+1} - x_k)` and
+:math:`c_k = y_k - m_k\, x_k`.  For concave :math:`f` with ``sign="<="``,
+the intersection of all chord inequalities equals the hypograph of
+:math:`f` on its domain.
+
+The LP dispatch requires curvature and sign to match: ``sign="<="`` needs
+concave (or linear); ``sign=">="`` needs convex (or linear).  A mismatch
+is *not* just a loose bound — it describes the wrong region (see the
+:doc:`piecewise-inequality-bounds-tutorial`).  ``method="auto"`` detects
+this and falls back; ``method="lp"`` raises.
+
+.. code-block:: python
+
+    # y <= f(x) on a concave f — auto picks LP
+    m.add_piecewise_formulation((y, yp, "<="), (x, xp))
+
+    # Or explicitly:
+    m.add_piecewise_formulation((y, yp, "<="), (x, xp), method="lp")
+
+**Not supported with** ``method="lp"``: all-equality, more than 2 tuples,
+and ``active``.  ``method="auto"`` falls back to SOS2/incremental in all
+three cases.
+
+The underlying chord expressions are also exposed as a standalone helper,
+``linopy.tangent_lines(x, x_pts, y_pts)``, which returns the per-segment
+chord as a :class:`~linopy.expressions.LinearExpression` with no variables
+created.  Use it directly if you want to compose the chord bound with other
+constraints by hand, without the domain bound that ``method="lp"`` adds
+automatically.
 
 SOS2 (Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -401,50 +451,6 @@ equality above; the bounded tuple's link uses the requested sign.
     m.add_piecewise_formulation((power, xp), (fuel, yp), method="incremental")
 
 **Limitation:** breakpoint sequences must be strictly monotonic.
-
-LP (chord-line) Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **2-variable inequality** on a **convex** or **concave** curve.  Adds one
-chord inequality per segment plus a domain bound — no auxiliary variables and
-no MIP relaxation:
-
-.. math::
-
-   &y \ \text{sign}\ m_k \cdot x + c_k
-   \quad \forall\ \text{segments } k
-
-   &x_0 \le x \le x_n
-
-where :math:`m_k = (y_{k+1} - y_k)/(x_{k+1} - x_k)` and
-:math:`c_k = y_k - m_k\, x_k`.  For concave :math:`f` with ``sign="<="``,
-the intersection of all chord inequalities equals the hypograph of
-:math:`f` on its domain.
-
-The LP dispatch requires curvature and sign to match: ``sign="<="`` needs
-concave (or linear); ``sign=">="`` needs convex (or linear).  A mismatch
-is *not* just a loose bound — it describes the wrong region (see the
-:doc:`piecewise-inequality-bounds-tutorial`).  ``method="auto"`` detects
-this and falls back; ``method="lp"`` raises.
-
-.. code-block:: python
-
-    # y <= f(x) on a concave f — auto picks LP
-    m.add_piecewise_formulation((y, yp, "<="), (x, xp))
-
-    # Or explicitly:
-    m.add_piecewise_formulation((y, yp, "<="), (x, xp), method="lp")
-
-**Not supported with** ``method="lp"``: all-equality, more than 2 tuples,
-and ``active``.  ``method="auto"`` falls back to SOS2/incremental in all
-three cases.
-
-The underlying chord expressions are also exposed as a standalone helper,
-``linopy.tangent_lines(x, x_pts, y_pts)``, which returns the per-segment
-chord as a :class:`~linopy.expressions.LinearExpression` with no variables
-created.  Use it directly if you want to compose the chord bound with other
-constraints by hand, without the domain bound that ``method="lp"`` adds
-automatically.
 
 Disjunctive (Disaggregated Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -532,45 +538,22 @@ for per-entity breakpoints with ragged lengths:
 
 Interior NaN values (gaps in the middle) are not supported and raise an error.
 
-Generated variables and constraints
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Inspecting generated objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Given a base name ``N`` (either user-supplied or auto-assigned like ``pwl0``),
-each formulation creates a predictable set of names:
+The returned :class:`PiecewiseFormulation` exposes ``.variables`` and
+``.constraints`` as live views into the model — use them to introspect
+exactly what was generated, rather than relying on documented name
+conventions:
 
-**SOS2** (``method="sos2"``):
+.. code-block:: python
 
-- ``{N}_lambda`` — variable, interpolation weights
-- ``{N}_convex`` — constraint, ``sum(lambda) == 1`` (or ``== active``)
-- ``{N}_link`` — constraint, equality link (pinned tuples when one tuple
-  is bounded; all tuples when all are equality)
-- ``{N}_output_link`` — constraint, signed link on the bounded tuple
-  *(only when one tuple carries* ``"<="`` */* ``">="`` *)*
+    f = m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
+    print(f)                       # method, convexity, vars/cons summary
 
-**Incremental** (``method="incremental"``):
-
-- ``{N}_delta`` — variable, fill fractions :math:`\delta_i`
-- ``{N}_order_binary`` — variable, per-segment binaries :math:`z_i`
-- ``{N}_delta_bound`` — constraint, :math:`\delta_i \le z_i`
-- ``{N}_fill_order`` — constraint, :math:`\delta_{i+1} \le \delta_i`
-- ``{N}_binary_order`` — constraint, :math:`z_{i+1} \le \delta_i`
-- ``{N}_active_bound`` — constraint, :math:`\delta_i \le active`
-  *(only when* ``active`` *is given)*
-- ``{N}_link`` / ``{N}_output_link`` — same split as SOS2
-
-**LP** (``method="lp"``):
-
-- ``{N}_chord`` — constraint, per-segment chord inequality
-- ``{N}_domain_lo``, ``{N}_domain_hi`` — constraints, :math:`x_0 \le x \le x_n`
-- *no auxiliary variables*
-
-**Disjunctive** (``segments(...)`` input):
-
-- ``{N}_segment_binary`` — variable, per-segment selectors :math:`z_k`
-- ``{N}_select`` — constraint, ``sum(z_k) == 1`` (or ``== active``)
-- ``{N}_lambda`` — variable, within-segment weights
-- ``{N}_convex`` — constraint, per-segment :math:`\sum_i \lambda_{k,i} = z_k`
-- ``{N}_link`` / ``{N}_output_link`` — same split as SOS2
+The comparison table above describes the *kind* of auxiliary objects each
+method creates (continuous + SOS2, binary + SOS2, none, …); exact name
+suffixes are an implementation detail and may evolve.
 
 
 See Also
