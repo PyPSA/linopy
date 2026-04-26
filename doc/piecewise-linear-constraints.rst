@@ -123,6 +123,25 @@ Multi-bounded and N≥3-inequality use cases aren't supported yet.  If you
 have a concrete use case, please open an issue at
 https://github.com/PyPSA/linopy/issues so we can scope it properly.
 
+**Formulation.**  For methods that introduce shared interpolation
+weights (SOS2 and incremental — see below), only the link constraint
+between the weights and the bounded expression changes.  Pinned tuples
+:math:`j` keep the equality, and the bounded tuple :math:`b` flips to
+the requested sign:
+
+.. math::
+
+   &e_j = \sum_{i=0}^{n} \lambda_i \, B_{j,i}
+   \quad \text{(pinned, } j \ne b \text{)}
+
+   &e_b \ \text{sign}\ \sum_{i=0}^{n} \lambda_i \, B_{b,i}
+   \quad \text{(bounded)}
+
+Internally this shows up as a stacked ``*_link`` equality covering the
+pinned tuples plus a separate signed ``*_output_link`` for the bounded
+tuple.  The ``method="lp"`` path encodes the same one-sided semantics
+without weights — see the LP section below.
+
 **Geometry.**  For 2 variables with ``sign="<="`` on a concave curve
 :math:`f`, the feasible region is the **hypograph** of :math:`f` on its
 domain:
