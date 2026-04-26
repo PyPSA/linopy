@@ -312,6 +312,58 @@ The resolved choice is exposed on the returned ``PiecewiseFormulation`` via
 ``.method`` (and ``.convexity`` when well-defined).  An ``INFO``-level log line
 explains the resolution whenever ``method="auto"`` is in play.
 
+At-a-glance comparison:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 18 18 18 20
+
+   * - Property
+     - ``sos2``
+     - ``incremental``
+     - ``lp``
+     - Disjunctive
+   * - Segment layout
+     - Connected
+     - Connected
+     - Connected
+     - Disconnected
+   * - Supported ``sign``
+     - ``==``, ``<=``, ``>=``
+     - ``==``, ``<=``, ``>=``
+     - ``<=``, ``>=`` only
+     - ``==``, ``<=``, ``>=``
+   * - Number of tuples
+     - Any (≥ 2)
+     - Any (≥ 2)
+     - Exactly 2
+     - Any (≥ 2)
+   * - Breakpoint order
+     - Any
+     - Strictly monotonic
+     - Strictly monotonic
+     - Any (per segment)
+   * - Curvature requirement
+     - None
+     - None
+     - Concave (``<=``) or convex (``>=``)
+     - None
+   * - Auxiliary variables
+     - Continuous + SOS2
+     - Continuous + binary
+     - **None**
+     - Binary + SOS2
+   * - ``active=`` supported
+     - Yes
+     - Yes
+     - No
+     - Yes
+   * - Solver requirement
+     - SOS2-capable
+     - MIP-capable
+     - **Any LP solver**
+     - SOS2 + MIP
+
 SOS2 (Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
