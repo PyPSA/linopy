@@ -40,19 +40,22 @@ STACKED_TERM_DIM = "_stacked_term"
 
 PWL_LAMBDA_SUFFIX = "_lambda"
 PWL_CONVEX_SUFFIX = "_convex"
-PWL_X_LINK_SUFFIX = "_x_link"
-PWL_Y_LINK_SUFFIX = "_y_link"
+PWL_LINK_SUFFIX = "_link"
 PWL_DELTA_SUFFIX = "_delta"
-PWL_FILL_SUFFIX = "_fill"
-PWL_BINARY_SUFFIX = "_binary"
+PWL_FILL_ORDER_SUFFIX = "_fill_order"
+PWL_SEGMENT_BINARY_SUFFIX = "_segment_binary"
 PWL_SELECT_SUFFIX = "_select"
-PWL_AUX_SUFFIX = "_aux"
-PWL_LP_SUFFIX = "_lp"
-PWL_LP_DOMAIN_SUFFIX = "_lp_domain"
-PWL_INC_BINARY_SUFFIX = "_inc_binary"
-PWL_INC_LINK_SUFFIX = "_inc_link"
-PWL_INC_ORDER_SUFFIX = "_inc_order"
+PWL_ORDER_BINARY_SUFFIX = "_order_binary"
+PWL_DELTA_BOUND_SUFFIX = "_delta_bound"
+PWL_BINARY_ORDER_SUFFIX = "_binary_order"
 PWL_ACTIVE_BOUND_SUFFIX = "_active_bound"
+PWL_OUTPUT_LINK_SUFFIX = "_output_link"
+PWL_CHORD_SUFFIX = "_chord"
+PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
+PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
+
+PWL_METHODS: set[str] = {"sos2", "lp", "incremental", "auto"}
+PWL_CONVEXITIES: set[str] = {"convex", "concave", "linear", "mixed"}
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_SEG_DIM = f"{BREAKPOINT_DIM}_seg"
@@ -74,6 +77,32 @@ HELPER_DIMS: list[str] = [
 SOS_TYPE_ATTR = "sos_type"
 SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
+
+
+class EvolvingAPIWarning(FutureWarning):
+    """
+    Signals a newly-added API whose details may evolve in minor releases.
+
+    Subclasses :class:`FutureWarning` so it is visible by default.  Each
+    emit prefixes its message with the affected feature (e.g.
+    ``"piecewise: ..."``) so message-regex filters can target a single
+    feature without hiding warnings from other features.
+
+    Silence globally with::
+
+        import warnings
+        import linopy
+
+        warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)
+
+    Or only one feature::
+
+        warnings.filterwarnings(
+            "ignore",
+            category=linopy.EvolvingAPIWarning,
+            message=r"^piecewise:",
+        )
+    """
 
 
 class ModelStatus(Enum):

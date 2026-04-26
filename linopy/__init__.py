@@ -14,13 +14,24 @@ __version__ = version("linopy")
 import linopy.monkey_patch_xarray  # noqa: F401
 from linopy.common import align
 from linopy.config import options
-from linopy.constants import EQUAL, GREATER_EQUAL, LESS_EQUAL
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    LESS_EQUAL,
+    EvolvingAPIWarning,
+)
 from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.piecewise import breakpoints, piecewise, segments, slopes_to_points
+from linopy.piecewise import (
+    PiecewiseFormulation,
+    breakpoints,
+    segments,
+    slopes_to_points,
+    tangent_lines,
+)
 from linopy.remote import RemoteHandler
 
 try:
@@ -32,19 +43,21 @@ __all__ = (
     "Constraint",
     "Constraints",
     "EQUAL",
+    "EvolvingAPIWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
     "LinearExpression",
     "Model",
     "Objective",
     "OetcHandler",
+    "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",
     "Variable",
     "Variables",
     "available_solvers",
     "breakpoints",
-    "piecewise",
+    "tangent_lines",
     "segments",
     "slopes_to_points",
     "align",
