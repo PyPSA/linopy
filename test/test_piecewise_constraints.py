@@ -1482,7 +1482,7 @@ class TestSignParameter:
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         with pytest.raises(TypeError, match="sign=.*has been removed"):
-            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="<=")  # type: ignore[call-arg]
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="<=")
 
     def test_two_bounded_tuples_raises(self) -> None:
         m = Model()
