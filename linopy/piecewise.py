@@ -25,7 +25,7 @@ from linopy.constants import (
     GREATER_EQUAL,
     HELPER_DIMS,
     LESS_EQUAL,
-    LP_SEG_DIM,
+    LP_PIECE_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CHORD_SUFFIX,
@@ -171,10 +171,10 @@ def _strip_nan(vals: Sequence[float] | np.ndarray) -> list[float]:
     return [v for v in vals if not np.isnan(v)]
 
 
-def _rename_to_segments(da: DataArray, seg_index: np.ndarray) -> DataArray:
-    """Rename breakpoint dim to segment dim and reassign coordinates."""
-    da = da.rename({BREAKPOINT_DIM: LP_SEG_DIM})
-    da[LP_SEG_DIM] = seg_index
+def _rename_to_pieces(da: DataArray, piece_index: np.ndarray) -> DataArray:
+    """Rename breakpoint dim to piece dim and reassign coordinates."""
+    da = da.rename({BREAKPOINT_DIM: LP_PIECE_DIM})
+    da[LP_PIECE_DIM] = piece_index
     return da
 
 
@@ -332,14 +332,14 @@ def slopes_to_points(
     x_points: list[float], slopes: list[float], y0: float
 ) -> list[float]:
     """
-    Convert segment slopes + initial y-value to y-coordinates at each breakpoint.
+    Convert per-piece slopes + initial y-value to y-coordinates at each breakpoint.
 
     Parameters
     ----------
     x_points : list[float]
         Breakpoint x-coordinates (length n).
     slopes : list[float]
-        Slope of each segment (length n-1).
+        Slope of each piece (length n-1).
     y0 : float
         y-value at the first breakpoint.
 
@@ -492,14 +492,14 @@ def _tangent_lines_impl(
 
     dx = x_points.diff(BREAKPOINT_DIM)
     dy = y_points.diff(BREAKPOINT_DIM)
-    seg_index = np.arange(dx.sizes[BREAKPOINT_DIM])
+    piece_index = np.arange(dx.sizes[BREAKPOINT_DIM])
 
-    slopes = _rename_to_segments(dy / dx, seg_index)
-    x_base = _rename_to_segments(
-        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    slopes = _rename_to_pieces(dy / dx, piece_index)
+    x_base = _rename_to_pieces(
+        x_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
-    y_base = _rename_to_segments(
-        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), seg_index
+    y_base = _rename_to_pieces(
+        y_points.isel({BREAKPOINT_DIM: slice(None, -1)}), piece_index
     )
 
     intercepts = y_base - slopes * x_base
@@ -519,8 +519,8 @@ def tangent_lines(
     Compute tangent-line (chord) expressions for a piecewise linear function.
 
     Low-level helper returning a :class:`~linopy.expressions.LinearExpression`
-    with an extra segment dimension.  Each element along the segment dimension
-    is the chord of one segment: :math:`m_k \cdot x + c_k`.  No auxiliary
+    with an extra piece dimension.  Each element along the piece dimension
+    is the chord of one piece: :math:`m_k \cdot x + c_k`.  No auxiliary
     variables are created.
 
     For most users: prefer :func:`add_piecewise_formulation` with a
@@ -550,20 +550,20 @@ def tangent_lines(
     Returns
     -------
     LinearExpression
-        Expression with an additional ``_breakpoint_seg`` dimension
-        (one entry per segment).
+        Expression with an additional ``_breakpoint_piece`` dimension
+        (one entry per piece).
 
     Warns
     -----
     EvolvingAPIWarning
         ``tangent_lines`` is part of the newly-added piecewise API; the
-        returned expression shape and segment-dim name may be refined.
+        returned expression shape and piece-dim name may be refined.
         Silence with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
     """
     warnings.warn(
         "piecewise: tangent_lines is a new API; the returned expression "
-        "shape and the segment-dim name may be refined in minor releases. "
+        "shape and the piece-dim name may be refined in minor releases. "
         "Please share your use cases or concerns at "
         "https://github.com/PyPSA/linopy/issues — your feedback shapes "
         "what stabilises.  Silence with "
@@ -752,7 +752,7 @@ def add_piecewise_formulation(
     ``(expression, breakpoints, sign)`` to mark that expression as bounded
     by the piecewise curve rather than pinned to it.  All expressions are
     linked through shared interpolation weights so that every operating
-    point lies on the same segment of the piecewise curve.
+    point lies on the same piece of the piecewise curve.
 
     Example — 2 variables (joint equality, the default)::
 
@@ -1386,16 +1386,16 @@ def _add_incremental(
     stacked_bp = links.stacked_bp
     extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
 
-    n_segments = stacked_bp.sizes[dim] - 1
-    seg_dim = f"{dim}_seg"
-    seg_index = pd.Index(range(n_segments), name=seg_dim)
-    delta_coords = extra + [seg_index]
+    n_pieces = stacked_bp.sizes[dim] - 1
+    piece_dim = f"{dim}_piece"
+    piece_index = pd.Index(range(n_pieces), name=piece_dim)
+    delta_coords = extra + [piece_index]
 
     if links.bp_mask is not None:
-        mask_lo = links.bp_mask.isel({dim: slice(None, -1)}).rename({dim: seg_dim})
-        mask_hi = links.bp_mask.isel({dim: slice(1, None)}).rename({dim: seg_dim})
-        mask_lo[seg_dim] = seg_index
-        mask_hi[seg_dim] = seg_index
+        mask_lo = links.bp_mask.isel({dim: slice(None, -1)}).rename({dim: piece_dim})
+        mask_hi = links.bp_mask.isel({dim: slice(1, None)}).rename({dim: piece_dim})
+        mask_lo[piece_dim] = piece_index
+        mask_hi[piece_dim] = piece_index
         delta_mask: DataArray | None = mask_lo & mask_hi
     else:
         delta_mask = None
@@ -1423,25 +1423,25 @@ def _add_incremental(
         delta_var <= binary_var, name=f"{name}{PWL_DELTA_BOUND_SUFFIX}"
     )
 
-    if n_segments >= 2:
-        delta_lo = delta_var.isel({seg_dim: slice(None, -1)}, drop=True)
-        delta_hi = delta_var.isel({seg_dim: slice(1, None)}, drop=True)
+    if n_pieces >= 2:
+        delta_lo = delta_var.isel({piece_dim: slice(None, -1)}, drop=True)
+        delta_hi = delta_var.isel({piece_dim: slice(1, None)}, drop=True)
         model.add_constraints(
             delta_hi <= delta_lo, name=f"{name}{PWL_FILL_ORDER_SUFFIX}"
         )
-        binary_hi = binary_var.isel({seg_dim: slice(1, None)}, drop=True)
+        binary_hi = binary_var.isel({piece_dim: slice(1, None)}, drop=True)
         model.add_constraints(
             binary_hi <= delta_lo, name=f"{name}{PWL_BINARY_ORDER_SUFFIX}"
         )
 
     def _incremental_weighted(bp: DataArray) -> LinearExpression:
-        steps = bp.diff(dim).rename({dim: seg_dim})
-        steps[seg_dim] = seg_index
+        steps = bp.diff(dim).rename({dim: piece_dim})
+        steps[piece_dim] = piece_index
         bp0 = bp.isel({dim: 0})
         bp0_term: DataArray | LinearExpression = bp0
         if active is not None:
             bp0_term = bp0 * active
-        return (delta_var * steps).sum(dim=seg_dim) + bp0_term
+        return (delta_var * steps).sum(dim=piece_dim) + bp0_term
 
     if links.eq_expr is not None and links.eq_bp is not None:
         model.add_constraints(
@@ -1560,20 +1560,20 @@ def _add_lp(
     """
     LP tangent-line formulation (no auxiliary variables).
 
-    Adds one chord constraint per segment plus domain bounds on x.
-    Trailing-NaN segments (per-entity short curves) are masked out so
+    Adds one chord constraint per piece plus domain bounds on x.
+    Trailing-NaN pieces (per-entity short curves) are masked out so
     they do not contribute spurious ``y ≤ 0`` constraints.
     """
-    # Per-segment validity: both endpoints must be non-NaN.
+    # Per-piece validity: both endpoints must be non-NaN.
     bp_valid = ~(x_points.isnull() | y_points.isnull())
-    seg_count = x_points.sizes[BREAKPOINT_DIM] - 1
-    seg_index = np.arange(seg_count)
-    full_mask = _rename_to_segments(
+    piece_count = x_points.sizes[BREAKPOINT_DIM] - 1
+    piece_index = np.arange(piece_count)
+    full_mask = _rename_to_pieces(
         bp_valid.isel({BREAKPOINT_DIM: slice(None, -1)})
         & bp_valid.isel({BREAKPOINT_DIM: slice(1, None)}).values,
-        seg_index,
+        piece_index,
     )
-    seg_mask: DataArray | None = None if bool(full_mask.all()) else full_mask
+    piece_mask: DataArray | None = None if bool(full_mask.all()) else full_mask
 
     # Use the internal impl so we don't fire a second EvolvingAPIWarning —
     # ``add_piecewise_formulation`` already warned on entry.
@@ -1584,7 +1584,7 @@ def _add_lp(
         tangents,
         sign,
         f"{name}{PWL_CHORD_SUFFIX}",
-        mask=seg_mask,
+        mask=piece_mask,
     )
 
     # Domain bounds: x ∈ [x_min, x_max] (skipna by default).

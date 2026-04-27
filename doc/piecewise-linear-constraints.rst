@@ -4,8 +4,18 @@ Piecewise Linear Constraints
 ============================
 
 Piecewise linear (PWL) constraints approximate nonlinear functions as connected
-linear segments, allowing you to model cost curves, efficiency curves, or
+linear pieces, allowing you to model cost curves, efficiency curves, or
 production functions within a linear programming framework.
+
+**Terminology used in this page:**
+
+- **breakpoint** — an :math:`(x, y)` knot where the slope can change.
+- **piece** — a linear part between two adjacent breakpoints on a single
+  connected curve.  ``n`` breakpoints define ``n − 1`` pieces.
+- **segment** — a *disjoint* operating region in the disjunctive
+  formulation, built via the :func:`~linopy.segments` factory.  Within
+  one segment the curve is itself piecewise-linear (made of pieces);
+  between segments there are gaps.
 
 .. contents::
    :local:
@@ -333,7 +343,7 @@ At-a-glance comparison:
      - ``sos2``
      - ``incremental``
      - Disjunctive
-   * - Segment layout
+   * - Curve layout
      - Connected
      - Connected
      - Connected
@@ -378,13 +388,13 @@ LP (chord-line) Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For **2-variable inequality** on a **convex** or **concave** curve.  Adds one
-chord inequality per segment plus a domain bound — no auxiliary variables and
+chord inequality per piece plus a domain bound — no auxiliary variables and
 no MIP relaxation:
 
 .. math::
 
    &y \ \text{sign}\ m_k \cdot x + c_k
-   \quad \forall\ \text{segments } k
+   \quad \forall\ \text{pieces } k
 
    &x_0 \le x \le x_n
 
@@ -412,7 +422,7 @@ and ``active``.  ``method="auto"`` falls back to SOS2/incremental in all
 three cases.
 
 The underlying chord expressions are also exposed as a standalone helper,
-``linopy.tangent_lines(x, x_pts, y_pts)``, which returns the per-segment
+``linopy.tangent_lines(x, x_pts, y_pts)``, which returns the per-piece
 chord as a :class:`~linopy.expressions.LinearExpression` with no variables
 created.  Use it directly if you want to compose the chord bound with other
 constraints by hand, without the domain bound that ``method="lp"`` adds
@@ -433,7 +443,7 @@ Works for any breakpoint ordering.  Introduces interpolation weights
    \quad \text{for each expression } j
 
 The SOS2 constraint ensures at most two adjacent :math:`\lambda_i` are
-non-zero, so every expression is interpolated within the same segment.
+non-zero, so every expression is interpolated within the same piece.
 
 With a bounded tuple, the pinned tuples still use the equality above; the
 bounded tuple's link is replaced by a one-sided ``e_b \ \text{sign}\ \sum_i

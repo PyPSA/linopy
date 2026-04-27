@@ -21,7 +21,7 @@ from linopy import (
 )
 from linopy.constants import (
     BREAKPOINT_DIM,
-    LP_SEG_DIM,
+    LP_PIECE_DIM,
     PWL_ACTIVE_BOUND_SUFFIX,
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CHORD_SUFFIX,
@@ -373,21 +373,21 @@ class TestTangentLines:
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
         env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
-        assert LP_SEG_DIM in env.dims
+        assert LP_PIECE_DIM in env.dims
 
     def test_basic_linexpr(self) -> None:
         """Envelope from a LinearExpression works too."""
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=100)
         env = tangent_lines(1 * x, [0, 50, 100], [0, 40, 60])
-        assert LP_SEG_DIM in env.dims
+        assert LP_PIECE_DIM in env.dims
 
-    def test_segment_count(self) -> None:
-        """Number of segments = number of breakpoints - 1."""
+    def test_piece_count(self) -> None:
+        """Number of pieces = number of breakpoints - 1."""
         m = Model()
         x = m.add_variables(name="x")
         env = tangent_lines(x, [0, 50, 100], [0, 40, 60])
-        assert env.sizes[LP_SEG_DIM] == 2
+        assert env.sizes[LP_PIECE_DIM] == 2
 
     def test_invalid_x_type_raises(self) -> None:
         with pytest.raises(TypeError, match="must be a Variable or LinearExpression"):
@@ -418,7 +418,7 @@ class TestTangentLines:
         x_pts = xr.DataArray([0, 50, 100], dims=[BREAKPOINT_DIM])
         y_pts = xr.DataArray([0, 40, 60], dims=[BREAKPOINT_DIM])
         env = tangent_lines(x, x_pts, y_pts)
-        assert LP_SEG_DIM in env.dims
+        assert LP_PIECE_DIM in env.dims
 
 
 # ===========================================================================
@@ -438,7 +438,7 @@ class TestIncremental:
         )
         assert f"pwl0{PWL_DELTA_SUFFIX}" in m.variables
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
-        assert delta.labels.sizes[LP_SEG_DIM] == 3
+        assert delta.labels.sizes[LP_PIECE_DIM] == 3
         assert f"pwl0{PWL_FILL_ORDER_SUFFIX}" in m.constraints
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" not in m.variables
 
@@ -475,7 +475,7 @@ class TestIncremental:
             method="incremental",
         )
         delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
-        assert delta.labels.sizes[LP_SEG_DIM] == 1
+        assert delta.labels.sizes[LP_PIECE_DIM] == 1
         assert f"pwl0{PWL_LINK_SUFFIX}" in m.constraints
         # N-var path uses a single stacked link constraint (no separate y_link)
 
@@ -490,7 +490,7 @@ class TestIncremental:
         )
         assert f"pwl0{PWL_ORDER_BINARY_SUFFIX}" in m.variables
         binary = m.variables[f"pwl0{PWL_ORDER_BINARY_SUFFIX}"]
-        assert binary.labels.sizes[LP_SEG_DIM] == 3
+        assert binary.labels.sizes[LP_PIECE_DIM] == 3
         assert f"pwl0{PWL_DELTA_BOUND_SUFFIX}" in m.constraints
 
     def test_creates_order_constraints(self) -> None:
