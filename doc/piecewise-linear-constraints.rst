@@ -340,8 +340,8 @@ At-a-glance comparison:
 
    * - Property
      - ``lp``
-     - ``sos2``
      - ``incremental``
+     - ``sos2``
      - Disjunctive
    * - Curve layout
      - Connected
@@ -360,8 +360,8 @@ At-a-glance comparison:
      - ≥ 2 (3+ requires all ``==``)
    * - Breakpoint order
      - Strictly monotonic
-     - Any
      - Strictly monotonic
+     - Any
      - Any (per segment)
    * - Curvature requirement
      - Concave (``<=``) or convex (``>=``)
@@ -370,8 +370,8 @@ At-a-glance comparison:
      - None
    * - Auxiliary variables
      - **None**
-     - Continuous + SOS2
      - Continuous + binary
+     - Continuous + SOS2
      - Binary + SOS2
    * - ``active=`` supported
      - No
@@ -380,8 +380,8 @@ At-a-glance comparison:
      - Yes
    * - Solver requirement
      - **Any LP solver**
-     - SOS2-capable
      - MIP-capable
+     - SOS2-capable
      - SOS2 + MIP
 
 LP (chord-line) Formulation
@@ -428,11 +428,39 @@ created.  Use it directly if you want to compose the chord bound with other
 constraints by hand, without the domain bound that ``method="lp"`` adds
 automatically.
 
+Incremental (Delta) Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The default MIP encoding when ``method="auto"`` is in play and breakpoints
+are **strictly monotonic** — produces a tight MIP directly, without going
+through an SOS2 layer.  Uses fill-fraction variables :math:`\delta_i` with
+binary indicators :math:`z_i`:
+
+.. math::
+
+   &\delta_i \in [0, 1], \quad z_i \in \{0, 1\}
+
+   &\delta_{i+1} \le \delta_i, \quad z_{i+1} \le \delta_i, \quad \delta_i \le z_i
+
+   &e_j = B_{j,0} + \sum_{i=1}^{n} \delta_i \, (B_{j,i} - B_{j,i-1})
+
+With a bounded tuple, the link to that tuple's expression flips to the
+requested sign while the pinned tuples keep the equality above (see
+the *Per-tuple sign* section's *Formulation* block).
+
+.. code-block:: python
+
+    m.add_piecewise_formulation((power, xp), (fuel, yp), method="incremental")
+
+**Limitation:** breakpoint sequences must be strictly monotonic.
+
 SOS2 (Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Works for any breakpoint ordering.  Introduces interpolation weights
-:math:`\lambda_i` with an SOS2 adjacency constraint:
+Fallback when breakpoints aren't strictly monotonic (the only case
+``method="auto"`` does not pick incremental for a connected curve).
+Introduces interpolation weights :math:`\lambda_i` with an SOS2
+adjacency constraint:
 
 .. math::
 
@@ -444,42 +472,23 @@ Works for any breakpoint ordering.  Introduces interpolation weights
 
 The SOS2 constraint ensures at most two adjacent :math:`\lambda_i` are
 non-zero, so every expression is interpolated within the same piece.
-
-With a bounded tuple, the pinned tuples still use the equality above; the
-bounded tuple's link is replaced by a one-sided ``e_b \ \text{sign}\ \sum_i
-\lambda_i B_{b,i}`` constraint.
+With a bounded tuple, the bounded link flips to the requested sign as
+above.
 
 .. note::
 
-   SOS2 is handled via branch-and-bound, similar to integer variables.
-   Prefer ``method="incremental"`` when breakpoints are monotonic.
+   Solvers with native SOS2 support handle the adjacency constraint via
+   branch-and-bound.  Solvers without it see the Big-M reformulation
+   linopy applies (controlled by ``reformulate_sos=`` on ``solve``) —
+   see :ref:`sos-reformulation` for the reformulated MIP form, which is
+   the model those solvers actually receive.  When breakpoints are
+   monotonic, prefer ``method="incremental"`` (or just ``"auto"``): it
+   builds a similar MIP encoding directly and does not depend on
+   solver SOS2 support or the reformulation step.
 
 .. code-block:: python
 
     m.add_piecewise_formulation((power, xp), (fuel, yp), method="sos2")
-
-Incremental (Delta) Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For **strictly monotonic** breakpoints.  Uses fill-fraction variables
-:math:`\delta_i` with binary indicators :math:`z_i`:
-
-.. math::
-
-   &\delta_i \in [0, 1], \quad z_i \in \{0, 1\}
-
-   &\delta_{i+1} \le \delta_i, \quad z_{i+1} \le \delta_i, \quad \delta_i \le z_i
-
-   &e_j = B_{j,0} + \sum_{i=1}^{n} \delta_i \, (B_{j,i} - B_{j,i-1})
-
-With a bounded tuple the same split as SOS2 applies: pinned tuples use the
-equality above; the bounded tuple's link uses the requested sign.
-
-.. code-block:: python
-
-    m.add_piecewise_formulation((power, xp), (fuel, yp), method="incremental")
-
-**Limitation:** breakpoint sequences must be strictly monotonic.
 
 Disjunctive (Disaggregated Convex Combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
