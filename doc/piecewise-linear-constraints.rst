@@ -594,11 +594,16 @@ method creates (continuous + SOS2, binary + SOS2, none, …); exact name
 suffixes are an implementation detail and may evolve.
 
 
+Tutorials
+---------
+
+.. toctree::
+   :maxdepth: 1
+
+   piecewise-linear-constraints-tutorial
+   piecewise-inequality-bounds-tutorial
+
 See Also
 --------
 
-- :doc:`piecewise-linear-constraints-tutorial` — worked examples of the
-  equality API (notebook)
-- :doc:`piecewise-inequality-bounds-tutorial` — per-tuple sign and the LP
-  formulation (notebook)
 - :doc:`sos-constraints` — low-level SOS1/SOS2 constraint API

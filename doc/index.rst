@@ -114,8 +114,6 @@ This package is published under MIT license.
    coordinate-alignment
    sos-constraints
    piecewise-linear-constraints
-   piecewise-linear-constraints-tutorial
-   piecewise-inequality-bounds-tutorial
    manipulating-models
    testing-framework
    transport-tutorial
