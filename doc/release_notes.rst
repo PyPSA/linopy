@@ -15,10 +15,10 @@ Upcoming Version
 * Add one-sided piecewise bounds via a per-tuple sign on ``add_piecewise_formulation``: append ``"<="`` or ``">="`` as a third tuple element — e.g. ``(fuel, y_pts, "<=")`` — to mark that expression as bounded by the curve while the others remain pinned.  At most one tuple may carry a non-equality sign; with 3 or more tuples all signs must be ``"=="``.  On convex/concave curves with a matching sign, ``method="auto"`` dispatches to a pure-LP chord formulation (``method="lp"``) with no auxiliary variables and automatic domain bounds on the input.  Mismatched curvature+sign is detected and falls back to SOS2/incremental with an explanatory info log.
 * Add unit-commitment gating via the ``active`` parameter on ``add_piecewise_formulation``: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero.  Works with the SOS2, incremental, and disjunctive methods.
 * Surface formulation metadata on the returned ``PiecewiseFormulation``: ``.method`` (resolved method name) and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"`` when well-defined).  Both persist across netCDF round-trip.
-* Add ``tangent_lines()`` as a low-level helper that returns per-segment chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
+* Add ``tangent_lines()`` as a low-level helper that returns per-piece chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
 * Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
 * Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``slopes_to_points()`` utility for converting segment slopes to breakpoint y-coordinates.
+* Add ``slopes_to_points()`` utility for converting per-piece slopes to breakpoint y-coordinates.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
