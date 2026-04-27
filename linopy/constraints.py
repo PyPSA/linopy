@@ -733,24 +733,34 @@ class Constraints:
         """
         return {format_string_as_variable_name(n): n for n in self}
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Constraints"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format constraint items, optionally excluding names in a group."""
+        r = ""
+        count = 0
         for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
             coords = (
                 " (" + ", ".join([str(c) for c in ds.coords.keys()]) + ")"
                 if ds.coords
                 else ""
             )
             r += f" * {name}{coords}\n"
-        if not len(list(self)):
+        if count == 0:
             r += "<empty>\n"
         return r
+
+    def __repr__(self) -> str:
+        r = "linopy.model.Constraints"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
+        return r
+
+    def _repr_filtered(self, exclude: set[str]) -> str:
+        """Format items excluding grouped names (used by Model.__repr__)."""
+        return self._format_items(exclude)
 
     @overload
     def __getitem__(self, names: str) -> Constraint: ...

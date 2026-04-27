@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 from warnings import warn
 
 import numpy as np
@@ -70,7 +70,7 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.piecewise import (
-    add_piecewise_constraints,
+    add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
 
@@ -96,6 +96,9 @@ from linopy.types import (
     VariableLike,
 )
 from linopy.variables import ScalarVariable, Variable, Variables
+
+if TYPE_CHECKING:
+    from linopy.piecewise import PiecewiseFormulation
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +231,7 @@ class Model:
         "_auto_mask",
         "_solver_dir",
         "_relaxed_registry",
+        "_piecewise_formulations",
         "solver_model",
         "solver_name",
         "matrices",
@@ -287,6 +291,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
@@ -498,16 +503,44 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        var_string = self.variables.__repr__().split("\n", 2)[2]
-        con_string = self.constraints.__repr__().split("\n", 2)[2]
+        grouped_names = self._piecewise_names()
+        var_string = self.variables._repr_filtered(grouped_names)
+        con_string = self.constraints._repr_filtered(grouped_names)
         model_string = f"Linopy {self.type} model"
 
-        return (
+        result = (
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
-            f"Constraints:\n------------\n{con_string}\n"
-            f"Status:\n-------\n{self.status}"
+            f"Constraints:\n------------\n{con_string}"
         )
+
+        if self._piecewise_formulations:
+            result += "\nPiecewise Formulations:\n----------------------\n"
+            for pwl in self._piecewise_formulations.values():
+                n_vars = len(pwl.variables)
+                n_cons = len(pwl.constraints)
+                # Collect user-facing dims (skip internal _ prefixed dims)
+                user_dims: list[str] = []
+                for var in pwl.variables.data.values():
+                    for d in var.coords:
+                        if not str(d).startswith("_") and str(d) not in user_dims:
+                            user_dims.append(str(d))
+                dims_str = f" ({', '.join(user_dims)})" if user_dims else ""
+                result += (
+                    f" * {pwl.name}{dims_str}"
+                    f" — {pwl.method}, {n_vars} vars, {n_cons} cons\n"
+                )
+
+        result += f"\nStatus:\n-------\n{self.status}"
+        return result
+
+    def _piecewise_names(self) -> set[str]:
+        """Return all variable/constraint names belonging to piecewise formulations."""
+        names: set[str] = set()
+        for pwl in self._piecewise_formulations.values():
+            names.update(pwl.variable_names)
+            names.update(pwl.constraint_names)
+        return names
 
     def __getitem__(self, key: str) -> Variable:
         """
@@ -796,7 +829,7 @@ class Model:
 
         variable.attrs.update(attrs_update)
 
-    add_piecewise_constraints = add_piecewise_constraints
+    add_piecewise_formulation = add_piecewise_formulation
 
     def add_constraints(
         self,

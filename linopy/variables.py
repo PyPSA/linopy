@@ -79,7 +79,6 @@ if TYPE_CHECKING:
         ScalarLinearExpression,
     )
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
 
 logger = logging.getLogger(__name__)
 
@@ -537,31 +536,13 @@ class Variable:
         except TypeError:
             return NotImplemented
 
-    @overload
-    def __le__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, other: SideLike) -> Constraint: ...
-
-    def __le__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __le__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__le__(other)
 
-    @overload
-    def __ge__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, other: SideLike) -> Constraint: ...
-
-    def __ge__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __ge__(self, other: SideLike) -> Constraint:
         return self.to_linexpr().__ge__(other)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, other: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, other: SideLike) -> Constraint: ...
-
-    def __eq__(self, other: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
+    def __eq__(self, other: SideLike) -> Constraint:  # type: ignore
         return self.to_linexpr().__eq__(other)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -1504,15 +1485,14 @@ class Variables:
         ]
         return base_attributes + formatted_names
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the linopy model.
-        """
-        r = "linopy.model.Variables"
-        line = "-" * len(r)
-        r += f"\n{line}\n"
-
+    def _format_items(self, exclude: set[str] | None = None) -> str:
+        """Format variable items, optionally excluding names in a group."""
+        r = ""
+        count = 0
         for name, ds in self.items():
+            if exclude and name in exclude:
+                continue
+            count += 1
             coords = (
                 " (" + ", ".join(str(coord) for coord in ds.coords) + ")"
                 if ds.coords
@@ -1525,9 +1505,20 @@ class Variables:
             if ds.attrs.get("semi_continuous", False):
                 coords += " - semi-continuous"
             r += f" * {name}{coords}\n"
-        if not len(list(self)):
+        if count == 0:
             r += "<empty>\n"
         return r
+
+    def __repr__(self) -> str:
+        r = "linopy.model.Variables"
+        line = "-" * len(r)
+        r += f"\n{line}\n"
+        r += self._format_items()
+        return r
+
+    def _repr_filtered(self, exclude: set[str]) -> str:
+        """Format items excluding grouped names (used by Model.__repr__)."""
+        return self._format_items(exclude)
 
     def __len__(self) -> int:
         return self.data.__len__()
