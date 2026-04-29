@@ -5,10 +5,15 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import contextlib
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from test_io import model  # noqa: F401
+
+with contextlib.suppress(ModuleNotFoundError):
+    import mosek
 
 from linopy import Model, solvers
 from linopy.solver_capabilities import SolverFeature, solver_supports
@@ -218,3 +223,124 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
         gurobi.solve_problem(model=model, solution_fn=sol_file, env=env)
     assert result.status.is_ok
     assert log2_file.exists()
+
+
+def _make_mosek_task_mock(
+    *,
+    bas_solsta: "mosek.solsta | None" = None,
+    itr_solsta: "mosek.solsta | None" = None,
+    itg_solsta: "mosek.solsta | None" = None,
+) -> MagicMock:
+    """Build a ``mosek.Task`` mock with controlled per-soltype statuses."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+
+    defined = {
+        mosek.soltype.bas: bas_solsta,
+        mosek.soltype.itr: itr_solsta,
+        mosek.soltype.itg: itg_solsta,
+    }
+
+    task = MagicMock()
+    task.solutiondef.side_effect = lambda st: defined[st] is not None
+    task.getsolsta.side_effect = lambda st: defined[st]
+    return task
+
+
+def test_choose_mosek_solution_prefers_basic_when_itr_is_farkas() -> None:
+    """When the IPM ends in a Farkas certificate but crossover is optimal, pick bas."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.optimal,
+        itr_solsta=mosek.solsta.dual_infeas_cer,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.bas
+
+
+def test_choose_mosek_solution_prefers_itr_on_tie() -> None:
+    """Both bas and itr optimal: prefer itr to preserve historical default."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.optimal,
+        itr_solsta=mosek.solsta.optimal,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itr
+
+
+def test_choose_mosek_solution_only_itr_defined() -> None:
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(itr_solsta=mosek.solsta.optimal)
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itr
+
+
+def test_choose_mosek_solution_only_bas_defined() -> None:
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(bas_solsta=mosek.solsta.optimal)
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.bas
+
+
+def test_choose_mosek_solution_returns_none_when_nothing_defined() -> None:
+    task = _make_mosek_task_mock()
+    assert solvers._choose_mosek_solution(task) is None
+
+
+def test_choose_mosek_solution_returns_itg_for_mip() -> None:
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(itg_solsta=mosek.solsta.integer_optimal)
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itg
+
+
+def test_choose_mosek_solution_itg_wins_over_bas_itr() -> None:
+    """If itg is defined we never fall back to continuous solutions."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.optimal,
+        itr_solsta=mosek.solsta.optimal,
+        itg_solsta=mosek.solsta.integer_optimal,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itg
+
+
+def test_choose_mosek_solution_picks_optimal_over_other_defined() -> None:
+    """Optimal beats non-optimal defined statuses regardless of iteration order."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.unknown,
+        itr_solsta=mosek.solsta.optimal,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itr
+
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.optimal,
+        itr_solsta=mosek.solsta.unknown,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.bas
+
+
+def test_choose_mosek_solution_falls_back_to_itr_when_both_non_optimal() -> None:
+    """Two defined-but-non-optimal solutions: prefer itr to match prior default."""
+    mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+    task = _make_mosek_task_mock(
+        bas_solsta=mosek.solsta.prim_infeas_cer,
+        itr_solsta=mosek.solsta.dual_infeas_cer,
+    )
+    assert solvers._choose_mosek_solution(task) is mosek.soltype.itr
+
+
+@pytest.mark.skipif(
+    "mosek" not in set(solvers.available_solvers), reason="Mosek is not installed"
+)
+def test_mosek_smoke_lp(tmp_path: Path) -> None:
+    """End-to-end smoke test: a small bounded LP solves to a finite optimum."""
+    mosek_solver = solvers.Mosek()
+    lp_file = tmp_path / "problem.lp"
+    lp_file.write_text(free_lp_problem)
+    sol_file = tmp_path / "solution.sol"
+
+    result = mosek_solver.solve_problem(problem_fn=lp_file, solution_fn=sol_file)
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    import math
+
+    assert math.isfinite(result.solution.objective)
+    assert result.solution.objective == pytest.approx(80.0 / 3.0, abs=1e-3)
