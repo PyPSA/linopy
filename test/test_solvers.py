@@ -5,11 +5,15 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import contextlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from test_io import model  # noqa: F401
+
+with contextlib.suppress(ModuleNotFoundError):
+    import mosek
 
 from linopy import Model, solvers
 from linopy.solver_capabilities import SolverFeature, solver_supports
@@ -222,7 +226,10 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
 
 
 def _make_mosek_task_mock(
-    *, bas_solsta=None, itr_solsta=None, itg_solsta=None
+    *,
+    bas_solsta: "mosek.solsta | None" = None,
+    itr_solsta: "mosek.solsta | None" = None,
+    itg_solsta: "mosek.solsta | None" = None,
 ) -> MagicMock:
     """Build a ``mosek.Task`` mock with controlled per-soltype statuses."""
     mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
