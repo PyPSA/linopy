@@ -112,6 +112,7 @@ Version 0.7.0
 * ``add_variables`` no longer ignores ``coords`` when ``lower`` / ``upper`` are DataArrays, and handles MultiIndex coords correctly with scalar bounds.
 * ``Model.to_netcdf`` no longer fails on the scipy netCDF backend when variables or constraints have MultiIndex coords; level names are now serialised as a JSON string (the legacy list form remains readable).
 * CPLEX no longer errors on quality attributes that aren't always available.
+* Fix Mosek interface to inspect both the basic and IPM solutions and pick the one with the better status, so that an optimal crossover solution is not discarded when IPM terminates with a (near-)Farkas certificate.
 
 **Breaking Changes**
 
