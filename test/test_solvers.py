@@ -169,9 +169,7 @@ def test_knitro_solver_no_log(tmp_path: Path) -> None:
 @pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
-def test_gurobi_environment_with_dict(
-    model: Model, tmp_path: Path
-) -> None:  # noqa: F811
+def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # noqa: F811
     gurobi = solvers.Gurobi()
 
     mps_file = tmp_path / "problem.mps"
@@ -197,9 +195,7 @@ def test_gurobi_environment_with_dict(
 @pytest.mark.skipif(
     "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
 )
-def test_gurobi_environment_with_gurobi_env(
-    model: Model, tmp_path: Path
-) -> None:  # noqa: F811
+def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> None:  # noqa: F811
     import gurobipy as gp
 
     gurobi = solvers.Gurobi()
