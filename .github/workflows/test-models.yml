@@ -67,7 +67,7 @@ jobs:
             cutouts
           key: data-cutouts-${{ env.week }}
 
-      - uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@v4
         if: env.pinned == 'false'
         with:
           activate-environment: pypsa-eur
