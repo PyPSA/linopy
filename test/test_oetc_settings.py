@@ -300,7 +300,8 @@ def test_model_solve_forwards_to_oetc() -> None:
     from linopy import Model
 
     m = Model()
-    m.add_variables(lower=0, name="x")
+    x = m.add_variables(lower=0, name="x")
+    m.add_objective(1 * x)
 
     handler = MagicMock(spec=OetcHandler)
     mock_solved = MagicMock()
