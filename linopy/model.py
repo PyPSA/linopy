@@ -1484,6 +1484,12 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
+        if self.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use `m.add_objective(...)` "
+                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
