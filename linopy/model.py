@@ -503,44 +503,20 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        grouped_names = self._piecewise_names()
-        var_string = self.variables._repr_filtered(grouped_names)
-        con_string = self.constraints._repr_filtered(grouped_names)
+        from linopy.piecewise import _grouped_names, _repr_summary
+
+        var_names, con_names = _grouped_names(self)
+        var_string = self.variables._format_items(exclude=var_names)
+        con_string = self.constraints._format_items(exclude=con_names)
         model_string = f"Linopy {self.type} model"
 
-        result = (
+        return (
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Constraints:\n------------\n{con_string}"
+            f"{_repr_summary(self)}"
+            f"\nStatus:\n-------\n{self.status}"
         )
-
-        if self._piecewise_formulations:
-            result += "\nPiecewise Formulations:\n----------------------\n"
-            for pwl in self._piecewise_formulations.values():
-                n_vars = len(pwl.variables)
-                n_cons = len(pwl.constraints)
-                # Collect user-facing dims (skip internal _ prefixed dims)
-                user_dims: list[str] = []
-                for var in pwl.variables.data.values():
-                    for d in var.coords:
-                        if not str(d).startswith("_") and str(d) not in user_dims:
-                            user_dims.append(str(d))
-                dims_str = f" ({', '.join(user_dims)})" if user_dims else ""
-                result += (
-                    f" * {pwl.name}{dims_str}"
-                    f" — {pwl.method}, {n_vars} vars, {n_cons} cons\n"
-                )
-
-        result += f"\nStatus:\n-------\n{self.status}"
-        return result
-
-    def _piecewise_names(self) -> set[str]:
-        """Return all variable/constraint names belonging to piecewise formulations."""
-        names: set[str] = set()
-        for pwl in self._piecewise_formulations.values():
-            names.update(pwl.variable_names)
-            names.update(pwl.constraint_names)
-        return names
 
     def __getitem__(self, key: str) -> Variable:
         """

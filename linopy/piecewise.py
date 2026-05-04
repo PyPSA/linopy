@@ -136,6 +136,16 @@ class PiecewiseFormulation:
         """View of the auxiliary constraints in this formulation."""
         return self._model.constraints[self.constraint_names]
 
+    def _user_dims(self) -> list[str]:
+        """User-facing dim names across this formulation's auxiliary variables."""
+        dims: list[str] = []
+        for var in self.variables.data.values():
+            for d in var.coords:
+                ds = str(d)
+                if not ds.startswith("_") and ds not in dims:
+                    dims.append(ds)
+        return dims
+
     def __repr__(self) -> str:
         # Collect user-facing dims with sizes (skip internal _ prefixed dims)
         user_dims: dict[str, int] = {}
@@ -161,6 +171,39 @@ class PiecewiseFormulation:
             dims = ", ".join(str(d) for d in con.coords) if con.coords else ""
             r += f"    * {cname} ({dims})\n" if dims else f"    * {cname}\n"
         return r
+
+
+def _grouped_names(model: Model) -> tuple[set[str], set[str]]:
+    """
+    Names of auxiliary variables/constraints that belong to a piecewise
+    formulation.  Returned as separate sets because variables and
+    constraints live in independent namespaces in the model.
+    """
+    var_names: set[str] = set()
+    con_names: set[str] = set()
+    for pwl in model._piecewise_formulations.values():
+        var_names.update(pwl.variable_names)
+        con_names.update(pwl.constraint_names)
+    return var_names, con_names
+
+
+def _repr_summary(model: Model) -> str:
+    """
+    Render the model-level summary of all piecewise formulations.
+
+    Returns the empty string when the model has no formulations so the
+    caller can unconditionally concatenate.
+    """
+    if not model._piecewise_formulations:
+        return ""
+    r = "\nPiecewise Formulations:\n----------------------\n"
+    for pwl in model._piecewise_formulations.values():
+        n_vars = len(pwl.variables)
+        n_cons = len(pwl.constraints)
+        user_dims = pwl._user_dims()
+        dims_str = f" ({', '.join(user_dims)})" if user_dims else ""
+        r += f" * {pwl.name}{dims_str} — {pwl.method}, {n_vars} vars, {n_cons} cons\n"
+    return r
 
 
 # ---------------------------------------------------------------------------

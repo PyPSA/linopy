@@ -1510,15 +1510,14 @@ class Variables:
         return r
 
     def __repr__(self) -> str:
+        """
+        Return a string representation of the variables container.
+        """
         r = "linopy.model.Variables"
         line = "-" * len(r)
         r += f"\n{line}\n"
         r += self._format_items()
         return r
-
-    def _repr_filtered(self, exclude: set[str]) -> str:
-        """Format items excluding grouped names (used by Model.__repr__)."""
-        return self._format_items(exclude)
 
     def __len__(self) -> int:
         return self.data.__len__()

@@ -752,15 +752,14 @@ class Constraints:
         return r
 
     def __repr__(self) -> str:
+        """
+        Return a string representation of the constraints container.
+        """
         r = "linopy.model.Constraints"
         line = "-" * len(r)
         r += f"\n{line}\n"
         r += self._format_items()
         return r
-
-    def _repr_filtered(self, exclude: set[str]) -> str:
-        """Format items excluding grouped names (used by Model.__repr__)."""
-        return self._format_items(exclude)
 
     @overload
     def __getitem__(self, names: str) -> Constraint: ...
