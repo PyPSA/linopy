@@ -59,6 +59,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Each user-facing piecewise entry point fires its EvolvingAPIWarning at
+# most once per process.  Without dedup, a single model build emits the
+# verbose warning hundreds of times and drowns out other output.
+_EvolvingApiKey: TypeAlias = Literal["tangent_lines", "add_piecewise_formulation"]
+_emitted_evolving_warnings: set[_EvolvingApiKey] = set()
+
+
+def _warn_evolving_api(key: _EvolvingApiKey, message: str) -> None:
+    """Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``."""
+    if key in _emitted_evolving_warnings:
+        return
+    _emitted_evolving_warnings.add(key)
+    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=3)
+
+
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
     Sequence[float] | DataArray | pd.Series | pd.DataFrame | dict[str, Sequence[float]]
@@ -606,15 +621,15 @@ def tangent_lines(
         Silence with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
     """
-    warnings.warn(
+    _warn_evolving_api(
+        "tangent_lines",
         "piecewise: tangent_lines is a new API; the returned expression "
         "shape and the piece-dim name may be refined in minor releases. "
         "Please share your use cases or concerns at "
         "https://github.com/PyPSA/linopy/issues — your feedback shapes "
-        "what stabilises.  Silence with "
+        "what stabilises.  This warning fires once per session; silence "
+        "entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
-        category=EvolvingAPIWarning,
-        stacklevel=2,
     )
     return _tangent_lines_impl(x, x_points, y_points)
 
@@ -896,15 +911,15 @@ def add_piecewise_formulation(
         with ``warnings.filterwarnings("ignore",
         category=linopy.EvolvingAPIWarning)``.
     """
-    warnings.warn(
+    _warn_evolving_api(
+        "add_piecewise_formulation",
         "piecewise: add_piecewise_formulation is a new API; some details "
         "(e.g. the per-tuple sign convention, active+sign semantics) "
         "may be refined in minor releases.  Please share your use cases "
         "or concerns at https://github.com/PyPSA/linopy/issues — your "
-        "feedback shapes what stabilises.  Silence with "
+        "feedback shapes what stabilises.  This warning fires once per "
+        "session; silence entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
-        category=EvolvingAPIWarning,
-        stacklevel=2,
     )
 
     # Migration helper: explicit error for the removed sign= keyword.
