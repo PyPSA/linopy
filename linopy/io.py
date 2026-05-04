@@ -1152,8 +1152,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
             {
                 name: {
                     "method": pwl.method,
-                    "variables": pwl.variable_names,
-                    "constraints": pwl.constraint_names,
+                    "variable_names": pwl.variable_names,
+                    "constraint_names": pwl.constraint_names,
                     "convexity": pwl.convexity,
                 }
                 for name, pwl in m._piecewise_formulations.items()
@@ -1263,8 +1263,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
             m._piecewise_formulations[name] = PiecewiseFormulation(
                 name=name,
                 method=d["method"],
-                variable_names=d["variables"],
-                constraint_names=d["constraints"],
+                variable_names=d["variable_names"],
+                constraint_names=d["constraint_names"],
                 model=m,
                 convexity=d.get("convexity"),
             )
