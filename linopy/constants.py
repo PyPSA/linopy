@@ -6,7 +6,7 @@ Linopy module for defining constant values used within the package.
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import Any, Literal, TypeAlias, Union, get_args
 
 import numpy as np
 import pandas as pd
@@ -54,8 +54,10 @@ PWL_CHORD_SUFFIX = "_chord"
 PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
 
-PWL_METHODS: set[str] = {"sos2", "lp", "incremental", "auto"}
-PWL_CONVEXITIES: set[str] = {"convex", "concave", "linear", "mixed"}
+PWL_METHOD: TypeAlias = Literal["sos2", "lp", "incremental", "auto"]
+PWL_METHODS: set[str] = set(get_args(PWL_METHOD))
+PWL_CONVEXITY: TypeAlias = Literal["convex", "concave", "linear", "mixed"]
+PWL_CONVEXITIES: set[str] = set(get_args(PWL_CONVEXITY))
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"

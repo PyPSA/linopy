@@ -30,6 +30,7 @@ from linopy.constants import (
     PWL_BINARY_ORDER_SUFFIX,
     PWL_CHORD_SUFFIX,
     PWL_CONVEX_SUFFIX,
+    PWL_CONVEXITY,
     PWL_DELTA_BOUND_SUFFIX,
     PWL_DELTA_SUFFIX,
     PWL_DOMAIN_HI_SUFFIX,
@@ -37,6 +38,7 @@ from linopy.constants import (
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
     PWL_LINK_SUFFIX,
+    PWL_METHOD,
     PWL_METHODS,
     PWL_ORDER_BINARY_SUFFIX,
     PWL_OUTPUT_LINK_SUFFIX,
@@ -115,7 +117,7 @@ class PiecewiseFormulation:
         variable_names: list[str],
         constraint_names: list[str],
         model: Model,
-        convexity: Literal["convex", "concave", "linear", "mixed"] | None = None,
+        convexity: PWL_CONVEXITY | None = None,
     ) -> None:
         self.name = name
         self.method = method
@@ -638,9 +640,7 @@ def _check_strict_monotonicity(bp: DataArray) -> bool:
     return bool(monotonic.all())
 
 
-def _detect_convexity(
-    x_points: DataArray, y_points: DataArray
-) -> Literal["convex", "concave", "linear", "mixed"]:
+def _detect_convexity(x_points: DataArray, y_points: DataArray) -> PWL_CONVEXITY:
     """
     Classify the shape of a single piecewise curve ``y = f(x)``.
 
@@ -740,7 +740,7 @@ def add_piecewise_formulation(
     model: Model,
     *pairs: tuple[LinExprLike, BreaksLike]
     | tuple[LinExprLike, BreaksLike, Literal["==", "<=", ">="]],
-    method: Literal["sos2", "incremental", "lp", "auto"] = "auto",
+    method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
     **kwargs: object,
@@ -1031,7 +1031,7 @@ def add_piecewise_formulation(
             "" if inputs.n_tuples == 1 else "s",
         )
 
-    convexity: Literal["convex", "concave", "linear", "mixed"] | None = None
+    convexity: PWL_CONVEXITY | None = None
     if inputs.n_tuples == 2 and not disjunctive:
         if inputs.is_equality:
             x_pts = inputs.pinned_bps[1]
