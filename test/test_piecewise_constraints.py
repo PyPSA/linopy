@@ -2093,7 +2093,7 @@ class TestPiecewiseNetCDFRoundtrip:
 
         # Compare every slot except the back-reference to the model, so this
         # test auto-catches any future field that IO forgets to persist.
-        fields = [s for s in PiecewiseFormulation.__slots__ if s != "_model"]
+        fields = [s for s in PiecewiseFormulation.__slots__ if s != "model"]
         before = {s: getattr(f, s) for s in fields}
         after = {s: getattr(f2, s) for s in fields}
         assert before == after

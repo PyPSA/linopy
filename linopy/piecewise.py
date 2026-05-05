@@ -93,6 +93,7 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
+@dataclass(slots=True, repr=False)
 class PiecewiseFormulation:
     """
     Result of ``add_piecewise_formulation``.
@@ -116,40 +117,22 @@ class PiecewiseFormulation:
         monotonic ``x`` breakpoints).  ``None`` otherwise.
     """
 
-    __slots__ = (
-        "name",
-        "method",
-        "convexity",
-        "variable_names",
-        "constraint_names",
-        "_model",
-    )
-
-    def __init__(
-        self,
-        name: str,
-        method: PWL_METHOD,
-        variable_names: list[str],
-        constraint_names: list[str],
-        model: Model,
-        convexity: PWL_CONVEXITY | None = None,
-    ) -> None:
-        self.name = name
-        self.method = method
-        self.convexity = convexity
-        self.variable_names = variable_names
-        self.constraint_names = constraint_names
-        self._model = model
+    name: str
+    method: PWL_METHOD
+    variable_names: list[str]
+    constraint_names: list[str]
+    model: Model
+    convexity: PWL_CONVEXITY | None = None
 
     @property
     def variables(self) -> Variables:
         """View of the auxiliary variables in this formulation."""
-        return self._model.variables[self.variable_names]
+        return self.model.variables[self.variable_names]
 
     @property
     def constraints(self) -> Constraints:
         """View of the auxiliary constraints in this formulation."""
-        return self._model.constraints[self.constraint_names]
+        return self.model.constraints[self.constraint_names]
 
     def _user_dims_with_sizes(self) -> dict[str, int]:
         """
