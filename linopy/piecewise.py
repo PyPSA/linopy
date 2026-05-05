@@ -1259,60 +1259,37 @@ def _try_lp(
     active: LinearExpression | None,
 ) -> bool:
     """Dispatch the LP formulation if requested or eligible."""
-    if method == "lp":
-        if inputs.n_tuples != 2:
-            raise ValueError(
-                "method='lp' requires exactly 2 (expression, breakpoints[, sign]) pairs."
-            )
-        if inputs.is_equality:
-            raise ValueError("method='lp' requires one tuple with sign='<=' or '>='.")
-        if active is not None:
-            raise ValueError("method='lp' is not compatible with active=...")
-        assert inputs.bounded_bp is not None  # narrowed by is_equality check
-        assert inputs.bounded_expr is not None
-        x_pts = inputs.pinned_bps[0]
-        y_pts = inputs.bounded_bp
-        if not _check_strict_monotonicity(x_pts):
-            raise ValueError("method='lp' requires strictly monotonic x breakpoints.")
-        convexity = _detect_convexity(x_pts, y_pts)
-        sign = inputs.bounded_sign
-        if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
-            raise ValueError(
-                "method='lp' with sign='<=' requires concave or linear "
-                f"curvature; got '{convexity}'. Use method='auto'."
-            )
-        if sign == GREATER_EQUAL and convexity not in ("convex", "linear"):
-            raise ValueError(
-                "method='lp' with sign='>=' requires convex or linear "
-                f"curvature; got '{convexity}'. Use method='auto'."
-            )
-        _add_lp(
-            model, name, inputs.pinned_exprs[0], inputs.bounded_expr, x_pts, y_pts, sign
-        )
-        return True
+    if method not in ("lp", "auto"):
+        return False
+    if method == "auto" and inputs.is_equality:
+        return False
 
-    if method == "auto" and not inputs.is_equality:
-        ok, reason = _lp_eligibility(inputs, active)
-        if ok:
-            assert inputs.bounded_expr is not None
-            assert inputs.bounded_bp is not None
-            _add_lp(
-                model,
-                name,
-                inputs.pinned_exprs[0],
-                inputs.bounded_expr,
-                inputs.pinned_bps[0],
-                inputs.bounded_bp,
-                inputs.bounded_sign,
+    ok, reason = _lp_eligibility(inputs, active)
+    if not ok:
+        if method == "lp":
+            raise ValueError(
+                f"method='lp' is not applicable: {reason}. Use method='auto'."
             )
-            return True
         logger.info(
             "piecewise formulation '%s': LP not applicable (%s); "
             "will use SOS2/incremental instead",
             name,
             reason,
         )
-    return False
+        return False
+
+    assert inputs.bounded_expr is not None
+    assert inputs.bounded_bp is not None
+    _add_lp(
+        model,
+        name,
+        inputs.pinned_exprs[0],
+        inputs.bounded_expr,
+        inputs.pinned_bps[0],
+        inputs.bounded_bp,
+        inputs.bounded_sign,
+    )
+    return True
 
 
 def _resolve_sos2_vs_incremental(method: str, stacked_bp: DataArray) -> str:
