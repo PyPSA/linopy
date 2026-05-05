@@ -210,6 +210,7 @@ class TestInfeasibility:
         x = m.add_variables(name="x")
         m.add_constraints(x >= 0)
         m.add_constraints(x <= -1)  # Make it infeasible
+        m.add_objective(1 * x)
 
         # Use a solver that doesn't support IIS
         if "cbc" in available_solvers:
