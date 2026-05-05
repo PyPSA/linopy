@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Generator
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,9 @@ from linopy.constants import (
     SEGMENT_DIM,
 )
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
+
+if TYPE_CHECKING:
+    from linopy.piecewise import _PwlInputs
 
 Sign: TypeAlias = Literal["==", "<=", ">="]
 Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
@@ -2172,7 +2176,7 @@ class TestLPEligibilityReasons:
         y_pts: list[float],
         sign: str,
         n_pinned: int = 1,
-    ) -> object:
+    ) -> _PwlInputs:
         from xarray import DataArray
 
         from linopy.constants import BREAKPOINT_DIM, EQUAL, sign_replace_dict
@@ -2290,7 +2294,7 @@ class TestLPEligibilityReasons:
     )
     def test_reason_string(
         self,
-        kwargs: dict,  # type: ignore[type-arg]
+        kwargs: dict[str, Any],
         active: object,
         fragments: tuple[str, ...],
     ) -> None:
@@ -2325,7 +2329,7 @@ class TestLPEligibilityReasons:
 
 class TestEvolvingAPIWarning:
     @pytest.fixture(autouse=True)
-    def _reset_dedup(self) -> None:
+    def _reset_dedup(self) -> Generator[None, None, None]:
         """
         Warnings dedup is module-global so order between tests would
         otherwise matter.  Clear before each test.
