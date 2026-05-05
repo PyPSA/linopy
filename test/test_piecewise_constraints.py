@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Literal, TypeAlias
 
@@ -2038,10 +2039,78 @@ class TestDetectConvexity:
 
 
 class TestPiecewiseNetCDFRoundtrip:
-    def test_formulation_survives_netcdf(self, tmp_path: Path) -> None:
+    """
+    Each case exercises a different combination of persisted fields:
+
+    * ``equality_2var`` — non-empty ``variable_names`` + ``convexity != None``
+    * ``bounded_lp``    — empty ``variable_names`` (LP path) +
+      ``convexity != None`` (the only path that yields ``method='lp'``)
+    * ``equality_3var`` — non-empty ``variable_names`` + ``convexity is None``
+      (3-var formulations don't classify curvature)
+    """
+
+    def _build(self, kind: str) -> tuple[Model, str]:
+        m = Model()
+        if kind == "equality_2var":
+            y = m.add_variables(name="y")
+            x = m.add_variables(lower=0, upper=30, name="x")
+            m.add_piecewise_formulation(
+                (y, [0, 20, 30, 35]), (x, [0, 10, 20, 30]), name="pwl"
+            )
+        elif kind == "bounded_lp":
+            x = m.add_variables(lower=0, upper=30, name="x")
+            y = m.add_variables(lower=0, upper=40, name="y")
+            m.add_piecewise_formulation(
+                (y, [0, 20, 30, 35], "<="),
+                (x, [0, 10, 20, 30]),
+                name="pwl",
+            )
+        elif kind == "equality_3var":
+            x = m.add_variables(name="x")
+            y = m.add_variables(name="y")
+            z = m.add_variables(name="z")
+            m.add_piecewise_formulation(
+                (x, [0, 30, 60, 100]),
+                (y, [0, 40, 85, 160]),
+                (z, [0, 25, 55, 95]),
+                name="pwl",
+            )
+        else:
+            raise ValueError(kind)
+        return m, "pwl"
+
+    @pytest.mark.parametrize("kind", ["equality_2var", "bounded_lp", "equality_3var"])
+    def test_formulation_survives_netcdf(self, tmp_path: Path, kind: str) -> None:
         from linopy import read_netcdf
         from linopy.piecewise import PiecewiseFormulation
 
+        m, name = self._build(kind)
+        f = m._piecewise_formulations[name]
+
+        path = tmp_path / "model.nc"
+        m.to_netcdf(path)
+        f2 = read_netcdf(path)._piecewise_formulations[name]
+
+        # Compare every slot except the back-reference to the model, so this
+        # test auto-catches any future field that IO forgets to persist.
+        fields = [s for s in PiecewiseFormulation.__slots__ if s != "_model"]
+        before = {s: getattr(f, s) for s in fields}
+        after = {s: getattr(f2, s) for s in fields}
+        assert before == after
+
+        # The reloaded formulation's properties must work — i.e. the model
+        # back-reference was rebound and the named members exist.
+        assert list(f2.variables) == list(f.variables)
+        assert list(f2.constraints) == list(f.constraints)
+
+
+# ===========================================================================
+# PiecewiseFormulation API surface
+# ===========================================================================
+
+
+class TestPiecewiseFormulationAPI:
+    def test_variables_constraints_repr(self) -> None:
         m = Model()
         y = m.add_variables(name="y")
         x = m.add_variables(lower=0, upper=30, name="x")
@@ -2050,15 +2119,274 @@ class TestPiecewiseNetCDFRoundtrip:
             (x, [0, 10, 20, 30]),
             name="pwl",
         )
-        assert f.convexity == "concave"
+        # Properties return live views from the model.
+        assert set(f.variables) == set(f.variable_names)
+        assert set(f.constraints) == set(f.constraint_names)
 
-        path = tmp_path / "model.nc"
-        m.to_netcdf(path)
-        f2 = read_netcdf(path)._piecewise_formulations["pwl"]
+        # __repr__ at minimum names the formulation, the resolved method,
+        # and lists each generated variable / constraint by name.
+        r = repr(f)
+        assert "pwl" in r
+        assert f.method in r
+        for vname in f.variable_names:
+            assert vname in r
+        for cname in f.constraint_names:
+            assert cname in r
 
-        # Compare every slot except the back-reference to the model, so this
-        # test auto-catches any future field that IO forgets to persist.
-        fields = [s for s in PiecewiseFormulation.__slots__ if s != "_model"]
-        before = {s: getattr(f, s) for s in fields}
-        after = {s: getattr(f2, s) for s in fields}
-        assert before == after
+    def test_repr_lp_has_no_variables_section_entries(self) -> None:
+        """LP formulation has zero auxiliary variables; __repr__ must still render."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=40, name="y")
+        f = m.add_piecewise_formulation(
+            (y, [0, 20, 30, 35], "<="),
+            (x, [0, 10, 20, 30]),
+            name="pwl_lp",
+        )
+        assert f.method == "lp"
+        assert f.variable_names == []
+        r = repr(f)
+        assert "pwl_lp" in r
+        assert "lp" in r
+
+
+# ===========================================================================
+# _lp_eligibility — each branch's user-facing reason string
+# ===========================================================================
+
+
+class TestLPEligibilityReasons:
+    """
+    Pin the diagnostic returned by each branch of ``_lp_eligibility``.
+    These reason strings flow into both the auto-dispatch INFO log and the
+    explicit ``method='lp'`` ``ValueError``, so each is a piece of the
+    user-facing API.
+
+    Direct unit test (rather than via ``add_piecewise_formulation``) so the
+    branches that the public-API short-circuits hide are still covered.
+    """
+
+    @staticmethod
+    def _make_inputs(
+        x_pts: list[float],
+        y_pts: list[float],
+        sign: str,
+        n_pinned: int = 1,
+    ) -> object:
+        from xarray import DataArray
+
+        from linopy.constants import BREAKPOINT_DIM, EQUAL, sign_replace_dict
+        from linopy.piecewise import _PwlInputs
+
+        # Normalise per the production code so callers can write "==" instead
+        # of "=" in the parametrize table.
+        sign = sign_replace_dict.get(sign, sign)
+
+        m = Model()
+        x = m.add_variables(name=f"x_{id(x_pts)}")
+        pinned_exprs = [(x * 1.0)]
+        pinned_bps = [
+            DataArray(x_pts, dims=[BREAKPOINT_DIM], coords={BREAKPOINT_DIM: x_pts})
+        ]
+        pinned_coords = ["x"]
+        for i in range(1, n_pinned):
+            xi = m.add_variables(name=f"x{i}_{id(x_pts)}")
+            pinned_exprs.append(xi * 1.0)
+            pinned_bps.append(pinned_bps[0])
+            pinned_coords.append(f"x{i}")
+
+        if sign == EQUAL:
+            return _PwlInputs(
+                pinned_exprs=pinned_exprs,
+                pinned_bps=pinned_bps,
+                pinned_coords=pinned_coords,
+                bounded_expr=None,
+                bounded_bp=None,
+                bounded_coord=None,
+                bounded_sign=EQUAL,
+                bp_mask=None,
+            )
+
+        y = m.add_variables(name=f"y_{id(y_pts)}")
+        return _PwlInputs(
+            pinned_exprs=pinned_exprs,
+            pinned_bps=pinned_bps,
+            pinned_coords=pinned_coords,
+            bounded_expr=y * 1.0,
+            bounded_bp=DataArray(
+                y_pts, dims=[BREAKPOINT_DIM], coords={BREAKPOINT_DIM: x_pts}
+            ),
+            bounded_coord="y",
+            bounded_sign=sign,
+            bp_mask=None,
+        )
+
+    @pytest.mark.parametrize(
+        ("kwargs", "active", "fragments"),
+        [
+            pytest.param(
+                {
+                    "x_pts": [0.0, 10.0],
+                    "y_pts": [0.0, 5.0],
+                    "sign": "==",
+                    "n_pinned": 3,
+                },
+                None,
+                ("3 expressions", "LP supports only 2"),
+                id="too_many_tuples",
+            ),
+            pytest.param(
+                {
+                    "x_pts": [0.0, 10.0],
+                    "y_pts": [0.0, 5.0],
+                    "sign": "==",
+                    "n_pinned": 2,
+                },
+                None,
+                ("all tuples are equality",),
+                id="all_equality",
+            ),
+            pytest.param(
+                {
+                    "x_pts": [0.0, 10.0, 20.0, 30.0],
+                    "y_pts": [0.0, 20.0, 30.0, 35.0],
+                    "sign": "<=",
+                },
+                "stub",
+                ("active",),
+                id="active_present",
+            ),
+            pytest.param(
+                {
+                    "x_pts": [0.0, 20.0, 10.0, 30.0],
+                    "y_pts": [0.0, 20.0, 30.0, 35.0],
+                    "sign": "<=",
+                },
+                None,
+                ("not strictly monotonic",),
+                id="non_monotonic_x",
+            ),
+            pytest.param(
+                {
+                    "x_pts": [0.0, 10.0, 20.0, 30.0],
+                    "y_pts": [0.0, 5.0, 15.0, 30.0],
+                    "sign": "<=",
+                },
+                None,
+                ("sign='<='", "concave"),
+                id="le_on_convex",
+            ),
+            pytest.param(
+                {
+                    "x_pts": [0.0, 10.0, 20.0, 30.0],
+                    "y_pts": [0.0, 20.0, 30.0, 35.0],
+                    "sign": ">=",
+                },
+                None,
+                ("sign='>='", "convex"),
+                id="ge_on_concave",
+            ),
+        ],
+    )
+    def test_reason_string(
+        self,
+        kwargs: dict,  # type: ignore[type-arg]
+        active: object,
+        fragments: tuple[str, ...],
+    ) -> None:
+        from linopy.piecewise import _lp_eligibility
+
+        inputs = self._make_inputs(**kwargs)
+        # ``active`` carrying the literal "stub" string is a sentinel — the
+        # eligibility check only looks at ``is None`` vs not, so any non-None
+        # value triggers the rejection branch.
+        ok, reason = _lp_eligibility(inputs, active)  # type: ignore[arg-type]
+        assert not ok
+        for frag in fragments:
+            assert frag in reason, f"missing {frag!r} in reason: {reason!r}"
+
+    def test_eligible_concave_le_returns_ok(self) -> None:
+        from linopy.piecewise import _lp_eligibility
+
+        inputs = self._make_inputs(
+            x_pts=[0.0, 10.0, 20.0, 30.0],
+            y_pts=[0.0, 20.0, 30.0, 35.0],  # concave
+            sign="<=",
+        )
+        ok, reason = _lp_eligibility(inputs, None)
+        assert ok
+        assert reason == ""
+
+
+# ===========================================================================
+# EvolvingAPIWarning — fires once per session per entry point
+# ===========================================================================
+
+
+class TestEvolvingAPIWarning:
+    @pytest.fixture(autouse=True)
+    def _reset_dedup(self) -> None:
+        """
+        Warnings dedup is module-global so order between tests would
+        otherwise matter.  Clear before each test.
+        """
+        from linopy.piecewise import _emitted_evolving_warnings
+
+        _emitted_evolving_warnings.clear()
+        yield
+        _emitted_evolving_warnings.clear()
+
+    def test_add_piecewise_formulation_warns_first_call(self) -> None:
+        from linopy import EvolvingAPIWarning
+
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.warns(EvolvingAPIWarning, match="add_piecewise_formulation"):
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]))
+
+    def test_add_piecewise_formulation_dedups(self) -> None:
+        from linopy import EvolvingAPIWarning
+
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", EvolvingAPIWarning)
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]))
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]))
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]))
+        evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
+        assert len(evolving) == 1
+
+    def test_tangent_lines_warns_and_dedups_independently(self) -> None:
+        from linopy import EvolvingAPIWarning
+
+        m = Model()
+        x = m.add_variables(lower=0, upper=10, name="x")
+        x_pts = [0.0, 5.0, 10.0]
+        y_pts = [0.0, 4.0, 5.0]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", EvolvingAPIWarning)
+            tangent_lines(x, x_pts, y_pts)
+            tangent_lines(x, x_pts, y_pts)
+        evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
+        assert len(evolving) == 1
+        assert "tangent_lines" in str(evolving[0].message)
+
+    def test_warning_stacklevel_points_to_user_call(self) -> None:
+        """
+        ``stacklevel=3`` in ``_warn_evolving_api`` should make the warning
+        report this test file as the source, not the internal helper.
+        """
+        from linopy import EvolvingAPIWarning
+
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", EvolvingAPIWarning)
+            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]))
+        evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
+        assert len(evolving) == 1
+        assert evolving[0].filename.endswith("test_piecewise_constraints.py")
