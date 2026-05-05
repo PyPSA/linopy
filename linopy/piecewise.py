@@ -37,6 +37,7 @@ from linopy.constants import (
     PWL_DOMAIN_LO_SUFFIX,
     PWL_FILL_ORDER_SUFFIX,
     PWL_LAMBDA_SUFFIX,
+    PWL_LINK_DIM,
     PWL_LINK_SUFFIX,
     PWL_METHOD,
     PWL_METHODS,
@@ -160,7 +161,7 @@ class PiecewiseFormulation:
         header = f"PiecewiseFormulation `{self.name}`"
         if dims_str:
             header += f" [{dims_str}]"
-        suffix = self.method
+        suffix: str = self.method
         if self.convexity is not None:
             suffix += f", {self.convexity}"
         r = f"{header} — {suffix}\n"
@@ -200,8 +201,8 @@ def _repr_summary(model: Model) -> str:
         return ""
     r = "\nPiecewise Formulations:\n----------------------\n"
     for pwl in model._piecewise_formulations.values():
-        n_vars = len(pwl.variables)
-        n_cons = len(pwl.constraints)
+        n_vars = len(pwl.variable_names)
+        n_cons = len(pwl.constraint_names)
         user_dims = pwl._user_dims()
         dims_str = f" ({', '.join(user_dims)})" if user_dims else ""
         r += f" * {pwl.name}{dims_str} — {pwl.method}, {n_vars} vars, {n_cons} cons\n"
@@ -215,7 +216,8 @@ def _repr_summary(model: Model) -> str:
 
 def _strip_nan(vals: Sequence[float] | np.ndarray) -> list[float]:
     """Remove NaN values from a sequence."""
-    return [v for v in vals if not np.isnan(v)]
+    arr = np.asarray(vals, dtype=float)
+    return arr[~np.isnan(arr)].tolist()
 
 
 def _rename_to_pieces(da: DataArray, piece_index: np.ndarray) -> DataArray:
@@ -997,7 +999,9 @@ def add_piecewise_formulation(
         if isinstance(expr, Variable) and expr.name:
             link_coords.append(expr.name)
         else:
-            link_coords.append(str(i))
+            # Internal-prefixed fallback so a user variable named e.g. "1"
+            # can't collide with the synthetic coord for an unnamed expr.
+            link_coords.append(f"_pwl_{i}")
 
     lin_exprs = [_to_linexpr(expr) for expr in raw_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
@@ -1038,7 +1042,7 @@ def add_piecewise_formulation(
                 "method='lp' is not supported for disjunctive (segment) breakpoints"
             )
         _add_disjunctive(model, name, inputs, active_expr)
-        resolved_method = "sos2"
+        resolved_method: PWL_METHOD = "sos2"
     else:
         resolved_method = _add_continuous(model, name, inputs, method, active_expr)
 
@@ -1110,7 +1114,7 @@ class _PwlInputs:
     bounded_coord: str | None
     bounded_sign: str
     bp_mask: DataArray | None
-    link_dim: str = "_pwl_var"
+    link_dim: str = PWL_LINK_DIM
 
     @property
     def is_equality(self) -> bool:
@@ -1275,7 +1279,9 @@ def _try_lp(
     return True
 
 
-def _resolve_sos2_vs_incremental(method: str, stacked_bp: DataArray) -> str:
+def _resolve_sos2_vs_incremental(
+    method: str, stacked_bp: DataArray
+) -> Literal["incremental", "sos2"]:
     """
     Validate and (for ``method="auto"``) pick between SOS2 and
     incremental based on monotonicity and NaN layout.
@@ -1297,15 +1303,11 @@ def _resolve_sos2_vs_incremental(method: str, stacked_bp: DataArray) -> str:
             )
         return "incremental"
 
-    if method == "sos2":
-        _validate_numeric_breakpoint_coords(stacked_bp)
-        if not trailing_nan_only:
-            raise ValueError(
-                "SOS2 method does not support non-trailing NaN breakpoints."
-            )
-        return "sos2"
-
-    raise ValueError(f"unknown method {method!r}")
+    assert method == "sos2"
+    _validate_numeric_breakpoint_coords(stacked_bp)
+    if not trailing_nan_only:
+        raise ValueError("SOS2 method does not support non-trailing NaN breakpoints.")
+    return "sos2"
 
 
 def _add_continuous(
@@ -1314,20 +1316,20 @@ def _add_continuous(
     inputs: _PwlInputs,
     method: str,
     active: LinearExpression | None = None,
-) -> str:
+) -> PWL_METHOD:
     """Returns the resolved method name (``"lp"``, ``"sos2"``, ``"incremental"``)."""
     if _try_lp(model, name, inputs, method, active):
         return "lp"
 
     links = _build_links(model, inputs)
-    method = _resolve_sos2_vs_incremental(method, links.stacked_bp)
+    resolved = _resolve_sos2_vs_incremental(method, links.stacked_bp)
 
-    if method == "sos2":
+    if resolved == "sos2":
         rhs = active if active is not None else 1
         _add_sos2(model, name, links, rhs)
     else:
         _add_incremental(model, name, links, active)
-    return method
+    return resolved
 
 
 def _add_sos2(
@@ -1389,7 +1391,7 @@ def _add_incremental(
     extra = _var_coords_from(stacked_bp, exclude={dim, links.link_dim})
 
     n_pieces = stacked_bp.sizes[dim] - 1
-    piece_dim = f"{dim}_piece"
+    piece_dim = LP_PIECE_DIM
     piece_index = pd.Index(range(n_pieces), name=piece_dim)
     delta_coords = extra + [piece_index]
 

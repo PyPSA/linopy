@@ -55,12 +55,13 @@ PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
 
 PWL_METHOD: TypeAlias = Literal["sos2", "lp", "incremental", "auto"]
-PWL_METHODS: set[str] = set(get_args(PWL_METHOD))
+PWL_METHODS: frozenset[str] = frozenset(get_args(PWL_METHOD))
 PWL_CONVEXITY: TypeAlias = Literal["convex", "concave", "linear", "mixed"]
-PWL_CONVEXITIES: set[str] = set(get_args(PWL_CONVEXITY))
+PWL_CONVEXITIES: frozenset[str] = frozenset(get_args(PWL_CONVEXITY))
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"
+PWL_LINK_DIM = "_pwl_var"
 GROUPED_TERM_DIM = "_grouped_term"
 GROUP_DIM = "_group"
 FACTOR_DIM = "_factor"
