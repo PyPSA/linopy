@@ -128,7 +128,7 @@ class PiecewiseFormulation:
     def __init__(
         self,
         name: str,
-        method: str,
+        method: PWL_METHOD,
         variable_names: list[str],
         constraint_names: list[str],
         model: Model,
@@ -151,24 +151,28 @@ class PiecewiseFormulation:
         """View of the auxiliary constraints in this formulation."""
         return self._model.constraints[self.constraint_names]
 
-    def _user_dims(self) -> list[str]:
-        """User-facing dim names across this formulation's auxiliary variables."""
-        dims: list[str] = []
+    def _user_dims_with_sizes(self) -> dict[str, int]:
+        """
+        User-facing dims across the formulation's variables, with sizes.
+
+        Skips internal ``_``-prefixed dims (e.g. ``_pwl_var``).  Insertion
+        order is preserved, so callers can use the keys as a stable
+        ordered list.
+        """
+        dims: dict[str, int] = {}
         for var in self.variables.data.values():
             for d in var.coords:
                 ds = str(d)
                 if not ds.startswith("_") and ds not in dims:
-                    dims.append(ds)
+                    dims[ds] = var.data.sizes[d]
         return dims
 
+    def _user_dims(self) -> list[str]:
+        """User-facing dim names across this formulation's auxiliary variables."""
+        return list(self._user_dims_with_sizes())
+
     def __repr__(self) -> str:
-        # Collect user-facing dims with sizes (skip internal _ prefixed dims)
-        user_dims: dict[str, int] = {}
-        for var in self.variables.data.values():
-            for d in var.coords:
-                ds = str(d)
-                if not ds.startswith("_") and ds not in user_dims:
-                    user_dims[ds] = var.data.sizes[d]
+        user_dims = self._user_dims_with_sizes()
         dims_str = ", ".join(f"{d}: {s}" for d, s in user_dims.items())
         header = f"PiecewiseFormulation `{self.name}`"
         if dims_str:
@@ -645,18 +649,13 @@ def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
 
     Returns whether the formulation is disjunctive (has segment dimension).
     """
-    if BREAKPOINT_DIM not in bp_a.dims:
-        raise ValueError(
-            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(bp_a.dims)}. "
-            "Use the breakpoints() or segments() factory."
-        )
-    if BREAKPOINT_DIM not in bp_b.dims:
-        raise ValueError(
-            f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
-            f"got dims {list(bp_b.dims)}. "
-            "Use the breakpoints() or segments() factory."
-        )
+    for bp in (bp_a, bp_b):
+        if BREAKPOINT_DIM not in bp.dims:
+            raise ValueError(
+                f"Breakpoints are missing the '{BREAKPOINT_DIM}' dimension, "
+                f"got dims {list(bp.dims)}. "
+                "Use the breakpoints() or segments() factory."
+            )
 
     if bp_a.sizes[BREAKPOINT_DIM] != bp_b.sizes[BREAKPOINT_DIM]:
         raise ValueError(
@@ -801,7 +800,6 @@ def add_piecewise_formulation(
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
-    **kwargs: object,
 ) -> PiecewiseFormulation:
     r"""
     Add piecewise linear constraints.
@@ -921,20 +919,6 @@ def add_piecewise_formulation(
         "session; silence entirely with "
         '`warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)`.',
     )
-
-    # Migration helper: explicit error for the removed sign= keyword.
-    if "sign" in kwargs:
-        raise TypeError(
-            "The `sign=` keyword has been removed from add_piecewise_formulation. "
-            "Specify the sign per-tuple as a third tuple element, e.g. "
-            "`(fuel, y_pts, '<=')` instead of `sign='<='`. "
-            "See doc/piecewise-linear-constraints.rst."
-        )
-    if kwargs:
-        raise TypeError(
-            "add_piecewise_formulation() got unexpected keyword argument(s): "
-            f"{sorted(kwargs)}"
-        )
 
     if method not in PWL_METHODS:
         raise ValueError(f"method must be one of {sorted(PWL_METHODS)}, got '{method}'")

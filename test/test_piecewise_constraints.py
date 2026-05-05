@@ -1477,13 +1477,6 @@ class TestSignParameter:
         with pytest.raises(ValueError, match="sign must be"):
             m.add_piecewise_formulation((x, [0, 10], "!"), (y, [0, 5]))  # type: ignore
 
-    def test_old_sign_kwarg_raises_with_migration_help(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x")
-        y = m.add_variables(name="y")
-        with pytest.raises(TypeError, match="sign=.*has been removed"):
-            m.add_piecewise_formulation((x, [0, 10]), (y, [0, 5]), sign="<=")
-
     def test_two_bounded_tuples_raises(self) -> None:
         m = Model()
         x = m.add_variables(name="x")
