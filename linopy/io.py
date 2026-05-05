@@ -1266,7 +1266,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
                 variable_names=d["variable_names"],
                 constraint_names=d["constraint_names"],
                 model=m,
-                convexity=d.get("convexity"),
+                convexity=d["convexity"],
             )
 
     return m
