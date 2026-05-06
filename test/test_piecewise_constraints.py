@@ -241,18 +241,41 @@ class TestSlopesValueType:
                 id="different_y0",
             ),
             pytest.param(
-                # list vs ndarray of same numeric content — strict types,
-                # documented edge.
+                # list and ndarray of same numeric content — list/tuple
+                # are promoted to ndarray, so they compare equal.
                 {"values": [1, 2], "y0": 0},
                 {"values": np.array([1, 2]), "y0": 0},
-                False,
-                id="different_value_types",
+                True,
+                id="list_and_ndarray_same_content",
+            ),
+            pytest.param(
+                # int and float y0 describe the same curve — Real scalars
+                # coerce numerically.
+                {"values": [1, 2], "y0": 0},
+                {"values": [1, 2], "y0": 0.0},
+                True,
+                id="int_and_float_y0",
+            ),
+            pytest.param(
+                # numpy scalar y0 vs Python float — same numeric value.
+                {"values": [1, 2], "y0": np.float64(0)},
+                {"values": [1, 2], "y0": 0.0},
+                True,
+                id="numpy_scalar_and_float_y0",
+            ),
+            pytest.param(
+                # In-place ``float('nan')`` (not the np.nan singleton) must
+                # still compare equal — the array-path promotion handles it.
+                {"values": [float("nan"), 1.0], "y0": 0, "align": "leading"},
+                {"values": [float("nan"), 1.0], "y0": 0, "align": "leading"},
+                True,
+                id="float_nan_in_list",
             ),
             pytest.param(
                 {"values": [np.nan, 1], "y0": 0, "align": "leading"},
                 {"values": [np.nan, 1], "y0": 0, "align": "leading"},
                 True,
-                id="nan_in_list_via_array_path",
+                id="np_nan_in_list",
             ),
             pytest.param(
                 {"values": [1, 2], "y0": float("nan")},
@@ -288,6 +311,25 @@ class TestSlopesValueType:
         # Falls through to bool(False), not raising.
         assert (Slopes([1, 2], y0=0) == "not a slopes") is False
         assert (Slopes([1, 2], y0=0) == 42) is False
+
+    def test_eq_dataframe_is_order_sensitive(self) -> None:
+        """``DataFrame.equals`` is order-sensitive — pin the documented caveat."""
+        from linopy import Slopes
+
+        df1 = pd.DataFrame({"a": [1, 0.5], "b": [2, 1]}).T
+        df2 = df1.loc[["b", "a"]]
+        assert (Slopes(df1, y0=0, dim="g") == Slopes(df2, y0=0, dim="g")) is False
+
+    def test_eq_object_dtype_ndarray_does_not_raise(self) -> None:
+        """Object/string-dtype ndarrays fall back to plain array_equal."""
+        from linopy import Slopes
+
+        a = np.array(["x", "y"], dtype=object)
+        b = np.array(["x", "y"], dtype=object)
+        c = np.array(["x", "z"], dtype=object)
+        # Equal content -> True; different content -> False; neither raises.
+        assert (Slopes(a, y0=0) == Slopes(b, y0=0)) is True
+        assert (Slopes(a, y0=0) == Slopes(c, y0=0)) is False
 
     def test_unhashable(self) -> None:
         """

@@ -196,14 +196,27 @@ class Slopes:
         Two ``Slopes`` are equal iff every field matches:
 
         * ``align`` and ``dim`` compare with ``==`` (str / None).
-        * ``y0`` and ``values`` dispatch on type via :func:`_values_equal`
-          — ``np.array_equal(equal_nan=True)`` for ndarrays, ``.equals``
-          for pandas/xarray, recursive for ``dict``, NaN-safe ``==`` for
-          scalars.
+        * ``y0`` and ``values`` dispatch on type via :func:`_values_equal`:
+          numeric scalars compare by value across types (``int 0 ==
+          float 0.0 == np.float64(0)``); ``list`` and ``tuple`` are
+          promoted to ndarray so NaN content compares element-wise
+          regardless of which NaN object was used; ndarrays use
+          ``np.array_equal(equal_nan=True)`` (with a fallback for
+          non-numeric dtypes); ``pd.Series`` / ``pd.DataFrame`` /
+          ``DataArray`` use ``.equals``; ``dict`` recurses on matching
+          keys.
 
         Non-``Slopes`` operands return ``NotImplemented`` per Python
-        convention.  Different *types* of ``values`` (e.g. ``list`` vs
-        ``ndarray``) are *not* coerced — they compare unequal.
+        convention.
+
+        Caveats
+        -------
+        * ``Series.equals`` / ``DataFrame.equals`` / ``DataArray.equals``
+          are *order-sensitive*: two frames with the same content but
+          reordered rows / columns / coords compare unequal.
+        * Cross-container coercion is limited to ``list``/``tuple`` →
+          ndarray.  A ``dict`` and a ``DataFrame`` describing the same
+          per-entity slopes still compare unequal.
 
         ``__hash__`` is set to ``None`` (unhashable) since the inner
         ``values`` may be a mutable container.
@@ -221,11 +234,41 @@ class Slopes:
 
 
 def _values_equal(a: object, b: object) -> bool:
-    """Type-dispatched equality for ``Slopes`` field values (NaN-safe)."""
+    """
+    Type-dispatched equality for ``Slopes`` field values (NaN-safe).
+
+    Numeric scalars compare by value (``int 0 == float 0.0 == np.float64(0)``)
+    with a NaN-safe fallback.  Lists / tuples are promoted to ndarray so
+    in-place ``float('nan')`` content compares element-wise NaN-safe rather
+    than relying on the ``np.nan`` singleton.  Non-numeric ndarray dtypes
+    (object, string) fall back to a plain ``np.array_equal`` without
+    ``equal_nan``.
+    """
+    # Numeric scalars (int/float/np.integer/np.floating) — coerce and compare.
+    # ``bool`` is a subclass of ``int``; exclude so True/False compare strictly.
+    if (
+        isinstance(a, Real)
+        and not isinstance(a, bool)
+        and isinstance(b, Real)
+        and not isinstance(b, bool)
+    ):
+        af, bf = float(a), float(b)
+        return (af != af and bf != bf) or af == bf
+
+    # Promote list/tuple so the ndarray path handles NaN content uniformly.
+    if isinstance(a, list | tuple):
+        a = np.asarray(a)
+    if isinstance(b, list | tuple):
+        b = np.asarray(b)
+
     if isinstance(a, np.ndarray):
-        if not isinstance(b, np.ndarray):
+        if not isinstance(b, np.ndarray) or a.shape != b.shape:
             return False
-        return bool(np.array_equal(a, b, equal_nan=True))
+        try:
+            return bool(np.array_equal(a, b, equal_nan=True))
+        except TypeError:
+            # Object / string dtype: ``equal_nan`` raises on isnan.
+            return bool(np.array_equal(a, b))
     if isinstance(a, pd.DataFrame):
         return isinstance(b, pd.DataFrame) and bool(a.equals(b))
     if isinstance(a, pd.Series):
@@ -238,10 +281,6 @@ def _values_equal(a: object, b: object) -> bool:
         return all(_values_equal(a[k], b[k]) for k in a)
     if type(a) is not type(b):
         return False
-    if isinstance(a, float):
-        # IEEE: nan != nan. Treat two nans as equal (matches the array path).
-        if a != a:  # nan check
-            return b != b
     return a == b
 
 
