@@ -809,7 +809,8 @@ class TestNaNMasking:
         assert (lam.labels.isel({BREAKPOINT_DIM: slice(None, 3)}) != -1).all()
         assert int(lam.labels.isel({BREAKPOINT_DIM: 3})) == -1
 
-    def test_sos2_interior_nan_raises(self) -> None:
+    @pytest.mark.parametrize("method", ["sos2", "auto"])
+    def test_sos2_interior_nan_raises(self, method: Method) -> None:
         """SOS2 with interior NaN breakpoints raises ValueError."""
         m = Model()
         x = m.add_variables(name="x")
@@ -820,7 +821,7 @@ class TestNaNMasking:
             m.add_piecewise_formulation(
                 (x, x_pts),
                 (y, y_pts),
-                method="sos2",
+                method=method,
             )
 
 
@@ -1362,6 +1363,43 @@ class TestValidationEdgeCases:
                 method="sos2",
             )
 
+    def test_unordered_sos2_breakpoint_coords_raise(self) -> None:
+        """SOS2 breakpoint coords define adjacency and must follow data order."""
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        x_pts = xr.DataArray(
+            [0, 1, 2],
+            dims=[BREAKPOINT_DIM],
+            coords={BREAKPOINT_DIM: [0, 2, 1]},
+        )
+        y_pts = xr.DataArray(
+            [0, 100, 0],
+            dims=[BREAKPOINT_DIM],
+            coords={BREAKPOINT_DIM: [0, 2, 1]},
+        )
+        with pytest.raises(ValueError, match="strictly increasing"):
+            m.add_piecewise_formulation((x, x_pts), (y, y_pts), method="sos2")
+
+    def test_breakpoint_entity_coords_must_match_expression_coords(self) -> None:
+        """Entity coords on breakpoints must not silently misalign with variables."""
+        m = Model()
+        entities = pd.Index(["a", "b"], name="entity")
+        x = m.add_variables(coords=[entities], name="x")
+        y = m.add_variables(coords=[entities], name="y")
+        x_pts = xr.DataArray(
+            [[0, 10], [0, 10]],
+            dims=["entity", BREAKPOINT_DIM],
+            coords={"entity": ["a", "b"], BREAKPOINT_DIM: [0, 1]},
+        )
+        y_pts = xr.DataArray(
+            [[0, 5], [0, 5]],
+            dims=["entity", BREAKPOINT_DIM],
+            coords={"entity": ["b", "c"], BREAKPOINT_DIM: [0, 1]},
+        )
+        with pytest.raises(ValueError, match="coordinates"):
+            m.add_piecewise_formulation((x, x_pts), (y, y_pts), method="sos2")
+
     def test_missing_breakpoint_dim_on_second_arg_raises(self) -> None:
         """Second breakpoint array missing breakpoint dim raises."""
         m = Model()
@@ -1862,6 +1900,22 @@ class TestSignParameter:
             method="lp",
         )
         m.add_constraints(x >= 50)
+        m.add_objective(-y)
+        status, _ = m.solve()
+        assert status != "ok"
+
+    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
+    def test_lp_domain_uses_paired_valid_breakpoints(self) -> None:
+        """A trailing NaN in y must also shrink the LP x-domain."""
+        m = Model()
+        x = m.add_variables(lower=0, upper=2, name="x")
+        y = m.add_variables(lower=0, upper=10, name="y")
+        m.add_piecewise_formulation(
+            (y, [0, 1, np.nan], "<="),
+            (x, [0, 1, 2]),
+            method="lp",
+        )
+        m.add_constraints(x == 2)
         m.add_objective(-y)
         status, _ = m.solve()
         assert status != "ok"

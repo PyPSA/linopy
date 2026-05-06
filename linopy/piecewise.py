@@ -663,10 +663,17 @@ def _validate_breakpoint_shapes(bp_a: DataArray, bp_b: DataArray) -> bool:
 
 
 def _validate_numeric_breakpoint_coords(bp: DataArray) -> None:
-    if not pd.api.types.is_numeric_dtype(bp.coords[BREAKPOINT_DIM]):
+    coord = bp.coords[BREAKPOINT_DIM]
+    if not pd.api.types.is_numeric_dtype(coord):
         raise ValueError(
             f"Breakpoint dimension '{BREAKPOINT_DIM}' must have numeric coordinates "
-            f"for SOS2 weights, but got {bp.coords[BREAKPOINT_DIM].dtype}"
+            f"for SOS2 weights, but got {coord.dtype}"
+        )
+    values = np.asarray(coord.values)
+    if len(values) > 1 and not bool(np.all(np.diff(values) > 0)):
+        raise ValueError(
+            f"Breakpoint dimension '{BREAKPOINT_DIM}' coordinates must be "
+            "strictly increasing for SOS2 weights."
         )
 
 
@@ -719,6 +726,42 @@ def _has_trailing_nan_only(bp: DataArray) -> bool:
     cummin = np.minimum.accumulate(valid.values, axis=valid.dims.index(BREAKPOINT_DIM))
     cummin_da = DataArray(cummin, coords=valid.coords, dims=valid.dims)
     return not bool((valid & ~cummin_da).any())
+
+
+def _paired_valid_points(*points: DataArray) -> DataArray:
+    invalid = points[0].isnull()
+    for point in points[1:]:
+        invalid = invalid | point.isnull()
+    return points[0].where(~invalid)
+
+
+def _validate_shared_coords(points: Sequence[DataArray]) -> None:
+    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    for i, left in enumerate(points):
+        for right in points[i + 1 :]:
+            for dim in (set(left.dims) & set(right.dims)) - skip:
+                left_index = pd.Index(left.coords[dim].values)
+                right_index = pd.Index(right.coords[dim].values)
+                if not left_index.equals(right_index):
+                    raise ValueError(
+                        f"Breakpoint coordinates for dimension '{dim}' must match."
+                    )
+
+
+def _validate_expr_coords(
+    points: Sequence[DataArray], exprs: Sequence[LinearExpression]
+) -> None:
+    skip = {BREAKPOINT_DIM, SEGMENT_DIM} | set(HELPER_DIMS)
+    for point in points:
+        for expr in exprs:
+            for dim in (set(point.dims) & set(expr.coord_dims)) - skip:
+                point_index = pd.Index(point.coords[dim].values)
+                expr_index = pd.Index(expr.coords[dim].values)
+                if not point_index.equals(expr_index):
+                    raise ValueError(
+                        f"Breakpoint coordinates for dimension '{dim}' must match "
+                        "the expression coordinates."
+                    )
 
 
 def _to_linexpr(expr: LinExprLike) -> LinearExpression:
@@ -979,9 +1022,12 @@ def add_piecewise_formulation(
         _validate_breakpoint_shapes(coerced_bps[0], coerced_bps[i])
 
     raw_exprs = [expr for expr, _, _ in parsed]
+    lin_exprs = [_to_linexpr(expr) for expr in raw_exprs]
     bp_list = [
         _broadcast_points(bp, *raw_exprs, disjunctive=disjunctive) for bp in coerced_bps
     ]
+    _validate_shared_coords(bp_list)
+    _validate_expr_coords(bp_list, lin_exprs)
 
     combined_null = bp_list[0].isnull()
     for bp in bp_list[1:]:
@@ -1003,7 +1049,6 @@ def add_piecewise_formulation(
             # can't collide with the synthetic coord for an unnamed expr.
             link_coords.append(f"_pwl_{i}")
 
-    lin_exprs = [_to_linexpr(expr) for expr in raw_exprs]
     active_expr = _to_linexpr(active) if active is not None else None
 
     if signed_idx is None:
@@ -1158,10 +1203,11 @@ def _lp_eligibility(
     assert inputs.bounded_bp is not None  # narrowed by is_equality check
     x_pts = inputs.pinned_bps[0]
     y_pts = inputs.bounded_bp
-    if not _check_strict_monotonicity(x_pts):
-        return False, "x breakpoints are not strictly monotonic"
-    if not _has_trailing_nan_only(x_pts):
-        return False, "x breakpoints contain non-trailing NaN"
+    paired_x = _paired_valid_points(x_pts, y_pts)
+    if not _check_strict_monotonicity(paired_x):
+        return False, "paired x breakpoints are not strictly monotonic"
+    if not _has_trailing_nan_only(paired_x):
+        return False, "paired breakpoints contain non-trailing NaN"
     convexity = _detect_convexity(x_pts, y_pts)
     sign = inputs.bounded_sign
     if sign == LESS_EQUAL and convexity not in ("concave", "linear"):
@@ -1290,7 +1336,11 @@ def _resolve_sos2_vs_incremental(
     is_monotonic = _check_strict_monotonicity(stacked_bp)
 
     if method == "auto":
-        return "incremental" if (is_monotonic and trailing_nan_only) else "sos2"
+        if not trailing_nan_only:
+            raise ValueError(
+                "SOS2 method does not support non-trailing NaN breakpoints."
+            )
+        return "incremental" if is_monotonic else "sos2"
 
     if method == "incremental":
         if not is_monotonic:
@@ -1591,8 +1641,9 @@ def _add_lp(
         mask=piece_mask,
     )
 
-    # Domain bounds: x ∈ [x_min, x_max] (skipna by default).
-    x_min = x_points.min(dim=BREAKPOINT_DIM)
-    x_max = x_points.max(dim=BREAKPOINT_DIM)
+    # Domain bounds: x ∈ [x_min, x_max] over paired-valid breakpoints.
+    paired_x_points = x_points.where(bp_valid)
+    x_min = paired_x_points.min(dim=BREAKPOINT_DIM)
+    x_max = paired_x_points.max(dim=BREAKPOINT_DIM)
     model.add_constraints(x_expr >= x_min, name=f"{name}{PWL_DOMAIN_LO_SUFFIX}")
     model.add_constraints(x_expr <= x_max, name=f"{name}{PWL_DOMAIN_HI_SUFFIX}")
