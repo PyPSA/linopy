@@ -643,22 +643,6 @@ class TestSlopesDispatch:
         assert f.method in ("sos2", "incremental")
         assert f.convexity == "concave"
 
-    def test_three_tuple_deferred(self) -> None:
-        """Slopes pulls x grid even with another non-Slopes tuple present."""
-        from linopy import Slopes
-
-        m = Model()
-        power = m.add_variables(name="power")
-        fuel = m.add_variables(name="fuel")
-        heat = m.add_variables(name="heat")
-        f = m.add_piecewise_formulation(
-            (power, [0, 30, 60, 100]),
-            (fuel, [0, 40, 85, 160]),
-            (heat, Slopes([0.8, 1.0, 1.0], y0=0)),
-        )
-        # 3-var formulation -> convexity is None
-        assert f.convexity is None
-
     def test_slopes_as_bounded_tuple(self) -> None:
         from linopy import Slopes
 
@@ -684,35 +668,24 @@ class TestSlopesDispatch:
                 (y, Slopes([1, 1], y0=0)),
             )
 
-    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
-    def test_two_non_slopes_picks_first_x_grid(self) -> None:
+    def test_multiple_non_slopes_with_slopes_raises(self) -> None:
         """
-        With multiple non-Slopes tuples, the Slopes resolution must borrow
-        the x grid from the *first* non-Slopes tuple (deterministic).
-
-        Pin this with distinguishable grids: x is [0, 10, 20, 30] and y
-        is [0, 100, 200, 300] (10× larger).  Slopes ``[1, 1, 1]`` with
-        ``y0=0`` resolves to ``[0, 10, 20, 30]`` if borrowed from x and
-        ``[0, 100, 200, 300]`` if borrowed from y.  Forcing the model
-        onto piece 1 (x == 10, hence y == 100) and solving must yield
-        z == 10 (matching the *first* — x — grid).
+        With Slopes present, two or more non-Slopes tuples is rejected:
+        each non-Slopes tuple is a y-vector for its own variable, so
+        there is no canonical x grid for the Slopes to integrate against.
         """
         from linopy import Slopes
 
         m = Model()
-        x = m.add_variables(lower=0, upper=30, name="x")
-        y = m.add_variables(lower=0, upper=300, name="y")
-        z = m.add_variables(lower=0, upper=300, name="z")
-        m.add_piecewise_formulation(
-            (x, [0, 10, 20, 30]),  # first non-Slopes — should be the source
-            (y, [0, 100, 200, 300]),  # second non-Slopes — must NOT be picked
-            (z, Slopes([1, 1, 1], y0=0)),
-        )
-        m.add_constraints(x == 10)
-        m.add_objective(z)  # any feasible objective; equality pins z anyway
-        m.solve()
-        assert float(m.solution["z"]) == pytest.approx(10.0, abs=TOL)
-        assert float(m.solution["y"]) == pytest.approx(100.0, abs=TOL)
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        with pytest.raises(ValueError, match="no canonical x grid"):
+            m.add_piecewise_formulation(
+                (x, [0, 10, 20, 30]),
+                (y, [0, 100, 200, 300]),
+                (z, Slopes([1, 1, 1], y0=0)),
+            )
 
     def test_multiple_slopes_share_x_grid(self) -> None:
         """

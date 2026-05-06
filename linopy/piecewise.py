@@ -109,17 +109,22 @@ class Slopes:
     Per-piece slopes + initial y-value, deferred until an x grid is known.
 
     Used as the second element of a tuple in
-    :func:`add_piecewise_formulation` where exactly one *other* tuple
-    provides the x grid for all :class:`Slopes` tuples in the call::
+    :func:`add_piecewise_formulation`.  When any :class:`Slopes` tuple is
+    present, **exactly one** other tuple must carry explicit breakpoints —
+    that tuple's values are the x grid against which all :class:`Slopes`
+    are integrated::
 
         m.add_piecewise_formulation(
-            (power, [0, 30, 60, 100]),               # provides x grid
-            (fuel,  Slopes([1.2, 1.4, 1.7], y0=0)),  # x grid borrowed
+            (power, [0, 30, 60, 100]),               # the x grid
+            (fuel,  Slopes([1.2, 1.4, 1.7], y0=0)),  # integrated against power
         )
 
-    Standalone use is possible via :meth:`to_breakpoints`, which resolves
-    the spec to an ordinary breakpoint :class:`xarray.DataArray` given an
-    explicit x grid.
+    With two or more non-:class:`Slopes` tuples there is no canonical x
+    axis, and the call raises :class:`ValueError`.  Resolve the
+    :class:`Slopes` explicitly via :meth:`to_breakpoints` in that case,
+    or for any standalone use::
+
+        bp = Slopes([1.2, 1.4, 1.7], y0=0).to_breakpoints([0, 30, 60, 100])
 
     Parameters
     ----------
@@ -1187,10 +1192,6 @@ def add_piecewise_formulation(
                 )
         parsed.append((expr, bp, tuple_sign))
 
-    # Resolve any deferred Slopes tuples by borrowing the x grid from the
-    # first non-Slopes tuple.  All non-Slopes tuples share the same
-    # BREAKPOINT_DIM (validated downstream), so picking the first is
-    # unambiguous.
     slopes_set = {i for i, p in enumerate(parsed) if isinstance(p[1], Slopes)}
     if slopes_set:
         non_slopes_idx = [i for i in range(len(parsed)) if i not in slopes_set]
@@ -1199,6 +1200,17 @@ def add_piecewise_formulation(
                 "All tuples are Slopes; at least one tuple must carry an "
                 "explicit x grid.  Pass the x grid via a regular tuple "
                 "or call Slopes(...).to_breakpoints(x_pts) explicitly."
+            )
+        if len(non_slopes_idx) > 1:
+            raise ValueError(
+                f"Slopes tuples present at positions {sorted(slopes_set)}, "
+                f"but {len(non_slopes_idx)} non-Slopes tuples carry their "
+                f"own breakpoint values (positions {non_slopes_idx}).  "
+                "There is no canonical x grid for the Slopes to integrate "
+                "against — borrowing from any one of them would silently "
+                "depend on tuple order.  Either reduce to a single non-Slopes "
+                "tuple, or resolve the Slopes explicitly by calling "
+                "Slopes(...).to_breakpoints(x_pts) before passing it in."
             )
         x_grid = parsed[non_slopes_idx[0]][1]
         parsed = [
