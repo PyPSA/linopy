@@ -223,6 +223,66 @@ class TestBreakpointsFactory:
 
 
 # ===========================================================================
+# breakpoints(slopes_align="leading")
+# ===========================================================================
+
+
+class TestSlopesAlignLeading:
+    """
+    `slopes_align="leading"` accepts slopes of length len(x_points),
+    where slopes[0] is a NaN sentinel that gets dropped.
+    """
+
+    def test_1d_matches_pieces(self) -> None:
+        leading = breakpoints(
+            slopes=[np.nan, 1, 2], x_points=[0, 1, 2], y0=0, slopes_align="leading"
+        )
+        pieces = breakpoints(slopes=[1, 2], x_points=[0, 1, 2], y0=0)
+        xr.testing.assert_equal(leading, pieces)
+
+    def test_dict_ragged(self) -> None:
+        bp = breakpoints(
+            slopes={"a": [np.nan, 1, 0.5], "b": [np.nan, 2]},
+            x_points={"a": [0, 10, 50], "b": [0, 20]},
+            y0={"a": 0, "b": 10},
+            dim="gen",
+            slopes_align="leading",
+        )
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
+        np.testing.assert_allclose(
+            bp.sel(gen="b").dropna(BREAKPOINT_DIM).values, [10, 50]
+        )
+
+    def test_dataarray(self) -> None:
+        slopes_da = xr.DataArray(
+            [[np.nan, 1, 2], [np.nan, 3, 4]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
+        )
+        xp_da = xr.DataArray(
+            [[0, 1, 2], [0, 1, 2]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
+        )
+        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
+        bp = breakpoints(
+            slopes=slopes_da, x_points=xp_da, y0=y0_da, slopes_align="leading"
+        )
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
+        np.testing.assert_allclose(bp.sel(gen="b").values, [5, 8, 12])
+
+    def test_non_nan_first_slope_raises(self) -> None:
+        with pytest.raises(ValueError, match="first slope"):
+            breakpoints(
+                slopes=[1, 2, 3], x_points=[0, 1, 2], y0=0, slopes_align="leading"
+            )
+
+    def test_without_slopes_mode_raises(self) -> None:
+        with pytest.raises(ValueError, match="only valid in slopes mode"):
+            breakpoints([0, 1, 2], slopes_align="leading")
+
+
+# ===========================================================================
 # segments() factory
 # ===========================================================================
 

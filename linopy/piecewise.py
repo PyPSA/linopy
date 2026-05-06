@@ -324,10 +324,22 @@ def _breakpoints_from_slopes(
     x_points: BreaksLike,
     y0: float | dict[str, float] | pd.Series | DataArray,
     dim: str | None,
+    slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
     """Convert slopes + x_points + y0 into a breakpoint DataArray."""
     slopes_arr = _coerce_breaks(slopes, dim)
     xp_arr = _coerce_breaks(x_points, dim)
+
+    if slopes_align == "leading":
+        if slopes_arr.sizes[BREAKPOINT_DIM] == 0:
+            raise ValueError("slopes_align='leading' requires at least one slope entry")
+        first_slope = slopes_arr.isel({BREAKPOINT_DIM: 0})
+        if not bool(first_slope.isnull().all()):
+            raise ValueError(
+                "slopes_align='leading' requires the first slope of each "
+                "entity to be NaN"
+            )
+        slopes_arr = slopes_arr.isel({BREAKPOINT_DIM: slice(1, None)})
 
     # 1D case: single set of breakpoints
     if slopes_arr.ndim == 1:
@@ -420,6 +432,7 @@ def breakpoints(
     x_points: BreaksLike | None = None,
     y0: float | dict[str, float] | pd.Series | DataArray | None = None,
     dim: str | None = None,
+    slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
     """
     Create a breakpoint DataArray for piecewise linear constraints.
@@ -448,6 +461,16 @@ def breakpoints(
     dim : str, optional
         Entity dimension name. Required when ``values`` or ``slopes`` is a
         ``pd.DataFrame`` or ``dict``.
+    slopes_align : {"pieces", "leading"}, default "pieces"
+        Alignment of ``slopes`` relative to ``x_points``.
+
+        - ``"pieces"``: ``len(slopes) == len(x_points) - 1``. ``slopes[i]``
+          is the slope between ``x[i]`` and ``x[i+1]``.
+        - ``"leading"``: ``len(slopes) == len(x_points)``. ``slopes[0]``
+          must be NaN and is ignored; ``slopes[i]`` for ``i>=1`` is the
+          slope between ``x[i-1]`` and ``x[i]``. Useful when a marginal
+          value is tabulated alongside each breakpoint with the first
+          row's marginal undefined.
 
     Returns
     -------
@@ -458,10 +481,12 @@ def breakpoints(
         raise ValueError("'values' and 'slopes' are mutually exclusive")
     if values is not None and (x_points is not None or y0 is not None):
         raise ValueError("'x_points' and 'y0' are forbidden when 'values' is given")
+    if slopes_align != "pieces" and slopes is None:
+        raise ValueError("'slopes_align' is only valid in slopes mode")
     if slopes is not None:
         if x_points is None or y0 is None:
             raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-        return _breakpoints_from_slopes(slopes, x_points, y0, dim)
+        return _breakpoints_from_slopes(slopes, x_points, y0, dim, slopes_align)
 
     # Points mode
     if values is None:
