@@ -332,9 +332,7 @@ def _breakpoints_from_slopes(
 
     if slopes_align == "leading":
         if slopes_arr.sizes[BREAKPOINT_DIM] == 0:
-            raise ValueError(
-                "slopes_align='leading' requires at least one slope entry"
-            )
+            raise ValueError("slopes_align='leading' requires at least one slope entry")
         first_slope = slopes_arr.isel({BREAKPOINT_DIM: 0})
         if not bool(first_slope.isnull().all()):
             raise ValueError(
