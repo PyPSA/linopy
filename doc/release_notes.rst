@@ -17,7 +17,6 @@ Upcoming Version
 * Surface formulation metadata on the returned ``PiecewiseFormulation``: ``.method`` (resolved method name) and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"`` when well-defined).  Both persist across netCDF round-trip.
 * Add ``tangent_lines()`` as a low-level helper that returns per-piece chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
 * Add ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict, plus a slopes-mode constructor), ``linopy.segments()`` (disjunctive operating regions), and ``slopes_to_points()`` (per-piece slopes → breakpoint y-coordinates) as breakpoint-construction helpers.
-* Add ``slopes_align`` keyword to ``linopy.breakpoints()``. With ``slopes_align="leading"``, ``slopes`` may have the same length as ``x_points`` where ``slopes[0]`` is a NaN sentinel that is dropped — useful when a marginal value is tabulated alongside each breakpoint.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
