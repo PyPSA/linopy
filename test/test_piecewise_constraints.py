@@ -197,6 +197,41 @@ class TestSlopesClass:
         with pytest.raises((AttributeError, TypeError)):
             s.y0 = 5  # type: ignore[misc]
 
+    def test_repr_hides_defaults_for_1d_list(self) -> None:
+        from linopy import Slopes
+
+        # Defaults (align="pieces", dim=None) must be omitted; the values
+        # list renders inline so users can read it.
+        assert repr(Slopes([1.2, 1.6, 2.15], y0=0)) == "Slopes([1.2, 1.6, 2.15], y0=0)"
+
+    def test_repr_shows_non_default_align(self) -> None:
+        from linopy import Slopes
+
+        r = repr(Slopes([np.nan, 1, 2], y0=0, align="leading"))
+        assert "align='leading'" in r
+        assert "dim=" not in r
+
+    def test_repr_summarises_dataframe(self) -> None:
+        from linopy import Slopes
+
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]}).T
+        r = repr(Slopes(df, y0=0, dim="gen"))
+        # Must not dump the full DataFrame; should summarise as <DataFrame shape=...>.
+        assert "<DataFrame" in r and "shape=" in r
+        assert "dim='gen'" in r
+
+    def test_repr_summarises_dataarray(self) -> None:
+        from linopy import Slopes
+
+        da = xr.DataArray(
+            [[1, 2], [3, 4]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"]},
+        )
+        r = repr(Slopes(da, y0=0, dim="gen"))
+        assert "<DataArray" in r
+        assert "gen: 2" in r
+
     def test_to_breakpoints_series(self) -> None:
         from linopy import Slopes
 

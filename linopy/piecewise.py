@@ -94,7 +94,7 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Slopes:
     """
     Per-piece slopes + initial y-value, deferred until an x grid is known.
@@ -160,6 +160,29 @@ class Slopes:
         return _breakpoints_from_slopes(
             self.values, x_points, self.y0, self.dim, self.align
         )
+
+    def __repr__(self) -> str:
+        bits = [_summarise_breakslike(self.values), f"y0={self.y0!r}"]
+        if self.align != "pieces":
+            bits.append(f"align={self.align!r}")
+        if self.dim is not None:
+            bits.append(f"dim={self.dim!r}")
+        return f"Slopes({', '.join(bits)})"
+
+
+def _summarise_breakslike(v: BreaksLike) -> str:
+    """Compact one-line summary of a BreaksLike value for use in reprs."""
+    if isinstance(v, DataArray):
+        sizes = ", ".join(f"{d}: {s}" for d, s in v.sizes.items())
+        return f"<DataArray {sizes}>"
+    if isinstance(v, pd.DataFrame):
+        return f"<DataFrame shape={v.shape}>"
+    if isinstance(v, pd.Series):
+        return f"<Series len={len(v)}>"
+    if isinstance(v, dict):
+        return f"<dict {len(v)} entries>"
+    # Sequence[float] (list, tuple, ndarray of small size) — render inline.
+    return repr(v)
 
 
 # Tuple element type covering both eager (DataArray etc.) and deferred (Slopes) bps.
