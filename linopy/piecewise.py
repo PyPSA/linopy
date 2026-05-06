@@ -256,12 +256,17 @@ def _summarise_breakslike(v: BreaksLike) -> str:
         return f"<Series len={len(v)}>"
     if isinstance(v, dict):
         return f"<dict {len(v)} entries>"
-    # Sequence[float] — render inline up to 8 entries (shortest float
-    # format, ``g``); longer truncates to head + tail with item count.
-    # ``np.asarray(...).tolist()`` normalises numpy scalars (e.g.
-    # ``np.float64`` / ``np.int64``) to Python types so the rendering
-    # is uniform regardless of input dtype.
-    seq = np.asarray(v).tolist()
+    # Multi-dim ndarray: shape summary (consistent with DataArray /
+    # DataFrame / Series treatment above).  ``np.asarray`` is called once
+    # so we don't double-normalise on the 1D path below.
+    arr = np.asarray(v)
+    if arr.ndim > 1:
+        return f"<ndarray shape={arr.shape}>"
+    # 1D path: render inline up to 8 entries (shortest float format,
+    # ``g``); longer truncates to head + tail with item count.
+    # ``arr.tolist()`` normalises numpy scalars (e.g. ``np.float64`` /
+    # ``np.int64``) to Python types so the rendering is uniform.
+    seq = arr.tolist()
     if not isinstance(seq, list):  # 0-D ndarray → scalar
         return _short_num(seq)
     if len(seq) <= 8:

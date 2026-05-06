@@ -327,6 +327,11 @@ class TestSlopesValueType:
                 "<dict 2 entries>",
                 id="dict",
             ),
+            pytest.param(
+                np.zeros((20, 5, 30)),
+                "<ndarray shape=(20, 5, 30)>",
+                id="multi_dim_ndarray",
+            ),
         ],
     )
     def test_repr_summarises_bulky_values(
