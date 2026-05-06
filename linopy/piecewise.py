@@ -63,7 +63,9 @@ logger = logging.getLogger(__name__)
 # Each user-facing piecewise entry point fires its EvolvingAPIWarning at
 # most once per process.  Without dedup, a single model build emits the
 # verbose warning hundreds of times and drowns out other output.
-_EvolvingApiKey: TypeAlias = Literal["tangent_lines", "add_piecewise_formulation"]
+_EvolvingApiKey: TypeAlias = Literal[
+    "tangent_lines", "add_piecewise_formulation", "Slopes"
+]
 _emitted_evolving_warnings: set[_EvolvingApiKey] = set()
 
 
@@ -148,6 +150,14 @@ class Slopes:
     align: Literal["pieces", "leading"] = "pieces"
     dim: str | None = None
 
+    def __post_init__(self) -> None:
+        _warn_evolving_api(
+            "Slopes",
+            "piecewise: Slopes is a new API; the constructor signature and "
+            "the dispatch rules for inheriting an x grid from sibling tuples "
+            "may be refined in minor releases.",
+        )
+
     def to_breakpoints(self, x_points: BreaksLike) -> DataArray:
         """
         Resolve to a breakpoint :class:`xarray.DataArray`, given an x grid.
@@ -181,8 +191,13 @@ def _summarise_breakslike(v: BreaksLike) -> str:
         return f"<Series len={len(v)}>"
     if isinstance(v, dict):
         return f"<dict {len(v)} entries>"
-    # Sequence[float] (list, tuple, ndarray of small size) — render inline.
-    return repr(v)
+    # Sequence[float] — render inline up to 8 entries; longer truncates.
+    seq = list(v)
+    if len(seq) <= 8:
+        return repr(seq)
+    head = ", ".join(repr(x) for x in seq[:3])
+    tail = ", ".join(repr(x) for x in seq[-2:])
+    return f"[{head}, ..., {tail}] ({len(seq)} items)"
 
 
 # Tuple element type covering both eager (DataArray etc.) and deferred (Slopes) bps.
@@ -1054,9 +1069,9 @@ def add_piecewise_formulation(
     # first non-Slopes tuple.  All non-Slopes tuples share the same
     # BREAKPOINT_DIM (validated downstream), so picking the first is
     # unambiguous.
-    slopes_idx = [i for i, p in enumerate(parsed) if isinstance(p[1], Slopes)]
-    if slopes_idx:
-        non_slopes_idx = [i for i in range(len(parsed)) if i not in set(slopes_idx)]
+    slopes_set = {i for i, p in enumerate(parsed) if isinstance(p[1], Slopes)}
+    if slopes_set:
+        non_slopes_idx = [i for i in range(len(parsed)) if i not in slopes_set]
         if not non_slopes_idx:
             raise ValueError(
                 "All tuples are Slopes; at least one tuple must carry an "

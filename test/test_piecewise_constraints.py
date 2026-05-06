@@ -56,6 +56,10 @@ _any_solvers = [
     s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
 ]
 
+# Solver-output tolerance for solution-value assertions in this file.  Matches
+# the convention in ``test_piecewise_feasibility.py``.
+TOL = 1e-6
+
 
 # ===========================================================================
 # _slopes_to_points (private list utility)
@@ -186,6 +190,17 @@ class TestSlopesValueType:
             assert r == expected
         else:
             assert expected in r
+
+    def test_repr_truncates_long_sequences(self) -> None:
+        """Lists/ndarrays over 8 entries must be summarised, not dumped."""
+        from linopy import Slopes
+
+        r = repr(Slopes(list(range(50)), y0=0))
+        # No 50-element dump — must include the "(50 items)" suffix and
+        # contain at most a handful of explicit numbers.
+        assert "(50 items)" in r
+        assert "..." in r
+        assert len(r) < 80, f"repr unexpectedly long: {r!r}"
 
     @pytest.mark.parametrize(
         ("values", "fragment"),
@@ -524,20 +539,55 @@ class TestSlopesDispatch:
                 (y, Slopes([1, 1], y0=0)),
             )
 
+    @pytest.mark.skipif(not _any_solvers, reason="no solver available")
     def test_two_non_slopes_picks_first_x_grid(self) -> None:
-        """With multiple non-Slopes tuples, deterministic pick from the first."""
+        """
+        With multiple non-Slopes tuples, the Slopes resolution must borrow
+        the x grid from the *first* non-Slopes tuple (deterministic).
+
+        Pin this with distinguishable grids: x is [0, 10, 20, 30] and y
+        is [0, 100, 200, 300] (10× larger).  Slopes ``[1, 1, 1]`` with
+        ``y0=0`` resolves to ``[0, 10, 20, 30]`` if borrowed from x and
+        ``[0, 100, 200, 300]`` if borrowed from y.  Forcing the model
+        onto piece 1 (x == 10, hence y == 100) and solving must yield
+        z == 10 (matching the *first* — x — grid).
+        """
+        from linopy import Slopes
+
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=300, name="y")
+        z = m.add_variables(lower=0, upper=300, name="z")
+        m.add_piecewise_formulation(
+            (x, [0, 10, 20, 30]),  # first non-Slopes — should be the source
+            (y, [0, 100, 200, 300]),  # second non-Slopes — must NOT be picked
+            (z, Slopes([1, 1, 1], y0=0)),
+        )
+        m.add_constraints(x == 10)
+        m.add_objective(z)  # any feasible objective; equality pins z anyway
+        m.solve()
+        assert float(m.solution["z"]) == pytest.approx(10.0, abs=TOL)
+        assert float(m.solution["y"]) == pytest.approx(100.0, abs=TOL)
+
+    def test_multiple_slopes_share_x_grid(self) -> None:
+        """
+        Two Slopes tuples plus one non-Slopes — both Slopes resolve against
+        the same borrowed x grid.  Pin via distinct slope sequences so the
+        two Slopes-derived variables end up with different breakpoint values.
+        """
         from linopy import Slopes
 
         m = Model()
         x = m.add_variables(name="x")
         y = m.add_variables(name="y")
         z = m.add_variables(name="z")
-        # x and y both carry the same grid (size 4); z borrows it
         f = m.add_piecewise_formulation(
-            (x, [0, 30, 60, 100]),
-            (y, [0, 40, 85, 160]),
-            (z, Slopes([0.5, 0.6, 0.7], y0=0)),
+            (x, [0, 10, 20, 30]),
+            (y, Slopes([1, 1, 1], y0=0)),  # → [0, 10, 20, 30]
+            (z, Slopes([2, 2, 2], y0=0)),  # → [0, 20, 40, 60]
         )
+        # 3-var formulation -> convexity is None.
+        assert f.convexity is None
         assert f.name in m._piecewise_formulations
 
     def test_slopes_align_leading_in_dispatch(self) -> None:
@@ -2741,6 +2791,24 @@ class TestEvolvingAPIWarning:
         evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
         assert len(evolving) == 1
         assert "tangent_lines" in str(evolving[0].message)
+
+    def test_slopes_construction_warns_and_dedups(self) -> None:
+        """
+        ``Slopes(...)`` is part of the same evolving API surface and emits
+        on construction so that the standalone ``Slopes(...).to_breakpoints(...)``
+        path doesn't silently bypass the signal.  Per-key dedup keeps it
+        quiet for repeated use.
+        """
+        from linopy import EvolvingAPIWarning, Slopes
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", EvolvingAPIWarning)
+            Slopes([1, 2], y0=0)
+            Slopes([3, 4], y0=5)
+            Slopes([1, 1, 1], y0=0, align="leading")
+        evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
+        assert len(evolving) == 1
+        assert "Slopes" in str(evolving[0].message)
 
     def test_warning_stacklevel_points_to_user_call(self) -> None:
         """
