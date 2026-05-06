@@ -18,10 +18,12 @@ Creating a model
     model.Model.add_variables
     model.Model.add_constraints
     model.Model.add_objective
-    model.Model.add_piecewise_constraints
-    piecewise.piecewise
+    model.Model.add_piecewise_formulation
+    piecewise.PiecewiseFormulation
     piecewise.breakpoints
     piecewise.segments
+    piecewise.slopes_to_points
+    piecewise.tangent_lines
     model.Model.linexpr
     model.Model.remove_constraints
     model.Model.copy
