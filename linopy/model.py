@@ -503,7 +503,8 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        from linopy.piecewise import _get_piecewise_groups, _repr_summary as pwl_repr_summary
+        from linopy.piecewise import _get_piecewise_groups
+        from linopy.piecewise import _repr_summary as pwl_repr_summary
 
         var_names, con_names = _get_piecewise_groups(self)
         var_string = self.variables._format_items(exclude=var_names)
