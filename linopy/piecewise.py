@@ -176,7 +176,7 @@ class PiecewiseFormulation:
         return r
 
 
-def _grouped_names(model: Model) -> tuple[set[str], set[str]]:
+def _get_piecewise_groups(model: Model) -> tuple[set[str], set[str]]:
     """
     Names of auxiliary variables/constraints that belong to a piecewise
     formulation.  Returned as separate sets because variables and

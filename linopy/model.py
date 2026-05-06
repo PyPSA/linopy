@@ -503,9 +503,9 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        from linopy.piecewise import _grouped_names, _repr_summary
+        from linopy.piecewise import _get_piecewise_groups, _repr_summary as pwl_repr_summary
 
-        var_names, con_names = _grouped_names(self)
+        var_names, con_names = _get_piecewise_groups(self)
         var_string = self.variables._format_items(exclude=var_names)
         con_string = self.constraints._format_items(exclude=con_names)
         model_string = f"Linopy {self.type} model"
@@ -514,7 +514,7 @@ class Model:
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
             f"Constraints:\n------------\n{con_string}"
-            f"{_repr_summary(self)}"
+            f"{pwl_repr_summary(self)}"
             f"\nStatus:\n-------\n{self.status}"
         )
 
