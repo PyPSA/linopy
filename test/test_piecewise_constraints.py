@@ -18,7 +18,6 @@ from linopy import (
     available_solvers,
     breakpoints,
     segments,
-    slopes_to_points,
     tangent_lines,
 )
 from linopy.constants import (
@@ -58,21 +57,32 @@ _any_solvers = [
 
 
 # ===========================================================================
-# slopes_to_points
+# _slopes_to_points (private list utility)
 # ===========================================================================
 
 
-class TestSlopesToPoints:
+class TestSlopesToPointsPrivate:
+    """
+    The list-level slopes→points primitive is private; the public path is
+    :class:`Slopes`.  These tests exist so the math stays under test even
+    though the helper isn't user-facing.
+    """
+
     def test_basic(self) -> None:
-        assert slopes_to_points([0, 1, 2], [1, 2], 0) == [0, 1, 3]
+        from linopy.piecewise import _slopes_to_points
+
+        assert _slopes_to_points([0, 1, 2], [1, 2], 0) == [0, 1, 3]
 
     def test_negative_slopes(self) -> None:
-        result = slopes_to_points([0, 10, 20], [-0.5, -1.0], 10)
-        assert result == [10, 5, -5]
+        from linopy.piecewise import _slopes_to_points
+
+        assert _slopes_to_points([0, 10, 20], [-0.5, -1.0], 10) == [10, 5, -5]
 
     def test_wrong_length_raises(self) -> None:
+        from linopy.piecewise import _slopes_to_points
+
         with pytest.raises(ValueError, match="len\\(slopes\\)"):
-            slopes_to_points([0, 1, 2], [1], 0)
+            _slopes_to_points([0, 1, 2], [1], 0)
 
 
 # ===========================================================================
@@ -96,61 +106,10 @@ class TestBreakpointsFactory:
         with pytest.raises(ValueError, match="'dim' is required"):
             breakpoints({"a": [0, 50], "b": [0, 30]})
 
-    def test_slopes_list(self) -> None:
-        bp = breakpoints(slopes=[1, 2], x_points=[0, 1, 2], y0=0)
-        expected = breakpoints([0, 1, 3])
-        xr.testing.assert_equal(bp, expected)
-
-    def test_slopes_dict(self) -> None:
-        bp = breakpoints(
-            slopes={"a": [1, 0.5], "b": [2, 1]},
-            x_points={"a": [0, 10, 50], "b": [0, 20, 80]},
-            y0={"a": 0, "b": 10},
-            dim="gen",
-        )
-        assert set(bp.dims) == {"gen", BREAKPOINT_DIM}
-        # a: [0, 10, 30], b: [10, 50, 110]
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
-        np.testing.assert_allclose(bp.sel(gen="b").values, [10, 50, 110])
-
-    def test_slopes_dict_shared_xpoints(self) -> None:
-        bp = breakpoints(
-            slopes={"a": [1, 2], "b": [3, 4]},
-            x_points=[0, 1, 2],
-            y0={"a": 0, "b": 0},
-            dim="gen",
-        )
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
-        np.testing.assert_allclose(bp.sel(gen="b").values, [0, 3, 7])
-
-    def test_slopes_dict_shared_y0(self) -> None:
-        bp = breakpoints(
-            slopes={"a": [1, 2], "b": [3, 4]},
-            x_points={"a": [0, 1, 2], "b": [0, 1, 2]},
-            y0=5.0,
-            dim="gen",
-        )
-        np.testing.assert_allclose(bp.sel(gen="a").values, [5, 6, 8])
-
-    def test_values_and_slopes_raises(self) -> None:
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            breakpoints([0, 1], slopes=[1], x_points=[0, 1], y0=0)
-
-    def test_slopes_without_xpoints_raises(self) -> None:
-        with pytest.raises(ValueError, match="requires both"):
-            breakpoints(slopes=[1], y0=0)
-
-    def test_slopes_without_y0_raises(self) -> None:
-        with pytest.raises(ValueError, match="requires both"):
-            breakpoints(slopes=[1], x_points=[0, 1])
-
-    def test_xpoints_with_values_raises(self) -> None:
-        with pytest.raises(ValueError, match="forbidden"):
-            breakpoints([0, 1], x_points=[0, 1])
-
-    def test_y0_with_values_raises(self) -> None:
-        with pytest.raises(ValueError, match="forbidden"):
-            breakpoints([0, 1], y0=5)
+    def test_slopes_kwargs_removed(self) -> None:
+        """The slopes mode of ``breakpoints`` was removed in favour of ``Slopes``."""
+        with pytest.raises(TypeError):
+            breakpoints([0, 1], slopes=[1], x_points=[0, 1], y0=0)  # type: ignore[call-arg]
 
     # --- pandas and xarray inputs ---
 
@@ -187,99 +146,6 @@ class TestBreakpointsFactory:
         da = xr.DataArray([0, 50, 100], dims=["foo"])
         with pytest.raises(ValueError, match="must have a"):
             breakpoints(da)
-
-    def test_slopes_series(self) -> None:
-        bp = breakpoints(
-            slopes=pd.Series([1, 2]),
-            x_points=pd.Series([0, 1, 2]),
-            y0=0,
-        )
-        expected = breakpoints([0, 1, 3])
-        xr.testing.assert_equal(bp, expected)
-
-    def test_slopes_dataarray(self) -> None:
-        slopes_da = xr.DataArray(
-            [[1, 2], [3, 4]],
-            dims=["gen", BREAKPOINT_DIM],
-            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1]},
-        )
-        xp_da = xr.DataArray(
-            [[0, 1, 2], [0, 1, 2]],
-            dims=["gen", BREAKPOINT_DIM],
-            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
-        )
-        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
-        bp = breakpoints(slopes=slopes_da, x_points=xp_da, y0=y0_da, dim="gen")
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
-        np.testing.assert_allclose(bp.sel(gen="b").values, [5, 8, 12])
-
-    def test_slopes_dataframe(self) -> None:
-        slopes_df = pd.DataFrame({"a": [1, 0.5], "b": [2, 1]}).T
-        xp_df = pd.DataFrame({"a": [0, 10, 50], "b": [0, 20, 80]}).T
-        y0_series = pd.Series({"a": 0, "b": 10})
-        bp = breakpoints(slopes=slopes_df, x_points=xp_df, y0=y0_series, dim="gen")
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
-        np.testing.assert_allclose(bp.sel(gen="b").values, [10, 50, 110])
-
-
-# ===========================================================================
-# breakpoints(slopes_align="leading")
-# ===========================================================================
-
-
-class TestSlopesAlignLeading:
-    """
-    `slopes_align="leading"` accepts slopes of length len(x_points),
-    where slopes[0] is a NaN sentinel that gets dropped.
-    """
-
-    def test_1d_matches_pieces(self) -> None:
-        leading = breakpoints(
-            slopes=[np.nan, 1, 2], x_points=[0, 1, 2], y0=0, slopes_align="leading"
-        )
-        pieces = breakpoints(slopes=[1, 2], x_points=[0, 1, 2], y0=0)
-        xr.testing.assert_equal(leading, pieces)
-
-    def test_dict_ragged(self) -> None:
-        bp = breakpoints(
-            slopes={"a": [np.nan, 1, 0.5], "b": [np.nan, 2]},
-            x_points={"a": [0, 10, 50], "b": [0, 20]},
-            y0={"a": 0, "b": 10},
-            dim="gen",
-            slopes_align="leading",
-        )
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
-        np.testing.assert_allclose(
-            bp.sel(gen="b").dropna(BREAKPOINT_DIM).values, [10, 50]
-        )
-
-    def test_dataarray(self) -> None:
-        slopes_da = xr.DataArray(
-            [[np.nan, 1, 2], [np.nan, 3, 4]],
-            dims=["gen", BREAKPOINT_DIM],
-            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
-        )
-        xp_da = xr.DataArray(
-            [[0, 1, 2], [0, 1, 2]],
-            dims=["gen", BREAKPOINT_DIM],
-            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
-        )
-        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
-        bp = breakpoints(
-            slopes=slopes_da, x_points=xp_da, y0=y0_da, slopes_align="leading"
-        )
-        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
-        np.testing.assert_allclose(bp.sel(gen="b").values, [5, 8, 12])
-
-    def test_non_nan_first_slope_raises(self) -> None:
-        with pytest.raises(ValueError, match="first slope"):
-            breakpoints(
-                slopes=[1, 2, 3], x_points=[0, 1, 2], y0=0, slopes_align="leading"
-            )
-
-    def test_without_slopes_mode_raises(self) -> None:
-        with pytest.raises(ValueError, match="only valid in slopes mode"):
-            breakpoints([0, 1, 2], slopes_align="leading")
 
 
 # ===========================================================================
@@ -330,6 +196,89 @@ class TestSlopesClass:
         s = Slopes([1, 2], y0=0)
         with pytest.raises((AttributeError, TypeError)):
             s.y0 = 5  # type: ignore[misc]
+
+    def test_to_breakpoints_series(self) -> None:
+        from linopy import Slopes
+
+        bp = Slopes(pd.Series([1, 2]), y0=0).to_breakpoints(pd.Series([0, 1, 2]))
+        expected = breakpoints([0, 1, 3])
+        xr.testing.assert_equal(bp, expected)
+
+    def test_to_breakpoints_dataarray(self) -> None:
+        from linopy import Slopes
+
+        slopes_da = xr.DataArray(
+            [[1, 2], [3, 4]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1]},
+        )
+        xp_da = xr.DataArray(
+            [[0, 1, 2], [0, 1, 2]],
+            dims=["gen", BREAKPOINT_DIM],
+            coords={"gen": ["a", "b"], BREAKPOINT_DIM: [0, 1, 2]},
+        )
+        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
+        bp = Slopes(slopes_da, y0=y0_da, dim="gen").to_breakpoints(xp_da)
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 1, 3])
+        np.testing.assert_allclose(bp.sel(gen="b").values, [5, 8, 12])
+
+    def test_to_breakpoints_dataframe(self) -> None:
+        from linopy import Slopes
+
+        slopes_df = pd.DataFrame({"a": [1, 0.5], "b": [2, 1]}).T
+        xp_df = pd.DataFrame({"a": [0, 10, 50], "b": [0, 20, 80]}).T
+        y0_series = pd.Series({"a": 0, "b": 10})
+        bp = Slopes(slopes_df, y0=y0_series, dim="gen").to_breakpoints(xp_df)
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
+        np.testing.assert_allclose(bp.sel(gen="b").values, [10, 50, 110])
+
+    def test_to_breakpoints_shared_x_grid(self) -> None:
+        """Per-entity slopes resolved against a single shared x grid."""
+        from linopy import Slopes
+
+        bp = Slopes({"a": [1, 2], "b": [3, 4]}, y0={"a": 0, "b": 0}, dim="gen")
+        result = bp.to_breakpoints([0, 1, 2])
+        np.testing.assert_allclose(result.sel(gen="a").values, [0, 1, 3])
+        np.testing.assert_allclose(result.sel(gen="b").values, [0, 3, 7])
+
+    def test_to_breakpoints_shared_y0(self) -> None:
+        """Scalar y0 broadcasts across entities."""
+        from linopy import Slopes
+
+        bp = Slopes({"a": [1, 2], "b": [3, 4]}, y0=5.0, dim="gen")
+        result = bp.to_breakpoints({"a": [0, 1, 2], "b": [0, 1, 2]})
+        np.testing.assert_allclose(result.sel(gen="a").values, [5, 6, 8])
+
+    def test_to_breakpoints_align_leading_dict_ragged(self) -> None:
+        """Per-entity ``"leading"`` alignment with ragged (NaN-padded) input."""
+        from linopy import Slopes
+
+        bp = Slopes(
+            {"a": [np.nan, 1, 0.5], "b": [np.nan, 2]},
+            y0={"a": 0, "b": 10},
+            dim="gen",
+            align="leading",
+        ).to_breakpoints({"a": [0, 10, 50], "b": [0, 20]})
+        np.testing.assert_allclose(bp.sel(gen="a").values, [0, 10, 30])
+        np.testing.assert_allclose(
+            bp.sel(gen="b").dropna(BREAKPOINT_DIM).values, [10, 50]
+        )
+
+    def test_to_breakpoints_1d_non_scalar_y0_raises(self) -> None:
+        """1D slopes with dict y0 raises TypeError."""
+        from linopy import Slopes
+
+        with pytest.raises(TypeError, match="scalar float"):
+            Slopes([1, 2], y0={"a": 0}).to_breakpoints([0, 10, 20])
+
+    def test_to_breakpoints_bad_y0_type_raises(self) -> None:
+        """Multi-entity slopes with unsupported y0 type raises TypeError."""
+        from linopy import Slopes
+
+        with pytest.raises(TypeError, match="y0"):
+            Slopes({"a": [1, 2], "b": [3, 4]}, y0="bad", dim="gen").to_breakpoints(
+                {"a": [0, 10, 20], "b": [0, 10, 20]}
+            )
 
 
 class TestSlopesDispatch:
@@ -563,9 +512,11 @@ class TestContinuousEquality:
         y = m.add_variables(name="y")
         # slopes=[-0.3, 0.45, 1.2] with y0=5 -> y_points=[5, 2, 20, 80]
         # Non-monotonic y-breakpoints, so auto selects SOS2
+        from linopy import Slopes
+
         m.add_piecewise_formulation(
             (x, [0, 10, 50, 100]),
-            (y, breakpoints(slopes=[-0.3, 0.45, 1.2], x_points=[0, 10, 50, 100], y0=5)),
+            (y, Slopes([-0.3, 0.45, 1.2], y0=5)),
         )
         assert f"pwl0{PWL_LAMBDA_SUFFIX}" in m.variables
 
@@ -1184,10 +1135,12 @@ class TestSolverTangentLines:
         m2 = Model()
         x2 = m2.add_variables(lower=0, upper=100, name="x")
         y2 = m2.add_variables(name="y")
+        from linopy import Slopes
+
         env2 = tangent_lines(
             x2,
             [0, 50, 100],
-            breakpoints(slopes=[0.8, 0.4], x_points=[0, 50, 100], y0=0),
+            Slopes([0.8, 0.4], y0=0).to_breakpoints([0, 50, 100]),
         )
         m2.add_constraints(y2 <= env2, name="pwl")
         m2.add_constraints(x2 <= 75, name="x_max")
@@ -1512,37 +1465,10 @@ class TestValidationEdgeCases:
         with pytest.raises(ValueError, match="1D sequence"):
             breakpoints([[1, 2], [3, 4]])
 
-    def test_breakpoints_no_values_no_slopes_raises(self) -> None:
-        """breakpoints() with neither values nor slopes raises."""
-        with pytest.raises(ValueError, match="Must pass either"):
-            breakpoints()
-
-    def test_slopes_1d_non_scalar_y0_raises(self) -> None:
-        """1D slopes with dict y0 raises TypeError."""
-        with pytest.raises(TypeError, match="scalar float"):
-            breakpoints(slopes=[1, 2], x_points=[0, 10, 20], y0={"a": 0})
-
-    def test_slopes_bad_y0_type_raises(self) -> None:
-        """Slopes with unsupported y0 type raises TypeError."""
-        with pytest.raises(TypeError, match="y0"):
-            breakpoints(
-                slopes={"a": [1, 2], "b": [3, 4]},
-                x_points={"a": [0, 10, 20], "b": [0, 10, 20]},
-                y0="bad",
-                dim="entity",
-            )
-
-    def test_slopes_dataarray_y0(self) -> None:
-        """Slopes mode with DataArray y0 works."""
-        y0_da = xr.DataArray([0, 5], dims=["gen"], coords={"gen": ["a", "b"]})
-        bp = breakpoints(
-            slopes={"a": [1, 2], "b": [3, 4]},
-            x_points={"a": [0, 10, 20], "b": [0, 10, 20]},
-            y0=y0_da,
-            dim="gen",
-        )
-        assert BREAKPOINT_DIM in bp.dims
-        assert "gen" in bp.dims
+    def test_breakpoints_no_values_raises(self) -> None:
+        """breakpoints() with no positional argument raises TypeError."""
+        with pytest.raises(TypeError):
+            breakpoints()  # type: ignore[call-arg]
 
     def test_non_numeric_breakpoint_coords_raises(self) -> None:
         """SOS2 with string breakpoint coords raises ValueError."""

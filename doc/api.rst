@@ -20,9 +20,9 @@ Creating a model
     model.Model.add_objective
     model.Model.add_piecewise_formulation
     piecewise.PiecewiseFormulation
+    piecewise.Slopes
     piecewise.breakpoints
     piecewise.segments
-    piecewise.slopes_to_points
     piecewise.tangent_lines
     model.Model.linexpr
     model.Model.remove_constraints

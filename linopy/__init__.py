@@ -30,7 +30,6 @@ from linopy.piecewise import (
     Slopes,
     breakpoints,
     segments,
-    slopes_to_points,
     tangent_lines,
 )
 from linopy.remote import RemoteHandler
@@ -64,6 +63,5 @@ __all__ = (
     "options",
     "read_netcdf",
     "segments",
-    "slopes_to_points",
     "tangent_lines",
 )

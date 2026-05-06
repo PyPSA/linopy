@@ -422,7 +422,7 @@ def _breakpoints_from_slopes(
     if slopes_arr.ndim == 1:
         if not isinstance(y0, Real):
             raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
-        pts = slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
+        pts = _slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
         return _sequence_to_array(pts)
 
     # Multi-dim case: per-entity slopes
@@ -456,7 +456,7 @@ def _breakpoints_from_slopes(
             xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
         else:
             xp = _strip_nan(xp_arr.values)
-        computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
+        computed[sk] = _slopes_to_points(xp, sl, y0_map[sk])
 
     return _dict_to_array(computed, entity_dim)
 
@@ -466,30 +466,14 @@ def _breakpoints_from_slopes(
 # ---------------------------------------------------------------------------
 
 
-def slopes_to_points(
+def _slopes_to_points(
     x_points: list[float], slopes: list[float], y0: float
 ) -> list[float]:
     """
     Convert per-piece slopes + initial y-value to y-coordinates at each breakpoint.
 
-    Parameters
-    ----------
-    x_points : list[float]
-        Breakpoint x-coordinates (length n).
-    slopes : list[float]
-        Slope of each piece (length n-1).
-    y0 : float
-        y-value at the first breakpoint.
-
-    Returns
-    -------
-    list[float]
-        y-coordinates at each breakpoint (length n).
-
-    Raises
-    ------
-    ValueError
-        If ``len(slopes) != len(x_points) - 1``.
+    Internal primitive used by ``Slopes.to_breakpoints``.  Public callers
+    should use :class:`Slopes` (DataArray output) instead.
     """
     if len(slopes) != len(x_points) - 1:
         raise ValueError(
@@ -503,72 +487,34 @@ def slopes_to_points(
 
 
 def breakpoints(
-    values: BreaksLike | None = None,
+    values: BreaksLike,
     *,
-    slopes: BreaksLike | None = None,
-    x_points: BreaksLike | None = None,
-    y0: float | dict[str, float] | pd.Series | DataArray | None = None,
     dim: str | None = None,
-    slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
     """
     Create a breakpoint DataArray for piecewise linear constraints.
 
-    Two modes (mutually exclusive):
-
-    **Points mode**: ``breakpoints(values, ...)``
-
-    **Slopes mode**: ``breakpoints(slopes=..., x_points=..., y0=...)``
-
     Parameters
     ----------
-    values : BreaksLike, optional
+    values : BreaksLike
         Breakpoint values. Accepted types: ``Sequence[float]``,
         ``pd.Series``, ``pd.DataFrame``, or ``xr.DataArray``.
         A 1D input (list, Series) creates 1D breakpoints.
         A 2D input (DataFrame, multi-dim DataArray) creates per-entity
         breakpoints (``dim`` is required for DataFrame).
-    slopes : BreaksLike, optional
-        Segment slopes. Mutually exclusive with ``values``.
-    x_points : BreaksLike, optional
-        Breakpoint x-coordinates. Required with ``slopes``.
-    y0 : float, dict, pd.Series, or DataArray, optional
-        Initial y-value. Required with ``slopes``. A scalar broadcasts to
-        all entities. A dict/Series/DataArray provides per-entity values.
     dim : str, optional
-        Entity dimension name. Required when ``values`` or ``slopes`` is a
+        Entity dimension name. Required when ``values`` is a
         ``pd.DataFrame`` or ``dict``.
-    slopes_align : {"pieces", "leading"}, default "pieces"
-        Alignment of ``slopes`` relative to ``x_points``.
-
-        - ``"pieces"``: ``len(slopes) == len(x_points) - 1``. ``slopes[i]``
-          is the slope between ``x[i]`` and ``x[i+1]``.
-        - ``"leading"``: ``len(slopes) == len(x_points)``. ``slopes[0]``
-          must be NaN and is ignored; ``slopes[i]`` for ``i>=1`` is the
-          slope between ``x[i-1]`` and ``x[i]``. Useful when a marginal
-          value is tabulated alongside each breakpoint with the first
-          row's marginal undefined.
 
     Returns
     -------
     DataArray
+
+    See Also
+    --------
+    Slopes : per-piece slopes + ``y0`` (deferred or standalone via
+        :meth:`Slopes.to_breakpoints`).
     """
-    # Validate mutual exclusivity
-    if values is not None and slopes is not None:
-        raise ValueError("'values' and 'slopes' are mutually exclusive")
-    if values is not None and (x_points is not None or y0 is not None):
-        raise ValueError("'x_points' and 'y0' are forbidden when 'values' is given")
-    if slopes_align != "pieces" and slopes is None:
-        raise ValueError("'slopes_align' is only valid in slopes mode")
-    if slopes is not None:
-        if x_points is None or y0 is None:
-            raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-        return _breakpoints_from_slopes(slopes, x_points, y0, dim, slopes_align)
-
-    # Points mode
-    if values is None:
-        raise ValueError("Must pass either 'values' or 'slopes'")
-
     return _coerce_breaks(values, dim)
 
 
