@@ -283,6 +283,149 @@ class TestSlopesAlignLeading:
 
 
 # ===========================================================================
+# Slopes class — deferred breakpoint spec
+# ===========================================================================
+
+
+class TestSlopesClass:
+    """Direct unit tests for the ``Slopes`` value type."""
+
+    def test_to_breakpoints_1d(self) -> None:
+        from linopy import Slopes
+
+        s = Slopes([1.2, 1.4, 1.7], y0=0)
+        bp = s.to_breakpoints([0, 30, 60, 100])
+        # y0=0; piece increments: 30*1.2=36, 30*1.4=42, 40*1.7=68
+        # cumulative: 0, 36, 78, 146
+        assert list(bp.values) == pytest.approx([0, 36, 78, 146])
+
+    def test_to_breakpoints_per_entity_dict(self) -> None:
+        from linopy import Slopes
+
+        s = Slopes({"a": [1, 0.5], "b": [2, 1]}, y0={"a": 0, "b": 10}, dim="gen")
+        bp = s.to_breakpoints({"a": [0, 10, 20], "b": [0, 5, 10]})
+        # a: y0=0, +10*1=10, +10*0.5=15 -> [0, 10, 15]
+        # b: y0=10, +5*2=20, +5*1=25 -> [10, 20, 25]
+        assert "gen" in bp.dims
+        assert bp.sel(gen="a").values.tolist() == pytest.approx([0, 10, 15])
+        assert bp.sel(gen="b").values.tolist() == pytest.approx([10, 20, 25])
+
+    def test_to_breakpoints_align_leading(self) -> None:
+        from linopy import Slopes
+
+        # Same as align="pieces" with [1, 2], plus a leading NaN to drop.
+        s = Slopes([np.nan, 1, 2], y0=0, align="leading")
+        bp = s.to_breakpoints([0, 1, 2])
+        assert list(bp.values) == pytest.approx([0, 1, 3])
+
+    def test_align_leading_first_not_nan_raises(self) -> None:
+        from linopy import Slopes
+
+        with pytest.raises(ValueError, match="first slope"):
+            Slopes([1, 2, 3], y0=0, align="leading").to_breakpoints([0, 1, 2])
+
+    def test_immutable(self) -> None:
+        from linopy import Slopes
+
+        s = Slopes([1, 2], y0=0)
+        with pytest.raises((AttributeError, TypeError)):
+            s.y0 = 5  # type: ignore[misc]
+
+
+class TestSlopesDispatch:
+    """Slopes inside ``add_piecewise_formulation`` — sibling resolution."""
+
+    def test_two_tuple_deferred(self) -> None:
+        from linopy import Slopes
+
+        m = Model()
+        power = m.add_variables(lower=0, upper=100, name="power")
+        fuel = m.add_variables(lower=0, name="fuel")
+        # Slopes [1.2, 1.4, 1.7] resolved over the borrowed x grid
+        # [0, 30, 60, 100] -> fuel breakpoints [0, 36, 78, 146].
+        # Equality-2-tuple convexity uses pinned_bps[1] as x; with
+        # increasing dy/dx slopes, the inverse view (power-vs-fuel) is
+        # concave — that's the label the formulation reports.
+        f = m.add_piecewise_formulation(
+            (power, [0, 30, 60, 100]),
+            (fuel, Slopes([1.2, 1.4, 1.7], y0=0)),
+        )
+        assert f.method in ("sos2", "incremental")
+        assert f.convexity == "concave"
+
+    def test_three_tuple_deferred(self) -> None:
+        """Slopes pulls x grid even with another non-Slopes tuple present."""
+        from linopy import Slopes
+
+        m = Model()
+        power = m.add_variables(name="power")
+        fuel = m.add_variables(name="fuel")
+        heat = m.add_variables(name="heat")
+        f = m.add_piecewise_formulation(
+            (power, [0, 30, 60, 100]),
+            (fuel, [0, 40, 85, 160]),
+            (heat, Slopes([0.8, 1.0, 1.0], y0=0)),
+        )
+        # 3-var formulation -> convexity is None
+        assert f.convexity is None
+
+    def test_slopes_as_bounded_tuple(self) -> None:
+        from linopy import Slopes
+
+        m = Model()
+        x = m.add_variables(lower=0, upper=30, name="x")
+        y = m.add_variables(lower=0, upper=100, name="y")
+        f = m.add_piecewise_formulation(
+            (y, Slopes([2, 1, 0.5], y0=0), "<="),  # concave
+            (x, [0, 10, 20, 30]),
+        )
+        assert f.method == "lp"
+        assert f.convexity == "concave"
+
+    def test_all_slopes_raises(self) -> None:
+        from linopy import Slopes
+
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        with pytest.raises(ValueError, match="All tuples are Slopes"):
+            m.add_piecewise_formulation(
+                (x, Slopes([1, 2], y0=0)),
+                (y, Slopes([1, 1], y0=0)),
+            )
+
+    def test_two_non_slopes_picks_first_x_grid(self) -> None:
+        """With multiple non-Slopes tuples, deterministic pick from the first."""
+        from linopy import Slopes
+
+        m = Model()
+        x = m.add_variables(name="x")
+        y = m.add_variables(name="y")
+        z = m.add_variables(name="z")
+        # x and y both carry the same grid (size 4); z borrows it
+        f = m.add_piecewise_formulation(
+            (x, [0, 30, 60, 100]),
+            (y, [0, 40, 85, 160]),
+            (z, Slopes([0.5, 0.6, 0.7], y0=0)),
+        )
+        assert f.name in m._piecewise_formulations
+
+    def test_slopes_align_leading_in_dispatch(self) -> None:
+        from linopy import Slopes
+
+        m = Model()
+        x = m.add_variables(lower=0, upper=2, name="x")
+        y = m.add_variables(name="y")
+        f = m.add_piecewise_formulation(
+            (x, [0, 1, 2]),
+            (y, Slopes([np.nan, 1, 2], y0=0, align="leading")),
+        )
+        # Resolved bp for y: [0, 1, 3].  As above, the equality-2-tuple
+        # convention reports the inverse view → concave.
+        assert f.convexity == "concave"
+
+
+# ===========================================================================
 # segments() factory
 # ===========================================================================
 

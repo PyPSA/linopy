@@ -27,6 +27,7 @@ from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
 from linopy.piecewise import (
     PiecewiseFormulation,
+    Slopes,
     breakpoints,
     segments,
     slopes_to_points,
@@ -53,6 +54,7 @@ __all__ = (
     "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",
+    "Slopes",
     "Variable",
     "Variables",
     "align",

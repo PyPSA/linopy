@@ -90,6 +90,83 @@ SegmentsLike: TypeAlias = (
 
 
 # ---------------------------------------------------------------------------
+# Deferred slopes spec
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Slopes:
+    """
+    Per-piece slopes + initial y-value, deferred until an x grid is known.
+
+    Used as the second element of a tuple in
+    :func:`add_piecewise_formulation` where exactly one *other* tuple
+    provides the x grid for all :class:`Slopes` tuples in the call::
+
+        m.add_piecewise_formulation(
+            (power, [0, 30, 60, 100]),               # provides x grid
+            (fuel,  Slopes([1.2, 1.4, 1.7], y0=0)),  # x grid borrowed
+        )
+
+    Standalone use is possible via :meth:`to_breakpoints`, which resolves
+    the spec to an ordinary breakpoint :class:`xarray.DataArray` given an
+    explicit x grid.
+
+    Parameters
+    ----------
+    values : BreaksLike
+        Per-piece slopes.  1D for shared breakpoints; 2D (DataFrame /
+        dict / DataArray with entity dim) for per-entity slopes.
+    y0 : float, dict, pd.Series, or DataArray, default 0.0
+        y-value at the first breakpoint.  Scalar broadcasts to all
+        entities; dict/Series/DataArray provides per-entity values.
+    align : {"pieces", "leading"}, default "pieces"
+        Alignment of ``values`` relative to the x grid.
+
+        - ``"pieces"``: ``len(values) == len(x_points) - 1``;
+          ``values[i]`` is the slope between ``x[i]`` and ``x[i+1]``.
+        - ``"leading"``: ``len(values) == len(x_points)``; ``values[0]``
+          must be NaN and is dropped, ``values[i]`` for ``i>=1`` is the
+          slope between ``x[i-1]`` and ``x[i]``.  Useful when a marginal
+          value is tabulated alongside each breakpoint with the first
+          row's marginal undefined.
+    dim : str, optional
+        Entity dimension name.  Required when ``values`` is a
+        ``pd.DataFrame`` or ``dict``.
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        :class:`Slopes` is part of the newly-added piecewise API.  Its
+        constructor signature and dispatch semantics may be refined.
+        Silence with ``warnings.filterwarnings("ignore",
+        category=linopy.EvolvingAPIWarning)``.
+    """
+
+    values: BreaksLike
+    y0: float | dict[str, float] | pd.Series | DataArray = 0.0
+    align: Literal["pieces", "leading"] = "pieces"
+    dim: str | None = None
+
+    def to_breakpoints(self, x_points: BreaksLike) -> DataArray:
+        """
+        Resolve to a breakpoint :class:`xarray.DataArray`, given an x grid.
+
+        Rarely called directly — typically you pass the :class:`Slopes`
+        instance to :func:`add_piecewise_formulation` and the x grid is
+        inherited from a sibling tuple.  Use this method for inspection
+        or when building breakpoints outside the formulation pipeline.
+        """
+        return _breakpoints_from_slopes(
+            self.values, x_points, self.y0, self.dim, self.align
+        )
+
+
+# Tuple element type covering both eager (DataArray etc.) and deferred (Slopes) bps.
+BreaksOrSlopes: TypeAlias = BreaksLike | Slopes
+
+
+# ---------------------------------------------------------------------------
 # Result type
 # ---------------------------------------------------------------------------
 
@@ -848,8 +925,8 @@ def _broadcast_points(
 
 def add_piecewise_formulation(
     model: Model,
-    *pairs: tuple[LinExprLike, BreaksLike]
-    | tuple[LinExprLike, BreaksLike, Literal["==", "<=", ">="]],
+    *pairs: tuple[LinExprLike, BreaksOrSlopes]
+    | tuple[LinExprLike, BreaksOrSlopes, Literal["==", "<=", ">="]],
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
@@ -984,7 +1061,7 @@ def add_piecewise_formulation(
 
     # Parse and normalise per-tuple signs.  Each pair is either
     # (expr, bp) — sign defaults to "==" — or (expr, bp, sign).
-    parsed: list[tuple[LinExprLike, BreaksLike, str]] = []
+    parsed: list[tuple[LinExprLike, BreaksOrSlopes, str]] = []
     for i, pair in enumerate(pairs):
         if not isinstance(pair, tuple) or len(pair) not in (2, 3):
             raise TypeError(
@@ -1003,6 +1080,27 @@ def add_piecewise_formulation(
                     f"{sorted(SIGNS)}, got {raw_sign!r}."
                 )
         parsed.append((expr, bp, tuple_sign))
+
+    # Resolve any deferred Slopes tuples by borrowing the x grid from the
+    # first non-Slopes tuple.  All non-Slopes tuples share the same
+    # BREAKPOINT_DIM (validated downstream), so picking the first is
+    # unambiguous.
+    slopes_idx = [i for i, p in enumerate(parsed) if isinstance(p[1], Slopes)]
+    if slopes_idx:
+        non_slopes_idx = [i for i in range(len(parsed)) if i not in set(slopes_idx)]
+        if not non_slopes_idx:
+            raise ValueError(
+                "All tuples are Slopes; at least one tuple must carry an "
+                "explicit x grid.  Pass the x grid via a regular tuple "
+                "or call Slopes(...).to_breakpoints(x_pts) explicitly."
+            )
+        x_grid = parsed[non_slopes_idx[0]][1]
+        parsed = [
+            (expr, bp.to_breakpoints(x_grid), sign)
+            if isinstance(bp, Slopes)
+            else (expr, bp, sign)
+            for expr, bp, sign in parsed
+        ]
 
     # At most one non-equality sign; with 3+ tuples, none.
     bounded_positions = [i for i, p in enumerate(parsed) if p[2] != EQUAL]
