@@ -189,6 +189,61 @@ class Slopes:
             bits.append(f"dim={self.dim!r}")
         return f"Slopes({', '.join(bits)})"
 
+    def __eq__(self, other: object) -> bool:
+        """
+        Value-equality across the field types accepted by the constructor.
+
+        Two ``Slopes`` are equal iff every field matches:
+
+        * ``align`` and ``dim`` compare with ``==`` (str / None).
+        * ``y0`` and ``values`` dispatch on type via :func:`_values_equal`
+          — ``np.array_equal(equal_nan=True)`` for ndarrays, ``.equals``
+          for pandas/xarray, recursive for ``dict``, NaN-safe ``==`` for
+          scalars.
+
+        Non-``Slopes`` operands return ``NotImplemented`` per Python
+        convention.  Different *types* of ``values`` (e.g. ``list`` vs
+        ``ndarray``) are *not* coerced — they compare unequal.
+
+        ``__hash__`` is set to ``None`` (unhashable) since the inner
+        ``values`` may be a mutable container.
+        """
+        if not isinstance(other, Slopes):
+            return NotImplemented
+        return (
+            self.align == other.align
+            and self.dim == other.dim
+            and _values_equal(self.y0, other.y0)
+            and _values_equal(self.values, other.values)
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _values_equal(a: object, b: object) -> bool:
+    """Type-dispatched equality for ``Slopes`` field values (NaN-safe)."""
+    if isinstance(a, np.ndarray):
+        if not isinstance(b, np.ndarray):
+            return False
+        return bool(np.array_equal(a, b, equal_nan=True))
+    if isinstance(a, pd.DataFrame):
+        return isinstance(b, pd.DataFrame) and bool(a.equals(b))
+    if isinstance(a, pd.Series):
+        return isinstance(b, pd.Series) and bool(a.equals(b))
+    if isinstance(a, DataArray):
+        return isinstance(b, DataArray) and bool(a.equals(b))
+    if isinstance(a, dict):
+        if not isinstance(b, dict) or a.keys() != b.keys():
+            return False
+        return all(_values_equal(a[k], b[k]) for k in a)
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, float):
+        # IEEE: nan != nan. Treat two nans as equal (matches the array path).
+        if a != a:  # nan check
+            return b != b
+    return a == b
+
 
 def _summarise_breakslike(v: BreaksLike) -> str:
     """Compact one-line summary of a BreaksLike value for use in reprs."""

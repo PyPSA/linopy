@@ -213,20 +213,92 @@ class TestSlopesValueType:
         assert r_int == "Slopes([1, 2, 3], y0=0)"
         assert r_float == "Slopes([1.5, 2.5, 3.5], y0=0)"
 
-    def test_equality_with_array_values_does_not_raise(self) -> None:
+    @pytest.mark.parametrize(
+        ("a", "b", "expected"),
+        [
+            pytest.param(
+                {"values": [1, 2], "y0": 0},
+                {"values": [1, 2], "y0": 0},
+                True,
+                id="lists_equal",
+            ),
+            pytest.param(
+                {"values": np.array([1, 2]), "y0": 0},
+                {"values": np.array([1, 2]), "y0": 0},
+                True,
+                id="ndarrays_equal_no_raise",
+            ),
+            pytest.param(
+                {"values": [1, 2], "y0": 0},
+                {"values": [1, 3], "y0": 0},
+                False,
+                id="different_values",
+            ),
+            pytest.param(
+                {"values": [1, 2], "y0": 0},
+                {"values": [1, 2], "y0": 5},
+                False,
+                id="different_y0",
+            ),
+            pytest.param(
+                # list vs ndarray of same numeric content — strict types,
+                # documented edge.
+                {"values": [1, 2], "y0": 0},
+                {"values": np.array([1, 2]), "y0": 0},
+                False,
+                id="different_value_types",
+            ),
+            pytest.param(
+                {"values": [np.nan, 1], "y0": 0, "align": "leading"},
+                {"values": [np.nan, 1], "y0": 0, "align": "leading"},
+                True,
+                id="nan_in_list_via_array_path",
+            ),
+            pytest.param(
+                {"values": [1, 2], "y0": float("nan")},
+                {"values": [1, 2], "y0": float("nan")},
+                True,
+                id="nan_in_scalar_y0",
+            ),
+            pytest.param(
+                {"values": {"a": [1, 2], "b": [3, 4]}, "y0": 0, "dim": "g"},
+                {"values": {"a": [1, 2], "b": [3, 4]}, "y0": 0, "dim": "g"},
+                True,
+                id="dict_equal",
+            ),
+            pytest.param(
+                {"values": {"a": [1, 2]}, "y0": 0, "dim": "g"},
+                {"values": {"a": [9, 9]}, "y0": 0, "dim": "g"},
+                False,
+                id="dict_different_inner_values",
+            ),
+        ],
+    )
+    def test_equality(
+        self, a: dict[str, Any], b: dict[str, Any], expected: bool
+    ) -> None:
+        """Value-equality across the field types accepted by the constructor."""
+        from linopy import Slopes
+
+        assert (Slopes(**a) == Slopes(**b)) is expected
+
+    def test_eq_against_non_slopes_returns_notimplemented(self) -> None:
+        from linopy import Slopes
+
+        # Falls through to bool(False), not raising.
+        assert (Slopes([1, 2], y0=0) == "not a slopes") is False
+        assert (Slopes([1, 2], y0=0) == 42) is False
+
+    def test_unhashable(self) -> None:
         """
-        Frozen dataclasses default to elementwise ``__eq__``, which raises
-        on numpy arrays.  ``Slopes`` opts out (``eq=False``) and falls
-        back to identity equality so callers can put it in sets / use it
-        as a dict key without incident.
+        ``values`` may be a mutable container (list, ndarray, dict), so
+        ``Slopes`` is intentionally unhashable.  Using one as a dict key
+        or set member must raise rather than silently using identity hash.
         """
         from linopy import Slopes
 
-        s1 = Slopes(np.array([1, 2]), y0=0)
-        s2 = Slopes(np.array([1, 2]), y0=0)
-        # Must not raise.
-        assert (s1 == s2) is False  # identity
-        assert (s1 == s1) is True
+        with pytest.raises(TypeError, match="unhashable"):
+            {Slopes([1, 2], y0=0): "x"}
 
     @pytest.mark.parametrize(
         ("values", "fragment"),
