@@ -202,6 +202,32 @@ class TestSlopesValueType:
         assert "..." in r
         assert len(r) < 80, f"repr unexpectedly long: {r!r}"
 
+    def test_repr_normalises_numpy_scalars(self) -> None:
+        """``np.int64`` / ``np.float64`` must render as plain Python numbers."""
+        from linopy import Slopes
+
+        r_int = repr(Slopes(np.array([1, 2, 3], dtype=np.int64), y0=0))
+        r_float = repr(Slopes(np.array([1.5, 2.5, 3.5]), y0=0))
+        # No numpy type prefixes, no surprising precision.
+        assert "np." not in r_int and "int64" not in r_int
+        assert r_int == "Slopes([1, 2, 3], y0=0)"
+        assert r_float == "Slopes([1.5, 2.5, 3.5], y0=0)"
+
+    def test_equality_with_array_values_does_not_raise(self) -> None:
+        """
+        Frozen dataclasses default to elementwise ``__eq__``, which raises
+        on numpy arrays.  ``Slopes`` opts out (``eq=False``) and falls
+        back to identity equality so callers can put it in sets / use it
+        as a dict key without incident.
+        """
+        from linopy import Slopes
+
+        s1 = Slopes(np.array([1, 2]), y0=0)
+        s2 = Slopes(np.array([1, 2]), y0=0)
+        # Must not raise.
+        assert (s1 == s2) is False  # identity
+        assert (s1 == s1) is True
+
     @pytest.mark.parametrize(
         ("values", "fragment"),
         [
@@ -2809,6 +2835,22 @@ class TestEvolvingAPIWarning:
         evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
         assert len(evolving) == 1
         assert "Slopes" in str(evolving[0].message)
+
+    def test_slopes_warning_stacklevel_points_to_user_call(self) -> None:
+        """
+        ``Slopes.__post_init__`` emits via a dataclass-generated ``__init__``
+        — ``_warn_evolving_api`` needs ``stacklevel=4`` to skip the helper,
+        ``__post_init__``, and the synthetic init and land on the actual
+        user line.
+        """
+        from linopy import EvolvingAPIWarning, Slopes
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", EvolvingAPIWarning)
+            Slopes([1, 2], y0=0)
+        evolving = [w for w in caught if issubclass(w.category, EvolvingAPIWarning)]
+        assert len(evolving) == 1
+        assert evolving[0].filename.endswith("test_piecewise_constraints.py")
 
     def test_warning_stacklevel_points_to_user_call(self) -> None:
         """

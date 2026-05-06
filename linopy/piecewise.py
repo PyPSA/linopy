@@ -69,12 +69,19 @@ _EvolvingApiKey: TypeAlias = Literal[
 _emitted_evolving_warnings: set[_EvolvingApiKey] = set()
 
 
-def _warn_evolving_api(key: _EvolvingApiKey, message: str) -> None:
-    """Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``."""
+def _warn_evolving_api(key: _EvolvingApiKey, message: str, stacklevel: int = 3) -> None:
+    """
+    Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``.
+
+    ``stacklevel`` defaults to 3 (helper → entry-point function → user
+    code).  Pass a larger value when called from one frame deeper than
+    a function — e.g. from a dataclass ``__post_init__``, which is
+    itself invoked by an auto-generated ``__init__``.
+    """
     if key in _emitted_evolving_warnings:
         return
     _emitted_evolving_warnings.add(key)
-    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=3)
+    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=stacklevel)
 
 
 # Accepted input types for breakpoint-like data
@@ -96,7 +103,7 @@ SegmentsLike: TypeAlias = (
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True, repr=False)
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class Slopes:
     """
     Per-piece slopes + initial y-value, deferred until an x grid is known.
@@ -151,11 +158,14 @@ class Slopes:
     dim: str | None = None
 
     def __post_init__(self) -> None:
+        # ``stacklevel=4``: warn → _warn_evolving_api → __post_init__ →
+        # dataclass-generated ``__init__`` → user code.
         _warn_evolving_api(
             "Slopes",
             "piecewise: Slopes is a new API; the constructor signature and "
             "the dispatch rules for inheriting an x grid from sibling tuples "
             "may be refined in minor releases.",
+            stacklevel=4,
         )
 
     def to_breakpoints(self, x_points: BreaksLike) -> DataArray:
@@ -191,13 +201,26 @@ def _summarise_breakslike(v: BreaksLike) -> str:
         return f"<Series len={len(v)}>"
     if isinstance(v, dict):
         return f"<dict {len(v)} entries>"
-    # Sequence[float] — render inline up to 8 entries; longer truncates.
-    seq = list(v)
+    # Sequence[float] — render inline up to 8 entries (shortest float
+    # format, ``g``); longer truncates to head + tail with item count.
+    # ``np.asarray(...).tolist()`` normalises numpy scalars (e.g.
+    # ``np.float64`` / ``np.int64``) to Python types so the rendering
+    # is uniform regardless of input dtype.
+    seq = np.asarray(v).tolist()
+    if not isinstance(seq, list):  # 0-D ndarray → scalar
+        return _short_num(seq)
     if len(seq) <= 8:
-        return repr(seq)
-    head = ", ".join(repr(x) for x in seq[:3])
-    tail = ", ".join(repr(x) for x in seq[-2:])
+        return "[" + ", ".join(_short_num(x) for x in seq) + "]"
+    head = ", ".join(_short_num(x) for x in seq[:3])
+    tail = ", ".join(_short_num(x) for x in seq[-2:])
     return f"[{head}, ..., {tail}] ({len(seq)} items)"
+
+
+def _short_num(x: object) -> str:
+    """Compact number formatting for repr — ``g`` for floats, ``repr`` else."""
+    if isinstance(x, float):
+        return f"{x:g}"
+    return repr(x)
 
 
 # Tuple element type covering both eager (DataArray etc.) and deferred (Slopes) bps.
