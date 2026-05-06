@@ -40,6 +40,7 @@ from linopy.constants import (
     PWL_SELECT_SUFFIX,
     SEGMENT_DIM,
 )
+from linopy.piecewise import _slopes_to_points
 from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
 
 if TYPE_CHECKING:
@@ -69,18 +70,12 @@ class TestSlopesToPointsPrivate:
     """
 
     def test_basic(self) -> None:
-        from linopy.piecewise import _slopes_to_points
-
         assert _slopes_to_points([0, 1, 2], [1, 2], 0) == [0, 1, 3]
 
     def test_negative_slopes(self) -> None:
-        from linopy.piecewise import _slopes_to_points
-
         assert _slopes_to_points([0, 10, 20], [-0.5, -1.0], 10) == [10, 5, -5]
 
     def test_wrong_length_raises(self) -> None:
-        from linopy.piecewise import _slopes_to_points
-
         with pytest.raises(ValueError, match="len\\(slopes\\)"):
             _slopes_to_points([0, 1, 2], [1], 0)
 
