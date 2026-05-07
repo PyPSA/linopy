@@ -276,8 +276,12 @@ def _values_equal(a: object, b: object) -> bool:
         except TypeError:
             return bool(np.array_equal(a, b))
 
-    if isinstance(a, pd.DataFrame | pd.Series | DataArray):
-        return isinstance(b, type(a)) and bool(a.equals(b))  # type: ignore[arg-type]
+    if isinstance(a, pd.DataFrame):
+        return isinstance(b, pd.DataFrame) and bool(a.equals(b))
+    if isinstance(a, pd.Series):
+        return isinstance(b, pd.Series) and bool(a.equals(b))
+    if isinstance(a, DataArray):
+        return isinstance(b, DataArray) and bool(a.equals(b))
 
     if isinstance(a, dict):
         return (
