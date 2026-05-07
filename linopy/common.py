@@ -20,7 +20,6 @@ import pandas as pd
 import polars as pl
 from numpy import arange, nan, signedinteger
 from polars.datatypes import DataTypeClass
-from xarray import DataArray, Dataset, apply_ufunc, broadcast
 from xarray import Coordinates, DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing

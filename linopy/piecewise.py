@@ -52,7 +52,6 @@ from linopy.constants import (
 )
 
 if TYPE_CHECKING:
-    from linopy.constraints import ConstraintBase
     from linopy.constraints import Constraint, Constraints
     from linopy.expressions import LinearExpression
     from linopy.model import Model
