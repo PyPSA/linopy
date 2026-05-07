@@ -10,7 +10,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1124,7 +1124,8 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
                 prefix_len = len(prefix) + 1  # leave original index level name
                 names = [n[prefix_len:] for n in ds[dim].to_index().names]
                 ds = ds.reset_index(dim)
-                ds.attrs[f"{dim}_multiindex"] = list(names)
+                # scipy netCDF3 backend cannot write unicode-array attrs.
+                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
 
         return ds
 
@@ -1203,11 +1204,20 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
+    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+        # str = JSON (new); iterable = legacy list from older linopy.
+        if isinstance(value, str):
+            return [str(n) for n in json.loads(value)]
+        return [str(n) for n in value]
+
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
         multiindexes = []
         for dim in ds.dims:
-            for name in ds.attrs.get(f"{dim}_multiindex", []):
+            attr = ds.attrs.get(f"{dim}_multiindex")
+            if attr is None:
+                continue
+            for name in parse_multiindex_attr(attr):
                 multiindexes.append(prefix + "-" + name)
         ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1220,8 +1230,8 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
         for dim in ds.dims:
             if f"{dim}_multiindex" in ds.attrs:
-                names = ds.attrs.pop(f"{dim}_multiindex")
-                ds = ds.set_index({dim: names})
+                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
+                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
 
         return ds
 
