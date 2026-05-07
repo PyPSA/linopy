@@ -43,8 +43,7 @@ Upcoming Version
 **Bug Fixes**
 
 * ``Model.solve()`` raises a clear ``ValueError`` when no objective is set, instead of writing a malformed LP file.
-* ``add_variables`` no longer ignores ``coords`` when ``lower``/``upper`` are DataArrays.
-* ``as_dataarray`` no longer treats MultiIndex level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
+* ``add_variables`` no longer ignores ``coords`` when ``lower``/``upper`` are DataArrays, and now handles MultiIndex coords correctly when broadcasting scalar bounds.
 * ``Model.to_netcdf`` now works on the scipy netCDF backend (MultiIndex level names serialized as JSON; old files remain readable).
 * CPLEX no longer errors on quality attributes that aren't always available (e.g. ``max_dual_infeasibility`` when a barrier solution has no crossover).
 
