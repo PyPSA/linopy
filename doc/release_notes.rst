@@ -8,11 +8,11 @@ Upcoming Version
 
 *Piecewise linear constraints (new)*
 
-* ``Model.add_piecewise_formulation((power, x_pts), (fuel, y_pts))`` adds piecewise constraints with SOS2, incremental, disjunctive, or pure-LP formulations (``method="auto"``). Supports N-variable linking (e.g. CHP) and per-entity breakpoints; emits :class:`linopy.EvolvingAPIWarning` while the API stabilises.
-* One-sided bounds: append ``"<="`` / ``">="`` to a tuple, e.g. ``(fuel, y_pts, "<=")``. On matching convex/concave curves ``method="auto"`` uses a pure-LP chord formulation.
+* ``Model.add_piecewise_formulation((power, x_pts), (fuel, y_pts))`` adds piecewise constraints with SOS2, incremental, disjunctive, or pure-LP formulations and automatic method dispatch. Supports N-variable linking (e.g. CHP) and per-entity breakpoints; emits :class:`linopy.EvolvingAPIWarning` while the API stabilises.
+* One-sided bounds: append ``"<="`` / ``">="`` to a tuple, e.g. ``(fuel, y_pts, "<=")``. On matching convex/concave curves this dispatches to a pure-LP chord formulation.
 * Unit-commitment gating via ``active``: when zero, deactivates the piecewise relation.
 * ``PiecewiseFormulation`` exposes ``.method`` / ``.convexity`` (persisted across netCDF round-trip).
-* Construction helpers: ``linopy.breakpoints()``, ``linopy.segments()``, ``linopy.Slopes`` (per-piece slopes, ``align="pieces"|"leading"``), ``tangent_lines()``.
+* Construction helpers: ``linopy.breakpoints()``, ``linopy.segments()``, ``linopy.Slopes`` for per-piece slopes, and ``tangent_lines()``.
 
 *Variables*
 
@@ -22,17 +22,17 @@ Upcoming Version
 
 *Model*
 
-* ``Model.copy()`` (default deep) with ``deep`` / ``include_solution`` options; works with ``copy.copy`` / ``copy.deepcopy``.
-* SOS1 / SOS2 reformulations for solvers without native SOS; ``Model.solve(reformulate_sos="auto")`` applies them only when needed.
+* ``Model.copy()`` for a deep copy of a model, optionally including the solution; supports the ``copy`` protocol.
+* SOS1 / SOS2 reformulations for solvers without native SOS, applied automatically by ``Model.solve()`` when needed.
 * ``format_labels()`` / ``format_infeasibilities()`` return strings instead of printing; deprecates the ``print_*`` siblings.
 
 *Expressions*
 
-* Coordinate alignment between subset/superset operands: ``*`` / ``/`` fill with 0, constant ``±`` fills with 0 and pins to LHS coords, comparisons fill RHS with NaN. Fixes ``subset + var`` reverse-addition and result coords expanding past the variable's space.
+* Coordinate alignment between subset/superset operands: missing coords fill with 0 in arithmetic and NaN in comparisons. Fixes ``subset + var`` reverse-addition and result coords expanding past the variable's space.
 
 *Solvers*
 
-* OETC: ``Model.solve()`` forwards ``solver_name`` / ``**solver_options`` to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
+* OETC: ``Model.solve()`` forwards solver options to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
 * SCIP supports quadratic problems on Windows.
 
 **Performance**
@@ -44,7 +44,7 @@ Upcoming Version
 * ``Model.solve()`` raises a clear ``ValueError`` when no objective is set.
 * ``add_variables`` no longer ignores ``coords`` when ``lower`` / ``upper`` are DataArrays, and handles MultiIndex coords correctly with scalar bounds.
 * ``Model.to_netcdf`` works on the scipy netCDF backend (old files remain readable).
-* CPLEX no longer errors on missing quality attributes (e.g. ``max_dual_infeasibility`` without crossover).
+* CPLEX no longer errors on quality attributes that aren't always available.
 
 **Breaking Changes**
 
