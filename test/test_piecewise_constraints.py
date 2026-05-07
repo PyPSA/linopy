@@ -723,6 +723,93 @@ class TestSlopesDispatch:
         assert f.convexity == "concave"
 
 
+class TestSlopesDispatchEquivalence:
+    """
+    Deferred Slopes dispatch builds the same model as eager breakpoints.
+
+    The wiring tests in :class:`TestSlopesDispatch` verify dispatch attributes
+    (``method``/``convexity``).  These tests pin the *outcome*: the deferred
+    form must produce a model byte-equal to the eagerly-resolved reference
+    (same auxiliary variables, same constraint coefficients/RHS).
+    """
+
+    def test_two_tuple_matches_eager(self) -> None:
+        from linopy import Slopes
+
+        from linopy.testing import assert_model_equal
+
+        # Slopes([1.2, 1.4, 1.7], y0=0) over [0, 30, 60, 100] resolves to
+        # fuel breakpoints [0, 36, 78, 146].
+        m_eager = Model()
+        p1 = m_eager.add_variables(lower=0, upper=100, name="power")
+        f1 = m_eager.add_variables(lower=0, name="fuel")
+        m_eager.add_piecewise_formulation(
+            (p1, [0, 30, 60, 100]), (f1, [0, 36, 78, 146])
+        )
+
+        m_deferred = Model()
+        p2 = m_deferred.add_variables(lower=0, upper=100, name="power")
+        f2 = m_deferred.add_variables(lower=0, name="fuel")
+        m_deferred.add_piecewise_formulation(
+            (p2, [0, 30, 60, 100]),
+            (f2, Slopes([1.2, 1.4, 1.7], y0=0)),
+        )
+
+        assert_model_equal(m_eager, m_deferred)
+
+    def test_multiple_slopes_resolved_breakpoints(self) -> None:
+        """
+        Two Slopes tuples resolve against the same borrowed x grid:
+        y → [0, 10, 20, 30], z → [0, 20, 40, 60].
+        """
+        from linopy import Slopes
+
+        from linopy.testing import assert_model_equal
+
+        m_eager = Model()
+        x1 = m_eager.add_variables(lower=0, upper=30, name="x")
+        y1 = m_eager.add_variables(lower=0, name="y")
+        z1 = m_eager.add_variables(lower=0, name="z")
+        m_eager.add_piecewise_formulation(
+            (x1, [0, 10, 20, 30]),
+            (y1, [0, 10, 20, 30]),
+            (z1, [0, 20, 40, 60]),
+        )
+
+        m_deferred = Model()
+        x2 = m_deferred.add_variables(lower=0, upper=30, name="x")
+        y2 = m_deferred.add_variables(lower=0, name="y")
+        z2 = m_deferred.add_variables(lower=0, name="z")
+        m_deferred.add_piecewise_formulation(
+            (x2, [0, 10, 20, 30]),
+            (y2, Slopes([1, 1, 1], y0=0)),
+            (z2, Slopes([2, 2, 2], y0=0)),
+        )
+
+        assert_model_equal(m_eager, m_deferred)
+
+    def test_align_leading_matches_eager(self) -> None:
+        """``align='leading'`` dispatch resolves to bps [0, 1, 3]."""
+        from linopy import Slopes
+
+        from linopy.testing import assert_model_equal
+
+        m_eager = Model()
+        x1 = m_eager.add_variables(lower=0, upper=2, name="x")
+        y1 = m_eager.add_variables(name="y")
+        m_eager.add_piecewise_formulation((x1, [0, 1, 2]), (y1, [0, 1, 3]))
+
+        m_deferred = Model()
+        x2 = m_deferred.add_variables(lower=0, upper=2, name="x")
+        y2 = m_deferred.add_variables(name="y")
+        m_deferred.add_piecewise_formulation(
+            (x2, [0, 1, 2]),
+            (y2, Slopes([np.nan, 1, 2], y0=0, align="leading")),
+        )
+
+        assert_model_equal(m_eager, m_deferred)
+
+
 # ===========================================================================
 # segments() factory
 # ===========================================================================

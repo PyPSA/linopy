@@ -86,12 +86,18 @@ def _warn_evolving_api(key: _EvolvingApiKey, message: str, stacklevel: int = 3) 
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
-    Sequence[float] | DataArray | pd.Series | pd.DataFrame | dict[str, Sequence[float]]
+    Sequence[float]
+    | np.ndarray
+    | DataArray
+    | pd.Series
+    | pd.DataFrame
+    | dict[str, Sequence[float]]
 )
 
 # Accepted input types for segment-like data (2D: segments × breakpoints)
 SegmentsLike: TypeAlias = (
     Sequence[Sequence[float]]
+    | np.ndarray
     | DataArray
     | pd.DataFrame
     | dict[str, Sequence[Sequence[float]]]
@@ -158,7 +164,7 @@ class Slopes:
     """
 
     values: BreaksLike
-    y0: float | dict[str, float] | pd.Series | DataArray = 0.0
+    y0: Real | dict[str, Real] | pd.Series | DataArray = 0.0
     align: Literal["pieces", "leading"] = "pieces"
     dim: str | None = None
 
@@ -469,7 +475,7 @@ def _rename_to_pieces(da: DataArray, piece_index: np.ndarray) -> DataArray:
     return da
 
 
-def _sequence_to_array(values: Sequence[float]) -> DataArray:
+def _sequence_to_array(values: Sequence[float] | np.ndarray | pd.Series) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
         raise ValueError(
@@ -564,7 +570,7 @@ def _dict_segments_to_array(
 def _breakpoints_from_slopes(
     slopes: BreaksLike,
     x_points: BreaksLike,
-    y0: float | dict[str, float] | pd.Series | DataArray,
+    y0: Real | dict[str, Real] | pd.Series | DataArray,
     dim: str | None,
     slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
