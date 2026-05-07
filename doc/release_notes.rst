@@ -12,7 +12,7 @@ Upcoming Version
 * One-sided bounds via a per-tuple sign — append ``"<="`` or ``">="`` (e.g. ``(fuel, y_pts, "<=")``). On matching convex/concave curves, ``method="auto"`` dispatches to a pure-LP chord formulation with no auxiliary variables.
 * Unit-commitment gating via the ``active`` parameter: a binary variable that, when zero, forces all auxiliary variables to zero.
 * ``PiecewiseFormulation`` exposes ``.method`` and ``.convexity``; both persist across netCDF round-trip.
-* Construction helpers: ``linopy.breakpoints()`` (with a ``slopes_align`` keyword for the marginal-cost convention), ``linopy.segments()`` for disjunctive operating regions, ``linopy.Slopes`` for specifying a curve by per-piece slopes, and ``tangent_lines()`` as a low-level chord helper.
+* Construction helpers: ``linopy.breakpoints()`` for points-based breakpoints, ``linopy.segments()`` for disjunctive operating regions, ``linopy.Slopes`` for specifying a curve by per-piece slopes (with ``align="pieces"``/``"leading"`` for the marginal-cost convention), and ``tangent_lines()`` as a low-level chord helper.
 
 *Variables*
 
