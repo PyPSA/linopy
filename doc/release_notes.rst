@@ -8,56 +8,46 @@ Upcoming Version
 
 *Piecewise linear constraints (new)*
 
-* Add ``add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat) and per-entity breakpoints. ``method="auto"`` picks the cheapest correct formulation automatically. The API emits an :class:`linopy.EvolvingAPIWarning` to signal that details may be refined in minor releases — feedback at https://github.com/PyPSA/linopy/issues shapes what stabilises. Silence with ``warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)``.
-* One-sided bounds via a per-tuple sign: append ``"<="`` or ``">="`` as a third tuple element (e.g. ``(fuel, y_pts, "<=")``) to mark that expression as bounded by the curve while the others remain pinned. On convex/concave curves with a matching sign, ``method="auto"`` dispatches to a pure-LP chord formulation with no auxiliary variables and automatic domain bounds; mismatched curvature falls back to SOS2/incremental with an explanatory log.
-* Unit-commitment gating via the ``active`` parameter: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero. Works with the SOS2, incremental, and disjunctive methods.
-* Returned ``PiecewiseFormulation`` surfaces ``.method`` and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"``); both persist across netCDF round-trip.
-* Construction helpers: ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict) with a ``slopes_align`` keyword for the marginal-cost convention; ``linopy.segments()`` for disjunctive operating regions; ``linopy.Slopes`` for specifying a curve by per-piece slopes — ``(fuel, Slopes([1.2, 1.4, 1.7], y0=0))`` borrows the x grid from a sibling tuple; and ``tangent_lines()`` as a low-level chord-expression helper.
+* ``Model.add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat), per-entity breakpoints, and ``method="auto"`` to pick the cheapest correct formulation. The API is marked with :class:`linopy.EvolvingAPIWarning` while it stabilises.
+* One-sided bounds via a per-tuple sign — append ``"<="`` or ``">="`` (e.g. ``(fuel, y_pts, "<=")``). On matching convex/concave curves, ``method="auto"`` dispatches to a pure-LP chord formulation with no auxiliary variables.
+* Unit-commitment gating via the ``active`` parameter: a binary variable that, when zero, forces all auxiliary variables to zero.
+* ``PiecewiseFormulation`` exposes ``.method`` and ``.convexity``; both persist across netCDF round-trip.
+* Construction helpers: ``linopy.breakpoints()`` (with a ``slopes_align`` keyword for the marginal-cost convention), ``linopy.segments()`` for disjunctive operating regions, ``linopy.Slopes`` for specifying a curve by per-piece slopes, and ``tangent_lines()`` as a low-level chord helper.
 
-*Variable utilities*
+*Variables*
 
-* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
-* Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
-* Add support for semi-continuous variables on solvers that support them.
-* Add SOS1 and SOS2 reformulations for solvers without native SOS support. ``Model.solve()`` accepts ``reformulate_sos="auto"`` to apply the reformulation only when the chosen solver lacks SOS support and pass through otherwise.
+* ``fix()`` / ``unfix()`` / ``fixed`` for fixing variables to values via equality constraints (with auto-rounding for integer/binary variables).
+* ``relax()`` / ``unrelax()`` / ``relaxed`` for LP relaxation of integer/binary variables; supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``).
+* Semi-continuous variables on solvers that support them.
+* SOS1 / SOS2 reformulations for solvers without native SOS support. ``Model.solve(reformulate_sos="auto")`` applies the reformulation only when the chosen solver lacks SOS.
 
-*Model and expression utilities*
+*Model*
 
-* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; supports Python's ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
-* Add ``__weakref__`` to ``Model.__slots__`` so ``weakref.ref(model)`` and ``WeakKeyDictionary`` keyed by ``Model`` work — enables third-party accessor-style extensions without subclassing.
-* Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
-* Harmonize coordinate alignment for operations between objects with subset/superset coordinates:
+* ``Model.copy()`` (default deep) with ``deep`` and ``include_solution`` options; supports ``copy.copy`` / ``copy.deepcopy``.
+* ``format_labels()`` (on ``Constraints``/``Variables``) and ``format_infeasibilities()`` (on ``Model``) return strings instead of printing. Deprecates ``print_labels()`` / ``print_infeasibilities()``.
+* Harmonized coordinate alignment between subset/superset operands: multiplication/division fill missing coords with 0; constant ± fills with 0 and pins to LHS coords; comparisons fill missing RHS coords with NaN. Fixes ``subset + var`` reverse-addition and superset DataArrays expanding result coords.
 
-  - Multiplication and division fill missing coords with 0 (variable doesn't participate).
-  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin the result to LHS coords.
-  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created).
-  - Fixes the crash on ``subset + var`` / ``subset + expr`` reverse addition and superset DataArrays expanding result coords beyond the variable's coordinate space.
+*Solvers*
 
-*Solver integration*
-
-* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to the OETC handler. Call-level options override settings-level defaults.
-* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
-* Enable quadratic problems with SCIP on Windows.
-* Improve handling of CPLEX solver quality attributes; safely skip attributes that are not always available (e.g. ``max_dual_infeasibility`` when a barrier solution has no crossover).
+* ``Model.solve()`` forwards ``solver_name`` and ``**solver_options`` to the OETC handler (call-level overrides settings-level defaults).
+* ``OetcSettings.from_env()`` reads OETC settings from ``OETC_*`` environment variables.
+* SCIP supports quadratic problems on Windows.
+* CPLEX safely skips quality attributes that aren't always available (e.g. ``max_dual_infeasibility`` without crossover).
 
 **Performance**
 
-* Speed up solution unpacking in ``Model.solve()`` by replacing pandas ``Series.loc`` with a direct numpy array lookup.
+* Faster solution unpacking in ``Model.solve()`` via direct numpy indexing instead of pandas ``Series.loc``.
 
 **Bug Fixes**
 
-* Raise a clear ``ValueError`` from ``Model.solve()`` when no objective has been set, instead of writing a malformed LP file. The message points to ``m.add_objective(...)`` (and ``m.add_objective(0 * x)`` for pure-feasibility checks).
-* Fix ``add_variables`` silently ignoring ``coords`` when ``lower`` / ``upper`` are passed as DataArrays.
-* Fix ``as_dataarray`` treating MultiIndex level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
-* Fix ``Model.to_netcdf`` failing on the scipy netCDF backend with a ``KeyError`` on MultiIndex level names; the names are now serialized as a JSON-encoded string. Files written by older linopy versions remain readable.
+* ``Model.solve()`` raises a clear ``ValueError`` when no objective is set, instead of writing a malformed LP file.
+* ``add_variables`` no longer ignores ``coords`` when ``lower``/``upper`` are DataArrays.
+* ``as_dataarray`` no longer treats MultiIndex level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
+* ``Model.to_netcdf`` now works on the scipy netCDF backend (MultiIndex level names serialized as JSON; old files remain readable).
 
 **Breaking Changes**
 
-* ``google-cloud-storage`` and ``requests`` are now optional dependencies. Install with the ``oetc`` extra (``pip install linopy[oetc]``) to keep the previous behaviour.
-
-**Documentation**
-
-* Add ``sphinx-copybutton`` to the documentation.
+* ``google-cloud-storage`` and ``requests`` are now optional. Install ``linopy[oetc]`` to keep the previous behaviour.
 
 
 Version 0.6.7
