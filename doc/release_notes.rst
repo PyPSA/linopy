@@ -4,7 +4,6 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 * Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
 * Harmonize coordinate alignment for operations with subset/superset objects:
   - Multiplication and division fill missing coords with 0 (variable doesn't participate)
@@ -12,18 +11,19 @@ Upcoming Version
   - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
   - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
   - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
-* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
-* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
-* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
+* Add ``add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``.  Supports N-variable linking (e.g. CHP with fuel/power/heat) and per-entity breakpoints.  ``method="auto"`` picks the cheapest correct formulation automatically.  The API is newly added and emits an :class:`linopy.EvolvingAPIWarning` to signal that details may be refined in minor releases — the current restrictions on per-tuple sign (at most one bounded tuple, N≥3 must be all equality) are the most likely candidates to relax as use cases come in.  Feedback and use cases at https://github.com/PyPSA/linopy/issues shape what stabilises.  Silence with ``warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)``.
+* Add one-sided piecewise bounds via a per-tuple sign on ``add_piecewise_formulation``: append ``"<="`` or ``">="`` as a third tuple element — e.g. ``(fuel, y_pts, "<=")`` — to mark that expression as bounded by the curve while the others remain pinned.  At most one tuple may carry a non-equality sign; with 3 or more tuples all signs must be ``"=="``.  On convex/concave curves with a matching sign, ``method="auto"`` dispatches to a pure-LP chord formulation (``method="lp"``) with no auxiliary variables and automatic domain bounds on the input.  Mismatched curvature+sign is detected and falls back to SOS2/incremental with an explanatory info log.
+* Add unit-commitment gating via the ``active`` parameter on ``add_piecewise_formulation``: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero.  Works with the SOS2, incremental, and disjunctive methods.
+* Surface formulation metadata on the returned ``PiecewiseFormulation``: ``.method`` (resolved method name) and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"`` when well-defined).  Both persist across netCDF round-trip.
+* Add ``tangent_lines()`` as a low-level helper that returns per-piece chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
+* Add ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict) and ``linopy.segments()`` (disjunctive operating regions) as breakpoint-construction helpers.
+* Add ``linopy.Slopes`` for specifying a piecewise curve by marginal costs / per-piece slopes instead of absolute y-values — ``(fuel, Slopes([1.2, 1.4, 1.7], y0=0))`` borrows the x grid from a sibling tuple in ``add_piecewise_formulation``.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them
 * Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
 * Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
 * Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
-* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
 * Enable quadratic problems with SCIP on windows.
 * Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
@@ -35,7 +35,16 @@ Upcoming Version
   - Add ``freeze()`` and ``mutable()`` methods on ``Constraint`` and ``CSRConstraint`` for lossless conversion between xarray-backed and CSR-backed representations.
 * Add ``set_names_in_solver_io`` parameter to ``Model`` to skip setting variable/constraint names in direct solver exports for faster performance.
 * Add compatibility to latest xarray version.
+* Fix ``as_dataarray`` treating multi-index level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
 
+
+Version 0.6.7
+-------------
+
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Fix ``Model.compute_infeasibilities`` returning a flattened, deduplicated union of all IIS when Xpress found more than one. The Xpress path now computes a single IIS (via ``firstIIS``), matching the Gurobi path.
+* Use ``xarray.Dataset.copy`` instead of constructor for compatibility with the latest xarray version.
+* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 
 Version 0.6.6
 -------------

@@ -5,6 +5,8 @@ Created on Thu Mar 18 09:03:35 2021.
 @author: fabian
 """
 
+import importlib.util
+import json
 import pickle
 from pathlib import Path
 
@@ -17,6 +19,8 @@ import xarray as xr
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.io import signed_number
 from linopy.testing import assert_model_equal
+
+HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
 
 @pytest.fixture
@@ -169,11 +173,6 @@ def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
-# skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
-@pytest.mark.skipif(
-    xr.__version__ in ["2024.1.0", "2024.1.1"],
-    reason="xarray version 2024.1.0 has a bug with MultiIndex deserialize",
-)
 def test_model_to_netcdf_with_multiindex(
     model_with_multiindex: Model, tmp_path: Path
 ) -> None:
@@ -183,6 +182,43 @@ def test_model_to_netcdf_with_multiindex(
     p = read_netcdf(fn)
 
     assert_model_equal(m, p)
+
+
+# Regression for https://github.com/PyPSA/linopy/issues/525.
+def test_model_to_netcdf_with_multiindex_scipy_engine(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    m = model_with_multiindex
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, engine="scipy")
+
+    raw_attrs = xr.load_dataset(fn).attrs
+    multiindex_attrs = {k: v for k, v in raw_attrs.items() if k.endswith("_multiindex")}
+    assert multiindex_attrs
+    for k, v in multiindex_attrs.items():
+        assert isinstance(v, str), f"{k!r}: {v!r}"
+
+    assert_model_equal(m, read_netcdf(fn))
+
+
+@pytest.mark.skipif(not HAS_NETCDF4, reason="legacy format requires netCDF4 backend")
+def test_read_netcdf_with_multiindex_legacy_list_attr(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    # Older linopy stored multiindex names as a Python list (netCDF4-only).
+    m = model_with_multiindex
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, engine="netcdf4")
+
+    ds = xr.load_dataset(fn, engine="netcdf4").load()
+    ds.attrs = {
+        k: (json.loads(v) if k.endswith("_multiindex") and isinstance(v, str) else v)
+        for k, v in ds.attrs.items()
+    }
+    fn_legacy = tmp_path / "legacy.nc"
+    ds.to_netcdf(fn_legacy, engine="netcdf4")
+
+    assert_model_equal(m, read_netcdf(fn_legacy))
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")

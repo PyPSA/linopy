@@ -21,11 +21,24 @@ from linopy.constraints import (
     Constraints,
     CSRConstraint,
 )
+from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    LESS_EQUAL,
+    EvolvingAPIWarning,
+)
+from linopy.constraints import Constraint, Constraints
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
 from linopy.objective import Objective
-from linopy.piecewise import breakpoints, piecewise, segments, slopes_to_points
+from linopy.piecewise import (
+    PiecewiseFormulation,
+    Slopes,
+    breakpoints,
+    segments,
+    tangent_lines,
+)
 from linopy.remote import RemoteHandler
 
 try:
@@ -40,23 +53,25 @@ __all__ = (
     "Constraint",
     "EQUAL",
     "PerformanceWarning",
+    "EvolvingAPIWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
     "LinearExpression",
     "Model",
     "Objective",
     "OetcHandler",
+    "PiecewiseFormulation",
     "QuadraticExpression",
     "RemoteHandler",
+    "Slopes",
     "Variable",
     "Variables",
+    "align",
     "available_solvers",
     "breakpoints",
-    "piecewise",
-    "segments",
-    "slopes_to_points",
-    "align",
     "merge",
     "options",
     "read_netcdf",
+    "segments",
+    "tangent_lines",
 )

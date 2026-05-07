@@ -126,6 +126,14 @@ def test_objective() -> None:
         m.objective = m.objective + 3
 
 
+def test_solve_without_objective_raises() -> None:
+    # https://github.com/PyPSA/linopy/issues/668
+    m: Model = Model()
+    m.add_variables(lower=0, upper=10, name="myvar")
+    with pytest.raises(ValueError, match="No objective has been set"):
+        m.solve()
+
+
 def test_remove_variable() -> None:
     m: Model = Model()
 

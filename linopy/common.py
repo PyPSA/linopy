@@ -21,6 +21,7 @@ import polars as pl
 from numpy import arange, nan, signedinteger
 from polars.datatypes import DataTypeClass
 from xarray import DataArray, Dataset, apply_ufunc, broadcast
+from xarray import Coordinates, DataArray, Dataset, apply_ufunc, broadcast
 from xarray import align as xr_align
 from xarray.core import dtypes, indexing
 from xarray.core.types import JoinOptions, T_Alignable
@@ -244,13 +245,14 @@ def as_dataarray(
         arr = numpy_to_dataarray(arr, coords=coords, dims=dims, **kwargs)
     elif isinstance(arr, pl.Series):
         arr = numpy_to_dataarray(arr.to_numpy(), coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, np.number):
-        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
-            dims = list(coords.keys())
-        arr = DataArray(float(arr), coords=coords, dims=dims, **kwargs)
-    elif isinstance(arr, int | float | str | bool | list):
-        if dims is None and is_dict_like(coords) and np.ndim(arr) == 0:
-            dims = list(coords.keys())
+    elif isinstance(arr, np.number | int | float | str | bool | list):
+        if isinstance(arr, np.number):
+            arr = float(arr)
+        if dims is None:
+            if isinstance(coords, Coordinates):
+                dims = coords.dims
+            elif is_dict_like(coords) and np.ndim(arr) == 0:
+                dims = list(coords.keys())
         arr = DataArray(arr, coords=coords, dims=dims, **kwargs)
 
     elif not isinstance(arr, DataArray):
