@@ -10,7 +10,7 @@ Upcoming Version
 
 * ``Model.add_piecewise_formulation((power, x_pts), (fuel, y_pts))`` adds piecewise constraints with SOS2, incremental, disjunctive, or pure-LP formulations (``method="auto"``). Supports N-variable linking (e.g. CHP) and per-entity breakpoints; emits :class:`linopy.EvolvingAPIWarning` while the API stabilises.
 * One-sided bounds: append ``"<="`` / ``">="`` to a tuple, e.g. ``(fuel, y_pts, "<=")``. On matching convex/concave curves ``method="auto"`` uses a pure-LP chord formulation.
-* Unit-commitment gating via ``active``: a binary that zeros all auxiliaries when off.
+* Unit-commitment gating via ``active``: when zero, deactivates the piecewise relation.
 * ``PiecewiseFormulation`` exposes ``.method`` / ``.convexity`` (persisted across netCDF round-trip).
 * Construction helpers: ``linopy.breakpoints()``, ``linopy.segments()``, ``linopy.Slopes`` (per-piece slopes, ``align="pieces"|"leading"``), ``tangent_lines()``.
 
