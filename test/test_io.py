@@ -127,17 +127,27 @@ def test_pickle_model(model_with_dash_names: Model, tmp_path: Path) -> None:
     assert_model_equal(m, p)
 
 
-# skip it xarray version is 2024.01.0 due to issue https://github.com/pydata/xarray/issues/8628
-@pytest.mark.skipif(
-    xr.__version__ in ["2024.1.0", "2024.1.1"],
-    reason="xarray version 2024.1.0 has a bug with MultiIndex deserialize",
-)
 def test_model_to_netcdf_with_multiindex(
     model_with_multiindex: Model, tmp_path: Path
 ) -> None:
     m = model_with_multiindex
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn)
+    p = read_netcdf(fn)
+
+    assert_model_equal(m, p)
+
+
+# Regression test for https://github.com/PyPSA/linopy/issues/525: when only
+# scipy is installed (no netCDF4 / h5netcdf), xarray falls back to scipy's
+# netCDF3 backend, which cannot write unicode-array attributes. MultiIndex
+# level names must therefore be serialised as a scalar string.
+def test_model_to_netcdf_with_multiindex_scipy_engine(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    m = model_with_multiindex
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, engine="scipy")
     p = read_netcdf(fn)
 
     assert_model_equal(m, p)

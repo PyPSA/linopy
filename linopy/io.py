@@ -1124,7 +1124,9 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
                 prefix_len = len(prefix) + 1  # leave original index level name
                 names = [n[prefix_len:] for n in ds[dim].to_index().names]
                 ds = ds.reset_index(dim)
-                ds.attrs[f"{dim}_multiindex"] = list(names)
+                # Store as JSON string for compatibility with the scipy
+                # netCDF3 backend, which cannot write unicode-array attrs.
+                ds.attrs[f"{dim}_multiindex"] = json.dumps(list(names))
 
         return ds
 
@@ -1203,11 +1205,20 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
+    def parse_multiindex_attr(value: Any) -> list[str]:
+        # New format: JSON-encoded string. Legacy format: list/array of names.
+        if isinstance(value, str):
+            return list(json.loads(value))
+        return list(value)
+
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
         multiindexes = []
         for dim in ds.dims:
-            for name in ds.attrs.get(f"{dim}_multiindex", []):
+            attr = ds.attrs.get(f"{dim}_multiindex")
+            if attr is None:
+                continue
+            for name in parse_multiindex_attr(attr):
                 multiindexes.append(prefix + "-" + name)
         ds = ds.drop_vars(set(ds.coords) - set(ds.dims) - set(multiindexes))
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1220,7 +1231,7 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
 
         for dim in ds.dims:
             if f"{dim}_multiindex" in ds.attrs:
-                names = ds.attrs.pop(f"{dim}_multiindex")
+                names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
                 ds = ds.set_index({dim: names})
 
         return ds
