@@ -12,7 +12,7 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Real
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypeGuard
 
 import numpy as np
 import pandas as pd
@@ -244,7 +244,7 @@ class Slopes:
     __hash__ = None  # type: ignore[assignment]
 
 
-def _is_numeric_scalar(x: object) -> bool:
+def _is_numeric_scalar(x: object) -> TypeGuard[Real]:
     return isinstance(x, Real) and not isinstance(x, bool)
 
 
@@ -276,9 +276,8 @@ def _values_equal(a: object, b: object) -> bool:
         except TypeError:
             return bool(np.array_equal(a, b))
 
-    for cls in (pd.DataFrame, pd.Series, DataArray):
-        if isinstance(a, cls):
-            return isinstance(b, cls) and bool(a.equals(b))
+    if isinstance(a, pd.DataFrame | pd.Series | DataArray):
+        return isinstance(b, type(a)) and bool(a.equals(b))  # type: ignore[arg-type]
 
     if isinstance(a, dict):
         return (
