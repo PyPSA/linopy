@@ -735,7 +735,6 @@ class TestSlopesDispatchEquivalence:
 
     def test_two_tuple_matches_eager(self) -> None:
         from linopy import Slopes
-
         from linopy.testing import assert_model_equal
 
         # Slopes([1.2, 1.4, 1.7], y0=0) over [0, 30, 60, 100] resolves to
@@ -763,7 +762,6 @@ class TestSlopesDispatchEquivalence:
         y → [0, 10, 20, 30], z → [0, 20, 40, 60].
         """
         from linopy import Slopes
-
         from linopy.testing import assert_model_equal
 
         m_eager = Model()
@@ -791,7 +789,6 @@ class TestSlopesDispatchEquivalence:
     def test_align_leading_matches_eager(self) -> None:
         """``align='leading'`` dispatch resolves to bps [0, 1, 3]."""
         from linopy import Slopes
-
         from linopy.testing import assert_model_equal
 
         m_eager = Model()
