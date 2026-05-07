@@ -16,7 +16,8 @@ Upcoming Version
 * Add unit-commitment gating via the ``active`` parameter on ``add_piecewise_formulation``: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero.  Works with the SOS2, incremental, and disjunctive methods.
 * Surface formulation metadata on the returned ``PiecewiseFormulation``: ``.method`` (resolved method name) and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"`` when well-defined).  Both persist across netCDF round-trip.
 * Add ``tangent_lines()`` as a low-level helper that returns per-piece chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
-* Add ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict, plus a slopes-mode constructor), ``linopy.segments()`` (disjunctive operating regions), and ``slopes_to_points()`` (per-piece slopes → breakpoint y-coordinates) as breakpoint-construction helpers.
+* Add ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict) and ``linopy.segments()`` (disjunctive operating regions) as breakpoint-construction helpers.
+* Add ``linopy.Slopes`` for specifying a piecewise curve by marginal costs / per-piece slopes instead of absolute y-values — ``(fuel, Slopes([1.2, 1.4, 1.7], y0=0))`` borrows the x grid from a sibling tuple in ``add_piecewise_formulation``.
 * Add the `sphinx-copybutton` to the documentation
 * Add SOS1 and SOS2 reformulations for solvers not supporting them.
 * Add semi-continous variables for solvers that support them

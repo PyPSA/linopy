@@ -12,7 +12,7 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Real
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypeGuard
 
 import numpy as np
 import pandas as pd
@@ -63,30 +63,268 @@ logger = logging.getLogger(__name__)
 # Each user-facing piecewise entry point fires its EvolvingAPIWarning at
 # most once per process.  Without dedup, a single model build emits the
 # verbose warning hundreds of times and drowns out other output.
-_EvolvingApiKey: TypeAlias = Literal["tangent_lines", "add_piecewise_formulation"]
+_EvolvingApiKey: TypeAlias = Literal[
+    "tangent_lines", "add_piecewise_formulation", "Slopes"
+]
 _emitted_evolving_warnings: set[_EvolvingApiKey] = set()
 
 
-def _warn_evolving_api(key: _EvolvingApiKey, message: str) -> None:
-    """Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``."""
+def _warn_evolving_api(key: _EvolvingApiKey, message: str, stacklevel: int = 3) -> None:
+    """
+    Emit an :class:`EvolvingAPIWarning` at most once per session per ``key``.
+
+    ``stacklevel`` defaults to 3 (helper → entry-point function → user
+    code).  Pass a larger value when called from one frame deeper than
+    a function — e.g. from a dataclass ``__post_init__``, which is
+    itself invoked by an auto-generated ``__init__``.
+    """
     if key in _emitted_evolving_warnings:
         return
     _emitted_evolving_warnings.add(key)
-    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=3)
+    warnings.warn(message, category=EvolvingAPIWarning, stacklevel=stacklevel)
 
 
 # Accepted input types for breakpoint-like data
 BreaksLike: TypeAlias = (
-    Sequence[float] | DataArray | pd.Series | pd.DataFrame | dict[str, Sequence[float]]
+    Sequence[float]
+    | np.ndarray
+    | DataArray
+    | pd.Series
+    | pd.DataFrame
+    | dict[str, Sequence[float]]
 )
 
 # Accepted input types for segment-like data (2D: segments × breakpoints)
 SegmentsLike: TypeAlias = (
     Sequence[Sequence[float]]
+    | np.ndarray
     | DataArray
     | pd.DataFrame
     | dict[str, Sequence[Sequence[float]]]
 )
+
+
+# ---------------------------------------------------------------------------
+# Deferred slopes spec
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class Slopes:
+    """
+    Per-piece slopes + initial y-value, deferred until an x grid is known.
+
+    Used as the second element of a tuple in
+    :func:`add_piecewise_formulation`.  When any :class:`Slopes` tuple is
+    present, **exactly one** other tuple must carry explicit breakpoints —
+    that tuple's values are the x grid against which all :class:`Slopes`
+    are integrated::
+
+        m.add_piecewise_formulation(
+            (power, [0, 30, 60, 100]),               # the x grid
+            (fuel,  Slopes([1.2, 1.4, 1.7], y0=0)),  # integrated against power
+        )
+
+    With two or more non-:class:`Slopes` tuples there is no canonical x
+    axis, and the call raises :class:`ValueError`.  Resolve the
+    :class:`Slopes` explicitly via :meth:`to_breakpoints` in that case,
+    or for any standalone use::
+
+        bp = Slopes([1.2, 1.4, 1.7], y0=0).to_breakpoints([0, 30, 60, 100])
+
+    Parameters
+    ----------
+    values : BreaksLike
+        Per-piece slopes.  1D for shared breakpoints; 2D (DataFrame /
+        dict / DataArray with entity dim) for per-entity slopes.
+    y0 : float, dict, pd.Series, or DataArray, default 0.0
+        y-value at the first breakpoint.  Scalar broadcasts to all
+        entities; dict/Series/DataArray provides per-entity values.
+    align : {"pieces", "leading"}, default "pieces"
+        Alignment of ``values`` relative to the x grid.
+
+        - ``"pieces"``: ``len(values) == len(x_points) - 1``;
+          ``values[i]`` is the slope between ``x[i]`` and ``x[i+1]``.
+        - ``"leading"``: ``len(values) == len(x_points)``; ``values[0]``
+          must be NaN and is dropped, ``values[i]`` for ``i>=1`` is the
+          slope between ``x[i-1]`` and ``x[i]``.  Useful when a marginal
+          value is tabulated alongside each breakpoint with the first
+          row's marginal undefined.
+    dim : str, optional
+        Entity dimension name.  Required when ``values`` is a
+        ``pd.DataFrame`` or ``dict``.
+
+    Warns
+    -----
+    EvolvingAPIWarning
+        :class:`Slopes` is part of the newly-added piecewise API.  Its
+        constructor signature and dispatch semantics may be refined.
+        Silence with ``warnings.filterwarnings("ignore",
+        category=linopy.EvolvingAPIWarning)``.
+    """
+
+    values: BreaksLike
+    y0: Real | dict[str, Real] | pd.Series | DataArray = 0.0
+    align: Literal["pieces", "leading"] = "pieces"
+    dim: str | None = None
+
+    def __post_init__(self) -> None:
+        # ``stacklevel=4``: warn → _warn_evolving_api → __post_init__ →
+        # dataclass-generated ``__init__`` → user code.
+        _warn_evolving_api(
+            "Slopes",
+            "piecewise: Slopes is a new API; the constructor signature and "
+            "the dispatch rules for inheriting an x grid from sibling tuples "
+            "may be refined in minor releases.",
+            stacklevel=4,
+        )
+
+    def to_breakpoints(self, x_points: BreaksLike) -> DataArray:
+        """
+        Resolve to a breakpoint :class:`xarray.DataArray`, given an x grid.
+
+        Rarely called directly — typically you pass the :class:`Slopes`
+        instance to :func:`add_piecewise_formulation` and the x grid is
+        inherited from a sibling tuple.  Use this method for inspection
+        or when building breakpoints outside the formulation pipeline.
+        """
+        return _breakpoints_from_slopes(
+            self.values, x_points, self.y0, self.dim, self.align
+        )
+
+    def __repr__(self) -> str:
+        bits = [_summarise_breakslike(self.values), f"y0={self.y0!r}"]
+        if self.align != "pieces":
+            bits.append(f"align={self.align!r}")
+        if self.dim is not None:
+            bits.append(f"dim={self.dim!r}")
+        return f"Slopes({', '.join(bits)})"
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Value-equality across the field types accepted by the constructor.
+
+        Two ``Slopes`` are equal iff every field matches:
+
+        * ``align`` and ``dim`` compare with ``==`` (str / None).
+        * ``y0`` and ``values`` dispatch on type via :func:`_values_equal`:
+          numeric scalars compare by value across types (``int 0 ==
+          float 0.0 == np.float64(0)``); ``list`` and ``tuple`` are
+          promoted to ndarray so NaN content compares element-wise
+          regardless of which NaN object was used; ndarrays use
+          ``np.array_equal(equal_nan=True)`` (with a fallback for
+          non-numeric dtypes); ``pd.Series`` / ``pd.DataFrame`` /
+          ``DataArray`` use ``.equals``; ``dict`` recurses on matching
+          keys.
+
+        Non-``Slopes`` operands return ``NotImplemented`` per Python
+        convention.
+
+        Caveats
+        -------
+        * ``Series.equals`` / ``DataFrame.equals`` / ``DataArray.equals``
+          are *order-sensitive*: two frames with the same content but
+          reordered rows / columns / coords compare unequal.
+        * Cross-container coercion is limited to ``list``/``tuple`` →
+          ndarray.  A ``dict`` and a ``DataFrame`` describing the same
+          per-entity slopes still compare unequal.
+
+        ``__hash__`` is set to ``None`` (unhashable) since the inner
+        ``values`` may be a mutable container.
+        """
+        if not isinstance(other, Slopes):
+            return NotImplemented
+        return (
+            self.align == other.align
+            and self.dim == other.dim
+            and _values_equal(self.y0, other.y0)
+            and _values_equal(self.values, other.values)
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _is_numeric_scalar(x: object) -> TypeGuard[Real]:
+    return isinstance(x, Real) and not isinstance(x, bool)
+
+
+def _values_equal(a: object, b: object) -> bool:
+    """
+    Type-dispatched equality for ``Slopes`` field values (NaN-safe).
+
+    Numeric scalars compare by value across types (``int 0 == float 0.0 ==
+    np.float64(0)``); ``bool`` is excluded.  Lists / tuples are promoted
+    to ndarray so in-place ``float('nan')`` content compares NaN-safe.
+    Non-numeric ndarray dtypes fall back to ``np.array_equal`` without
+    ``equal_nan``.  ``DataFrame`` / ``Series`` / ``DataArray`` use
+    ``.equals``; ``dict`` recurses on matching keys.
+    """
+    if _is_numeric_scalar(a) and _is_numeric_scalar(b):
+        af, bf = float(a), float(b)
+        return af == bf or (af != af and bf != bf)
+
+    if isinstance(a, list | tuple):
+        a = np.asarray(a)
+    if isinstance(b, list | tuple):
+        b = np.asarray(b)
+
+    if isinstance(a, np.ndarray):
+        if not isinstance(b, np.ndarray) or a.shape != b.shape:
+            return False
+        try:
+            return bool(np.array_equal(a, b, equal_nan=True))
+        except TypeError:
+            return bool(np.array_equal(a, b))
+
+    if isinstance(a, pd.DataFrame):
+        return isinstance(b, pd.DataFrame) and bool(a.equals(b))
+    if isinstance(a, pd.Series):
+        return isinstance(b, pd.Series) and bool(a.equals(b))
+    if isinstance(a, DataArray):
+        return isinstance(b, DataArray) and bool(a.equals(b))
+
+    if isinstance(a, dict):
+        return (
+            isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(_values_equal(a[k], b[k]) for k in a)
+        )
+
+    return type(a) is type(b) and bool(a == b)
+
+
+def _summarise_breakslike(v: BreaksLike) -> str:
+    """Compact one-line summary of a BreaksLike value for use in reprs."""
+    if isinstance(v, DataArray):
+        sizes = ", ".join(f"{d}: {s}" for d, s in v.sizes.items())
+        return f"<DataArray {sizes}>"
+    if isinstance(v, pd.DataFrame):
+        return f"<DataFrame shape={v.shape}>"
+    if isinstance(v, pd.Series):
+        return f"<Series len={len(v)}>"
+    if isinstance(v, dict):
+        return f"<dict {len(v)} entries>"
+
+    arr = np.asarray(v)
+    if arr.ndim > 1:
+        return f"<ndarray shape={arr.shape}>"
+    seq: list = arr.tolist()
+    if len(seq) <= 8:
+        return "[" + ", ".join(_short_num(x) for x in seq) + "]"
+    head = ", ".join(_short_num(x) for x in seq[:3])
+    tail = ", ".join(_short_num(x) for x in seq[-2:])
+    return f"[{head}, ..., {tail}] ({len(seq)} items)"
+
+
+def _short_num(x: object) -> str:
+    """Compact number formatting for repr — ``g`` for floats, ``repr`` else."""
+    if isinstance(x, float):
+        return f"{x:g}"
+    return repr(x)
+
+
+# Tuple element type covering both eager (DataArray etc.) and deferred (Slopes) bps.
+BreaksOrSlopes: TypeAlias = BreaksLike | Slopes
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +465,7 @@ def _rename_to_pieces(da: DataArray, piece_index: np.ndarray) -> DataArray:
     return da
 
 
-def _sequence_to_array(values: Sequence[float]) -> DataArray:
+def _sequence_to_array(values: Sequence[float] | np.ndarray | pd.Series) -> DataArray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
         raise ValueError(
@@ -322,7 +560,7 @@ def _dict_segments_to_array(
 def _breakpoints_from_slopes(
     slopes: BreaksLike,
     x_points: BreaksLike,
-    y0: float | dict[str, float] | pd.Series | DataArray,
+    y0: Real | dict[str, Real] | pd.Series | DataArray,
     dim: str | None,
     slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
@@ -345,7 +583,7 @@ def _breakpoints_from_slopes(
     if slopes_arr.ndim == 1:
         if not isinstance(y0, Real):
             raise TypeError("When 'slopes' is 1D, 'y0' must be a scalar float")
-        pts = slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
+        pts = _slopes_to_points(list(xp_arr.values), list(slopes_arr.values), float(y0))
         return _sequence_to_array(pts)
 
     # Multi-dim case: per-entity slopes
@@ -379,7 +617,7 @@ def _breakpoints_from_slopes(
             xp = _strip_nan(xp_arr.sel({entity_dim: key}).values)
         else:
             xp = _strip_nan(xp_arr.values)
-        computed[sk] = slopes_to_points(xp, sl, y0_map[sk])
+        computed[sk] = _slopes_to_points(xp, sl, y0_map[sk])
 
     return _dict_to_array(computed, entity_dim)
 
@@ -389,30 +627,14 @@ def _breakpoints_from_slopes(
 # ---------------------------------------------------------------------------
 
 
-def slopes_to_points(
+def _slopes_to_points(
     x_points: list[float], slopes: list[float], y0: float
 ) -> list[float]:
     """
     Convert per-piece slopes + initial y-value to y-coordinates at each breakpoint.
 
-    Parameters
-    ----------
-    x_points : list[float]
-        Breakpoint x-coordinates (length n).
-    slopes : list[float]
-        Slope of each piece (length n-1).
-    y0 : float
-        y-value at the first breakpoint.
-
-    Returns
-    -------
-    list[float]
-        y-coordinates at each breakpoint (length n).
-
-    Raises
-    ------
-    ValueError
-        If ``len(slopes) != len(x_points) - 1``.
+    Internal primitive used by ``Slopes.to_breakpoints``.  Public callers
+    should use :class:`Slopes` (DataArray output) instead.
     """
     if len(slopes) != len(x_points) - 1:
         raise ValueError(
@@ -426,72 +648,34 @@ def slopes_to_points(
 
 
 def breakpoints(
-    values: BreaksLike | None = None,
+    values: BreaksLike,
     *,
-    slopes: BreaksLike | None = None,
-    x_points: BreaksLike | None = None,
-    y0: float | dict[str, float] | pd.Series | DataArray | None = None,
     dim: str | None = None,
-    slopes_align: Literal["pieces", "leading"] = "pieces",
 ) -> DataArray:
     """
     Create a breakpoint DataArray for piecewise linear constraints.
 
-    Two modes (mutually exclusive):
-
-    **Points mode**: ``breakpoints(values, ...)``
-
-    **Slopes mode**: ``breakpoints(slopes=..., x_points=..., y0=...)``
-
     Parameters
     ----------
-    values : BreaksLike, optional
+    values : BreaksLike
         Breakpoint values. Accepted types: ``Sequence[float]``,
         ``pd.Series``, ``pd.DataFrame``, or ``xr.DataArray``.
         A 1D input (list, Series) creates 1D breakpoints.
         A 2D input (DataFrame, multi-dim DataArray) creates per-entity
         breakpoints (``dim`` is required for DataFrame).
-    slopes : BreaksLike, optional
-        Segment slopes. Mutually exclusive with ``values``.
-    x_points : BreaksLike, optional
-        Breakpoint x-coordinates. Required with ``slopes``.
-    y0 : float, dict, pd.Series, or DataArray, optional
-        Initial y-value. Required with ``slopes``. A scalar broadcasts to
-        all entities. A dict/Series/DataArray provides per-entity values.
     dim : str, optional
-        Entity dimension name. Required when ``values`` or ``slopes`` is a
+        Entity dimension name. Required when ``values`` is a
         ``pd.DataFrame`` or ``dict``.
-    slopes_align : {"pieces", "leading"}, default "pieces"
-        Alignment of ``slopes`` relative to ``x_points``.
-
-        - ``"pieces"``: ``len(slopes) == len(x_points) - 1``. ``slopes[i]``
-          is the slope between ``x[i]`` and ``x[i+1]``.
-        - ``"leading"``: ``len(slopes) == len(x_points)``. ``slopes[0]``
-          must be NaN and is ignored; ``slopes[i]`` for ``i>=1`` is the
-          slope between ``x[i-1]`` and ``x[i]``. Useful when a marginal
-          value is tabulated alongside each breakpoint with the first
-          row's marginal undefined.
 
     Returns
     -------
     DataArray
+
+    See Also
+    --------
+    Slopes : per-piece slopes + ``y0`` (deferred or standalone via
+        :meth:`Slopes.to_breakpoints`).
     """
-    # Validate mutual exclusivity
-    if values is not None and slopes is not None:
-        raise ValueError("'values' and 'slopes' are mutually exclusive")
-    if values is not None and (x_points is not None or y0 is not None):
-        raise ValueError("'x_points' and 'y0' are forbidden when 'values' is given")
-    if slopes_align != "pieces" and slopes is None:
-        raise ValueError("'slopes_align' is only valid in slopes mode")
-    if slopes is not None:
-        if x_points is None or y0 is None:
-            raise ValueError("'slopes' requires both 'x_points' and 'y0'")
-        return _breakpoints_from_slopes(slopes, x_points, y0, dim, slopes_align)
-
-    # Points mode
-    if values is None:
-        raise ValueError("Must pass either 'values' or 'slopes'")
-
     return _coerce_breaks(values, dim)
 
 
@@ -848,8 +1032,8 @@ def _broadcast_points(
 
 def add_piecewise_formulation(
     model: Model,
-    *pairs: tuple[LinExprLike, BreaksLike]
-    | tuple[LinExprLike, BreaksLike, Literal["==", "<=", ">="]],
+    *pairs: tuple[LinExprLike, BreaksOrSlopes]
+    | tuple[LinExprLike, BreaksOrSlopes, Literal["==", "<=", ">="]],
     method: PWL_METHOD = "auto",
     active: LinExprLike | None = None,
     name: str | None = None,
@@ -984,7 +1168,7 @@ def add_piecewise_formulation(
 
     # Parse and normalise per-tuple signs.  Each pair is either
     # (expr, bp) — sign defaults to "==" — or (expr, bp, sign).
-    parsed: list[tuple[LinExprLike, BreaksLike, str]] = []
+    parsed: list[tuple[LinExprLike, BreaksOrSlopes, str]] = []
     for i, pair in enumerate(pairs):
         if not isinstance(pair, tuple) or len(pair) not in (2, 3):
             raise TypeError(
@@ -1003,6 +1187,34 @@ def add_piecewise_formulation(
                     f"{sorted(SIGNS)}, got {raw_sign!r}."
                 )
         parsed.append((expr, bp, tuple_sign))
+
+    slopes_set = {i for i, p in enumerate(parsed) if isinstance(p[1], Slopes)}
+    if slopes_set:
+        non_slopes_idx = [i for i in range(len(parsed)) if i not in slopes_set]
+        if not non_slopes_idx:
+            raise ValueError(
+                "All tuples are Slopes; at least one tuple must carry an "
+                "explicit x grid.  Pass the x grid via a regular tuple "
+                "or call Slopes(...).to_breakpoints(x_pts) explicitly."
+            )
+        if len(non_slopes_idx) > 1:
+            raise ValueError(
+                f"Slopes tuples present at positions {sorted(slopes_set)}, "
+                f"but {len(non_slopes_idx)} non-Slopes tuples carry their "
+                f"own breakpoint values (positions {non_slopes_idx}).  "
+                "There is no canonical x grid for the Slopes to integrate "
+                "against — borrowing from any one of them would silently "
+                "depend on tuple order.  Either reduce to a single non-Slopes "
+                "tuple, or resolve the Slopes explicitly by calling "
+                "Slopes(...).to_breakpoints(x_pts) before passing it in."
+            )
+        x_grid = parsed[non_slopes_idx[0]][1]
+        parsed = [
+            (expr, bp.to_breakpoints(x_grid), sign)
+            if isinstance(bp, Slopes)
+            else (expr, bp, sign)
+            for expr, bp, sign in parsed
+        ]
 
     # At most one non-equality sign; with 3+ tuples, none.
     bounded_positions = [i for i, p in enumerate(parsed) if p[2] != EQUAL]

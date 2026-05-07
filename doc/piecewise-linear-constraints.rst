@@ -96,7 +96,9 @@ Two factories with distinct geometric meaning:
 
     linopy.breakpoints([0, 50, 100])  # connected
     linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")  # per-entity
-    linopy.breakpoints(slopes=[1.2, 1.4], x_points=[0, 30, 60], y0=0)  # from slopes
+    linopy.Slopes(
+        [1.2, 1.4], y0=0
+    )  # from slopes (deferred — pairs with a sibling tuple)
     linopy.segments([(0, 10), (50, 100)])  # two disjoint regions
     linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")
 
@@ -240,20 +242,22 @@ Equivalent, but explicit about the DataArray construction:
 From slopes
 ~~~~~~~~~~~
 
-When you know marginal costs (slopes) rather than absolute values:
+When you know marginal costs (slopes) rather than absolute values, wrap
+them in :class:`linopy.Slopes`.  The x grid is borrowed from the sibling
+tuple — no need to repeat it:
 
 .. code-block:: python
 
     m.add_piecewise_formulation(
         (power, [0, 50, 100, 150]),
-        (
-            cost,
-            linopy.breakpoints(
-                slopes=[1.1, 1.5, 1.9], x_points=[0, 50, 100, 150], y0=0
-            ),
-        ),
+        (cost, linopy.Slopes([1.1, 1.5, 1.9], y0=0)),
     )
     # cost breakpoints: [0, 55, 130, 225]
+
+For standalone resolution outside of ``add_piecewise_formulation``, call
+:meth:`linopy.Slopes.to_breakpoints` with an explicit x grid::
+
+    bp = linopy.Slopes([1.1, 1.5, 1.9], y0=0).to_breakpoints([0, 50, 100, 150])
 
 Per-entity breakpoints
 ~~~~~~~~~~~~~~~~~~~~~~
