@@ -5,6 +5,8 @@ Created on Thu Mar 18 09:03:35 2021.
 @author: fabian
 """
 
+import importlib.util
+import json
 import pickle
 from pathlib import Path
 
@@ -17,6 +19,8 @@ import xarray as xr
 from linopy import LESS_EQUAL, Model, available_solvers, read_netcdf
 from linopy.io import signed_number
 from linopy.testing import assert_model_equal
+
+HAS_NETCDF4 = importlib.util.find_spec("netCDF4") is not None
 
 
 @pytest.fixture
@@ -148,8 +152,46 @@ def test_model_to_netcdf_with_multiindex_scipy_engine(
     m = model_with_multiindex
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn, engine="scipy")
-    p = read_netcdf(fn)
 
+    # Confirm the on-disk attr is a scalar string, not a unicode array — this
+    # is what makes the file writable by scipy in the first place.
+    with xr.load_dataset(fn) as raw:
+        multiindex_attrs = {
+            k: v for k, v in raw.attrs.items() if k.endswith("_multiindex")
+        }
+    assert multiindex_attrs, "expected at least one *_multiindex attr"
+    for k, v in multiindex_attrs.items():
+        assert isinstance(v, str), f"{k}={v!r} should be a JSON-encoded string"
+
+    p = read_netcdf(fn)
+    assert_model_equal(m, p)
+
+
+# Files written by older linopy versions stored MultiIndex level names as a
+# Python list of strings (which round-trips through netCDF4 but not scipy).
+# read_netcdf must keep accepting that legacy form so existing files don't
+# break after this change.
+@pytest.mark.skipif(not HAS_NETCDF4, reason="legacy format requires netCDF4 backend")
+def test_read_netcdf_with_multiindex_legacy_list_attr(
+    model_with_multiindex: Model, tmp_path: Path
+) -> None:
+    m = model_with_multiindex
+    fn = tmp_path / "test.nc"
+    m.to_netcdf(fn, engine="netcdf4")
+
+    # Rewrite the JSON-encoded *_multiindex attrs as Python lists, mimicking
+    # what the previous linopy implementation produced.
+    with xr.load_dataset(fn, engine="netcdf4") as ds:
+        ds = ds.load()
+    rewritten = {
+        k: (json.loads(v) if k.endswith("_multiindex") and isinstance(v, str) else v)
+        for k, v in ds.attrs.items()
+    }
+    ds.attrs = rewritten
+    fn_legacy = tmp_path / "legacy.nc"
+    ds.to_netcdf(fn_legacy, engine="netcdf4")
+
+    p = read_netcdf(fn_legacy)
     assert_model_equal(m, p)
 
 

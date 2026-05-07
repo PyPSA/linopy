@@ -10,7 +10,7 @@ import logging
 import shutil
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1205,11 +1205,12 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     def remove_prefix(k: str, prefix: str) -> str:
         return k[len(prefix) + 1 :]
 
-    def parse_multiindex_attr(value: Any) -> list[str]:
-        # New format: JSON-encoded string. Legacy format: list/array of names.
+    def parse_multiindex_attr(value: str | Iterable[str]) -> list[str]:
+        # New format: JSON-encoded string. Legacy format: list/array of names
+        # (e.g. files written by older linopy via the netCDF4 backend).
         if isinstance(value, str):
-            return list(json.loads(value))
-        return list(value)
+            return [str(n) for n in json.loads(value)]
+        return [str(n) for n in value]
 
     def get_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         ds = ds[[k for k in ds if has_prefix(str(k), prefix)]]
