@@ -25,6 +25,9 @@ Upcoming Version
 * ``Model.copy()`` (default deep) with ``deep`` and ``include_solution`` options; supports ``copy.copy`` / ``copy.deepcopy``.
 * SOS1 / SOS2 reformulations for solvers without native SOS support. ``Model.solve(reformulate_sos="auto")`` applies the reformulation only when the chosen solver lacks SOS.
 * ``format_labels()`` (on ``Constraints``/``Variables``) and ``format_infeasibilities()`` (on ``Model``) return strings instead of printing. Deprecates ``print_labels()`` / ``print_infeasibilities()``.
+
+*Expressions*
+
 * Harmonized coordinate alignment between subset/superset operands: multiplication/division fill missing coords with 0; constant ± fills with 0 and pins to LHS coords; comparisons fill missing RHS coords with NaN. Fixes ``subset + var`` reverse-addition and superset DataArrays expanding result coords.
 
 *Solvers*
@@ -32,7 +35,6 @@ Upcoming Version
 * ``Model.solve()`` forwards ``solver_name`` and ``**solver_options`` to the OETC handler (call-level overrides settings-level defaults).
 * ``OetcSettings.from_env()`` reads OETC settings from ``OETC_*`` environment variables.
 * SCIP supports quadratic problems on Windows.
-* CPLEX safely skips quality attributes that aren't always available (e.g. ``max_dual_infeasibility`` without crossover).
 
 **Performance**
 
@@ -44,6 +46,7 @@ Upcoming Version
 * ``add_variables`` no longer ignores ``coords`` when ``lower``/``upper`` are DataArrays.
 * ``as_dataarray`` no longer treats MultiIndex level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
 * ``Model.to_netcdf`` now works on the scipy netCDF backend (MultiIndex level names serialized as JSON; old files remain readable).
+* CPLEX no longer errors on quality attributes that aren't always available (e.g. ``max_dual_infeasibility`` when a barrier solution has no crossover).
 
 **Breaking Changes**
 
