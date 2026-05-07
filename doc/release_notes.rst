@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+Version 0.7.0
+-------------
+
 **Features**
 
 *Piecewise linear constraints (new)*
