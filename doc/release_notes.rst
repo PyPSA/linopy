@@ -4,31 +4,60 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
-* Harmonize coordinate alignment for operations with subset/superset objects:
-  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
-  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
-  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
-  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
-  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``.  Supports N-variable linking (e.g. CHP with fuel/power/heat) and per-entity breakpoints.  ``method="auto"`` picks the cheapest correct formulation automatically.  The API is newly added and emits an :class:`linopy.EvolvingAPIWarning` to signal that details may be refined in minor releases — the current restrictions on per-tuple sign (at most one bounded tuple, N≥3 must be all equality) are the most likely candidates to relax as use cases come in.  Feedback and use cases at https://github.com/PyPSA/linopy/issues shape what stabilises.  Silence with ``warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)``.
-* Add one-sided piecewise bounds via a per-tuple sign on ``add_piecewise_formulation``: append ``"<="`` or ``">="`` as a third tuple element — e.g. ``(fuel, y_pts, "<=")`` — to mark that expression as bounded by the curve while the others remain pinned.  At most one tuple may carry a non-equality sign; with 3 or more tuples all signs must be ``"=="``.  On convex/concave curves with a matching sign, ``method="auto"`` dispatches to a pure-LP chord formulation (``method="lp"``) with no auxiliary variables and automatic domain bounds on the input.  Mismatched curvature+sign is detected and falls back to SOS2/incremental with an explanatory info log.
-* Add unit-commitment gating via the ``active`` parameter on ``add_piecewise_formulation``: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero.  Works with the SOS2, incremental, and disjunctive methods.
-* Surface formulation metadata on the returned ``PiecewiseFormulation``: ``.method`` (resolved method name) and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"`` when well-defined).  Both persist across netCDF round-trip.
-* Add ``tangent_lines()`` as a low-level helper that returns per-piece chord expressions as a ``LinearExpression`` — no variables created.  Most users should prefer ``add_piecewise_formulation`` with a bounded tuple ``(y, y_pts, "<=")``, which builds on this helper and adds domain bounds and curvature validation.
-* Add ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict) and ``linopy.segments()`` (disjunctive operating regions) as breakpoint-construction helpers.
-* Add ``linopy.Slopes`` for specifying a piecewise curve by marginal costs / per-piece slopes instead of absolute y-values — ``(fuel, Slopes([1.2, 1.4, 1.7], y0=0))`` borrows the x grid from a sibling tuple in ``add_piecewise_formulation``.
-* Add the `sphinx-copybutton` to the documentation
-* Add SOS1 and SOS2 reformulations for solvers not supporting them.
-* Add semi-continous variables for solvers that support them
-* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
-* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
-* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
-* Enable quadratic problems with SCIP on windows.
-* Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
+**Features**
+
+*Piecewise linear constraints (new)*
+
+* Add ``add_piecewise_formulation()`` for piecewise linear constraints with SOS2, incremental, and disjunctive formulations: ``m.add_piecewise_formulation((power, x_pts), (fuel, y_pts))``. Supports N-variable linking (e.g. CHP with fuel/power/heat) and per-entity breakpoints. ``method="auto"`` picks the cheapest correct formulation automatically. The API emits an :class:`linopy.EvolvingAPIWarning` to signal that details may be refined in minor releases — feedback at https://github.com/PyPSA/linopy/issues shapes what stabilises. Silence with ``warnings.filterwarnings("ignore", category=linopy.EvolvingAPIWarning)``.
+* One-sided bounds via a per-tuple sign: append ``"<="`` or ``">="`` as a third tuple element (e.g. ``(fuel, y_pts, "<=")``) to mark that expression as bounded by the curve while the others remain pinned. On convex/concave curves with a matching sign, ``method="auto"`` dispatches to a pure-LP chord formulation with no auxiliary variables and automatic domain bounds; mismatched curvature falls back to SOS2/incremental with an explanatory log.
+* Unit-commitment gating via the ``active`` parameter: a binary variable that, when zero, forces all auxiliary variables (and thus the linked expressions) to zero. Works with the SOS2, incremental, and disjunctive methods.
+* Returned ``PiecewiseFormulation`` surfaces ``.method`` and ``.convexity`` (``"convex"`` / ``"concave"`` / ``"linear"`` / ``"mixed"``); both persist across netCDF round-trip.
+* Construction helpers: ``linopy.breakpoints()`` (lists/Series/DataFrame/DataArray/dict) with a ``slopes_align`` keyword for the marginal-cost convention; ``linopy.segments()`` for disjunctive operating regions; ``linopy.Slopes`` for specifying a curve by per-piece slopes — ``(fuel, Slopes([1.2, 1.4, 1.7], y0=0))`` borrows the x grid from a sibling tuple; and ``tangent_lines()`` as a low-level chord-expression helper.
+
+*Variable utilities*
+
 * Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
 * Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
-* Fix ``as_dataarray`` treating multi-index level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
+* Add support for semi-continuous variables on solvers that support them.
+* Add SOS1 and SOS2 reformulations for solvers without native SOS support. ``Model.solve()`` accepts ``reformulate_sos="auto"`` to apply the reformulation only when the chosen solver lacks SOS support and pass through otherwise.
+
+*Model and expression utilities*
+
+* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; supports Python's ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
+* Add ``__weakref__`` to ``Model.__slots__`` so ``weakref.ref(model)`` and ``WeakKeyDictionary`` keyed by ``Model`` work — enables third-party accessor-style extensions without subclassing.
+* Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
+* Harmonize coordinate alignment for operations between objects with subset/superset coordinates:
+
+  - Multiplication and division fill missing coords with 0 (variable doesn't participate).
+  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin the result to LHS coords.
+  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created).
+  - Fixes the crash on ``subset + var`` / ``subset + expr`` reverse addition and superset DataArrays expanding result coords beyond the variable's coordinate space.
+
+*Solver integration*
+
+* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to the OETC handler. Call-level options override settings-level defaults.
+* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
+* Enable quadratic problems with SCIP on Windows.
+* Improve handling of CPLEX solver quality attributes; safely skip attributes that are not always available (e.g. ``max_dual_infeasibility`` when a barrier solution has no crossover).
+
+**Performance**
+
+* Speed up solution unpacking in ``Model.solve()`` by replacing pandas ``Series.loc`` with a direct numpy array lookup.
+
+**Bug Fixes**
+
+* Raise a clear ``ValueError`` from ``Model.solve()`` when no objective has been set, instead of writing a malformed LP file. The message points to ``m.add_objective(...)`` (and ``m.add_objective(0 * x)`` for pure-feasibility checks).
+* Fix ``add_variables`` silently ignoring ``coords`` when ``lower`` / ``upper`` are passed as DataArrays.
+* Fix ``as_dataarray`` treating MultiIndex level names as extra dimensions when broadcasting a scalar against ``xarray.Coordinates``.
+* Fix ``Model.to_netcdf`` failing on the scipy netCDF backend with a ``KeyError`` on MultiIndex level names; the names are now serialized as a JSON-encoded string. Files written by older linopy versions remain readable.
+
+**Breaking Changes**
+
+* ``google-cloud-storage`` and ``requests`` are now optional dependencies. Install with the ``oetc`` extra (``pip install linopy[oetc]``) to keep the previous behaviour.
+
+**Documentation**
+
+* Add ``sphinx-copybutton`` to the documentation.
 
 
 Version 0.6.7
