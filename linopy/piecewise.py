@@ -244,29 +244,25 @@ class Slopes:
     __hash__ = None  # type: ignore[assignment]
 
 
+def _is_numeric_scalar(x: object) -> bool:
+    return isinstance(x, Real) and not isinstance(x, bool)
+
+
 def _values_equal(a: object, b: object) -> bool:
     """
     Type-dispatched equality for ``Slopes`` field values (NaN-safe).
 
-    Numeric scalars compare by value (``int 0 == float 0.0 == np.float64(0)``)
-    with a NaN-safe fallback.  Lists / tuples are promoted to ndarray so
-    in-place ``float('nan')`` content compares element-wise NaN-safe rather
-    than relying on the ``np.nan`` singleton.  Non-numeric ndarray dtypes
-    (object, string) fall back to a plain ``np.array_equal`` without
-    ``equal_nan``.
+    Numeric scalars compare by value across types (``int 0 == float 0.0 ==
+    np.float64(0)``); ``bool`` is excluded.  Lists / tuples are promoted
+    to ndarray so in-place ``float('nan')`` content compares NaN-safe.
+    Non-numeric ndarray dtypes fall back to ``np.array_equal`` without
+    ``equal_nan``.  ``DataFrame`` / ``Series`` / ``DataArray`` use
+    ``.equals``; ``dict`` recurses on matching keys.
     """
-    # Numeric scalars (int/float/np.integer/np.floating) — coerce and compare.
-    # ``bool`` is a subclass of ``int``; exclude so True/False compare strictly.
-    if (
-        isinstance(a, Real)
-        and not isinstance(a, bool)
-        and isinstance(b, Real)
-        and not isinstance(b, bool)
-    ):
+    if _is_numeric_scalar(a) and _is_numeric_scalar(b):
         af, bf = float(a), float(b)
-        return (af != af and bf != bf) or af == bf
+        return af == bf or (af != af and bf != bf)
 
-    # Promote list/tuple so the ndarray path handles NaN content uniformly.
     if isinstance(a, list | tuple):
         a = np.asarray(a)
     if isinstance(b, list | tuple):
@@ -278,21 +274,20 @@ def _values_equal(a: object, b: object) -> bool:
         try:
             return bool(np.array_equal(a, b, equal_nan=True))
         except TypeError:
-            # Object / string dtype: ``equal_nan`` raises on isnan.
             return bool(np.array_equal(a, b))
-    if isinstance(a, pd.DataFrame):
-        return isinstance(b, pd.DataFrame) and bool(a.equals(b))
-    if isinstance(a, pd.Series):
-        return isinstance(b, pd.Series) and bool(a.equals(b))
-    if isinstance(a, DataArray):
-        return isinstance(b, DataArray) and bool(a.equals(b))
+
+    for cls in (pd.DataFrame, pd.Series, DataArray):
+        if isinstance(a, cls):
+            return isinstance(b, cls) and bool(a.equals(b))
+
     if isinstance(a, dict):
-        if not isinstance(b, dict) or a.keys() != b.keys():
-            return False
-        return all(_values_equal(a[k], b[k]) for k in a)
-    if type(a) is not type(b):
-        return False
-    return a == b
+        return (
+            isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(_values_equal(a[k], b[k]) for k in a)
+        )
+
+    return type(a) is type(b) and bool(a == b)
 
 
 def _summarise_breakslike(v: BreaksLike) -> str:
@@ -306,19 +301,11 @@ def _summarise_breakslike(v: BreaksLike) -> str:
         return f"<Series len={len(v)}>"
     if isinstance(v, dict):
         return f"<dict {len(v)} entries>"
-    # Multi-dim ndarray: shape summary (consistent with DataArray /
-    # DataFrame / Series treatment above).  ``np.asarray`` is called once
-    # so we don't double-normalise on the 1D path below.
+
     arr = np.asarray(v)
     if arr.ndim > 1:
         return f"<ndarray shape={arr.shape}>"
-    # 1D path: render inline up to 8 entries (shortest float format,
-    # ``g``); longer truncates to head + tail with item count.
-    # ``arr.tolist()`` normalises numpy scalars (e.g. ``np.float64`` /
-    # ``np.int64``) to Python types so the rendering is uniform.
-    seq = arr.tolist()
-    if not isinstance(seq, list):  # 0-D ndarray → scalar
-        return _short_num(seq)
+    seq: list = arr.tolist()
     if len(seq) <= 8:
         return "[" + ", ".join(_short_num(x) for x in seq) + "]"
     head = ", ".join(_short_num(x) for x in seq[:3])
