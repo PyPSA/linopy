@@ -142,10 +142,7 @@ def test_model_to_netcdf_with_multiindex(
     assert_model_equal(m, p)
 
 
-# Regression test for https://github.com/PyPSA/linopy/issues/525: when only
-# scipy is installed (no netCDF4 / h5netcdf), xarray falls back to scipy's
-# netCDF3 backend, which cannot write unicode-array attributes. MultiIndex
-# level names must therefore be serialised as a scalar string.
+# Regression for https://github.com/PyPSA/linopy/issues/525.
 def test_model_to_netcdf_with_multiindex_scipy_engine(
     model_with_multiindex: Model, tmp_path: Path
 ) -> None:
@@ -153,46 +150,33 @@ def test_model_to_netcdf_with_multiindex_scipy_engine(
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn, engine="scipy")
 
-    # Confirm the on-disk attr is a scalar string, not a unicode array — this
-    # is what makes the file writable by scipy in the first place.
-    with xr.load_dataset(fn) as raw:
-        multiindex_attrs = {
-            k: v for k, v in raw.attrs.items() if k.endswith("_multiindex")
-        }
-    assert multiindex_attrs, "expected at least one *_multiindex attr"
+    raw_attrs = xr.load_dataset(fn).attrs
+    multiindex_attrs = {k: v for k, v in raw_attrs.items() if k.endswith("_multiindex")}
+    assert multiindex_attrs
     for k, v in multiindex_attrs.items():
-        assert isinstance(v, str), f"{k}={v!r} should be a JSON-encoded string"
+        assert isinstance(v, str), f"{k!r}: {v!r}"
 
-    p = read_netcdf(fn)
-    assert_model_equal(m, p)
+    assert_model_equal(m, read_netcdf(fn))
 
 
-# Files written by older linopy versions stored MultiIndex level names as a
-# Python list of strings (which round-trips through netCDF4 but not scipy).
-# read_netcdf must keep accepting that legacy form so existing files don't
-# break after this change.
 @pytest.mark.skipif(not HAS_NETCDF4, reason="legacy format requires netCDF4 backend")
 def test_read_netcdf_with_multiindex_legacy_list_attr(
     model_with_multiindex: Model, tmp_path: Path
 ) -> None:
+    # Older linopy stored multiindex names as a Python list (netCDF4-only).
     m = model_with_multiindex
     fn = tmp_path / "test.nc"
     m.to_netcdf(fn, engine="netcdf4")
 
-    # Rewrite the JSON-encoded *_multiindex attrs as Python lists, mimicking
-    # what the previous linopy implementation produced.
-    with xr.load_dataset(fn, engine="netcdf4") as ds:
-        ds = ds.load()
-    rewritten = {
+    ds = xr.load_dataset(fn, engine="netcdf4").load()
+    ds.attrs = {
         k: (json.loads(v) if k.endswith("_multiindex") and isinstance(v, str) else v)
         for k, v in ds.attrs.items()
     }
-    ds.attrs = rewritten
     fn_legacy = tmp_path / "legacy.nc"
     ds.to_netcdf(fn_legacy, engine="netcdf4")
 
-    p = read_netcdf(fn_legacy)
-    assert_model_equal(m, p)
+    assert_model_equal(m, read_netcdf(fn_legacy))
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
