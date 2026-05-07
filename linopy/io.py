@@ -1233,7 +1233,10 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
         for dim in ds.dims:
             if f"{dim}_multiindex" in ds.attrs:
                 names = parse_multiindex_attr(ds.attrs.pop(f"{dim}_multiindex"))
-                ds = ds.set_index({dim: names})
+                # mypy: dict-invariance trips xarray's
+                # Mapping[Any, Hashable | Sequence[Hashable]] stub even though
+                # list[str] is a valid Sequence[Hashable].
+                ds = ds.set_index({dim: names})  # type: ignore[dict-item]
 
         return ds
 
