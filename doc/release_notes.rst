@@ -19,11 +19,11 @@ Upcoming Version
 * ``fix()`` / ``unfix()`` / ``fixed`` for fixing variables to values via equality constraints (with auto-rounding for integer/binary variables).
 * ``relax()`` / ``unrelax()`` / ``relaxed`` for LP relaxation of integer/binary variables; supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``).
 * Semi-continuous variables on solvers that support them.
-* SOS1 / SOS2 reformulations for solvers without native SOS support. ``Model.solve(reformulate_sos="auto")`` applies the reformulation only when the chosen solver lacks SOS.
 
 *Model*
 
 * ``Model.copy()`` (default deep) with ``deep`` and ``include_solution`` options; supports ``copy.copy`` / ``copy.deepcopy``.
+* SOS1 / SOS2 reformulations for solvers without native SOS support. ``Model.solve(reformulate_sos="auto")`` applies the reformulation only when the chosen solver lacks SOS.
 * ``format_labels()`` (on ``Constraints``/``Variables``) and ``format_infeasibilities()`` (on ``Model``) return strings instead of printing. Deprecates ``print_labels()`` / ``print_infeasibilities()``.
 * Harmonized coordinate alignment between subset/superset operands: multiplication/division fill missing coords with 0; constant ± fills with 0 and pins to LHS coords; comparisons fill missing RHS coords with NaN. Fixes ``subset + var`` reverse-addition and superset DataArrays expanding result coords.
 
