@@ -434,7 +434,15 @@ class ConstraintBase(ABC):
         The resulting DataFrame represents a long table format of the all
         non-masked constraints with non-zero coefficients. It contains the
         columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        .. deprecated::
+            Use ``to_polars()`` instead.
         """
+        warnings.warn(
+            "Constraint.flat is deprecated, use to_polars() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         ds = self.data
 
         def mask_func(data: dict) -> pd.Series:
