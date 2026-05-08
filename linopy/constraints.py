@@ -488,6 +488,21 @@ class ConstraintBase(ABC):
     iterate_slices = iterate_slices
 
 
+def _equal_nnz_slices(
+    indptr: np.ndarray, slice_size: int
+) -> Generator[slice, None, None]:
+    """Yield row slices such that each slice contains at most slice_size non-zeros."""
+    n_rows = len(indptr) - 1
+    start = 0
+    while start < n_rows:
+        offset = np.searchsorted(
+            indptr[start + 1 :], indptr[start] + slice_size, side="left"
+        )
+        end = min(start + 1 + offset, n_rows)
+        yield slice(start, end)
+        start = end
+
+
 class CSRConstraint(ConstraintBase):
     """
     Frozen constraint backed by a CSR sparse matrix.
@@ -974,37 +989,31 @@ class CSRConstraint(ConstraintBase):
         slice_size: int | None = 2_000_000,
         slice_dims: list | None = None,
     ) -> Generator[CSRConstraint, None, None]:
-        """Yield row-batched sub-Constraints without Dataset reconstruction."""
+        """
+        Yield row-batched sub-Constraints without Dataset reconstruction.
+
+        Batches are raw CSR slices suitable only for ``to_polars()``. They are
+        yielded with ``coords=[]`` because batches cover contiguous active rows,
+        not a contiguous slice of the coordinate grid, so the original coords
+        would be misleading. Do not call ``.data``, ``.mutable()``, or any
+        coord-dependent property on batch slices.
+        """
         nnz = self._csr.nnz
         if slice_size is None or nnz <= slice_size:
             yield self
             return
 
-        n = self._csr.shape[0]
-        cumulative = np.cumsum(np.diff(self._csr.indptr))
-        batch_start = 0
-        for batch_end_nnz in range(slice_size, nnz + slice_size, slice_size):
-            batch_end = int(np.searchsorted(cumulative, batch_end_nnz, side="right"))
-            batch_end = max(batch_end, batch_start + 1)
-            if batch_end >= n:
-                batch_end = n
-            sign = (
-                self._sign
-                if isinstance(self._sign, str)
-                else self._sign[batch_start:batch_end]
-            )
+        for rows in _equal_nnz_slices(self._csr.indptr, slice_size):
+            sign = self._sign if isinstance(self._sign, str) else self._sign[rows]
             yield CSRConstraint(
-                csr=self._csr[batch_start:batch_end],
-                con_labels=self._con_labels[batch_start:batch_end],
-                rhs=self._rhs[batch_start:batch_end],
+                csr=self._csr[rows],
+                con_labels=self._con_labels[rows],
+                rhs=self._rhs[rows],
                 sign=sign,
-                coords=self._coords,
+                coords=[],
                 model=self._model,
                 name=self._name,
             )
-            batch_start = batch_end
-            if batch_start >= n:
-                break
 
     @classmethod
     def from_mutable(
