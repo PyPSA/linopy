@@ -108,35 +108,6 @@ def _con_unwrap(con: ConstraintBase | Dataset) -> Dataset:
     return con.data if isinstance(con, ConstraintBase) else con
 
 
-def _matrix_export_data(
-    con: ConstraintBase, label_index: VariableLabelIndex
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    label_to_pos = label_index.label_to_pos
-    labels_flat = con.labels.values.ravel()
-    vars_vals = con.vars.values
-    n_rows = len(labels_flat)
-    vars_2d = (
-        vars_vals.reshape(n_rows, -1)
-        if n_rows > 0
-        else vars_vals.reshape(0, max(1, vars_vals.size))
-    )
-
-    row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
-    con_labels = labels_flat[row_mask]
-    vars_final = vars_2d[row_mask]
-    valid_final = vars_final != -1
-
-    coeffs_final = con.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
-    cols = label_to_pos[vars_final[valid_final]]
-    data = coeffs_final[valid_final]
-
-    counts = valid_final.sum(axis=1)
-    indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
-    indptr[0] = 0
-    np.cumsum(counts, out=indptr[1:])
-    return con_labels, row_mask, cols, data, indptr
-
-
 class ConstraintBase(ABC):
     """
     Abstract base class for Constraint and CSRConstraint.
@@ -299,17 +270,9 @@ class ConstraintBase(ABC):
         return self.rhs.size
 
     @property
+    @abstractmethod
     def ncons(self) -> int:
-        """
-        Get the number of active constraints (non-masked, with at least one valid variable).
-        """
-        labels = self.labels.values
-        vars_arr = self.vars.values
-        if labels.ndim == 0:
-            return int(labels != FILL_VALUE["labels"] and (vars_arr != -1).any())
-        return int(
-            ((labels != FILL_VALUE["labels"]) & (vars_arr != -1).any(axis=-1)).sum()
-        )
+        """Get the number of active constraints (non-masked, with at least one valid variable)."""
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:
@@ -348,10 +311,9 @@ class ConstraintBase(ABC):
         return None
 
     @property
+    @abstractmethod
     def lhs(self) -> expressions.LinearExpression:
         """Get the left-hand-side linear expression of the constraint."""
-        data = self.data[["coeffs", "vars"]].rename({self.term_dim: TERM_DIM})
-        return expressions.LinearExpression(data, self.model)
 
     def __contains__(self, value: Any) -> bool:
         return self.data.__contains__(value)
@@ -461,19 +423,15 @@ class ConstraintBase(ABC):
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
+    @abstractmethod
     def to_matrix(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
         """
-        Construct a dense CSR matrix for this constraint.
+        Construct a CSR matrix for this constraint.
 
         Only active (non-masked) rows are included. Column indices are dense
         positions in the active variable array, as given by ``label_index``.
-
-        Parameters
-        ----------
-        label_index : VariableLabelIndex
-            Variable label index providing ``label_to_pos`` and ``n_active_vars``.
 
         Returns
         -------
@@ -482,12 +440,6 @@ class ConstraintBase(ABC):
         con_labels : np.ndarray
             Active constraint labels in row order.
         """
-        con_labels, _, cols, data, indptr = _matrix_export_data(self, label_index)
-        csr = scipy.sparse.csr_array(
-            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
-        )
-        csr.sum_duplicates()
-        return csr, con_labels
 
     def to_netcdf_ds(self) -> Dataset:
         """Return a Dataset representation suitable for netcdf serialization."""
@@ -1127,6 +1079,17 @@ class Constraint(ConstraintBase):
         return self._assigned
 
     @property
+    def ncons(self) -> int:
+        """Get the number of active constraints (non-masked, with at least one valid variable)."""
+        labels = self.labels.values
+        vars_arr = self.vars.values
+        if labels.ndim == 0:
+            return int(labels != FILL_VALUE["labels"] and (vars_arr != -1).any())
+        return int(
+            ((labels != FILL_VALUE["labels"]) & (vars_arr != -1).any(axis=-1)).sum()
+        )
+
+    @property
     def range(self) -> tuple[int, int]:
         """Return the range of the constraint."""
         return self.data.attrs["label_range"]
@@ -1214,13 +1177,62 @@ class Constraint(ConstraintBase):
     def has_variable(self, variable: variables.Variable) -> bool:
         return bool(self.data["vars"].isin(variable.labels.values.ravel()).any())
 
+    def _matrix_export_data(
+        self, label_index: VariableLabelIndex
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        label_to_pos = label_index.label_to_pos
+        labels_flat = self.labels.values.ravel()
+        vars_vals = self.vars.values
+        n_rows = len(labels_flat)
+        vars_2d = (
+            vars_vals.reshape(n_rows, -1)
+            if n_rows > 0
+            else vars_vals.reshape(0, max(1, vars_vals.size))
+        )
+
+        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+        con_labels = labels_flat[row_mask]
+        vars_final = vars_2d[row_mask]
+        valid_final = vars_final != -1
+
+        coeffs_final = self.coeffs.values.ravel().reshape(vars_2d.shape)[row_mask]
+        cols = label_to_pos[vars_final[valid_final]]
+        data = coeffs_final[valid_final]
+
+        counts = valid_final.sum(axis=1)
+        indptr = np.empty(len(con_labels) + 1, dtype=np.int32)
+        indptr[0] = 0
+        np.cumsum(counts, out=indptr[1:])
+        return con_labels, row_mask, cols, data, indptr
+
+    def to_matrix(
+        self, label_index: VariableLabelIndex
+    ) -> tuple[scipy.sparse.csr_array, np.ndarray]:
+        """
+        Construct a CSR matrix for this constraint.
+
+        Only active (non-masked) rows are included. Column indices are dense
+        positions in the active variable array, as given by ``label_index``.
+
+        Returns
+        -------
+        csr : scipy.sparse.csr_array
+            Shape (n_active_cons, n_active_vars).
+        con_labels : np.ndarray
+            Active constraint labels in row order.
+        """
+        con_labels, _, cols, data, indptr = self._matrix_export_data(label_index)
+        csr = scipy.sparse.csr_array(
+            (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
+        )
+        csr.sum_duplicates()
+        return csr, con_labels
+
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
         """Return (csr, con_labels, b, sense) in one pass."""
-        con_labels, row_mask, cols, data, indptr = _matrix_export_data(
-            self, label_index
-        )
+        con_labels, row_mask, cols, data, indptr = self._matrix_export_data(label_index)
         csr = scipy.sparse.csr_array(
             (data, cols, indptr), shape=(len(con_labels), label_index.n_active_vars)
         )
