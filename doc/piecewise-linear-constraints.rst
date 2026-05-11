@@ -41,15 +41,17 @@ Quick Start
 
 .. code-block:: python
 
-    # fuel >= f(power) on the same heat-rate curve as above.  Over-
-    # fuelling is physically admissible but wasteful, so minimising
-    # fuel pulls the operating point onto the curve.  "auto" picks the
-    # cheapest correct formulation: pure LP (chord constraints) here,
-    # since convex + ">=" is LP-applicable; SOS2/incremental otherwise.
+    # fuel >= f(power) on the same heat-rate curve as above.
     m.add_piecewise_formulation(
         (fuel, [0, 36, 84, 170], ">="),
         (power, [0, 30, 60, 100]),
     )
+
+Over-fuelling is physically admissible but wasteful, so minimising
+fuel pulls the operating point onto the curve.  ``method="auto"``
+picks the cheapest correct formulation: pure LP (chord constraints)
+here, since convex + ``">="`` is LP-applicable; SOS2/incremental
+otherwise.
 
 Each ``(expression, breakpoints[, sign])`` tuple pairs a variable with
 its breakpoint values.  The optional sign (default ``"=="``) is ``"<="``
