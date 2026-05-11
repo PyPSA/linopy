@@ -50,6 +50,10 @@ direct_solvers = get_available_solvers_with_feature(
 for solver in direct_solvers:
     params.append((solver, "direct", False))
 
+set_names_direct_solvers = [
+    solver for solver in ("highs", "gurobi") if solver in direct_solvers
+]
+
 if "mosek" in available_solvers:
     params.append(("mosek", "lp", False))
     params.append(("mosek", "lp", True))
@@ -298,7 +302,7 @@ def modified_model() -> Model:
     x = m.add_variables(coords=[lower.index], name="x", binary=True)
     y = m.add_variables(lower, name="y")
 
-    c = m.add_constraints(x + y, GREATER_EQUAL, 10)
+    c = m.add_constraints(x + y, GREATER_EQUAL, 10, freeze=False)
 
     y.lower = 9
     c.lhs = 2 * x + y
@@ -672,7 +676,9 @@ def test_infeasible_model(
         with pytest.warns(DeprecationWarning):
             model.compute_set_of_infeasible_constraints()
         model.compute_infeasibilities()
-        model.print_infeasibilities()
+        formatted = model.format_infeasibilities()
+        assert isinstance(formatted, str)
+        assert formatted
     else:
         with pytest.raises((NotImplementedError, ImportError)):
             model.compute_infeasibilities()
@@ -1004,6 +1010,60 @@ def test_solver_attribute_getter(
         rc = model.variables.get_solver_attribute("RC")
         assert isinstance(rc, xr.Dataset)
         assert set(rc) == set(model.variables)
+
+
+def assert_semantically_equal_direct_solves(
+    solved_with_names: Model, solved_without_names: Model, solver: str
+) -> None:
+    tol = GPU_SOL_TOL if solver in gpu_solvers else CPU_SOL_TOL
+
+    assert solved_with_names.status == solved_without_names.status
+    assert (
+        solved_with_names.termination_condition
+        == solved_without_names.termination_condition
+    )
+    assert solved_with_names.objective.value is not None
+    assert solved_without_names.objective.value is not None
+    assert solved_with_names.objective.value == pytest.approx(
+        solved_without_names.objective.value, rel=tol
+    )
+    assert_allclose(
+        solved_with_names.solution,
+        solved_without_names.solution,
+        rtol=tol,
+        atol=tol,
+    )
+
+    dual_with_names = solved_with_names.dual
+    dual_without_names = solved_without_names.dual
+    assert set(dual_with_names.data_vars) == set(dual_without_names.data_vars)
+    if dual_with_names.data_vars:
+        assert_allclose(
+            dual_with_names,
+            dual_without_names,
+            rtol=tol,
+            atol=tol,
+        )
+
+
+@pytest.mark.parametrize("solver", set_names_direct_solvers)
+def test_direct_solve_set_names_semantic_equivalence(model: Model, solver: str) -> None:
+    model_with_names = model.copy(deep=True)
+    model_without_names = model.copy(deep=True)
+
+    status_with_names, condition_with_names = model_with_names.solve(
+        solver_name=solver, io_api="direct", set_names=True
+    )
+    status_without_names, condition_without_names = model_without_names.solve(
+        solver_name=solver, io_api="direct", set_names=False
+    )
+
+    assert status_with_names == "ok"
+    assert status_without_names == "ok"
+    assert condition_with_names == condition_without_names
+    assert_semantically_equal_direct_solves(
+        model_with_names, model_without_names, solver
+    )
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

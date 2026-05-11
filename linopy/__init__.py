@@ -19,8 +19,14 @@ from linopy.constants import (
     GREATER_EQUAL,
     LESS_EQUAL,
     EvolvingAPIWarning,
+    PerformanceWarning,
 )
-from linopy.constraints import Constraint, Constraints
+from linopy.constraints import (
+    Constraint,
+    ConstraintBase,
+    Constraints,
+    CSRConstraint,
+)
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
 from linopy.model import Model, Variable, Variables, available_solvers
@@ -40,9 +46,12 @@ except ImportError:
     pass
 
 __all__ = (
-    "Constraint",
+    "CSRConstraint",
+    "ConstraintBase",
     "Constraints",
+    "Constraint",
     "EQUAL",
+    "PerformanceWarning",
     "EvolvingAPIWarning",
     "GREATER_EQUAL",
     "LESS_EQUAL",
