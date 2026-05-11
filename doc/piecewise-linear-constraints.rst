@@ -305,43 +305,6 @@ genuinely need the one-sided semantics.  See the
 :doc:`piecewise-inequality-bounds-tutorial` notebook for a full
 walkthrough.
 
-Formulation math
-~~~~~~~~~~~~~~~~
-
-For methods that introduce shared interpolation weights (SOS2 and
-incremental — see below), only the link constraint between the weights
-and the bounded expression changes.  Write the method-specific weighted
-sum of breakpoints for tuple :math:`j` as
-:math:`W_j(\text{weights}, B)` — the explicit form is
-:math:`\sum_i \lambda_i B_{j,i}` for SOS2 and
-:math:`B_{j,0} + \sum_i \delta_i (B_{j,i} - B_{j,i-1})` for incremental
-(see the method sections below).  Equality-signed tuples :math:`j` keep
-the equality, and the bounded tuple :math:`b` flips to the requested
-sign:
-
-.. math::
-
-   &e_j = W_j(\text{weights}, B)
-   \quad \text{(equality, } j \ne b \text{)}
-
-   &e_b \ \text{sign}\ W_b(\text{weights}, B)
-   \quad \text{(bounded)}
-
-Internally this shows up as a stacked ``*_link`` equality covering the
-equality-signed tuples plus a separate signed ``*_output_link`` for
-the bounded tuple.  The ``method="lp"`` path encodes the same one-sided
-semantics without weights — see the LP section below.
-
-.. warning::
-
-   With a bounded tuple and ``active=0``, the output is only forced to
-   ``0`` on the signed side — the complementary bound still comes from
-   the output variable's own lower/upper bound.  In the common case of
-   non-negative outputs (fuel, cost, heat), set ``lower=0`` on that
-   variable: combined with the ``y ≤ 0`` constraint from deactivation,
-   this forces ``y = 0`` automatically.
-
-
 Formulation Methods
 -------------------
 
@@ -491,8 +454,7 @@ binary indicators :math:`z_i`:
    &e_j = B_{j,0} + \sum_{i=1}^{n} \delta_i \, (B_{j,i} - B_{j,i-1})
 
 With a bounded tuple, the link to that tuple's expression flips to the
-requested sign while the equality-signed tuples keep the equality above
-(see the *Formulation math* block in *Per-tuple sign*).
+requested sign while the equality-signed tuples keep the equality above.
 
 .. code-block:: python
 
@@ -583,9 +545,16 @@ are forced to zero:
 - ``commit=1``: power operates in [30, 100], fuel = f(power)
 - ``commit=0``: power = 0, fuel = 0
 
-Not supported with ``method="lp"``.  For bounded-tuple semantics under
-``active=0`` see the warning in *Per-tuple sign — Formulation math*
-above.
+Not supported with ``method="lp"``.
+
+.. warning::
+
+   With a bounded tuple and ``active=0``, the output is only forced to
+   ``0`` on the signed side — the complementary bound still comes from
+   the output variable's own lower/upper bound.  In the common case of
+   non-negative outputs (fuel, cost, heat), set ``lower=0`` on that
+   variable: combined with the ``y ≤ 0`` constraint from deactivation,
+   this forces ``y = 0`` automatically.
 
 Auto-broadcasting
 ~~~~~~~~~~~~~~~~~
