@@ -36,6 +36,7 @@ from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
+    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -639,28 +640,36 @@ class CSRConstraint(ConstraintBase):
         return self._active_to_dataarray(self._rhs, fill=np.nan)
 
     @rhs.setter
-    def rhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        self._refreeze_after(lambda mc: setattr(mc, "rhs", value))
+    def rhs(self, value: ConstantLike) -> None:
+        if isinstance(
+            value,
+            expressions.LinearExpression
+            | expressions.QuadraticExpression
+            | variables.Variable
+            | variables.ScalarVariable,
+        ):
+            raise AttributeError(
+                "CSRConstraint.rhs accepts only constant-like values "
+                "(scalar, ndarray, DataArray). To assign an expression to rhs, "
+                "call .mutable() first."
+            )
+        coords_dict = {c.name: c for c in self._coords}
+        da = as_dataarray(value, coords=coords_dict, dims=self.coord_dims)
+        arr = da.values.ravel().astype(float)
+        self._rhs = arr[self.active_positions]
+        self._dual = None
 
     @property
     def lhs(self) -> expressions.LinearExpression:
         """Get LHS as LinearExpression (triggers Dataset reconstruction)."""
-        return self.mutable().lhs
+        ds = self._to_dataset(self.nterm)
+        return expressions.LinearExpression(ds[["coeffs", "vars"]], self._model)
 
     @lhs.setter
     def lhs(self, value: ExpressionLike | VariableLike | ConstantLike) -> None:
-        self._refreeze_after(lambda mc: setattr(mc, "lhs", value))
-
-    def _refreeze_after(self, mutate: Callable[[Constraint], None]) -> None:
-        mc = self.mutable()
-        mutate(mc)
-        refrozen = CSRConstraint.from_mutable(mc, self._cindex)
-        self._csr = refrozen._csr
-        self._con_labels = refrozen._con_labels
-        self._rhs = refrozen._rhs
-        self._sign = refrozen._sign
-        self._coords = refrozen._coords
-        self._dual = None
+        raise AttributeError(
+            "CSRConstraint.lhs is read-only; call .mutable() to modify term structure."
+        )
 
     @property
     @has_optimized_model
@@ -936,13 +945,13 @@ class CSRConstraint(ConstraintBase):
             "vars": vlabels[csr.indices],
             "rhs": self._rhs[rows],
         }
+        df = pl.DataFrame(data)
         if isinstance(self._sign, str):
-            data["sign"] = pl.Series(
-                "sign", [self._sign], dtype=sign_dtype
-            ).new_from_index(0, len(rows))
+            sign_expr = pl.lit(self._sign, dtype=sign_dtype)
         else:
-            data["sign"] = pl.Series("sign", self._sign[rows], dtype=sign_dtype)
-        return pl.DataFrame(data)[["labels", "coeffs", "vars", "sign", "rhs"]]
+            sign_expr = pl.Series("sign", self._sign[rows], dtype=sign_dtype)
+        df = df.with_columns(sign=sign_expr)
+        return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     def iterate_slices(
         self,
