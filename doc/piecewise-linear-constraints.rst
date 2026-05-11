@@ -545,7 +545,9 @@ are forced to zero:
 - ``commit=1``: power operates in [30, 100], fuel = f(power)
 - ``commit=0``: power = 0, fuel = 0
 
-Not supported with ``method="lp"``.
+Not supported with ``method="lp"`` (gating needs a binary).  Use
+``method="auto"``, or *Chord expressions as a building block* for
+manual gating.
 
 .. warning::
 
