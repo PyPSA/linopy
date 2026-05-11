@@ -4,6 +4,10 @@ Release Notes
 Upcoming Version
 ----------------
 
+
+Version 0.7.0
+-------------
+
 **Features**
 
 *Piecewise linear constraints (new)*
@@ -43,7 +47,7 @@ Upcoming Version
 
 * ``Model.solve()`` raises a clear ``ValueError`` when no objective is set.
 * ``add_variables`` no longer ignores ``coords`` when ``lower`` / ``upper`` are DataArrays, and handles MultiIndex coords correctly with scalar bounds.
-* ``Model.to_netcdf`` works on the scipy netCDF backend (old files remain readable).
+* ``Model.to_netcdf`` no longer fails on the scipy netCDF backend when variables or constraints have MultiIndex coords; level names are now serialised as a JSON string (the legacy list form remains readable).
 * CPLEX no longer errors on quality attributes that aren't always available.
 
 **Breaking Changes**
