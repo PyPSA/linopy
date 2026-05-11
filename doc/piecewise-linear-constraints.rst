@@ -3,23 +3,15 @@
 Piecewise Linear Constraints
 ============================
 
-Piecewise linear (PWL) constraints approximate nonlinear functions as connected
-linear pieces, allowing you to model cost curves, efficiency curves, or
-production functions within a linear programming framework.
+Piecewise linear (PWL) constraints approximate nonlinear functions as
+connected linear pieces, allowing you to model cost curves, efficiency
+curves, or production functions within a linear programming framework.
 
-**Terminology used in this page:**
-
-- **breakpoint** — a knot on the piecewise curve where the slope can
-  change.  Each tuple supplies a 1-D breakpoint array; the ``i``-th
-  entries across all tuples, taken together, define one knot.  For two
-  tuples this is the usual :math:`(x, y)` pair; for three or more, an
-  ``N``-dim knot.
-- **piece** — a linear part between two adjacent breakpoints on a single
-  connected curve.  ``n`` breakpoints define ``n − 1`` pieces.
-- **segment** — a *disjoint* operating region in the disjunctive
-  formulation, built via the :func:`~linopy.segments` factory.  Within
-  one segment the curve is itself piecewise-linear (made of pieces);
-  between segments there are gaps.
+Throughout this page: a **breakpoint** is a knot where the slope can
+change; a **piece** is the linear part between adjacent breakpoints; a
+**segment** is a disjoint operating region in the disjunctive
+formulation.  Per-tuple breakpoint arrays are paired by index — the
+``i``-th entries across all tuples together define one knot.
 
 .. contents::
    :local:
@@ -75,7 +67,7 @@ API
 .. code-block:: python
 
     m.add_piecewise_formulation(
-        (expr1, breakpoints1),  # sign defaults to "==" (pinned role)
+        (expr1, breakpoints1),  # sign defaults to "==" (equality role)
         (expr2, breakpoints2, "<="),  # or with an explicit sign
         ...,
         method="auto",  # "auto", "sos2", "incremental", or "lp"
@@ -90,165 +82,19 @@ tuple.  The pure-LP path adds chord and domain constraints only; SOS2,
 incremental, and disjunctive also add interpolation weights and/or
 binaries (see *Formulation Methods* below).
 
-Breakpoint inputs
-~~~~~~~~~~~~~~~~~
-
-Three building blocks with distinct geometric meaning — two factories
-and one class:
-
-- ``breakpoints()`` — values along a single **connected** curve.  Linear
-  pieces between adjacent breakpoints are interpolated continuously.
-- ``segments()`` — **disjoint** operating regions with gaps between them
-  (e.g. forbidden zones).  Builds a 2-D array consumed by the
-  *disjunctive* formulation, where exactly one region is active at a time.
-- :class:`~linopy.Slopes` — per-piece slopes plus an initial ``y0``,
-  deferred until an x grid is supplied.  Inside
-  ``add_piecewise_formulation`` the x grid is borrowed from a sibling
-  tuple; standalone, call :meth:`~linopy.Slopes.to_breakpoints`.
-
-.. code-block:: python
-
-    linopy.breakpoints([0, 50, 100])  # connected
-    linopy.breakpoints({"gen1": [0, 50], "gen2": [0, 80]}, dim="gen")  # per-entity
-    linopy.segments([(0, 10), (50, 100)])  # two disjoint regions
-    linopy.segments({"gen1": [(0, 10)], "gen2": [(0, 80)]}, dim="gen")
-    linopy.Slopes([1.2, 1.4], y0=0)  # deferred — pairs with a sibling tuple
-
-
-Per-tuple sign — equality vs inequality
-----------------------------------------
-
-Each tuple's optional third element is a sign:
-
-- ``"=="`` (default) — **pinned**: the tuple enters as an equality.
-- ``"<="`` / ``">="`` — **bounded**: the expression undershoots /
-  overshoots the curve.
-
-These describe the tuple's *role*, not a geometric property of the
-variable.  What "pinned" actually constrains depends on the count:
-
-- **All tuples pinned (default).**  Shared interpolation weights put
-  the joint :math:`(e_1, \ldots, e_N)` exactly on the curve.
-- **One bounded + one pinned (2 tuples).**  The joint :math:`(x, y)`
-  lies in the hypograph / epigraph (see *Geometry* below).  A single
-  coordinate can't locate a curve point, so the pinned axis's marginal
-  feasible set is just :math:`[x_{\min}, x_{\max}]` — same in LP
-  (enforced directly) and SOS2/incremental (enforced via the weight
-  link).
-- **One bounded + 3+ tuples.**  Not supported (see restrictions below).
-
-.. code-block:: python
-
-    # All-equality: joint (x, y) on the curve.
-    m.add_piecewise_formulation((y, y_pts), (x, x_pts))
-
-    # Bounded: joint (x, y) in the hypograph — y ≤ f(x), x ∈ [x_min, x_max].
-    m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
-
-    # Bounded: joint (x, y) in the epigraph — y ≥ f(x), x ∈ [x_min, x_max].
-    m.add_piecewise_formulation((y, y_pts, ">="), (x, x_pts))
-
-    # 3-variable all-equality (CHP): joint (power, fuel, heat) on the curve.
-    m.add_piecewise_formulation((power, p_pts), (fuel, f_pts), (heat, h_pts))
-
-**Restrictions (current):**
-
-- At most one tuple may carry a non-equality sign — a single bounded side.
-- With **3 or more** tuples, all signs must be ``"=="``.
-
-Multi-bounded and N≥3-inequality use cases aren't supported yet.  If you
-have a concrete use case, please open an issue at
-https://github.com/PyPSA/linopy/issues so we can scope it properly.
-
-**Formulation.**  For methods that introduce shared interpolation
-weights (SOS2 and incremental — see below), only the link constraint
-between the weights and the bounded expression changes.  Write the
-method-specific weighted sum of breakpoints for tuple :math:`j` as
-:math:`W_j(\text{weights}, B)` — the explicit form is :math:`\sum_i
-\lambda_i B_{j,i}` for SOS2 and :math:`B_{j,0} + \sum_i \delta_i (B_{j,i}
-- B_{j,i-1})` for incremental (see the method sections below).  Pinned
-tuples :math:`j` keep the equality, and the bounded tuple :math:`b` flips
-to the requested sign:
-
-.. math::
-
-   &e_j = W_j(\text{weights}, B)
-   \quad \text{(pinned, } j \ne b \text{)}
-
-   &e_b \ \text{sign}\ W_b(\text{weights}, B)
-   \quad \text{(bounded)}
-
-Internally this shows up as a stacked ``*_link`` equality covering the
-pinned tuples plus a separate signed ``*_output_link`` for the bounded
-tuple.  The ``method="lp"`` path encodes the same one-sided semantics
-without weights — see the LP section below.
-
-**Geometry.**  For 2 variables with ``sign="<="`` on a concave curve
-:math:`f`, the feasible region is the **hypograph** of :math:`f` on its
-domain:
-
-.. math::
-
-   \{ (x, y) \ :\ x_0 \le x \le x_n,\ y \le f(x) \}.
-
-For convex :math:`f` with ``sign=">="`` it is the **epigraph**.  Mismatched
-sign + curvature (convex + ``"<="``, or concave + ``">="``) describes a
-*non-convex* region — ``method="auto"`` falls back to SOS2/incremental
-and ``method="lp"`` raises.
-
-**Choice of bounded tuple and sign.**  Pick the sign matching the
-physically admissible direction for that expression:
-
-- ``"<="`` for a quantity with a controllable *dissipation path* — heat
-  rejection via cooling tower (*thermal curtailment*), electrical
-  curtailment, emissions after post-treatment — so undershooting the
-  curve is realisable.
-- ``">="`` for an *input* whose over-supply is admissible but wasteful —
-  fuel, raw materials — so overshooting the curve is realisable
-  (objective pressure then pulls the operating point onto the curve).
-
-The wrong direction (``"<="`` on fuel, ``">="`` on a non-curtailable
-output) yields a valid but **loose** formulation that admits operating
-points the plant cannot physically realise; an objective rewarding the
-wrong direction may then find a non-physical optimum — safe only when
-no such objective pressure exists.
-
-**When is a one-sided bound wanted?**
-
-For *continuous* curves, the main reason to reach for ``"<="`` / ``">="``
-is to unlock the **LP chord formulation** — no SOS2, no binaries, just
-pure LP.  On a convex/concave curve with a matching sign, the chord
-inequalities are as tight as SOS2, so you get the same optimum with a
-cheaper model.  Inequality formulations also tighten the LP relaxation
-of SOS2/incremental, which can reduce branch-and-bound work even when
-LP itself is not applicable.
-
-For *disjunctive* curves (``segments(...)``), the per-tuple sign is a
-first-class tool in its own right: disconnected operating regions with a
-bounded output, always exact regardless of segment curvature (see the
-disjunctive section below).
-
-If the curvature doesn't match the sign (convex + ``"<="``, or concave +
-``">="``), LP is not applicable — ``method="auto"`` falls back to
-SOS2/incremental with the signed link, which gives a valid but much
-more expensive model.  In that case prefer ``"=="`` unless you genuinely
-need the one-sided semantics.  See the
-:doc:`piecewise-inequality-bounds-tutorial` notebook for a full
-walkthrough.
-
-.. warning::
-
-   With a bounded tuple and ``active=0``, the output is only forced to
-   ``0`` on the signed side — the complementary bound still comes from
-   the output variable's own lower/upper bound.  In the common case of
-   non-negative outputs (fuel, cost, heat), set ``lower=0`` on that
-   variable: combined with the ``y ≤ 0`` constraint from deactivation,
-   this forces ``y = 0`` automatically.  See the docstring for the
-   full recipe.
-
 
 Breakpoint Construction
 -----------------------
+
+Three building blocks provide breakpoint data:
+
+- :func:`~linopy.breakpoints` — values along a single **connected**
+  curve.
+- :func:`~linopy.segments` — **disjoint** operating regions with gaps
+  between them (e.g. forbidden zones); selects the disjunctive
+  formulation automatically.
+- :class:`~linopy.Slopes` — per-piece slopes plus an initial ``y0``,
+  deferred until an x grid is supplied by a sibling tuple.
 
 From lists
 ~~~~~~~~~~
@@ -349,10 +195,151 @@ Link any number of variables through shared breakpoints (joint equality):
     )
 
 All variables are symmetric here; every feasible point is the same
-``λ``-weighted combination of breakpoints across all three.  With 3 or
-more tuples, only ``"=="`` signs are accepted — bounding one expression
-by a multi-input curve isn't supported yet; see the per-tuple sign
-section above for the issue link.
+``λ``-weighted combination of breakpoints across all three.  Sign
+restrictions apply (see *Per-tuple sign* below) — for ``N ≥ 3`` tuples
+all signs must be ``"=="``.
+
+
+Per-tuple sign — equality vs inequality
+----------------------------------------
+
+Roles and restrictions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Each tuple's optional third element is a sign:
+
+- ``"=="`` (default) — **equality role**: the tuple enters as an
+  equality.
+- ``"<="`` / ``">="`` — **bounded**: the expression undershoots /
+  overshoots the curve.
+
+**Restrictions (current):**
+
+- At most one tuple may carry a non-equality sign — a single bounded side.
+- With **3 or more** tuples, all signs must be ``"=="``.
+
+Multi-bounded and N≥3-inequality use cases aren't supported yet.  If
+you have a concrete use case, please open an issue at
+https://github.com/PyPSA/linopy/issues so we can scope it properly.
+
+Geometry
+~~~~~~~~
+
+What the formulation actually constrains depends on the tuple count and
+signs:
+
+- **All-equality (default).**  Shared interpolation weights put the
+  joint :math:`(e_1, \ldots, e_N)` exactly on the curve.
+- **One bounded + one equality (2 tuples).**  The joint :math:`(x, y)`
+  lies in the **hypograph** (``"<="`` on a concave :math:`f`) or
+  **epigraph** (``">="`` on a convex :math:`f`):
+
+  .. math::
+
+     \{ (x, y) \ :\ x_{\min} \le x \le x_{\max},\ y \le f(x) \}
+     \qquad \text{(hypograph)}
+
+  The equality axis is just confined to its breakpoint domain
+  :math:`[x_{\min}, x_{\max}]` — a single coordinate can't locate a
+  curve point.  Same projection in LP (enforced directly) and
+  SOS2/incremental (enforced via the weight link).
+- **Mismatched sign + curvature** (convex + ``"<="``, or concave +
+  ``">="``) describes a *non-convex* region — ``method="auto"`` falls
+  back to SOS2/incremental and ``method="lp"`` raises.
+
+.. code-block:: python
+
+    # All-equality: joint (x, y) on the curve.
+    m.add_piecewise_formulation((y, y_pts), (x, x_pts))
+
+    # Bounded: joint (x, y) in the hypograph — y ≤ f(x), x ∈ [x_min, x_max].
+    m.add_piecewise_formulation((y, y_pts, "<="), (x, x_pts))
+
+    # Bounded: joint (x, y) in the epigraph — y ≥ f(x), x ∈ [x_min, x_max].
+    m.add_piecewise_formulation((y, y_pts, ">="), (x, x_pts))
+
+    # 3-variable all-equality (CHP): joint (power, fuel, heat) on the curve.
+    m.add_piecewise_formulation((power, p_pts), (fuel, f_pts), (heat, h_pts))
+
+Choice of bounded tuple and sign
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pick the sign matching the physically admissible direction for that
+expression:
+
+- ``"<="`` for a quantity with a controllable *dissipation path* — heat
+  rejection via cooling tower (*thermal curtailment*), electrical
+  curtailment, emissions after post-treatment — so undershooting the
+  curve is realisable.
+- ``">="`` for an *input* whose over-supply is admissible but wasteful —
+  fuel, raw materials — so overshooting the curve is realisable
+  (objective pressure then pulls the operating point onto the curve).
+
+The wrong direction (``"<="`` on fuel, ``">="`` on a non-curtailable
+output) yields a valid but **loose** formulation that admits operating
+points the plant cannot physically realise; an objective rewarding the
+wrong direction may then find a non-physical optimum — safe only when
+no such objective pressure exists.
+
+When is a one-sided bound wanted?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For *continuous* curves, the main reason to reach for ``"<="`` /
+``">="`` is to unlock the **LP chord formulation** — no SOS2, no
+binaries, just pure LP.  On a convex/concave curve with a matching
+sign, the chord inequalities are as tight as SOS2, so you get the same
+optimum with a cheaper model.  Inequality formulations also tighten
+the LP relaxation of SOS2/incremental, which can reduce branch-and-
+bound work even when LP itself is not applicable.
+
+For *disjunctive* curves (``segments(...)``), the per-tuple sign is a
+first-class tool in its own right: disconnected operating regions with
+a bounded output, always exact regardless of segment curvature (see
+the disjunctive section below).
+
+If the curvature doesn't match the sign (convex + ``"<="``, or concave +
+``">="``), LP is not applicable — ``method="auto"`` falls back to
+SOS2/incremental with the signed link, which gives a valid but much
+more expensive model.  In that case prefer ``"=="`` unless you
+genuinely need the one-sided semantics.  See the
+:doc:`piecewise-inequality-bounds-tutorial` notebook for a full
+walkthrough.
+
+Formulation math
+~~~~~~~~~~~~~~~~
+
+For methods that introduce shared interpolation weights (SOS2 and
+incremental — see below), only the link constraint between the weights
+and the bounded expression changes.  Write the method-specific weighted
+sum of breakpoints for tuple :math:`j` as
+:math:`W_j(\text{weights}, B)` — the explicit form is
+:math:`\sum_i \lambda_i B_{j,i}` for SOS2 and
+:math:`B_{j,0} + \sum_i \delta_i (B_{j,i} - B_{j,i-1})` for incremental
+(see the method sections below).  Equality-signed tuples :math:`j` keep
+the equality, and the bounded tuple :math:`b` flips to the requested
+sign:
+
+.. math::
+
+   &e_j = W_j(\text{weights}, B)
+   \quad \text{(equality, } j \ne b \text{)}
+
+   &e_b \ \text{sign}\ W_b(\text{weights}, B)
+   \quad \text{(bounded)}
+
+Internally this shows up as a stacked ``*_link`` equality covering the
+equality-signed tuples plus a separate signed ``*_output_link`` for
+the bounded tuple.  The ``method="lp"`` path encodes the same one-sided
+semantics without weights — see the LP section below.
+
+.. warning::
+
+   With a bounded tuple and ``active=0``, the output is only forced to
+   ``0`` on the signed side — the complementary bound still comes from
+   the output variable's own lower/upper bound.  In the common case of
+   non-negative outputs (fuel, cost, heat), set ``lower=0`` on that
+   variable: combined with the ``y ≤ 0`` constraint from deactivation,
+   this forces ``y = 0`` automatically.
 
 
 Formulation Methods
@@ -368,11 +355,9 @@ formulation based on ``sign``, curvature and breakpoint layout:
 - **Disjunctive (segments)** → SOS2 applied per segment with binary
   segment selection (the disjunctive formulation in the table below).
 
-The resolved choice is exposed on the returned ``PiecewiseFormulation`` via
-``.method`` (and ``.convexity`` when well-defined).  Disjunctive
-formulations report ``method="sos2"`` even though their structure is the
-per-segment variant — the table below treats it as a separate column for
-clarity.  An ``INFO``-level log line explains the resolution whenever
+The resolved choice is exposed on the returned ``PiecewiseFormulation``
+via ``.method`` (and ``.convexity`` when well-defined).  An
+``INFO``-level log line explains the resolution whenever
 ``method="auto"`` is in play.
 
 At-a-glance comparison:
@@ -427,12 +412,19 @@ At-a-glance comparison:
      - SOS2-capable (or MIP via :ref:`Big-M reformulation <sos-reformulation>`)
      - SOS2 + MIP (or MIP via :ref:`Big-M reformulation <sos-reformulation>`)
 
-LP (chord-line) Formulation
+.. note::
+
+   Disjunctive formulations report ``method="sos2"`` (the underlying
+   per-segment encoding uses SOS2), but the table treats them as a
+   separate column because the per-segment binaries change the
+   auxiliary-variable structure and solver requirements.
+
+LP (chord-line) formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For **2-variable inequality** on a **convex** or **concave** curve.  Adds one
-chord inequality per piece plus a domain bound — no auxiliary variables and
-no MIP relaxation:
+For **2-variable inequality** on a **convex** or **concave** curve.
+Adds one chord inequality per piece plus a domain bound — no auxiliary
+variables and no MIP relaxation:
 
 .. math::
 
@@ -442,18 +434,18 @@ no MIP relaxation:
    &x_{\min} \le x \le x_{\max}
 
 where :math:`m_k = (y_{k+1} - y_k)/(x_{k+1} - x_k)` and
-:math:`c_k = y_k - m_k\, x_k`.  The domain bound uses
-:math:`x_{\min}` and :math:`x_{\max}` rather than the first/last
-breakpoint so that descending x grids work too — strictly-monotonic
-breakpoints are accepted in either order.  For concave :math:`f` with
-``sign="<="``, the intersection of all chord inequalities equals the
-hypograph of :math:`f` on its domain.
+:math:`c_k = y_k - m_k\, x_k`.  The domain bound uses :math:`x_{\min}`
+and :math:`x_{\max}` rather than the first/last breakpoint so that
+descending x grids work too — strictly-monotonic breakpoints are
+accepted in either order.  For concave :math:`f` with ``sign="<="``,
+the intersection of all chord inequalities equals the hypograph of
+:math:`f` on its domain.
 
-The LP dispatch requires curvature and sign to match: ``sign="<="`` needs
-concave (or linear); ``sign=">="`` needs convex (or linear).  A mismatch
-is *not* just a loose bound — it describes the wrong region (see the
-:doc:`piecewise-inequality-bounds-tutorial`).  ``method="auto"`` detects
-this and falls back; ``method="lp"`` raises.
+The LP dispatch requires curvature and sign to match: ``sign="<="``
+needs concave (or linear); ``sign=">="`` needs convex (or linear).  A
+mismatch is *not* just a loose bound — it describes the wrong region
+(see the :doc:`piecewise-inequality-bounds-tutorial`).
+``method="auto"`` detects this and falls back; ``method="lp"`` raises.
 
 .. code-block:: python
 
@@ -463,18 +455,26 @@ this and falls back; ``method="lp"`` raises.
     # Or explicitly:
     m.add_piecewise_formulation((y, yp, "<="), (x, xp), method="lp")
 
-**Not supported with** ``method="lp"``: all-equality, more than 2 tuples,
-and ``active``.  ``method="auto"`` falls back to SOS2/incremental in all
-three cases.
+**Not supported with** ``method="lp"``: all-equality, more than 2
+tuples, and ``active``.  ``method="auto"`` falls back to
+SOS2/incremental in all three cases.
 
-The underlying chord expressions are also exposed as a standalone helper,
-``linopy.tangent_lines(x, x_pts, y_pts)``, which returns the per-piece
-chord as a :class:`~linopy.expressions.LinearExpression` with no variables
-created.  Use it directly if you want to compose the chord bound with other
-constraints by hand, without the domain bound that ``method="lp"`` adds
-automatically.
+Chord expressions as a building block
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Incremental (Delta) Formulation
+The underlying chord expressions are also exposed as a standalone
+helper, :func:`~linopy.tangent_lines`, which returns the per-piece
+chord as a :class:`~linopy.expressions.LinearExpression` with no
+variables created.  Use it directly when you want to compose the chord
+bound with other constraints by hand, without the domain bound that
+``method="lp"`` adds automatically:
+
+.. code-block:: python
+
+    chord = linopy.tangent_lines(x, x_pts, y_pts)
+    m.add_constraints(y <= chord + slack)
+
+Incremental (Delta) formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The default MIP encoding when ``method="auto"`` is in play and breakpoints
@@ -491,8 +491,8 @@ binary indicators :math:`z_i`:
    &e_j = B_{j,0} + \sum_{i=1}^{n} \delta_i \, (B_{j,i} - B_{j,i-1})
 
 With a bounded tuple, the link to that tuple's expression flips to the
-requested sign while the pinned tuples keep the equality above (see
-the *Per-tuple sign* section's *Formulation* block).
+requested sign while the equality-signed tuples keep the equality above
+(see the *Formulation math* block in *Per-tuple sign*).
 
 .. code-block:: python
 
@@ -500,7 +500,7 @@ the *Per-tuple sign* section's *Formulation* block).
 
 **Limitation:** breakpoint sequences must be strictly monotonic.
 
-SOS2 (Convex Combination)
+SOS2 (Convex combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Fallback when breakpoints aren't strictly monotonic (the only case
@@ -536,7 +536,7 @@ above.
 
     m.add_piecewise_formulation((power, xp), (fuel, yp), method="sos2")
 
-Disjunctive (Disaggregated Convex Combination)
+Disjunctive (Disaggregated convex combination)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For **disconnected segments** (gaps between operating regions).  Binary
@@ -583,15 +583,9 @@ are forced to zero:
 - ``commit=1``: power operates in [30, 100], fuel = f(power)
 - ``commit=0``: power = 0, fuel = 0
 
-Not supported with ``method="lp"``.
-
-.. note::
-
-   With a bounded tuple, deactivation only pushes the signed bound to
-   ``0`` — the complementary side comes from the output variable's own
-   lower/upper bound.  Set ``lower=0`` on naturally non-negative outputs
-   (fuel, cost, heat) to pin the output to zero on deactivation.  See
-   the per-tuple sign section above for details.
+Not supported with ``method="lp"``.  For bounded-tuple semantics under
+``active=0`` see the warning in *Per-tuple sign — Formulation math*
+above.
 
 Auto-broadcasting
 ~~~~~~~~~~~~~~~~~
