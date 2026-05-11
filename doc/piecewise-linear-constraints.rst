@@ -49,14 +49,14 @@ Quick Start
 
 .. code-block:: python
 
-    # heat <= f(power).  "auto" picks the cheapest correct formulation:
-    # pure LP (chord constraints) when curvature matches the sign,
-    # SOS2/incremental otherwise.  Bound a curtailable output so
-    # undershooting the curve is physically realisable — see *Choice of
-    # bounded tuple* below.
+    # fuel >= f(power) on a convex heat-rate curve.  Over-fuelling is
+    # admissible but wasteful, so minimising fuel pulls the operating
+    # point onto the curve.  "auto" picks the cheapest correct
+    # formulation: pure LP (chord constraints) when curvature matches
+    # the sign — here convex + ">="  — and SOS2/incremental otherwise.
     m.add_piecewise_formulation(
-        (heat, [0, 20, 30, 35], "<="),
-        (power, [0, 10, 20, 30]),
+        (fuel, [0, 36, 84, 170], ">="),
+        (power, [0, 30, 60, 100]),
     )
 
 Each ``(expression, breakpoints[, sign])`` tuple pairs a variable with
@@ -196,16 +196,22 @@ sign + curvature (convex + ``"<="``, or concave + ``">="``) describes a
 *non-convex* region — ``method="auto"`` falls back to SOS2/incremental
 and ``method="lp"`` raises.
 
-**Choice of bounded tuple.**  The bounded tuple should correspond to a
-quantity with a mechanism for below-curve operation — typically a
-controllable dissipation path: heat rejection via cooling tower (also
-called *thermal curtailment*), electrical curtailment, or emissions
-after post-treatment.  Marking a consumption-side variable such as fuel
-intake as bounded yields a valid but **loose** formulation: the
-characteristic curve fixes fuel draw at a given load, so ``"<="`` on
-fuel admits operating points the plant cannot physically realise.  An
-objective that rewards lower fuel may then find a non-physical optimum
-— safe only when no such objective pressure exists.
+**Choice of bounded tuple and sign.**  Pick the sign matching the
+physically admissible direction for that expression:
+
+- ``"<="`` for a quantity with a controllable *dissipation path* — heat
+  rejection via cooling tower (*thermal curtailment*), electrical
+  curtailment, emissions after post-treatment — so undershooting the
+  curve is realisable.
+- ``">="`` for an *input* whose over-supply is admissible but wasteful —
+  fuel, raw materials — so overshooting the curve is realisable
+  (objective pressure then pulls the operating point onto the curve).
+
+The wrong direction (``"<="`` on fuel, ``">="`` on a non-curtailable
+output) yields a valid but **loose** formulation that admits operating
+points the plant cannot physically realise; an objective rewarding the
+wrong direction may then find a non-physical optimum — safe only when
+no such objective pressure exists.
 
 **When is a one-sided bound wanted?**
 
