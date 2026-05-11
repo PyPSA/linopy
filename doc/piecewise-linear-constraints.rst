@@ -49,15 +49,14 @@ Quick Start
 
 .. code-block:: python
 
-    # power <= f(fuel) on the same curve as above, but read as a
-    # production function: power output is bounded by what the fuel
-    # input can support, and the unit may run below the max
-    # (curtailable output).  "auto" picks the cheapest correct
-    # formulation: pure LP (chord constraints) here, since concave +
-    # "<=" is LP-applicable; SOS2/incremental otherwise.
+    # fuel >= f(power) on the same heat-rate curve as above.  Over-
+    # fuelling is physically admissible but wasteful, so minimising
+    # fuel pulls the operating point onto the curve.  "auto" picks the
+    # cheapest correct formulation: pure LP (chord constraints) here,
+    # since convex + ">=" is LP-applicable; SOS2/incremental otherwise.
     m.add_piecewise_formulation(
-        (power, [0, 30, 60, 100], "<="),
-        (fuel, [0, 36, 84, 170]),
+        (fuel, [0, 36, 84, 170], ">="),
+        (power, [0, 30, 60, 100]),
     )
 
 Each ``(expression, breakpoints[, sign])`` tuple pairs a variable with
