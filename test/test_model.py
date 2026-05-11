@@ -6,6 +6,7 @@ Test function defined in the Model class.
 from __future__ import annotations
 
 import copy as pycopy
+import weakref
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -39,6 +40,25 @@ def test_model_solver_dir() -> None:
     d: str = gettempdir()
     m: Model = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
+
+
+def test_model_is_weakrefable() -> None:
+    m: Model = Model()
+    ref = weakref.ref(m)
+    assert ref() is m
+
+
+def test_model_weakkeydict_use_case() -> None:
+    # third-party extensions rely on WeakKeyDictionary for per-instance storage
+    registry: weakref.WeakKeyDictionary[Model, str] = weakref.WeakKeyDictionary()
+    m: Model = Model()
+    registry[m] = "extension-state"
+    assert registry[m] == "extension-state"
+    del m
+    import gc
+
+    gc.collect()
+    assert len(registry) == 0
 
 
 def test_model_variable_getitem() -> None:
@@ -91,6 +111,14 @@ def test_objective() -> None:
     # test objective with constant which is not supported
     with pytest.raises(ValueError):
         m.objective = m.objective + 3
+
+
+def test_solve_without_objective_raises() -> None:
+    # https://github.com/PyPSA/linopy/issues/668
+    m: Model = Model()
+    m.add_variables(lower=0, upper=10, name="myvar")
+    with pytest.raises(ValueError, match="No objective has been set"):
+        m.solve()
 
 
 def test_remove_variable() -> None:

@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 from warnings import warn
 
 import numpy as np
@@ -70,7 +70,7 @@ from linopy.io import (
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
 from linopy.piecewise import (
-    add_piecewise_constraints,
+    add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
 
@@ -96,6 +96,9 @@ from linopy.types import (
     VariableLike,
 )
 from linopy.variables import ScalarVariable, Variable, Variables
+
+if TYPE_CHECKING:
+    from linopy.piecewise import PiecewiseFormulation
 
 logger = logging.getLogger(__name__)
 
@@ -228,9 +231,13 @@ class Model:
         "_auto_mask",
         "_solver_dir",
         "_relaxed_registry",
+        "_piecewise_formulations",
         "solver_model",
         "solver_name",
         "matrices",
+        # allow weak references to Model instances so third-party extensions
+        # can attach per-instance state via WeakKeyDictionary
+        "__weakref__",
     )
 
     def __init__(
@@ -284,6 +291,7 @@ class Model:
         self._chunk: T_Chunks = chunk
         self._force_dim_names: bool = bool(force_dim_names)
         self._auto_mask: bool = bool(auto_mask)
+        self._piecewise_formulations: dict[str, PiecewiseFormulation] = {}
         self._relaxed_registry: dict[str, str] = {}
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
@@ -359,7 +367,9 @@ class Model:
         """
         Set the parameters of the model.
         """
-        self._parameters = Dataset(value)
+        self._parameters = (
+            value.copy() if isinstance(value, Dataset) else Dataset(value)
+        )
 
     @property
     def solution(self) -> Dataset:
@@ -493,15 +503,20 @@ class Model:
         """
         Return a string representation of the linopy model.
         """
-        var_string = self.variables.__repr__().split("\n", 2)[2]
-        con_string = self.constraints.__repr__().split("\n", 2)[2]
+        from linopy.piecewise import _get_piecewise_groups
+        from linopy.piecewise import _repr_summary as pwl_repr_summary
+
+        var_names, con_names = _get_piecewise_groups(self)
+        var_string = self.variables._format_items(exclude=var_names)
+        con_string = self.constraints._format_items(exclude=con_names)
         model_string = f"Linopy {self.type} model"
 
         return (
             f"{model_string}\n{'=' * len(model_string)}\n\n"
             f"Variables:\n----------\n{var_string}\n"
-            f"Constraints:\n------------\n{con_string}\n"
-            f"Status:\n-------\n{self.status}"
+            f"Constraints:\n------------\n{con_string}"
+            f"{pwl_repr_summary(self)}"
+            f"\nStatus:\n-------\n{self.status}"
         )
 
     def __getitem__(self, key: str) -> Variable:
@@ -791,7 +806,7 @@ class Model:
 
         variable.attrs.update(attrs_update)
 
-    add_piecewise_constraints = add_piecewise_constraints
+    add_piecewise_formulation = add_piecewise_formulation
 
     def add_constraints(
         self,
@@ -1479,6 +1494,12 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
+        if self.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use `m.add_objective(...)` "
+                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+            )
+
         # clear cached matrix properties potentially present from previous solve commands
         self.matrices.clean_cached_properties()
 
@@ -1811,18 +1832,16 @@ class Model:
         be skipped (e.g., labels [0, 2, 4] with gaps instead of sequential
         [0, 1, 2]).
         """
-        # Compute all IIS
+        # Compute a single IIS (matches Gurobi behavior; multiple IIS would
+        # otherwise get flattened into an ambiguous union). Mode 2 prioritises
+        # a fast IIS search over minimality.
         try:  # Try new API first
-            solver_model.IISAll()
+            solver_model.firstIIS(2)
         except AttributeError:  # Fallback to old API
-            solver_model.iisall()
+            solver_model.iisfirst(2)
 
-        # Get the number of IIS found
-        num_iis = solver_model.attributes.numiis
-        if num_iis == 0:
+        if solver_model.attributes.numiis == 0:
             return []
-
-        labels = set()
 
         clabels = self.matrices.clabels
         constraint_position_map = {}
@@ -1832,17 +1851,12 @@ class Model:
                 if constraint_label >= 0:
                     constraint_position_map[constraint_obj] = constraint_label
 
-        # Retrieve each IIS
-        for iis_num in range(1, num_iis + 1):
-            iis_constraints = self._extract_iis_constraints(solver_model, iis_num)
+        labels = set()
+        for constraint_obj in self._extract_iis_constraints(solver_model, 1):
+            if constraint_obj in constraint_position_map:
+                labels.add(constraint_position_map[constraint_obj])
 
-            for constraint_obj in iis_constraints:
-                if constraint_obj in constraint_position_map:
-                    labels.add(constraint_position_map[constraint_obj])
-                # Note: Silently skip constraints not found in mapping
-                # This can happen if the model structure changed after solving
-
-        return sorted(list(labels))
+        return sorted(labels)
 
     def _extract_iis_constraints(self, solver_model: Any, iis_num: int) -> list[Any]:
         """

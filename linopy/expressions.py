@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product, zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast, overload
 from warnings import warn
 
 import numpy as np
@@ -92,31 +92,10 @@ from linopy.types import (
 if TYPE_CHECKING:
     from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.model import Model
-    from linopy.piecewise import PiecewiseConstraintDescriptor, PiecewiseExpression
     from linopy.variables import ScalarVariable, Variable
 
 
 FILL_VALUE = {"vars": -1, "coeffs": np.nan, "const": np.nan}
-
-
-def _to_piecewise_constraint_descriptor(
-    lhs: Any, rhs: Any, operator: str
-) -> PiecewiseConstraintDescriptor | None:
-    """Build a piecewise descriptor for reversed RHS syntax if applicable."""
-    from linopy.piecewise import PiecewiseExpression
-
-    if not isinstance(rhs, PiecewiseExpression):
-        return None
-
-    if operator == "<=":
-        return rhs.__ge__(lhs)
-    if operator == ">=":
-        return rhs.__le__(lhs)
-    if operator == "==":
-        return rhs.__eq__(lhs)
-
-    msg = f"Unsupported operator '{operator}' for piecewise dispatch."
-    raise ValueError(msg)
 
 
 def exprwrap(
@@ -284,7 +263,7 @@ class LinearExpressionGroupby:
                 index.names = [str(col) for col in orig_group.columns]
                 index.name = GROUP_DIM
                 new_coords = Coordinates.from_pandas_multiindex(index, GROUP_DIM)
-                ds = xr.Dataset(ds.assign_coords(new_coords))
+                ds = ds.assign_coords(new_coords)
 
             ds = ds.rename({GROUP_DIM: final_group_name})
             return LinearExpression(ds, self.model)
@@ -391,8 +370,7 @@ class BaseExpression(ABC):
         coeffs_vars_dict = {str(k): v for k, v in coeffs_vars.items()}
         data = assign_multiindex_safe(data, **coeffs_vars_dict)
 
-        # transpose with new Dataset to really ensure correct order
-        data = Dataset(data.transpose(..., TERM_DIM))
+        data = data.transpose(..., TERM_DIM)
 
         # ensure helper dimensions are not set as coordinates
         if drop_dims := set(HELPER_DIMS).intersection(data.coords):
@@ -536,7 +514,7 @@ class BaseExpression(ABC):
         # merge on factor dimension only returns v1 * v2 + c1 * c2
         ds = other.data[["coeffs", "vars"]].sel(_term=0).broadcast_like(self.data)
         ds = assign_multiindex_safe(ds, const=other.const)
-        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)  # type: ignore
+        res = merge([self, ds], dim=FACTOR_DIM, cls=QuadraticExpression)
         # deal with cross terms c1 * v2 + c2 * v1
         if self.has_constant:
             res = res + self.const * other.reset_const()
@@ -669,40 +647,13 @@ class BaseExpression(ABC):
     def __truediv__(self: GenericExpression, other: SideLike) -> GenericExpression:
         return self.__div__(other)
 
-    @overload
-    def __le__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __le__(self, rhs: SideLike) -> Constraint: ...
-
-    def __le__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "<=")
-        if descriptor is not None:
-            return descriptor
+    def __le__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(LESS_EQUAL, rhs)
 
-    @overload
-    def __ge__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __ge__(self, rhs: SideLike) -> Constraint: ...
-
-    def __ge__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, ">=")
-        if descriptor is not None:
-            return descriptor
+    def __ge__(self, rhs: SideLike) -> Constraint:
         return self.to_constraint(GREATER_EQUAL, rhs)
 
-    @overload  # type: ignore[override]
-    def __eq__(self, rhs: PiecewiseExpression) -> PiecewiseConstraintDescriptor: ...
-
-    @overload
-    def __eq__(self, rhs: SideLike) -> Constraint: ...
-
-    def __eq__(self, rhs: SideLike) -> Constraint | PiecewiseConstraintDescriptor:
-        descriptor = _to_piecewise_constraint_descriptor(self, rhs, "==")
-        if descriptor is not None:
-            return descriptor
+    def __eq__(self, rhs: SideLike) -> Constraint:  # type: ignore[override]
         return self.to_constraint(EQUAL, rhs)
 
     def __gt__(self, other: Any) -> NotImplementedType:
@@ -741,7 +692,7 @@ class BaseExpression(ABC):
             self, QuadraticExpression
         ):
             other = other.to_quadexpr()
-        return merge([self, other], cls=self.__class__, join=join)  # type: ignore[list-item]
+        return merge([self, other], cls=self.__class__, join=join)
 
     def sub(
         self: GenericExpression,
@@ -2098,7 +2049,7 @@ class QuadraticExpression(BaseExpression):
             raise ValueError(f"Size of dimension {FACTOR_DIM} must be 2.")
 
         # transpose data to have _term as last dimension and _factor as second last
-        data = xr.Dataset(data.transpose(..., FACTOR_DIM, TERM_DIM))
+        data = data.transpose(..., FACTOR_DIM, TERM_DIM)
         self._data = data
 
     @property
@@ -2332,18 +2283,39 @@ def as_expression(
         return LinearExpression(obj, model)
 
 
+Mergeable: TypeAlias = BaseExpression | variables.Variable | Dataset
+
+
+@overload
 def merge(
-    exprs: Sequence[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
-    *add_exprs: tuple[
-        LinearExpression | QuadraticExpression | variables.Variable | Dataset
-    ],
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
+    dim: str = ...,
+    cls: type[GenericExpression],
+    join: str | None = ...,
+    **kwargs: Any,
+) -> GenericExpression: ...
+
+
+@overload
+def merge(
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
+    dim: str = ...,
+    cls: None = ...,
+    join: str | None = ...,
+    **kwargs: Any,
+) -> BaseExpression: ...
+
+
+def merge(
+    exprs: Sequence[Mergeable] | Mergeable,
+    *add_exprs: Mergeable,
     dim: str = TERM_DIM,
-    cls: type[GenericExpression] = None,  # type: ignore
+    cls: type[BaseExpression] | None = None,
     join: str | None = None,
     **kwargs: Any,
-) -> GenericExpression:
+) -> BaseExpression:
     """
     Merge multiple expression together.
 
@@ -2374,34 +2346,38 @@ def merge(
     -------
     res : linopy.LinearExpression or linopy.QuadraticExpression
     """
-    if not isinstance(exprs, list) and len(add_exprs):
+    if not isinstance(exprs, Sequence):
         warn(
             "Passing a tuple to the merge function is deprecated. Please pass a list of objects to be merged",
             DeprecationWarning,
         )
-        exprs = [exprs] + list(add_exprs)  # type: ignore
+        exprs = [exprs] + list(add_exprs)
 
-    has_quad_expression = any(type(e) is QuadraticExpression for e in exprs)
-    has_linear_expression = any(type(e) is LinearExpression for e in exprs)
+    has_quad_expression = any(isinstance(e, QuadraticExpression) for e in exprs)
+    has_linear_expression = any(isinstance(e, LinearExpression) for e in exprs)
     if cls is None:
         cls = QuadraticExpression if has_quad_expression else LinearExpression
 
-    if cls is QuadraticExpression and dim == TERM_DIM and has_linear_expression:
+    if (
+        issubclass(cls, QuadraticExpression)
+        and dim == TERM_DIM
+        and has_linear_expression
+    ):
         raise ValueError(
             "Cannot merge linear and quadratic expressions along term dimension."
             "Convert to QuadraticExpression first."
         )
 
-    if has_quad_expression and cls is not QuadraticExpression:
+    if has_quad_expression and not issubclass(cls, QuadraticExpression):
         raise ValueError("Cannot merge linear expressions to QuadraticExpression")
 
-    linopy_types = (variables.Variable, LinearExpression, QuadraticExpression)
+    linopy_types = (variables.Variable, BaseExpression)
 
     model = exprs[0].model
 
     if join is not None:
         override = join == "override"
-    elif cls in linopy_types and dim in HELPER_DIMS:
+    elif issubclass(cls, linopy_types) and dim in HELPER_DIMS:
         coord_dims = [
             {k: v for k, v in e.sizes.items() if k not in HELPER_DIMS} for e in exprs
         ]
@@ -2417,9 +2393,9 @@ def merge(
             "coords": "minimal",
             "compat": "override",
         }
-        if cls == LinearExpression:
+        if issubclass(cls, LinearExpression):
             kwargs["fill_value"] = FILL_VALUE
-        elif cls == variables.Variable:
+        elif issubclass(cls, variables.Variable):
             kwargs["fill_value"] = variables.FILL_VALUE
 
         if join is not None:
@@ -2564,10 +2540,6 @@ class ScalarLinearExpression:
         return self.__div__(other)
 
     def __le__(self, other: int | float) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, "<=")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for <=: {type(self)} and {type(other)}"
@@ -2576,10 +2548,6 @@ class ScalarLinearExpression:
         return constraints.AnonymousScalarConstraint(self, LESS_EQUAL, other)
 
     def __ge__(self, other: int | float) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, ">=")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for >=: {type(self)} and {type(other)}"
@@ -2590,10 +2558,6 @@ class ScalarLinearExpression:
     def __eq__(  # type: ignore[override]
         self, other: int | float
     ) -> AnonymousScalarConstraint:
-        descriptor = _to_piecewise_constraint_descriptor(self, other, "==")
-        if descriptor is not None:
-            return descriptor  # type: ignore[return-value]
-
         if not isinstance(other, int | float | np.number):
             raise TypeError(
                 f"unsupported operand type(s) for ==: {type(self)} and {type(other)}"

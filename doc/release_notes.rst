@@ -4,30 +4,64 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Add ``Model.copy()`` (default deep copy) with ``deep`` and ``include_solution`` options; support Python ``copy.copy`` and ``copy.deepcopy`` protocols via ``__copy__`` and ``__deepcopy__``.
-* Harmonize coordinate alignment for operations with subset/superset objects:
-  - Multiplication and division fill missing coords with 0 (variable doesn't participate)
-  - Addition and subtraction of constants fill missing coords with 0 (identity element) and pin result to LHS coords
-  - Comparison operators (``==``, ``<=``, ``>=``) fill missing RHS coords with NaN (no constraint created)
-  - Fixes crash on ``subset + var`` / ``subset + expr`` reverse addition
-  - Fixes superset DataArrays expanding result coords beyond the variable's coordinate space
-* Add ``add_piecewise_constraints()`` with SOS2, incremental, LP, and disjunctive formulations (``linopy.piecewise(x, x_pts, y_pts) == y``).
-* Add ``linopy.piecewise()`` to create piecewise linear function descriptors (`PiecewiseExpression`) from separate x/y breakpoint arrays.
-* Add ``linopy.breakpoints()`` factory for convenient breakpoint construction from lists, Series, DataFrames, DataArrays, or dicts. Supports slopes mode.
-* Add ``linopy.segments()`` factory for disjunctive (disconnected) breakpoints.
-* Add ``active`` parameter to ``piecewise()`` for gating piecewise linear functions with a binary variable (e.g. unit commitment). Supported for incremental, SOS2, and disjunctive methods.
-* Add the `sphinx-copybutton` to the documentation
-* Add SOS1 and SOS2 reformulations for solvers not supporting them.
-* Add semi-continous variables for solvers that support them
-* Add ``OetcSettings.from_env()`` classmethod to create OETC settings from environment variables (``OETC_EMAIL``, ``OETC_PASSWORD``, ``OETC_NAME``, ``OETC_AUTH_URL``, ``OETC_ORCHESTRATOR_URL``, ``OETC_CPU_CORES``, ``OETC_DISK_SPACE_GB``, ``OETC_DELETE_WORKER_ON_ERROR``).
-* Forward ``solver_name`` and ``**solver_options`` from ``Model.solve()`` to OETC handler. Call-level options override settings-level defaults.
-* Improve handling of CPLEX solver quality attributes to ensure metrics such are extracted correctly when available.
-* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
-* Enable quadratic problems with SCIP on windows.
-* Add ``format_labels()`` on ``Constraints``/``Variables`` and ``format_infeasibilities()`` on ``Model`` that return strings instead of printing to stdout, allowing usage with logging, storage, or custom output handling. Deprecate ``print_labels()`` and ``print_infeasibilities()``.
-* Add ``fix()``, ``unfix()``, and ``fixed`` to ``Variable`` and ``Variables`` for fixing variables to values via equality constraints. Supports automatic rounding for integer/binary variables.
-* Add ``relax()``, ``unrelax()``, and ``relaxed`` to ``Variable`` and ``Variables`` for LP relaxation of integer/binary variables. Supports partial relaxation via filtered views (e.g. ``m.variables.integers.relax()``). Semi-continuous variables raise ``NotImplementedError``.
 
+Version 0.7.0
+-------------
+
+**Features**
+
+*Piecewise linear constraints (new)*
+
+* ``Model.add_piecewise_formulation((power, x_pts), (fuel, y_pts))`` adds piecewise constraints with SOS2, incremental, disjunctive, or pure-LP formulations and automatic method dispatch. Supports N-variable linking (e.g. CHP) and per-entity breakpoints; emits :class:`linopy.EvolvingAPIWarning` while the API stabilises.
+* One-sided bounds: append ``"<="`` / ``">="`` to a tuple, e.g. ``(fuel, y_pts, "<=")``. On matching convex/concave curves this dispatches to a pure-LP chord formulation.
+* Unit-commitment gating via ``active``: when zero, deactivates the piecewise relation.
+* ``PiecewiseFormulation`` exposes ``.method`` / ``.convexity`` (persisted across netCDF round-trip).
+* Construction helpers: ``linopy.breakpoints()``, ``linopy.segments()``, ``linopy.Slopes`` for per-piece slopes, and ``tangent_lines()``.
+
+*Variables*
+
+* ``fix()`` / ``unfix()`` / ``fixed`` for fixing variables to values via equality constraints (rounds integers/binaries).
+* ``relax()`` / ``unrelax()`` / ``relaxed`` for LP relaxation; supports partial relaxation (e.g. ``m.variables.integers.relax()``).
+* Semi-continuous variables on solvers that support them.
+
+*Model*
+
+* ``Model.copy()`` for a deep copy of a model, optionally including the solution; supports the ``copy`` protocol.
+* SOS1 / SOS2 reformulations for solvers without native SOS, applied automatically by ``Model.solve()`` when needed.
+* ``format_labels()`` / ``format_infeasibilities()`` return strings instead of printing; deprecates the ``print_*`` siblings.
+
+*Expressions*
+
+* Coordinate alignment between subset/superset operands: missing coords fill with 0 in arithmetic and NaN in comparisons. Fixes ``subset + var`` reverse-addition and result coords expanding past the variable's space.
+
+*Solvers*
+
+* OETC: ``Model.solve()`` forwards solver options to the handler; ``OetcSettings.from_env()`` reads ``OETC_*``.
+* SCIP supports quadratic problems on Windows.
+
+**Performance**
+
+* Faster solution unpacking in ``Model.solve()``.
+
+**Bug Fixes**
+
+* ``Model.solve()`` raises a clear ``ValueError`` when no objective is set.
+* ``add_variables`` no longer ignores ``coords`` when ``lower`` / ``upper`` are DataArrays, and handles MultiIndex coords correctly with scalar bounds.
+* ``Model.to_netcdf`` no longer fails on the scipy netCDF backend when variables or constraints have MultiIndex coords; level names are now serialised as a JSON string (the legacy list form remains readable).
+* CPLEX no longer errors on quality attributes that aren't always available.
+
+**Breaking Changes**
+
+* ``google-cloud-storage`` and ``requests`` are now optional. Install ``linopy[oetc]`` to keep the previous behaviour.
+
+
+Version 0.6.7
+-------------
+
+* Fix Xpress IIS label mapping for masked constraints and add a regression test for matching infeasible coordinates.
+* Fix ``Model.compute_infeasibilities`` returning a flattened, deduplicated union of all IIS when Xpress found more than one. The Xpress path now computes a single IIS (via ``firstIIS``), matching the Gurobi path.
+* Use ``xarray.Dataset.copy`` instead of constructor for compatibility with the latest xarray version.
+* Blacklist highspy 1.14.0 which produces wrong results due to broken presolve and crashes on Windows (`HiGHS#2964 <https://github.com/ERGO-Code/HiGHS/issues/2964>`_).
 
 Version 0.6.6
 -------------
