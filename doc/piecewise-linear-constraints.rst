@@ -169,17 +169,18 @@ over remaining dimensions (e.g. ``time``).
 Disjunctive segments
 ~~~~~~~~~~~~~~~~~~~~
 
-For equipment with disconnected operating modes — stepped pump speeds,
+For equipment with disconnected operating bands — stepped pump speeds,
 switchable combustion cycles, allowed bands around forbidden vibration
-zones — use ``segments()``.  Each segment is one mode's (range, curve);
+zones — use ``segments()``.  Each segment is one band's (range, curve);
 a binary picks exactly one per operating point.
 
 .. code-block:: python
 
-    # Pump VSD with three stepped speed settings.
+    # Stepped pump with two speed bands; the gap between them is a
+    # forbidden zone.
     m.add_piecewise_formulation(
-        (flow, linopy.segments([(5, 15, 25), (30, 50, 70), (80, 115, 150)])),
-        (power, linopy.segments([(1, 3.5, 7), (10, 19, 32), (40, 70, 115)])),
+        (flow, linopy.segments([(5, 25), (40, 100)])),
+        (power, linopy.segments([(1, 7), (15, 50)])),
     )
 
 The disjunctive formulation is selected automatically when breakpoints
