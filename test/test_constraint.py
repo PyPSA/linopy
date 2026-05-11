@@ -821,19 +821,6 @@ def test_freeze_mixed_signs_from_rule() -> None:
     np.testing.assert_array_equal(con.sign.values, expected_signs)
 
 
-def test_frozen_rhs_setter() -> None:
-    m = Model()
-    time = pd.RangeIndex(5, name="t")
-    x = m.add_variables(lower=0, coords=[time], name="x")
-    con = m.add_constraints(x >= 1, name="c", freeze=True)
-    assert isinstance(con, linopy.constraints.CSRConstraint)
-    con.rhs = 10
-    np.testing.assert_array_equal(con._rhs, np.full(5, 10.0))
-    factor = pd.Series(range(5), index=time)
-    con.rhs = 2 * factor
-    np.testing.assert_array_equal(con._rhs, 2 * np.arange(5, dtype=float))
-
-
 def test_frozen_lhs_setter_raises() -> None:
     m = Model()
     time = pd.RangeIndex(5, name="t")
@@ -845,33 +832,14 @@ def test_frozen_lhs_setter_raises() -> None:
         con.lhs = 3 * x + 2 * y
 
 
-def test_frozen_rhs_setter_rejects_expression() -> None:
+def test_frozen_rhs_setter_raises() -> None:
     m = Model()
     time = pd.RangeIndex(5, name="t")
     x = m.add_variables(lower=0, coords=[time], name="x")
     con = m.add_constraints(x >= 0, name="c", freeze=True)
     assert isinstance(con, linopy.constraints.CSRConstraint)
-    with pytest.raises(AttributeError, match="constant-like"):
-        con.rhs = 2 * x
-
-
-def test_frozen_rhs_setter_preserves_term_structure() -> None:
-    m = Model()
-    time = pd.RangeIndex(5, name="t")
-    x = m.add_variables(lower=0, coords=[time], name="x")
-    con = m.add_constraints(x >= 0, name="c", freeze=True)
-    csr_before = con._csr
-    con.rhs = 7
-    assert con._csr is csr_before
-
-
-def test_frozen_setter_invalidates_dual() -> None:
-    m = Model()
-    x = m.add_variables(lower=0, coords=[pd.RangeIndex(3, name="i")], name="x")
-    con = m.add_constraints(x >= 0, name="c", freeze=True)
-    con._dual = np.array([1.0, 2.0, 3.0])
-    con.rhs = 10
-    assert con._dual is None
+    with pytest.raises(AttributeError, match="read-only"):
+        con.rhs = 10
 
 
 def test_mixed_sign_to_matrix_with_rhs() -> None:

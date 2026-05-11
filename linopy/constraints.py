@@ -36,7 +36,6 @@ from linopy.common import (
     LocIndexer,
     VariableLabelIndex,
     align_lines_by_delimiter,
-    as_dataarray,
     assign_multiindex_safe,
     check_has_nulls,
     check_has_nulls_polars,
@@ -641,23 +640,9 @@ class CSRConstraint(ConstraintBase):
 
     @rhs.setter
     def rhs(self, value: ConstantLike) -> None:
-        if isinstance(
-            value,
-            expressions.LinearExpression
-            | expressions.QuadraticExpression
-            | variables.Variable
-            | variables.ScalarVariable,
-        ):
-            raise AttributeError(
-                "CSRConstraint.rhs accepts only constant-like values "
-                "(scalar, ndarray, DataArray). To assign an expression to rhs, "
-                "call .mutable() first."
-            )
-        coords_dict = {c.name: c for c in self._coords}
-        da = as_dataarray(value, coords=coords_dict, dims=self.coord_dims)
-        arr = da.values.ravel().astype(float)
-        self._rhs = arr[self.active_positions]
-        self._dual = None
+        raise AttributeError(
+            "CSRConstraint.rhs is read-only; call .mutable() to modify."
+        )
 
     @property
     def lhs(self) -> expressions.LinearExpression:
