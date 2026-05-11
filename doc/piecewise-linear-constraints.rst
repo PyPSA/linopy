@@ -169,17 +169,25 @@ over remaining dimensions (e.g. ``time``).
 Disjunctive segments
 ~~~~~~~~~~~~~~~~~~~~
 
-For disconnected operating regions (e.g. forbidden zones), use ``segments()``:
+For equipment with disconnected operating regions — discrete commercial
+sizes, multi-speed pumps, forbidden zones — use ``segments()``.  Each
+segment is one option's (range, curve); a binary picks exactly one.
 
 .. code-block:: python
 
+    # Three turbine classes with non-overlapping operating bands.
     m.add_piecewise_formulation(
-        (power, linopy.segments([(0, 0), (50, 80)])),
-        (cost, linopy.segments([(0, 0), (125, 200)])),
+        (power, linopy.segments([(10, 20, 30), (40, 60, 80), (100, 150, 200)])),
+        (fuel, linopy.segments([(12, 22, 35), (40, 56, 80), (105, 150, 215)])),
     )
 
-The disjunctive formulation is selected automatically when breakpoints have a
-segment dimension.  A bounded tuple (``"<="`` / ``">="``) also works here.
+The disjunctive formulation is selected automatically when breakpoints
+have a segment dimension.  A bounded tuple (``"<="`` / ``">="``) also
+works here.
+
+For a single on/off gate on one continuous curve, prefer ``active=...``
+(see *Advanced Features* below) — using a degenerate ``(0, 0)`` segment
+to encode "off" mixes the disjunctive concept with on/off logic.
 
 N-variable linking
 ~~~~~~~~~~~~~~~~~~
