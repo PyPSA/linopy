@@ -52,6 +52,4 @@ ExpressionLike: TypeAlias = Union[
 ]
 ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
 LinExprLike = Union["Variable", "LinearExpression"]
-MaskLike = Union[numpy.ndarray, DataArray, Series, DataFrame]  # noqa: UP007
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007
-PathLike = Union[str, Path]  # noqa: UP007

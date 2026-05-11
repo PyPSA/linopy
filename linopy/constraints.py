@@ -945,12 +945,12 @@ class CSRConstraint(ConstraintBase):
             "vars": vlabels[csr.indices],
             "rhs": self._rhs[rows],
         }
-        df = pl.DataFrame(data)
-        if isinstance(self._sign, str):
-            sign_expr = pl.lit(self._sign, dtype=sign_dtype)
-        else:
-            sign_expr = pl.Series("sign", self._sign[rows], dtype=sign_dtype)
-        df = df.with_columns(sign=sign_expr)
+        sign_expr: pl.Expr | pl.Series = (
+            pl.lit(self._sign, dtype=sign_dtype)
+            if isinstance(self._sign, str)
+            else pl.Series("sign", self._sign[rows], dtype=sign_dtype)
+        )
+        df = pl.DataFrame(data).with_columns(sign=sign_expr)
         return df[["labels", "coeffs", "vars", "sign", "rhs"]]
 
     def iterate_slices(
