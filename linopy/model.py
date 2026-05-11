@@ -243,6 +243,7 @@ class Model:
         "_piecewise_formulations",
         "solver_model",
         "solver_name",
+        "__weakref__",
     )
 
     def __init__(
@@ -1588,9 +1589,6 @@ class Model:
                 "No objective has been set on the model. Use `m.add_objective(...)` "
                 "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
             )
-
-        # clear cached matrix properties potentially present from previous solve commands
-        self.matrices.clean_cached_properties()
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
