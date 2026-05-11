@@ -178,8 +178,7 @@ a binary picks exactly one per operating point.
 
 .. code-block:: python
 
-    # Stepped pump with two speed bands; the gap between them is a
-    # forbidden zone.
+    # Stepped pump with two speed bands.
     m.add_piecewise_formulation(
         (flow, linopy.segments([(5, 25), (40, 100)])),
         (power, linopy.segments([(1, 7), (15, 50)])),
