@@ -979,7 +979,7 @@ class Variable:
         """
         solver_model = self.model.solver_model
         if not solver_supports(
-            self.model.solver_name, SolverFeature.SOLVER_ATTRIBUTE_ACCESS
+            self.model.solver_name or "", SolverFeature.SOLVER_ATTRIBUTE_ACCESS
         ):
             raise NotImplementedError(
                 "Solver attribute getter only supports the Gurobi solver for now."

@@ -48,6 +48,7 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
+    Result,
     TerminationCondition,
 )
 from linopy.constraints import (
@@ -193,8 +194,7 @@ class Model:
     the optimization process.
     """
 
-    solver_model: Any
-    solver_name: str
+    solver: solvers.Solver | None
     _variables: Variables
     _constraints: Constraints
     _objective: Objective
@@ -241,8 +241,7 @@ class Model:
         "_solver_dir",
         "_relaxed_registry",
         "_piecewise_formulations",
-        "solver_model",
-        "solver_name",
+        "solver",
         "__weakref__",
     )
 
@@ -312,6 +311,15 @@ class Model:
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
+        self.solver: solvers.Solver | None = None
+
+    @property
+    def solver_model(self) -> Any:
+        return self.solver.solver_model if self.solver is not None else None
+
+    @property
+    def solver_name(self) -> str | None:
+        return self.solver.solver_name.value if self.solver is not None else None
 
     @property
     def matrices(self) -> MatrixAccessor:
@@ -1707,15 +1715,15 @@ class Model:
 
         try:
             solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
-            # initialize the solver as object of solver subclass <solver_class>
-            solver = solver_class(
-                **solver_options,
-            )
+            if self.solver is not None:
+                self.solver.close()
+            solver = solver_class(**solver_options)
+            self.solver = solver
+
             if io_api == "direct":
                 if set_names is None:
                     set_names = self.set_names_in_solver_io
-                # no problem file written and direct model is set for solver
-                result = solver.solve_problem_from_model(
+                solver.solve_problem_from_model(
                     model=self,
                     solution_fn=to_path(solution_fn),
                     log_fn=to_path(log_fn),
@@ -1741,7 +1749,7 @@ class Model:
                     slice_size=slice_size,
                     progress=progress,
                 )
-                result = solver.solve_problem_from_file(
+                solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),
                     solution_fn=to_path(solution_fn),
                     log_fn=to_path(log_fn),
@@ -1756,48 +1764,65 @@ class Model:
                     os.remove(fn)
 
         try:
-            result.info()
-
-            self.objective._value = result.solution.objective
-            self.status = result.status.status.value
-            self.termination_condition = result.status.termination_condition.value
-            self.solver_model = result.solver_model
-            self.solver_name = solver_name
-
-            if not result.status.is_ok:
-                return (
-                    result.status.status.value,
-                    result.status.termination_condition.value,
-                )
-
-            # map solution and dual to original shape which includes missing values
-            sol = result.solution.primal.copy()
-            sol = set_int_index(sol)
-            sol.loc[-1] = nan
-
-            sol_arr = series_to_lookup_array(sol)
-
-            for _, var in self.variables.items():
-                vals = lookup_vals(sol_arr, np.ravel(var.labels))
-                var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
-
-            if not result.solution.dual.empty:
-                dual = result.solution.dual.copy()
-                dual = set_int_index(dual)
-                dual.loc[-1] = nan
-
-                dual_arr = series_to_lookup_array(dual)
-
-                for _, con in self.constraints.items():
-                    vals = lookup_vals(dual_arr, np.ravel(con.labels))
-                    con.dual = xr.DataArray(
-                        vals.reshape(con.labels.shape), con.labels.coords
-                    )
-
-            return result.status.status.value, result.status.termination_condition.value
+            return self.apply_result()
         finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
+
+    def apply_result(self, result: Result | None = None) -> tuple[str, str]:
+        if result is None:
+            if self.solver is None or self.solver.status is None:
+                raise RuntimeError(
+                    "No solver state available; call solve() first or pass a Result."
+                )
+            result = Result(
+                status=self.solver.status,
+                solution=self.solver.solution,
+                solver_model=self.solver.solver_model,
+                solver_name=self.solver.solver_name.value,
+                report=self.solver.report,
+            )
+
+        result.info()
+
+        if result.solution is not None:
+            self.objective._value = result.solution.objective
+
+        status_value = result.status.status.value
+        termination_condition = result.status.termination_condition.value
+        self.status = status_value
+        self.termination_condition = termination_condition
+
+        if not result.status.is_ok:
+            return status_value, termination_condition
+
+        if result.solution is None or len(result.solution.primal) == 0:
+            return status_value, termination_condition
+
+        sol = result.solution.primal.copy()
+        sol = set_int_index(sol)
+        sol.loc[-1] = nan
+
+        sol_arr = series_to_lookup_array(sol)
+
+        for _, var in self.variables.items():
+            vals = lookup_vals(sol_arr, np.ravel(var.labels))
+            var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
+
+        if not result.solution.dual.empty:
+            dual = result.solution.dual.copy()
+            dual = set_int_index(dual)
+            dual.loc[-1] = nan
+
+            dual_arr = series_to_lookup_array(dual)
+
+            for _, con in self.constraints.items():
+                vals = lookup_vals(dual_arr, np.ravel(con.labels))
+                con.dual = xr.DataArray(
+                    vals.reshape(con.labels.shape), con.labels.coords
+                )
+
+        return status_value, termination_condition
 
     def _mock_solve(
         self,
@@ -1819,8 +1844,6 @@ class Model:
         self.objective._value = 0.0
         self.status = "ok"
         self.termination_condition = TerminationCondition.optimal.value
-        self.solver_model = None
-        self.solver_name = solver_name
 
         for name, var in self.variables.items():
             var.solution = xr.DataArray(0.0, var.coords)
@@ -1843,7 +1866,7 @@ class Model:
         labels : list[int]
             Labels of the infeasible constraints.
         """
-        solver_model = getattr(self, "solver_model", None)
+        solver_model = self.solver_model
 
         # Check for Gurobi
         if "gurobi" in available_solvers:
@@ -1872,7 +1895,7 @@ class Model:
         # If we get here, either the solver doesn't support IIS or no solver model is available
         if solver_model is None:
             # Check if this is a supported solver without a stored model
-            solver_name = getattr(self, "solver_name", "unknown")
+            solver_name = self.solver_name or "unknown"
             if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
                 raise ValueError(
                     "No solver model available. The model must be solved first with "
