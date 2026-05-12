@@ -277,6 +277,18 @@ class Solution:
 
 
 @dataclass
+class SolverReport:
+    """
+    Solver-reported performance metrics.
+    """
+
+    runtime: float | None = None
+    mip_gap: float | None = None
+    barrier_iterations: int | None = None
+    simplex_iterations: int | None = None
+
+
+@dataclass
 class Result:
     """
     Result of the optimization.
@@ -285,6 +297,8 @@ class Result:
     status: Status
     solution: Solution | None = None
     solver_model: Any = None
+    solver_name: str = ""
+    report: SolverReport | None = None
 
     def __repr__(self) -> str:
         solver_model_string = (
@@ -297,10 +311,21 @@ class Result:
             )
         else:
             solution_string = "Solution: None\n"
+        solver_name_string = (
+            f"Solver: {self.solver_name}\n" if self.solver_name else ""
+        )
+        report_string = ""
+        if self.report is not None:
+            if self.report.runtime is not None:
+                report_string += f"Runtime: {self.report.runtime:.2f}s\n"
+            if self.report.mip_gap is not None:
+                report_string += f"MIP gap: {self.report.mip_gap:.2e}\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
             + solution_string
+            + solver_name_string
+            + report_string
             + f"Solver model: {solver_model_string}\n"
             f"Solver message: {self.status.legacy_status}"
         )
