@@ -60,11 +60,8 @@ def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
 def test_to_solver_model_then_resolve(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    solver_enum = solvers.SolverName(solver.lower())
-    solver_class = getattr(solvers, solver_enum.name)
-    instance = solver_class()
-    instance.to_solver_model(simple_model)
-    result = instance.resolve(simple_model.sense)
+    simple_model.to_solver_model(solver)
+    simple_model.resolve()
 
     reference = Model(chunk=None)
     rx = reference.add_variables(name="x")
@@ -74,9 +71,8 @@ def test_to_solver_model_then_resolve(simple_model: Model, solver: str) -> None:
     reference.add_objective(2 * ry + rx)
     reference.solve(solver, io_api="direct")
 
-    assert result.status.is_ok
-    assert result.solution is not None
-    assert np.isclose(result.solution.objective, reference.objective.value)
+    assert simple_model.status == "ok"
+    assert np.isclose(simple_model.objective.value, reference.objective.value)
 
 
 def test_apply_result_explicit(simple_model: Model) -> None:

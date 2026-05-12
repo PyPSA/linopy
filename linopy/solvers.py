@@ -344,6 +344,7 @@ class Solver(ABC, Generic[EnvType]):
         self.report: SolverReport | None = None
         self.solver_model: Any = None
         self.io_api: str | None = None
+        self.sense: str | None = None
         self.env: Any = None
         self._env_stack: contextlib.ExitStack | None = None
 
@@ -357,12 +358,14 @@ class Solver(ABC, Generic[EnvType]):
     def update_solver_model(self, model: Model, **kwargs: Any) -> None:
         raise NotImplementedError
 
-    def resolve(self, sense: str) -> Result:
+    def resolve(self) -> Result:
         if self.solver_model is None:
             raise RuntimeError("call to_solver_model first")
-        return self._resolve(sense)
+        if self.sense is None:
+            raise RuntimeError("sense not set; call to_solver_model first")
+        return self._resolve()
 
-    def _resolve(self, sense: str) -> Result:
+    def _resolve(self) -> Result:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -968,6 +971,7 @@ class Highs(Solver[None]):
         self._set_solver_params(h, log_fn)
         self.solver_model = h
         self.io_api = "direct"
+        self.sense = model.sense
         return h
 
     def solve_problem_from_model(
@@ -998,8 +1002,8 @@ class Highs(Solver[None]):
             sense=model.sense,
         )
 
-    def _resolve(self, sense: str) -> Result:
-        return self._solve(self.solver_model, io_api=self.io_api, sense=sense)
+    def _resolve(self) -> Result:
+        return self._solve(self.solver_model, io_api=self.io_api, sense=self.sense)
 
     def solve_problem_from_file(
         self,
@@ -1239,6 +1243,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         )
         self.solver_model = m
         self.io_api = "direct"
+        self.sense = model.sense
         return m
 
     def solve_problem_from_model(
@@ -1268,7 +1273,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             sense=model.sense,
         )
 
-    def _resolve(self, sense: str) -> Result:
+    def _resolve(self) -> Result:
         return self._solve(
             self.solver_model,
             solution_fn=None,
@@ -1276,7 +1281,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             warmstart_fn=None,
             basis_fn=None,
             io_api=self.io_api,
-            sense=sense,
+            sense=self.sense,
         )
 
     def solve_problem_from_file(
@@ -2347,7 +2352,7 @@ class Mosek(Solver[None]):
             sense=model.sense,
         )
 
-    def _resolve(self, sense: str) -> Result:
+    def _resolve(self) -> Result:
         return self._solve(
             self.solver_model,
             solution_fn=None,
@@ -2355,7 +2360,7 @@ class Mosek(Solver[None]):
             warmstart_fn=None,
             basis_fn=None,
             io_api=self.io_api,
-            sense=sense,
+            sense=self.sense,
         )
 
     def to_solver_model(
@@ -2375,6 +2380,7 @@ class Mosek(Solver[None]):
         )
         self.solver_model = m
         self.io_api = "direct"
+        self.sense = model.sense
         return m
 
     def solve_problem_from_file(
@@ -3112,14 +3118,15 @@ class cuPDLPx(Solver[None]):
         cu_model = model.to_cupdlpx()
         self.solver_model = cu_model
         self.io_api = "direct"
+        self.sense = model.sense
         return cu_model
 
-    def _resolve(self, sense: str) -> Result:
+    def _resolve(self) -> Result:
         return self._solve(
             self.solver_model,
             l_model=None,
             io_api=self.io_api,
-            sense=sense,
+            sense=self.sense,
         )
 
     def _solve(

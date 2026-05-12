@@ -1768,6 +1768,32 @@ class Model:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
 
+    def to_solver_model(self, solver_name: str, **kwargs: Any) -> Any:
+        """
+        Build the solver-native model for `solver_name` without solving.
+
+        Instantiates the solver, attaches it as `self.solver`, and returns
+        the native model object (e.g. `gurobipy.Model`). Pair with `resolve()`
+        for a two-step build-then-solve workflow.
+        """
+        solver_class = getattr(solvers, solvers.SolverName(solver_name).name)
+        if self.solver is not None:
+            self.solver.close()
+        self.solver = solver_class()
+        return self.solver.to_solver_model(self, **kwargs)
+
+    def resolve(self) -> tuple[str, str]:
+        """
+        Solve the previously built solver model and apply the result.
+
+        Requires a prior `to_solver_model(...)`. Returns the
+        `(status, termination_condition)` tuple from `apply_result`.
+        """
+        if self.solver is None:
+            raise RuntimeError("call to_solver_model() first")
+        self.solver.resolve()
+        return self.apply_result()
+
     def apply_result(self, result: Result | None = None) -> tuple[str, str]:
         if result is None:
             if self.solver is None or self.solver.status is None:
