@@ -88,20 +88,19 @@ binaries (see *Formulation Methods* below).
 Breakpoint Construction
 -----------------------
 
-Three building blocks provide breakpoint data:
+Each tuple's breakpoints come from :func:`~linopy.breakpoints` (a
+single connected curve) or :func:`~linopy.segments` (disjoint
+operating bands).  :class:`~linopy.Slopes` can stand in for
+:func:`~linopy.breakpoints` when per-piece slopes are the natural
+input — it resolves to a breakpoints array.
 
-- :func:`~linopy.breakpoints` — values along a single **connected**
-  curve.
-- :func:`~linopy.segments` — **disjoint** operating regions with gaps
-  between them (e.g. forbidden zones); selects the disjunctive
-  formulation automatically.
-- :class:`~linopy.Slopes` — per-piece slopes plus an initial ``y0``,
-  deferred until an x grid is supplied by a sibling tuple.
+``breakpoints()`` — a connected curve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-From lists
-~~~~~~~~~~
+Values along a single **connected** piecewise curve — the default case
+for efficiency curves, heat rates, and cost curves.
 
-The simplest form — pass Python lists directly in the tuple:
+The simplest form passes a Python list directly in the tuple:
 
 .. code-block:: python
 
@@ -109,9 +108,6 @@ The simplest form — pass Python lists directly in the tuple:
         (power, [0, 30, 60, 100]),
         (fuel, [0, 36, 84, 170]),
     )
-
-With the ``breakpoints()`` factory
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Equivalent, but explicit about the DataArray construction:
 
@@ -122,31 +118,8 @@ Equivalent, but explicit about the DataArray construction:
         (fuel, linopy.breakpoints([0, 36, 84, 170])),
     )
 
-From slopes
-~~~~~~~~~~~
-
-When you know marginal costs (slopes) rather than absolute values, wrap
-them in :class:`linopy.Slopes`.  The x grid is borrowed from the sibling
-tuple — no need to repeat it:
-
-.. code-block:: python
-
-    m.add_piecewise_formulation(
-        (power, [0, 50, 100, 150]),
-        (cost, linopy.Slopes([1.1, 1.5, 1.9], y0=0)),
-    )
-    # cost breakpoints: [0, 55, 130, 225]
-
-For standalone resolution outside of ``add_piecewise_formulation``, call
-:meth:`linopy.Slopes.to_breakpoints` with an explicit x grid::
-
-    bp = linopy.Slopes([1.1, 1.5, 1.9], y0=0).to_breakpoints([0, 50, 100, 150])
-
-Per-entity breakpoints
-~~~~~~~~~~~~~~~~~~~~~~
-
-Different generators can have different curves.  Pass a dict to
-``breakpoints()`` with entity names as keys:
+**Per-entity curves.**  Different generators can have different
+curves.  Pass a dict to ``breakpoints()`` with entity names as keys:
 
 .. code-block:: python
 
@@ -165,16 +138,35 @@ Different generators can have different curves.  Pass a dict to
         ),
     )
 
-Ragged lengths are NaN-padded automatically.  Breakpoints are auto-broadcast
-over remaining dimensions (e.g. ``time``).
+Ragged lengths are NaN-padded automatically.  Breakpoints are auto-
+broadcast over remaining dimensions (e.g. ``time``).
 
-Disjunctive segments
-~~~~~~~~~~~~~~~~~~~~
+**Specifying by slopes.**  :class:`linopy.Slopes` resolves to a
+breakpoint array from per-piece slopes plus an initial ``y0``,
+instead of from absolute y-values — useful when slopes are the
+natural input (e.g. marginal costs).  The x grid is borrowed from
+the sibling tuple, so the y breakpoints don't have to be computed
+by hand:
 
-For equipment with disconnected operating bands — stepped pump speeds,
-switchable combustion cycles, allowed bands around forbidden vibration
-zones — use ``segments()``.  Each segment is one band's (range, curve);
-a binary picks exactly one per operating point.
+.. code-block:: python
+
+    m.add_piecewise_formulation(
+        (power, [0, 50, 100, 150]),
+        (cost, linopy.Slopes([1.1, 1.5, 1.9], y0=0)),
+    )
+    # cost breakpoints resolve to: [0, 55, 130, 225]
+
+For standalone resolution outside ``add_piecewise_formulation``, call
+:meth:`linopy.Slopes.to_breakpoints` with an explicit x grid::
+
+    bp = linopy.Slopes([1.1, 1.5, 1.9], y0=0).to_breakpoints([0, 50, 100, 150])
+
+``segments()`` — disjoint operating bands
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For equipment with disconnected operating bands.  Each segment is one
+band's ``(range, curve)``; a binary picks exactly one per operating
+point, with continuous interpolation within the chosen band.
 
 .. code-block:: python
 
@@ -184,18 +176,18 @@ a binary picks exactly one per operating point.
         (power, linopy.segments([(1, 7), (15, 50)])),
     )
 
-The disjunctive formulation is selected automatically when breakpoints
-have a segment dimension.  A bounded tuple (``"<="`` / ``">="``) also
-works here.
+Bounded tuples (``"<="`` / ``">="``) are supported on disjunctive
+curves too.
 
 For a single on/off gate on one continuous curve, prefer ``active=...``
-(see *Advanced Features* below) — using a degenerate ``(0, 0)`` segment
+(see :ref:`piecewise-active`) — using a degenerate ``(0, 0)`` segment
 to encode "off" mixes the disjunctive concept with on/off logic.
 
 N-variable linking
 ~~~~~~~~~~~~~~~~~~
 
-Link any number of variables through shared breakpoints (joint equality):
+Independent of the building block used, any number of variables can be
+linked through shared breakpoints (joint equality):
 
 .. code-block:: python
 
@@ -224,14 +216,16 @@ Each tuple's optional third element is a sign:
 - ``"<="`` / ``">="`` — **bounded**: the expression undershoots /
   overshoots the curve.
 
-**Restrictions (current):**
+.. note::
 
-- At most one tuple may carry a non-equality sign — a single bounded side.
-- With **3 or more** tuples, all signs must be ``"=="``.
+   **Current restrictions.**
 
-Multi-bounded and N≥3-inequality use cases aren't supported yet.  If
-you have a concrete use case, please open an issue at
-https://github.com/PyPSA/linopy/issues so we can scope it properly.
+   - At most one tuple may carry a non-equality sign — a single bounded side.
+   - With **3 or more** tuples, all signs must be ``"=="``.
+
+   Multi-bounded and N≥3-inequality use cases aren't supported yet.
+   If you have a concrete use case, please open an issue at
+   https://github.com/PyPSA/linopy/issues so we can scope it properly.
 
 Geometry
 ~~~~~~~~
@@ -536,6 +530,8 @@ disconnected operating regions" that ``method="lp"`` cannot handle.
 
 Advanced Features
 -----------------
+
+.. _piecewise-active:
 
 Active parameter (unit commitment)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
