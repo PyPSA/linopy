@@ -317,9 +317,25 @@ class Model:
     def solver_model(self) -> Any:
         return self.solver.solver_model if self.solver is not None else None
 
+    @solver_model.setter
+    def solver_model(self, value: Any) -> None:
+        if value is not None:
+            raise AttributeError("solver state is managed via model.solver")
+        if self.solver is not None:
+            self.solver.close()
+        self.solver = None
+
     @property
     def solver_name(self) -> str | None:
         return self.solver.solver_name.value if self.solver is not None else None
+
+    @solver_name.setter
+    def solver_name(self, value: str | None) -> None:
+        if value is not None:
+            raise AttributeError("solver state is managed via model.solver")
+        if self.solver is not None:
+            self.solver.close()
+        self.solver = None
 
     @property
     def matrices(self) -> MatrixAccessor:
@@ -1768,7 +1784,15 @@ class Model:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
 
-    def to_solver_model(self, solver_name: str, **kwargs: Any) -> Any:
+    def to_solver_model(
+        self,
+        solver_name: str,
+        explicit_coordinate_names: bool = False,
+        set_names: bool | None = None,
+        env: Any = None,
+        log_fn: Path | None = None,
+        **solver_options: Any,
+    ) -> Any:
         """
         Build the solver-native model for `solver_name` without solving.
 
@@ -1777,10 +1801,28 @@ class Model:
         for a two-step build-then-solve workflow.
         """
         solver_class = getattr(solvers, solvers.SolverName(solver_name).name)
+        if not solver_class.supports(SolverFeature.DIRECT_API):
+            raise NotImplementedError(
+                f"Solver {solver_name} does not support direct API model export."
+            )
+        if set_names is None:
+            set_names = self.set_names_in_solver_io
         if self.solver is not None:
             self.solver.close()
-        self.solver = solver_class()
-        return self.solver.to_solver_model(self, **kwargs)
+        solver = solver_class(**solver_options)
+        self.solver = solver
+        try:
+            return solver.to_solver_model(
+                self,
+                explicit_coordinate_names=explicit_coordinate_names,
+                set_names=set_names,
+                env=env,
+                log_fn=to_path(log_fn),
+            )
+        except Exception:
+            solver.close()
+            self.solver = None
+            raise
 
     def resolve(self) -> tuple[str, str]:
         """
@@ -1857,6 +1899,9 @@ class Model:
         solver_name = "mock"
 
         logger.info(f" Solve problem using {solver_name.title()} solver")
+        if self.solver is not None:
+            self.solver.close()
+        self.solver = None
         # reset result
         self.reset_solution()
 

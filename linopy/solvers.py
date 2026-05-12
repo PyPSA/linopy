@@ -346,6 +346,8 @@ class Solver(ABC, Generic[EnvType]):
         self.io_api: str | None = None
         self.sense: str | None = None
         self.env: Any = None
+        self._vlabels: np.ndarray | None = None
+        self._clabels: np.ndarray | None = None
         self._env_stack: contextlib.ExitStack | None = None
 
         if self.solver_name.value not in available_solvers:
@@ -357,6 +359,10 @@ class Solver(ABC, Generic[EnvType]):
 
     def update_solver_model(self, model: Model, **kwargs: Any) -> None:
         raise NotImplementedError
+
+    def _store_labels(self, model: Model) -> None:
+        self._vlabels = model.matrices.vlabels.copy()
+        self._clabels = model.matrices.clabels.copy()
 
     def resolve(self) -> Result:
         if self.solver_model is None:
@@ -374,6 +380,8 @@ class Solver(ABC, Generic[EnvType]):
         self.env = None
         self.solver_model = None
         self._env_stack = None
+        self._vlabels = None
+        self._clabels = None
 
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
@@ -968,6 +976,7 @@ class Highs(Solver[None]):
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
+        self._store_labels(model)
         self._set_solver_params(h, log_fn)
         self.solver_model = h
         self.io_api = "direct"
@@ -1045,6 +1054,8 @@ class Highs(Solver[None]):
         self._set_solver_params(h, log_fn)
 
         h.readModel(problem_fn_)
+        self._vlabels = None
+        self._clabels = None
         self.solver_model = h
         self.io_api = read_io_api_from_problem_file(problem_fn)
 
@@ -1156,6 +1167,9 @@ class Highs(Solver[None]):
             if model is not None:
                 sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
                 dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
+            elif self._vlabels is not None and self._clabels is not None:
+                sol = pd.Series(solution.col_value, self._vlabels, dtype=float)
+                dual = pd.Series(solution.row_dual, self._clabels, dtype=float)
             else:
                 sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float)
                 dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float)
@@ -1241,6 +1255,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
+        self._store_labels(model)
         self.solver_model = m
         self.io_api = "direct"
         self.sense = model.sense
@@ -1422,12 +1437,18 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
-            sol = pd.Series({v.VarName: v.x for v in m.getVars()}, dtype=float)  # type: ignore
+            vars = m.getVars()
+            if self._vlabels is not None:
+                sol = pd.Series([v.X for v in vars], self._vlabels, dtype=float)
+            else:
+                sol = pd.Series({v.VarName: v.X for v in vars}, dtype=float)
 
             try:
-                dual = pd.Series(
-                    {c.ConstrName: c.Pi for c in m.getConstrs()}, dtype=float
-                )
+                constrs = m.getConstrs()
+                if self._clabels is not None:
+                    dual = pd.Series([c.Pi for c in constrs], self._clabels, dtype=float)
+                else:
+                    dual = pd.Series({c.ConstrName: c.Pi for c in constrs}, dtype=float)
             except AttributeError:
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -2378,6 +2399,7 @@ class Mosek(Solver[None]):
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
+        self._store_labels(model)
         self.solver_model = m
         self.io_api = "direct"
         self.sense = model.sense
@@ -2621,14 +2643,22 @@ class Mosek(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getprimalobj(soltype)
 
-            sol = m.getxx(soltype)
-            sol = {m.getvarname(i): sol[i] for i in range(m.getnumvar())}
-            sol = pd.Series(sol, dtype=float)
+            sol_values = m.getxx(soltype)
+            if self._vlabels is not None:
+                sol = pd.Series(sol_values, self._vlabels, dtype=float)
+            else:
+                sol = {m.getvarname(i): sol_values[i] for i in range(m.getnumvar())}
+                sol = pd.Series(sol, dtype=float)
 
             try:
-                dual = m.gety(soltype)
-                dual = {m.getconname(i): dual[i] for i in range(m.getnumcon())}
-                dual = pd.Series(dual, dtype=float)
+                dual_values = m.gety(soltype)
+                if self._clabels is not None:
+                    dual = pd.Series(dual_values, self._clabels, dtype=float)
+                else:
+                    dual = {
+                        m.getconname(i): dual_values[i] for i in range(m.getnumcon())
+                    }
+                    dual = pd.Series(dual, dtype=float)
             except (mosek.Error, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = pd.Series(dtype=float)
@@ -3116,6 +3146,7 @@ class cuPDLPx(Solver[None]):
             msg = "cuPDLPx does not currently support QP or MILP problems."
             raise NotImplementedError(msg)
         cu_model = model.to_cupdlpx()
+        self._store_labels(model)
         self.solver_model = cu_model
         self.io_api = "direct"
         self.sense = model.sense
@@ -3210,8 +3241,8 @@ class cuPDLPx(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = cu_model.ObjVal
 
-            vlabels = None if l_model is None else l_model.matrices.vlabels
-            clabels = None if l_model is None else l_model.matrices.clabels
+            vlabels = l_model.matrices.vlabels if l_model is not None else self._vlabels
+            clabels = l_model.matrices.clabels if l_model is not None else self._clabels
 
             sol = pd.Series(cu_model.X, vlabels, dtype=float)
             dual = pd.Series(cu_model.Pi, clabels, dtype=float)

@@ -496,6 +496,22 @@ def test_mock_solve(model_maximization: Model) -> None:
     assert (x_solution == 0).all()
 
 
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
+    status, condition = model.solve(solver_name="highs", io_api="direct")
+    assert status == "ok"
+    assert model.solver is not None
+    assert model.solver_model is not None
+    assert model.solver_name == "highs"
+
+    status, condition = model.solve(solver="some_non_existant_solver", mock_solve=True)
+
+    assert status == "ok"
+    assert model.solver is None
+    assert model.solver_model is None
+    assert model.solver_name is None
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_default_settings_chunked(
     model_chunked: Model, solver: str, io_api: str, explicit_coordinate_names: bool
