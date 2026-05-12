@@ -39,6 +39,7 @@ from linopy.piecewise import (
     tangent_lines,
 )
 from linopy.remote import RemoteHandler
+from linopy.solvers import SolverFeature
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
@@ -63,6 +64,7 @@ __all__ = (
     "QuadraticExpression",
     "RemoteHandler",
     "Slopes",
+    "SolverFeature",
     "Variable",
     "Variables",
     "align",

@@ -14,7 +14,13 @@ from test_io import model  # noqa: F401
 
 from linopy import GREATER_EQUAL, Model, solvers
 from linopy.constants import Result, Solution, Status
-from linopy.solver_capabilities import SolverFeature, solver_supports
+from linopy.solver_capabilities import (
+    SOLVER_REGISTRY,
+    SolverFeature,
+    SolverInfo,
+    _xpress_supports_gpu,
+    solver_supports,
+)
 
 
 @pytest.fixture
@@ -318,3 +324,55 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
         gurobi.solve_problem(model=model, solution_fn=sol_file, env=env)
     assert result.status.is_ok
     assert log2_file.exists()
+
+
+@pytest.mark.parametrize(
+    "solver_cls, feature, expected",
+    [
+        (solvers.Gurobi, SolverFeature.SOS_CONSTRAINTS, True),
+        (solvers.Gurobi, SolverFeature.GPU_ACCELERATION, False),
+        (solvers.Highs, SolverFeature.SOS_CONSTRAINTS, False),
+        (solvers.Highs, SolverFeature.SEMI_CONTINUOUS_VARIABLES, True),
+        (solvers.CBC, SolverFeature.LP_FILE_NAMES, False),
+        (solvers.CBC, SolverFeature.INTEGER_VARIABLES, True),
+        (solvers.cuPDLPx, SolverFeature.DIRECT_API, True),
+        (solvers.cuPDLPx, SolverFeature.GPU_ACCELERATION, True),
+        (solvers.cuPDLPx, SolverFeature.QUADRATIC_OBJECTIVE, False),
+        (solvers.PIPS, SolverFeature.INTEGER_VARIABLES, False),
+    ],
+)
+def test_solver_class_supports_feature(
+    solver_cls: type, feature: SolverFeature, expected: bool
+) -> None:
+    assert solver_cls.supports(feature) is expected
+
+
+def test_solver_instance_supports_matches_class() -> None:
+    feature = SolverFeature.QUADRATIC_OBJECTIVE
+    assert solvers.Gurobi.supports(feature) is True
+    if "gurobi" in solvers.available_solvers:
+        assert solvers.Gurobi().supports(feature) is True
+
+
+@pytest.mark.parametrize("solver_name", [n.value for n in solvers.SolverName])
+def test_capability_shim_round_trips(solver_name: str) -> None:
+    solver_cls = getattr(solvers, solvers.SolverName(solver_name).name)
+    for feature in SolverFeature:
+        assert solver_supports(solver_name, feature) == solver_cls.supports(feature)
+
+
+def test_solver_registry_iter_and_index() -> None:
+    names = list(SOLVER_REGISTRY)
+    assert "gurobi" in names
+    for name in names:
+        info = SOLVER_REGISTRY[name]
+        assert isinstance(info, SolverInfo)
+        assert isinstance(info.features, frozenset)
+        assert info.name == name
+
+
+@pytest.mark.skipif(
+    "xpress" not in set(solvers.available_solvers), reason="Xpress is not installed"
+)
+def test_xpress_gpu_feature_reflects_installed_version() -> None:
+    assert solvers.Xpress.supports(SolverFeature.GPU_ACCELERATION) == _xpress_supports_gpu()

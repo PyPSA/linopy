@@ -86,9 +86,9 @@ try:
     from linopy.remote import OetcHandler
 except ImportError:
     OetcHandler = None  # type: ignore
-from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
+    SolverFeature,
     available_solvers,
 )
 from linopy.sos_reformulation import (
@@ -1656,11 +1656,13 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
+        solver_class = getattr(solvers, solvers.SolverName(solver_name).name)
+
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
         if solution_fn is None:
             if (
-                solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+                solver_class.supports(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
                 and not keep_files
             ):
                 # these (solver, keep_files=False) combos do not need a solution file
@@ -1674,8 +1676,8 @@ class Model:
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
 
-        if self.is_quadratic and not solver_supports(
-            solver_name, SolverFeature.QUADRATIC_OBJECTIVE
+        if self.is_quadratic and not solver_class.supports(
+            SolverFeature.QUADRATIC_OBJECTIVE
         ):
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
@@ -1689,7 +1691,7 @@ class Model:
 
         sos_reform_result = None
         if self.variables.sos:
-            supports_sos = solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+            supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
             if reformulate_sos in (True, "auto") and not supports_sos:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
                 sos_reform_result = reformulate_sos_constraints(self)
@@ -1705,16 +1707,13 @@ class Model:
                 )
 
         if self.variables.semi_continuous:
-            if not solver_supports(
-                solver_name, SolverFeature.SEMI_CONTINUOUS_VARIABLES
-            ):
+            if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
                 raise ValueError(
                     f"Solver {solver_name} does not support semi-continuous variables. "
                     "Use a solver that supports them (gurobi, cplex, highs)."
                 )
 
         try:
-            solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
             if self.solver is not None:
                 self.solver.close()
             solver = solver_class(**solver_options)
@@ -1735,7 +1734,7 @@ class Model:
                 )
             else:
                 if (
-                    not solver_supports(solver_name, SolverFeature.LP_FILE_NAMES)
+                    not solver_class.supports(SolverFeature.LP_FILE_NAMES)
                     and explicit_coordinate_names
                 ):
                     logger.warning(
@@ -1896,7 +1895,9 @@ class Model:
         if solver_model is None:
             # Check if this is a supported solver without a stored model
             solver_name = self.solver_name or "unknown"
-            if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
+            if self.solver is not None and self.solver.supports(
+                SolverFeature.IIS_COMPUTATION
+            ):
                 raise ValueError(
                     "No solver model available. The model must be solved first with "
                     "a solver that supports IIS computation and the result must be infeasible."

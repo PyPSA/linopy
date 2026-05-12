@@ -18,11 +18,15 @@ import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from collections.abc import Callable, Generator
+from enum import Enum, auto
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
+from packaging.specifiers import SpecifierSet
 from packaging.version import parse as parse_version
 
 import linopy.io
@@ -34,12 +38,31 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
-from linopy.solver_capabilities import (
-    SOLVER_REGISTRY,
-    SolverFeature,
-    SolverInfo,
-    get_solvers_with_feature,
-)
+
+
+class SolverFeature(Enum):
+    """Enumeration of all solver capabilities tracked by linopy."""
+
+    INTEGER_VARIABLES = auto()
+    QUADRATIC_OBJECTIVE = auto()
+    DIRECT_API = auto()
+    LP_FILE_NAMES = auto()
+    READ_MODEL_FROM_FILE = auto()
+    SOLUTION_FILE_NOT_NEEDED = auto()
+    GPU_ACCELERATION = auto()
+    IIS_COMPUTATION = auto()
+    SOS_CONSTRAINTS = auto()
+    SEMI_CONTINUOUS_VARIABLES = auto()
+    SOLVER_ATTRIBUTE_ACCESS = auto()
+
+
+def _xpress_supports_gpu() -> bool:
+    """Check if installed xpress version supports GPU acceleration (>=9.8.0)."""
+    try:
+        return package_version("xpress") in SpecifierSet(">=9.8.0")
+    except PackageNotFoundError:
+        return False
+
 
 if TYPE_CHECKING:
     import gurobipy
@@ -47,12 +70,6 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 EnvType = TypeVar("EnvType")
-
-# Generated from solver_capabilities registry for backward compatibility
-QUADRATIC_SOLVERS = get_solvers_with_feature(SolverFeature.QUADRATIC_OBJECTIVE)
-NO_SOLUTION_FILE_SOLVERS = get_solvers_with_feature(
-    SolverFeature.SOLUTION_FILE_NOT_NEEDED
-)
 
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
@@ -223,7 +240,6 @@ with contextlib.suppress(ModuleNotFoundError):
         pass
 
 
-quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
 logger = logging.getLogger(__name__)
 
 
@@ -309,6 +325,14 @@ class Solver(ABC, Generic[EnvType]):
     `solve_problem_from_file()` methods.
     """
 
+    display_name: ClassVar[str] = ""
+    features: ClassVar[frozenset[SolverFeature]] = frozenset()
+
+    @classmethod
+    def supports(cls, feature: SolverFeature) -> bool:
+        """Check if this solver supports a given feature."""
+        return feature in cls.features
+
     def __init__(
         self,
         **solver_options: Any,
@@ -321,9 +345,6 @@ class Solver(ABC, Generic[EnvType]):
         self.solver_model: Any = None
         self.io_api: str | None = None
         self.env: Any = None
-        self.capability: SolverInfo | None = SOLVER_REGISTRY.get(
-            self.solver_name.value
-        )
         self._env_stack: contextlib.ExitStack | None = None
 
         if self.solver_name.value not in available_solvers:
@@ -507,6 +528,14 @@ class CBC(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "CBC"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+        }
+    )
 
     def __init__(
         self,
@@ -701,6 +730,14 @@ class GLPK(Solver[None]):
         options for the given solver
     """
 
+    display_name: ClassVar[str] = "GLPK"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+        }
+    )
+
     def __init(
         self,
         **solver_options: Any,
@@ -883,6 +920,19 @@ class Highs(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "HiGHS"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+        }
+    )
 
     def __init__(
         self,
@@ -1136,6 +1186,22 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "Gurobi"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.IIS_COMPUTATION,
+            SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+            SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
+        }
+    )
 
     def __init__(
         self,
@@ -1396,6 +1462,18 @@ class Cplex(Solver[None]):
         options for the given solver
     """
 
+    display_name: ClassVar[str] = "CPLEX"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOS_CONSTRAINTS,
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+        }
+    )
+
     def __init__(
         self,
         **solver_options: Any,
@@ -1551,6 +1629,17 @@ class SCIP(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "SCIP"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
     def __init__(
         self,
@@ -1709,6 +1798,22 @@ class Xpress(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "FICO Xpress"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.IIS_COMPUTATION,
+        }
+    ) | (
+        frozenset({SolverFeature.GPU_ACCELERATION})
+        if _xpress_supports_gpu()
+        else frozenset()
+    )
 
     def __init__(
         self,
@@ -1890,6 +1995,17 @@ class Knitro(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "Artelys Knitro"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
     def __init__(
         self,
@@ -2149,6 +2265,18 @@ class Mosek(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "MOSEK"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
     def __init__(
         self,
@@ -2523,6 +2651,17 @@ class COPT(Solver[None]):
         options for the given solver
     """
 
+    display_name: ClassVar[str] = "COPT"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
+
     def __init(
         self,
         **solver_options: Any,
@@ -2665,6 +2804,17 @@ class MindOpt(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "MindOpt"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.INTEGER_VARIABLES,
+            SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.LP_FILE_NAMES,
+            SolverFeature.READ_MODEL_FROM_FILE,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
     def __init(
         self,
@@ -2830,6 +2980,15 @@ class cuPDLPx(Solver[None]):
     **solver_options
         options for the given solver
     """
+
+    display_name: ClassVar[str] = "cuPDLPx"
+    features: ClassVar[frozenset[SolverFeature]] = frozenset(
+        {
+            SolverFeature.DIRECT_API,
+            SolverFeature.GPU_ACCELERATION,
+            SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+        }
+    )
 
     def __init__(
         self,
@@ -3079,3 +3238,25 @@ class cuPDLPx(Solver[None]):
         """
         for k, v in self.solver_options.items():
             cu_model.setParam(k, v)
+
+
+def _solver_class_for(name: str) -> type[Solver] | None:
+    try:
+        return globals().get(SolverName(name).name)
+    except ValueError:
+        return None
+
+
+QUADRATIC_SOLVERS = [
+    n.value
+    for n in SolverName
+    if (cls := _solver_class_for(n.value)) is not None
+    and cls.supports(SolverFeature.QUADRATIC_OBJECTIVE)
+]
+NO_SOLUTION_FILE_SOLVERS = [
+    n.value
+    for n in SolverName
+    if (cls := _solver_class_for(n.value)) is not None
+    and cls.supports(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+]
+quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]

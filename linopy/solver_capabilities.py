@@ -1,306 +1,99 @@
 """
-Linopy module for solver capability tracking.
+Back-compat shim for legacy solver-capability imports.
 
-This module provides a centralized registry of solver capabilities,
-replacing scattered hardcoded checks throughout the codebase.
+Capability data is declared on each `Solver` subclass in `linopy.solvers`.
+Prefer `Solver.features` / `Solver.supports()` over the helpers in this module.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum, auto
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
+from enum import Enum
 from typing import TYPE_CHECKING
 
-from packaging.specifiers import SpecifierSet
-
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from linopy.solvers import Solver, SolverFeature, _xpress_supports_gpu
+
+__all__ = (
+    "SOLVER_REGISTRY",
+    "SolverFeature",
+    "SolverInfo",
+    "_xpress_supports_gpu",
+    "get_available_solvers_with_feature",
+    "get_solvers_with_feature",
+    "solver_supports",
+)
 
 
-def _xpress_supports_gpu() -> bool:
-    """Check if installed xpress version supports GPU acceleration (>=9.8.0)."""
-    try:
-        return package_version("xpress") in SpecifierSet(">=9.8.0")
-    except PackageNotFoundError:
-        return False
+def __getattr__(name: str) -> object:
+    if name in {"SolverFeature", "_xpress_supports_gpu"}:
+        from linopy import solvers as _solvers_mod
 
-
-class SolverFeature(Enum):
-    """Enumeration of all solver capabilities tracked by linopy."""
-
-    # Model feature support
-    INTEGER_VARIABLES = auto()  # Support for integer variables
-
-    # Objective function support
-    QUADRATIC_OBJECTIVE = auto()
-
-    # I/O capabilities
-    DIRECT_API = auto()  # Solve directly from Model without writing files
-    LP_FILE_NAMES = auto()  # Support for named variables/constraints in LP files
-    READ_MODEL_FROM_FILE = auto()  # Ability to read models from file
-    SOLUTION_FILE_NOT_NEEDED = auto()  # Solver doesn't need a solution file
-
-    # Advanced features
-    GPU_ACCELERATION = auto()  # GPU-accelerated solving
-    IIS_COMPUTATION = auto()  # Irreducible Infeasible Set computation
-
-    # Special constraint types
-    SOS_CONSTRAINTS = auto()  # Special Ordered Sets (SOS1/SOS2) constraints
-
-    # Special variable types
-    SEMI_CONTINUOUS_VARIABLES = auto()  # Semi-continuous variable support
-
-    # Solver-specific
-    SOLVER_ATTRIBUTE_ACCESS = auto()  # Direct access to solver variable attributes
+        return getattr(_solvers_mod, name)
+    raise AttributeError(name)
 
 
 @dataclass(frozen=True)
 class SolverInfo:
-    """Information about a solver's capabilities."""
+    """Legacy view of a solver's capabilities. Prefer Solver.features / Solver.supports()."""
 
     name: str
-    features: frozenset[SolverFeature]
+    features: frozenset[Enum]
     display_name: str = ""
 
     def __post_init__(self) -> None:
         if not self.display_name:
             object.__setattr__(self, "display_name", self.name.upper())
 
-    def supports(self, feature: SolverFeature) -> bool:
-        """Check if this solver supports a given feature."""
+    def supports(self, feature: Enum) -> bool:
         return feature in self.features
 
 
-# Define all solver capabilities
-SOLVER_REGISTRY: dict[str, SolverInfo] = {
-    "gurobi": SolverInfo(
-        name="gurobi",
-        display_name="Gurobi",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.DIRECT_API,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.IIS_COMPUTATION,
-                SolverFeature.SOS_CONSTRAINTS,
-                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
-                SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
-            }
-        ),
-    ),
-    "highs": SolverInfo(
-        name="highs",
-        display_name="HiGHS",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.DIRECT_API,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
-            }
-        ),
-    ),
-    "glpk": SolverInfo(
-        name="glpk",
-        display_name="GLPK",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-            }
-        ),  # No LP_FILE_NAMES support
-    ),
-    "cbc": SolverInfo(
-        name="cbc",
-        display_name="CBC",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-            }
-        ),  # No LP_FILE_NAMES support
-    ),
-    "cplex": SolverInfo(
-        name="cplex",
-        display_name="CPLEX",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOS_CONSTRAINTS,
-                SolverFeature.SEMI_CONTINUOUS_VARIABLES,
-            }
-        ),
-    ),
-    "xpress": SolverInfo(
-        name="xpress",
-        display_name="FICO Xpress",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.GPU_ACCELERATION,
-                SolverFeature.IIS_COMPUTATION,
-            }
-            if _xpress_supports_gpu()
-            else {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-                SolverFeature.IIS_COMPUTATION,
-            }
-        ),
-    ),
-    "knitro": SolverInfo(
-        name="knitro",
-        display_name="Artelys Knitro",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-    "scip": SolverInfo(
-        name="scip",
-        display_name="SCIP",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-    "mosek": SolverInfo(
-        name="mosek",
-        display_name="MOSEK",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.DIRECT_API,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-    "copt": SolverInfo(
-        name="copt",
-        display_name="COPT",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-    "mindopt": SolverInfo(
-        name="mindopt",
-        display_name="MindOpt",
-        features=frozenset(
-            {
-                SolverFeature.INTEGER_VARIABLES,
-                SolverFeature.QUADRATIC_OBJECTIVE,
-                SolverFeature.LP_FILE_NAMES,
-                SolverFeature.READ_MODEL_FROM_FILE,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-    "cupdlpx": SolverInfo(
-        name="cupdlpx",
-        display_name="cuPDLPx",
-        features=frozenset(
-            {
-                SolverFeature.DIRECT_API,
-                SolverFeature.GPU_ACCELERATION,
-                SolverFeature.SOLUTION_FILE_NOT_NEEDED,
-            }
-        ),
-    ),
-}
+def _solver_class(name: str) -> type[Solver] | None:
+    from linopy import solvers as _solvers_mod
+
+    try:
+        return getattr(_solvers_mod, _solvers_mod.SolverName(name).name, None)
+    except ValueError:
+        return None
 
 
 def solver_supports(solver_name: str, feature: SolverFeature) -> bool:
-    """
-    Check if a solver supports a given feature.
-
-    Parameters
-    ----------
-    solver_name : str
-        Name of the solver (e.g., "gurobi", "highs")
-    feature : SolverFeature
-        The feature to check for
-
-    Returns
-    -------
-    bool
-        True if the solver supports the feature, False otherwise.
-        Returns False for unknown solvers.
-    """
-    if solver_name not in SOLVER_REGISTRY:
-        return False
-    return SOLVER_REGISTRY[solver_name].supports(feature)
+    cls = _solver_class(solver_name)
+    return cls is not None and cls.supports(feature)
 
 
 def get_solvers_with_feature(feature: SolverFeature) -> list[str]:
-    """
-    Get all solvers that support a given feature.
+    from linopy.solvers import SolverName
 
-    Parameters
-    ----------
-    feature : SolverFeature
-        The feature to filter by
-
-    Returns
-    -------
-    list[str]
-        List of solver names supporting the feature
-    """
-    return [name for name, info in SOLVER_REGISTRY.items() if info.supports(feature)]
+    return [n.value for n in SolverName if solver_supports(n.value, feature)]
 
 
 def get_available_solvers_with_feature(
     feature: SolverFeature, available_solvers: Sequence[str]
 ) -> list[str]:
-    """
-    Get installed solvers that support a given feature.
-
-    Parameters
-    ----------
-    feature : SolverFeature
-        The feature to filter by
-    available_solvers : Sequence[str]
-        List of currently available/installed solvers
-
-    Returns
-    -------
-    list[str]
-        List of installed solver names supporting the feature
-    """
     return [s for s in get_solvers_with_feature(feature) if s in available_solvers]
+
+
+class _LazyRegistry(Mapping[str, SolverInfo]):
+    def __getitem__(self, key: str) -> SolverInfo:
+        cls = _solver_class(key)
+        if cls is None:
+            raise KeyError(key)
+        return SolverInfo(
+            name=key, features=cls.features, display_name=cls.display_name
+        )
+
+    def __iter__(self) -> Iterator[str]:
+        from linopy.solvers import SolverName
+
+        return (n.value for n in SolverName)
+
+    def __len__(self) -> int:
+        from linopy.solvers import SolverName
+
+        return len(SolverName)
+
+
+SOLVER_REGISTRY: Mapping[str, SolverInfo] = _LazyRegistry()

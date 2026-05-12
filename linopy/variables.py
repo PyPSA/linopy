@@ -62,7 +62,6 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
 )
-from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.types import (
     ConstantLike,
     DimsLike,
@@ -977,6 +976,8 @@ class Variable:
         -------
         xr.DataArray
         """
+        from linopy.solver_capabilities import SolverFeature, solver_supports
+
         solver_model = self.model.solver_model
         if not solver_supports(
             self.model.solver_name or "", SolverFeature.SOLVER_ATTRIBUTE_ACCESS
