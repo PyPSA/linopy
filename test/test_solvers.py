@@ -7,11 +7,111 @@ Created on Tue Jan 28 09:03:35 2025.
 
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 from test_io import model  # noqa: F401
 
-from linopy import Model, solvers
+from linopy import GREATER_EQUAL, Model, solvers
+from linopy.constants import Result, Solution, Status
 from linopy.solver_capabilities import SolverFeature, solver_supports
+
+
+@pytest.fixture
+def simple_model() -> Model:
+    m = Model(chunk=None)
+    x = m.add_variables(name="x")
+    y = m.add_variables(name="y")
+    m.add_constraints(2 * x + 6 * y, GREATER_EQUAL, 10)
+    m.add_constraints(4 * x + 2 * y, GREATER_EQUAL, 3)
+    m.add_objective(2 * y + x)
+    return m
+
+
+@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+def test_solver_instance_attached_after_solve(
+    simple_model: Model, solver: str
+) -> None:
+    simple_model.solve(solver)
+    assert isinstance(simple_model.solver, solvers.Solver)
+    assert simple_model.solver.status is not None
+    assert simple_model.solver.status.is_ok
+    assert simple_model.solver.solution is not None
+    assert simple_model.solver_model is simple_model.solver.solver_model
+    assert simple_model.solver_name == solver
+
+
+@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
+    solver_enum = solvers.SolverName(solver.lower())
+    solver_class = getattr(solvers, solver_enum.name)
+    instance = solver_class()
+    result = instance.solve_problem(model=simple_model)
+    assert result.solver_name == solver
+
+
+@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+def test_to_solver_model_then_resolve(simple_model: Model, solver: str) -> None:
+    if not solver_supports(solver, SolverFeature.DIRECT_API):
+        pytest.skip("Solver does not support direct API.")
+    solver_enum = solvers.SolverName(solver.lower())
+    solver_class = getattr(solvers, solver_enum.name)
+    instance = solver_class()
+    instance.to_solver_model(simple_model)
+    result = instance.resolve(simple_model.sense)
+
+    reference = Model(chunk=None)
+    rx = reference.add_variables(name="x")
+    ry = reference.add_variables(name="y")
+    reference.add_constraints(2 * rx + 6 * ry, GREATER_EQUAL, 10)
+    reference.add_constraints(4 * rx + 2 * ry, GREATER_EQUAL, 3)
+    reference.add_objective(2 * ry + rx)
+    reference.solve(solver, io_api="direct")
+
+    assert result.status.is_ok
+    assert result.solution is not None
+    assert np.isclose(result.solution.objective, reference.objective.value)
+
+
+def test_apply_result_explicit(simple_model: Model) -> None:
+    x_labels = simple_model.variables["x"].labels.values
+    y_labels = simple_model.variables["y"].labels.values
+    primal = pd.Series(
+        {int(x_labels): 1.5, int(y_labels): 2.0}, dtype=float
+    )
+    solution = Solution(primal=primal, objective=5.5)
+    result = Result(
+        status=Status.from_termination_condition("optimal"),
+        solution=solution,
+        solver_name="mock",
+    )
+    simple_model.solver = None
+    simple_model.apply_result(result)
+    assert simple_model.status == "ok"
+    assert simple_model.termination_condition == "optimal"
+    assert simple_model.objective.value == 5.5
+    assert float(simple_model.variables["x"].solution) == 1.5
+    assert float(simple_model.variables["y"].solution) == 2.0
+
+
+@pytest.mark.skipif(
+    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+)
+def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
+    simple_model.solve("gurobi", io_api="direct")
+    assert simple_model.solver is not None
+    assert simple_model.solver.env is not None
+    assert isinstance(simple_model.solver_model.NumVars, int)
+
+
+@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
+    simple_model.solve(solver)
+    solver_instance = simple_model.solver
+    assert solver_instance is not None
+    solver_instance.close()
+    assert solver_instance.solver_model is None
+    assert solver_instance.env is None
 
 free_mps_problem = """NAME               sample_mip
 ROWS
