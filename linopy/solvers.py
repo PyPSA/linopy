@@ -355,6 +355,21 @@ class Solver(ABC, Generic[EnvType]):
         with contextlib.suppress(Exception):
             self.close()
 
+    def __repr__(self) -> str:
+        status = self.status.status.value if self.status is not None else "unsolved"
+        parts = [f"name={self.solver_name.value!r}", f"status={status!r}"]
+        if self.io_api is not None:
+            parts.append(f"io_api={self.io_api!r}")
+        if self.solver_model is not None:
+            parts.append("solver_model=loaded")
+        if self.env is not None:
+            parts.append("env=active")
+        if self.solution is not None:
+            parts.append(f"objective={self.solution.objective:.4g}")
+        if self.report is not None and self.report.runtime is not None:
+            parts.append(f"runtime={self.report.runtime:.3g}s")
+        return f"{type(self).__name__}({', '.join(parts)})"
+
     def _make_result(
         self,
         status: Status,
