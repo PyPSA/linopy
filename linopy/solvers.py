@@ -29,12 +29,15 @@ import linopy.io
 from linopy.constants import (
     Result,
     Solution,
+    SolverReport,
     SolverStatus,
     Status,
     TerminationCondition,
 )
 from linopy.solver_capabilities import (
+    SOLVER_REGISTRY,
     SolverFeature,
+    SolverInfo,
     get_solvers_with_feature,
 )
 
@@ -310,12 +313,67 @@ class Solver(ABC, Generic[EnvType]):
         self,
         **solver_options: Any,
     ) -> None:
-        self.solver_options = solver_options
+        self.options: dict[str, Any] = solver_options
+        self.solver_options: dict[str, Any] = solver_options
+        self.status: Status | None = None
+        self.solution: Solution | None = None
+        self.report: SolverReport | None = None
+        self.solver_model: Any = None
+        self.io_api: str | None = None
+        self.env: Any = None
+        self.capability: SolverInfo | None = SOLVER_REGISTRY.get(
+            self.solver_name.value
+        )
+        self._env_stack: contextlib.ExitStack | None = None
 
-        # Check for the solver to be initialized whether the package is installed or not.
         if self.solver_name.value not in available_solvers:
             msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
             raise ImportError(msg)
+
+    def to_solver_model(self, model: Model, **kwargs: Any) -> Any:
+        raise NotImplementedError
+
+    def update_solver_model(self, model: Model, **kwargs: Any) -> None:
+        raise NotImplementedError
+
+    def resolve(self, sense: str) -> Result:
+        if self.solver_model is None:
+            raise RuntimeError("call to_solver_model first")
+        return self._resolve(sense)
+
+    def _resolve(self, sense: str) -> Result:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        if self._env_stack is not None:
+            self._env_stack.close()
+        self.env = None
+        self.solver_model = None
+        self._env_stack = None
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def _make_result(
+        self,
+        status: Status,
+        solution: Solution | None,
+        solver_model: Any = None,
+        report: SolverReport | None = None,
+    ) -> Result:
+        self.status = status
+        self.solution = solution
+        self.report = report
+        if solver_model is not None:
+            self.solver_model = solver_model
+        return Result(
+            status=status,
+            solution=solution,
+            solver_model=solver_model,
+            solver_name=self.solver_name.value,
+            report=report,
+        )
 
     def safe_get_solution(
         self, status: Status, func: Callable[[], Solution]
@@ -609,7 +667,13 @@ class CBC(Solver[None]):
             runtime = float(m.group(1))
         CbcModel = namedtuple("CbcModel", ["mip_gap", "runtime"])
 
-        return Result(status, solution, CbcModel(mip_gap, runtime))
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=CbcModel(mip_gap, runtime),
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+        )
 
 
 class GLPK(Solver[None]):
@@ -740,7 +804,8 @@ class GLPK(Solver[None]):
 
         if not os.path.exists(solution_fn):
             status = Status(SolverStatus.warning, TerminationCondition.unknown)
-            return Result(status, Solution())
+            self.io_api = io_api
+            return self._make_result(status, Solution())
 
         f = open(solution_fn)
 
@@ -780,7 +845,8 @@ class GLPK(Solver[None]):
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
-        return Result(status, solution)
+        self.io_api = io_api
+        return self._make_result(status, solution)
 
 
 class Highs(Solver[None]):
@@ -809,48 +875,14 @@ class Highs(Solver[None]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def solve_problem_from_model(
+    def to_solver_model(
         self,
         model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
-    ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the HiGHS solver.
-        Reads a linear problem file and passes it to the HiGHS solver.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-        # check for HiGHS solver compatibility
+        log_fn: Path | None = None,
+        **kwargs: Any,
+    ) -> highspy.Highs:
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
@@ -869,9 +901,30 @@ class Highs(Solver[None]):
             set_names=set_names,
         )
         self._set_solver_params(h, log_fn)
+        self.solver_model = h
+        self.io_api = "direct"
+        return h
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> Result:
+        self.to_solver_model(
+            model,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+            log_fn=log_fn,
+        )
 
         return self._solve(
-            h,
+            self.solver_model,
             solution_fn,
             warmstart_fn,
             basis_fn,
@@ -879,6 +932,9 @@ class Highs(Solver[None]):
             io_api="direct",
             sense=model.sense,
         )
+
+    def _resolve(self, sense: str) -> Result:
+        return self._solve(self.solver_model, io_api=self.io_api, sense=sense)
 
     def solve_problem_from_file(
         self,
@@ -920,13 +976,15 @@ class Highs(Solver[None]):
         self._set_solver_params(h, log_fn)
 
         h.readModel(problem_fn_)
+        self.solver_model = h
+        self.io_api = read_io_api_from_problem_file(problem_fn)
 
         return self._solve(
             h,
             solution_fn,
             warmstart_fn,
             basis_fn,
-            io_api=read_io_api_from_problem_file(problem_fn),
+            io_api=self.io_api,
             sense=read_sense_from_problem_file(problem_fn),
         )
 
@@ -1038,7 +1096,20 @@ class Highs(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, h)
+        runtime: float | None = None
+        mip_gap: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(h.getRunTime())
+        with contextlib.suppress(Exception):
+            mip_gap = float(h.getInfo().mip_gap)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=h,
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+        )
 
 
 class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
@@ -1057,6 +1128,38 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     ) -> None:
         super().__init__(**solver_options)
 
+    def _resolve_env(
+        self, env: gurobipy.Env | dict[str, Any] | None
+    ) -> gurobipy.Env:
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        if env is None:
+            resolved = self._env_stack.enter_context(gurobipy.Env())
+        elif isinstance(env, dict):
+            resolved = self._env_stack.enter_context(gurobipy.Env(params=env))
+        else:
+            resolved = env
+        self.env = resolved
+        return resolved
+
+    def to_solver_model(
+        self,
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        env: gurobipy.Env | dict[str, Any] | None = None,
+        set_names: bool = True,
+        **kwargs: Any,
+    ) -> gurobipy.Model:
+        env_ = self._resolve_env(env)
+        m = model.to_gurobipy(
+            env=env_,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self.solver_model = m
+        self.io_api = "direct"
+        return m
+
     def solve_problem_from_model(
         self,
         model: Model,
@@ -1068,58 +1171,32 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
     ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the Gurobi solver.
-        Reads a problem file and passes it to the Gurobi solver.
-        This function communicates with gurobi using the gurobipy package.
+        self.to_solver_model(
+            model,
+            explicit_coordinate_names=explicit_coordinate_names,
+            env=env,
+            set_names=set_names,
+        )
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api="direct",
+            sense=model.sense,
+        )
 
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : gurobipy.Env or dict, optional
-            Gurobi environment for the solver, pass env directly or kwargs for creation.
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(gurobipy.Env())
-            elif isinstance(env, dict):
-                env_ = stack.enter_context(gurobipy.Env(params=env))
-            else:
-                env_ = env
-
-            m = model.to_gurobipy(
-                env=env_,
-                explicit_coordinate_names=explicit_coordinate_names,
-                set_names=set_names,
-            )
-
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api="direct",
-                sense=model.sense,
-            )
+    def _resolve(self, sense: str) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=None,
+            log_fn=None,
+            warmstart_fn=None,
+            basis_fn=None,
+            io_api=self.io_api,
+            sense=sense,
+        )
 
     def solve_problem_from_file(
         self,
@@ -1158,25 +1235,20 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)
 
-        with contextlib.ExitStack() as stack:
-            if env is None:
-                env_ = stack.enter_context(gurobipy.Env())
-            elif isinstance(env, dict):
-                env_ = stack.enter_context(gurobipy.Env(params=env))
-            else:
-                env_ = env
+        env_ = self._resolve_env(env)
+        m = gurobipy.read(problem_fn_, env=env_)
+        self.solver_model = m
+        self.io_api = io_api
 
-            m = gurobipy.read(problem_fn_, env=env_)
-
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api=io_api,
-                sense=sense,
-            )
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+        )
 
     def _solve(
         self,
@@ -1279,7 +1351,20 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        runtime: float | None = None
+        mip_gap: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(m.Runtime)
+        with contextlib.suppress(Exception):
+            mip_gap = float(m.MIPGap)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=m,
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+        )
 
 
 class Cplex(Solver[None]):
@@ -1438,7 +1523,8 @@ class Cplex(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class SCIP(Solver[None]):
@@ -1592,7 +1678,8 @@ class SCIP(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class Xpress(Solver[None]):
@@ -1766,7 +1853,8 @@ class Xpress(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 KnitroResult = namedtuple(
@@ -1994,24 +2082,29 @@ class Knitro(Solver[None]):
                 solution_fn.parent.mkdir(exist_ok=True)
                 knitro.KN_write_mps_file(kc, path_to_string(solution_fn))
 
-            return Result(
+            knitro_model = KnitroResult(
+                reported_runtime=reported_runtime,
+                mip_relaxation_bnd=mip_relaxation_bnd,
+                mip_number_nodes=mip_number_nodes,
+                mip_number_solves=mip_number_solves,
+                mip_rel_gap=mip_rel_gap,
+                mip_abs_gap=mip_abs_gap,
+                abs_feas_error=abs_feas_error,
+                rel_feas_error=rel_feas_error,
+                abs_opt_error=abs_opt_error,
+                rel_opt_error=rel_opt_error,
+                n_vars=n_vars,
+                n_cons=n_cons,
+                n_integer_vars=n_integer_vars,
+                n_continuous_vars=n_continuous_vars,
+            )
+            self.io_api = io_api
+            return self._make_result(
                 status,
                 solution,
-                KnitroResult(
-                    reported_runtime=reported_runtime,
-                    mip_relaxation_bnd=mip_relaxation_bnd,
-                    mip_number_nodes=mip_number_nodes,
-                    mip_number_solves=mip_number_solves,
-                    mip_rel_gap=mip_rel_gap,
-                    mip_abs_gap=mip_abs_gap,
-                    abs_feas_error=abs_feas_error,
-                    rel_feas_error=rel_feas_error,
-                    abs_opt_error=abs_opt_error,
-                    rel_opt_error=rel_opt_error,
-                    n_vars=n_vars,
-                    n_cons=n_cons,
-                    n_integer_vars=n_integer_vars,
-                    n_continuous_vars=n_continuous_vars,
+                solver_model=knitro_model,
+                report=SolverReport(
+                    runtime=reported_runtime, mip_gap=mip_rel_gap
                 ),
             )
         finally:
@@ -2096,22 +2189,50 @@ class Mosek(Solver[None]):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        with mosek.Task() as m:
-            m = model.to_mosek(
-                m,
-                explicit_coordinate_names=explicit_coordinate_names,
-                set_names=set_names,
-            )
+        self.to_solver_model(
+            model,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api="direct",
+            sense=model.sense,
+        )
 
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api="direct",
-                sense=model.sense,
-            )
+    def _resolve(self, sense: str) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=None,
+            log_fn=None,
+            warmstart_fn=None,
+            basis_fn=None,
+            io_api=self.io_api,
+            sense=sense,
+        )
+
+    def to_solver_model(
+        self,
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+        **kwargs: Any,
+    ) -> mosek.Task:
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        task = self._env_stack.enter_context(mosek.Task())
+        m = model.to_mosek(
+            task,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self.solver_model = m
+        self.io_api = "direct"
+        return m
 
     def solve_problem_from_file(
         self,
@@ -2154,23 +2275,25 @@ class Mosek(Solver[None]):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        with mosek.Task() as m:
-            # read sense and io_api from problem file
-            sense = read_sense_from_problem_file(problem_fn)
-            io_api = read_io_api_from_problem_file(problem_fn)
-            # for Mosek solver, the path needs to be a string
-            problem_fn_ = path_to_string(problem_fn)
-            m.readdata(problem_fn_)
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        m = self._env_stack.enter_context(mosek.Task())
+        sense = read_sense_from_problem_file(problem_fn)
+        io_api = read_io_api_from_problem_file(problem_fn)
+        problem_fn_ = path_to_string(problem_fn)
+        m.readdata(problem_fn_)
+        self.solver_model = m
+        self.io_api = io_api
 
-            return self._solve(
-                m,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                io_api=io_api,
-                sense=sense,
-            )
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+        )
 
     def _solve(
         self,
@@ -2366,7 +2489,8 @@ class Mosek(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        return Result(status, solution)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class COPT(Solver[None]):
@@ -2508,7 +2632,8 @@ class COPT(Solver[None]):
 
         env_.close()
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class MindOpt(Solver[None]):
@@ -2653,7 +2778,8 @@ class MindOpt(Solver[None]):
         m.dispose()
         env_.dispose()
 
-        return Result(status, solution, m)
+        self.io_api = io_api
+        return self._make_result(status, solution, solver_model=m)
 
 
 class PIPS(Solver[None]):
@@ -2792,14 +2918,10 @@ class cuPDLPx(Solver[None]):
         Result
         """
 
-        if model.type in ["QP", "MILP"]:
-            msg = "cuPDLPx does not currently support QP or MILP problems."
-            raise NotImplementedError(msg)
-
-        cu_model = model.to_cupdlpx()
+        self.to_solver_model(model)
 
         return self._solve(
-            cu_model,
+            self.solver_model,
             l_model=model,
             solution_fn=solution_fn,
             log_fn=log_fn,
@@ -2807,6 +2929,23 @@ class cuPDLPx(Solver[None]):
             basis_fn=basis_fn,
             io_api="direct",
             sense=model.sense,
+        )
+
+    def to_solver_model(self, model: Model, **kwargs: Any) -> cupdlpx.Model:
+        if model.type in ["QP", "MILP"]:
+            msg = "cuPDLPx does not currently support QP or MILP problems."
+            raise NotImplementedError(msg)
+        cu_model = model.to_cupdlpx()
+        self.solver_model = cu_model
+        self.io_api = "direct"
+        return cu_model
+
+    def _resolve(self, sense: str) -> Result:
+        return self._solve(
+            self.solver_model,
+            l_model=None,
+            io_api=self.io_api,
+            sense=sense,
         )
 
     def _solve(
@@ -2904,8 +3043,17 @@ class cuPDLPx(Solver[None]):
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
         solution = maybe_adjust_objective_sign(solution, io_api, sense)
 
-        # see https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#solution-attributes
-        return Result(status, solution, cu_model)
+        runtime: float | None = None
+        with contextlib.suppress(Exception):
+            runtime = float(cu_model.Runtime)
+
+        self.io_api = io_api
+        return self._make_result(
+            status,
+            solution,
+            solver_model=cu_model,
+            report=SolverReport(runtime=runtime),
+        )
 
     def _set_solver_params(self, cu_model: cupdlpx.Model) -> None:
         """
