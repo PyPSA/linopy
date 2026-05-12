@@ -166,9 +166,7 @@ class TestInfeasibility:
         # Solve the model first
         m.solve(solver_name=solver)
 
-        # Manually remove the solver_model to simulate cleanup
-        m.solver_model = None
-        m.solver_name = solver  # But keep the solver name
+        m.solver.solver_model = None
 
         # Should raise ValueError since we know it was solved with supported solver
         with pytest.raises(ValueError, match="No solver model available"):
