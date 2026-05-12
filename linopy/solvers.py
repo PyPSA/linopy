@@ -364,14 +364,14 @@ class Solver(ABC, Generic[EnvType]):
         self._vlabels = model.matrices.vlabels.copy()
         self._clabels = model.matrices.clabels.copy()
 
-    def resolve(self) -> Result:
+    def run(self) -> Result:
         if self.solver_model is None:
             raise RuntimeError("call to_solver_model first")
         if self.sense is None:
             raise RuntimeError("sense not set; call to_solver_model first")
-        return self._resolve()
+        return self._run()
 
-    def _resolve(self) -> Result:
+    def _run(self) -> Result:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -1011,7 +1011,7 @@ class Highs(Solver[None]):
             sense=model.sense,
         )
 
-    def _resolve(self) -> Result:
+    def _run(self) -> Result:
         return self._solve(self.solver_model, io_api=self.io_api, sense=self.sense)
 
     def solve_problem_from_file(
@@ -1288,7 +1288,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             sense=model.sense,
         )
 
-    def _resolve(self) -> Result:
+    def _run(self) -> Result:
         return self._solve(
             self.solver_model,
             solution_fn=None,
@@ -2373,7 +2373,7 @@ class Mosek(Solver[None]):
             sense=model.sense,
         )
 
-    def _resolve(self) -> Result:
+    def _run(self) -> Result:
         return self._solve(
             self.solver_model,
             solution_fn=None,
@@ -3152,7 +3152,7 @@ class cuPDLPx(Solver[None]):
         self.sense = model.sense
         return cu_model
 
-    def _resolve(self) -> Result:
+    def _run(self) -> Result:
         return self._solve(
             self.solver_model,
             l_model=None,

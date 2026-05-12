@@ -59,11 +59,11 @@ def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_to_solver_model_then_resolve(simple_model: Model, solver: str) -> None:
+def test_prepare_solver_then_run(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    simple_model.to_solver_model(solver)
-    simple_model.resolve()
+    simple_model.prepare_solver(solver)
+    simple_model.run_solver()
 
     reference = Model(chunk=None)
     rx = reference.add_variables(name="x")
@@ -78,13 +78,13 @@ def test_to_solver_model_then_resolve(simple_model: Model, solver: str) -> None:
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_to_solver_model_set_names_false_resolve(
+def test_prepare_solver_set_names_false_run(
     simple_model: Model, solver: str
 ) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    simple_model.to_solver_model(solver, set_names=False)
-    status, condition = simple_model.resolve()
+    simple_model.prepare_solver(solver, set_names=False)
+    status, condition = simple_model.run_solver()
 
     assert status == "ok"
     assert condition == "optimal"
@@ -96,8 +96,8 @@ def test_to_solver_model_set_names_false_resolve(
 @pytest.mark.skipif(
     "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
 )
-def test_highs_to_solver_model_applies_solver_options(simple_model: Model) -> None:
-    highs_model = simple_model.to_solver_model("highs", time_limit=123)
+def test_highs_prepare_solver_applies_solver_options(simple_model: Model) -> None:
+    highs_model = simple_model.prepare_solver("highs", time_limit=123)
 
     option_status, time_limit = highs_model.getOptionValue("time_limit")
     assert str(option_status) == "HighsStatus.kOk"
@@ -108,13 +108,13 @@ def test_highs_to_solver_model_applies_solver_options(simple_model: Model) -> No
     "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
 )
 def test_solver_state_compatibility_setters(simple_model: Model) -> None:
-    simple_model.to_solver_model("highs")
+    simple_model.prepare_solver("highs")
     simple_model.solver_model = None
     assert simple_model.solver is None
     assert simple_model.solver_model is None
     assert simple_model.solver_name is None
 
-    simple_model.to_solver_model("highs")
+    simple_model.prepare_solver("highs")
     simple_model.solver_name = None
     assert simple_model.solver is None
     assert simple_model.solver_model is None

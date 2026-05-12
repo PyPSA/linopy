@@ -4,6 +4,11 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Solver refactor: solver state now lives on a stateful ``Solver`` instance attached to ``Model.solver``. ``Model.solver_model`` and ``Model.solver_name`` become read-only properties delegating to ``model.solver`` (assigning anything other than ``None`` raises; setting ``None`` closes the solver). ``Model.solver_name`` may be ``None`` before a solve.
+* Two-step solve workflow: ``Model.prepare_solver(solver_name, ...)`` builds the native solver model without solving, and ``Model.run_solver()`` runs it. ``Model.apply_result(result=None)`` exposes the solution-mapping step and defaults to the state on ``model.solver``.
+* Solver capabilities are declared as ``features: frozenset[SolverFeature]`` ClassVars on each ``Solver`` subclass; use ``Solver.supports(feature)``. ``SolverFeature`` is now exported from ``linopy`` (and from ``linopy.solvers``); ``linopy.solver_capabilities`` remains as a back-compat shim with a lazy ``SOLVER_REGISTRY`` mapping.
+* ``Result`` gains ``solver_name`` and ``report: SolverReport | None`` (runtime, MIP gap, iteration counts) and prints them in ``__repr__``. CBC, HiGHS, Gurobi, Knitro, and cuPDLPx populate ``report``.
+* Direct-API solvers (HiGHS, Gurobi, Mosek, cuPDLPx) cache variable/constraint labels on the ``Solver`` instance, so solutions are reconstructed by label rather than by solver-side names — fixes label mapping when names are not set on the solver.
 * Increase speed of direct solver communication (~10x) in conversion functions like `to_highspy` through faster matrix creation (see below), leading to significant overall speed-up when setting `io_api="direct"`.
 * Add ``CSRConstraint``, a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Provides up to 90% memory savings for constraints with many terms and 30–120x faster matrix generation for direct solver APIs.
   - Add ``freeze_constraints`` parameter to ``Model`` for globally storing constraints in CSR format on ``add_constraints``.
