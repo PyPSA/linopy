@@ -1,22 +1,21 @@
 .. _user-guide:
 
-User Guide
-==========
+Overview
+========
 
-This guide takes you from a working install to building, modifying, and
-solving real models. Each page is a runnable Jupyter notebook — read it
-top to bottom, or use it as a reference once you know what you're
-looking for.
+In :doc:`Getting Started <prerequisites>` you installed linopy, built
+a first scalar model, and saw N-D variables on coordinates. The User
+Guide reopens each of those pieces in depth and adds the rest of the
+modelling surface.
 
-If you haven't yet, run through the :doc:`Getting Started <prerequisites>`
-section first: it installs linopy and a solver, then walks through a
-first scalar model and the move to N-D variables with coordinates.
+Each page is a runnable Jupyter notebook — read it top to bottom, or
+use it as a reference once you know what you're looking for.
 
 
 Core building blocks
 --------------------
 
-The four notebooks below cover the model object users interact with
+The four notebooks below cover the model object you'll interact with
 most. Read them in order the first time; come back to them whenever
 you're unsure what a particular operator or argument does.
 
