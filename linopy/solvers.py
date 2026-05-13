@@ -26,11 +26,15 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from packaging.specifiers import SpecifierSet
 from packaging.version import parse as parse_version
+from scipy.sparse import tril, triu
 
 import linopy.io
 from linopy.constants import (
+    SOS_DIM_ATTR,
+    SOS_TYPE_ATTR,
     Result,
     Solution,
     SolverReport,
@@ -65,7 +69,10 @@ def _installed_version_in(pkg: str, spec: str) -> bool:
 
 
 if TYPE_CHECKING:
+    import cupdlpx
     import gurobipy
+    import highspy
+    import mosek
 
     from linopy.model import Model
 
@@ -1008,7 +1015,8 @@ class Highs(Solver[None]):
                 "Drop the solver option or use 'choose' to enable quadratic terms / integrality."
             )
 
-        h = model.to_highspy(
+        h = self._build_solver_model(
+            model,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
@@ -1017,6 +1025,74 @@ class Highs(Solver[None]):
         self.solver_model = h
         self.io_api = "direct"
         self.sense = model.sense
+        return h
+
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> highspy.Highs:
+        """Build a highspy.Highs instance that mirrors the linopy `model`."""
+        if model.variables.sos:
+            raise NotImplementedError(
+                "SOS constraints are not supported by the HiGHS direct API. "
+                "Use io_api='lp' instead."
+            )
+
+        M = model.matrices
+        h = highspy.Highs()
+        h.addVars(len(M.vlabels), M.lb, M.ub)
+        if (
+            len(model.binaries)
+            + len(model.integers)
+            + len(list(model.variables.semi_continuous))
+        ):
+            vtypes = M.vtypes
+            integrality_map = {"C": 0, "B": 1, "I": 1, "S": 2}
+            int_mask = (vtypes == "B") | (vtypes == "I") | (vtypes == "S")
+            labels = np.arange(len(vtypes))[int_mask]
+            integrality = np.array(
+                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.int32
+            )
+            h.changeColsIntegrality(len(labels), labels, integrality)
+            if len(model.binaries):
+                labels = np.arange(len(vtypes))[vtypes == "B"]
+                n = len(labels)
+                h.changeColsBounds(
+                    n, labels, np.zeros_like(labels), np.ones_like(labels)
+                )
+
+        c = M.c
+        h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
+
+        A = M.A
+        if A is not None:
+            A = A.tocsr()
+            num_cons = A.shape[0]
+            lower = np.where(M.sense != "<", M.b, -np.inf)
+            upper = np.where(M.sense != ">", M.b, np.inf)
+            h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            lp = h.getLp()
+            lp.col_names_ = print_variables(M.vlabels)
+            if len(M.clabels):
+                lp.row_names_ = print_constraints(M.clabels)
+            h.passModel(lp)
+
+        Q = M.Q
+        if Q is not None:
+            Q = triu(Q).tocsr()
+            num_vars = Q.shape[0]
+            h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
+
+        if model.objective.sense == "max":
+            h.changeObjectiveSense(highspy.ObjSense.kMaximize)
+
         return h
 
     def solve_problem_from_model(
@@ -1286,7 +1362,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         **kwargs: Any,
     ) -> gurobipy.Model:
         env_ = self._resolve_env(env)
-        m = model.to_gurobipy(
+        m = self._build_solver_model(
+            model,
             env=env_,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
@@ -1296,6 +1373,70 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         self.io_api = "direct"
         self.sense = model.sense
         return m
+
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        env: gurobipy.Env | None = None,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> gurobipy.Model:
+        """Build a gurobipy.Model that mirrors the linopy `model`."""
+        model.constraints.sanitize_missings()
+        gm = gurobipy.Model(env=env)
+
+        M = model.matrices
+
+        kwargs: dict[str, Any] = {}
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            kwargs["name"] = print_variables(M.vlabels)
+        if (
+            len(model.binaries.labels)
+            + len(model.integers.labels)
+            + len(list(model.variables.semi_continuous))
+        ):
+            kwargs["vtype"] = M.vtypes
+        x = gm.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
+
+        if model.is_quadratic:
+            gm.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
+        else:
+            gm.setObjective(M.c @ x)
+
+        if model.objective.sense == "max":
+            gm.ModelSense = -1
+
+        if len(model.constraints):
+            c = gm.addMConstr(M.A, x, M.sense, M.b)
+            if set_names:
+                names = print_constraints(M.clabels)
+                c.setAttr("ConstrName", names)
+
+        if model.variables.sos:
+            for var_name in model.variables.sos:
+                var = model.variables.sos[var_name]
+                sos_type: int = var.attrs[SOS_TYPE_ATTR]
+                sos_dim: str = var.attrs[SOS_DIM_ATTR]
+
+                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
+                    s = s.squeeze()
+                    indices = s.values.flatten().tolist()
+                    weights = s.coords[sos_dim].values.tolist()
+                    gm.addSOS(sos_type, x[indices].tolist(), weights)
+
+                others = [dim for dim in var.labels.dims if dim != sos_dim]
+                if not others:
+                    add_sos(var.labels, sos_type, sos_dim)
+                else:
+                    stacked = var.labels.stack(_sos_group=others)
+                    for _, s in stacked.groupby("_sos_group"):
+                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+
+        gm.update()
+        return gm
 
     def solve_problem_from_model(
         self,
@@ -2403,7 +2544,8 @@ class Mosek(Solver[None]):
         self.close()
         self._env_stack = contextlib.ExitStack()
         task = self._env_stack.enter_context(mosek.Task())
-        m = model.to_mosek(
+        m = self._build_solver_model(
+            model,
             task,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
@@ -2413,6 +2555,96 @@ class Mosek(Solver[None]):
         self.io_api = "direct"
         self.sense = model.sense
         return m
+
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        task: mosek.Task,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> mosek.Task:
+        """Populate an empty MOSEK task with the contents of `model`."""
+        if model.variables.sos:
+            raise NotImplementedError("SOS constraints are not supported by MOSEK.")
+        if model.variables.semi_continuous:
+            raise NotImplementedError(
+                "Semi-continuous variables are not supported by MOSEK. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        task.appendvars(model.nvars)
+        task.appendcons(model.ncons)
+
+        M = model.matrices
+
+        if set_names:
+            print_variables, print_constraints = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            labels = print_variables(M.vlabels)
+            task.generatevarnames(
+                np.arange(0, len(labels)), "%0", [len(labels)], None, [0], labels
+            )
+
+        bkx = [
+            (
+                (
+                    (mosek.boundkey.ra if lb < ub else mosek.boundkey.fx)
+                    if ub < np.inf
+                    else mosek.boundkey.lo
+                )
+                if (lb > -np.inf)
+                else (mosek.boundkey.up if (ub < np.inf) else mosek.boundkey.fr)
+            )
+            for (lb, ub) in zip(M.lb, M.ub)
+        ]
+        blx = [b if b > -np.inf else 0.0 for b in M.lb]
+        bux = [b if b < np.inf else 0.0 for b in M.ub]
+        task.putvarboundslice(0, model.nvars, bkx, blx, bux)
+
+        if len(model.binaries.labels) + len(model.integers.labels) > 0:
+            idx = [i for (i, v) in enumerate(M.vtypes) if v in ["B", "I"]]
+            task.putvartypelist(idx, [mosek.variabletype.type_int] * len(idx))
+            if len(model.binaries.labels) > 0:
+                bidx = [i for (i, v) in enumerate(M.vtypes) if v == "B"]
+                task.putvarboundlistconst(bidx, mosek.boundkey.ra, 0.0, 1.0)
+
+        if len(model.constraints) > 0:
+            if set_names:
+                names = print_constraints(M.clabels)
+                for i, n in enumerate(names):
+                    task.putconname(i, n)
+            bkc = [
+                (
+                    (mosek.boundkey.up if b < np.inf else mosek.boundkey.fr)
+                    if s == "<"
+                    else (
+                        (mosek.boundkey.lo if b > -np.inf else mosek.boundkey.up)
+                        if s == ">"
+                        else mosek.boundkey.fx
+                    )
+                )
+                for s, b in zip(M.sense, M.b)
+            ]
+            blc = [b if b > -np.inf else 0.0 for b in M.b]
+            buc = [b if b < np.inf else 0.0 for b in M.b]
+            if M.A is not None:
+                A = M.A.tocsr()
+                task.putarowslice(
+                    0, model.ncons, A.indptr[:-1], A.indptr[1:], A.indices, A.data
+                )
+                task.putconboundslice(0, model.ncons, bkc, blc, buc)
+
+        if M.Q is not None:
+            Q = (0.5 * tril(M.Q + M.Q.transpose())).tocoo()
+            task.putqobj(Q.row, Q.col, Q.data)
+        task.putclist(list(np.arange(model.nvars)), M.c)
+
+        if model.objective.sense == "max":
+            task.putobjsense(mosek.objsense.maximize)
+        else:
+            task.putobjsense(mosek.objsense.minimize)
+        return task
 
     def solve_problem_from_file(
         self,
@@ -3125,11 +3357,56 @@ class cuPDLPx(Solver[None]):
         if model.type in ["QP", "MILP"]:
             msg = "cuPDLPx does not currently support QP or MILP problems."
             raise NotImplementedError(msg)
-        cu_model = model.to_cupdlpx()
+        if kwargs.get("explicit_coordinate_names"):
+            warnings.warn(
+                "cuPDLPx does not support named variables/constraints. "
+                "The explicit_coordinate_names parameter is ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+        cu_model = self._build_solver_model(model)
         self._store_labels(model)
         self.solver_model = cu_model
         self.io_api = "direct"
         self.sense = model.sense
+        return cu_model
+
+    @staticmethod
+    def _build_solver_model(model: Model) -> cupdlpx.Model:
+        """Build a cupdlpx.Model that mirrors the linopy `model`."""
+        if model.variables.semi_continuous:
+            raise NotImplementedError(
+                "Semi-continuous variables are not supported by cuPDLPx. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        M = model.matrices
+        if M.A is None:
+            raise ValueError("Model has no constraints, cannot export to cuPDLPx.")
+        A = M.A.tocsr()
+        lower = np.where(
+            np.logical_or(np.equal(M.sense, ">"), np.equal(M.sense, "=")),
+            M.b,
+            -np.inf,
+        )
+        upper = np.where(
+            np.logical_or(np.equal(M.sense, "<"), np.equal(M.sense, "=")),
+            M.b,
+            np.inf,
+        )
+
+        cu_model = cupdlpx.Model(
+            objective_vector=M.c,
+            constraint_matrix=A,
+            constraint_lower_bound=lower,
+            constraint_upper_bound=upper,
+            variable_lower_bound=M.lb,
+            variable_upper_bound=M.ub,
+        )
+
+        if model.objective.sense == "max":
+            cu_model.ModelSense = cupdlpx.PDLP.MAXIMIZE
+
         return cu_model
 
     def _run(self) -> Result:

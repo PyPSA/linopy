@@ -70,7 +70,8 @@ def test_to_gurobipy_emits_sos_constraints() -> None:
     m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
 
     try:
-        model = m.to_gurobipy()
+        with pytest.warns(DeprecationWarning, match="to_gurobipy is deprecated"):
+            model = m.to_gurobipy()
     except gurobipy.GurobiError as exc:  # pragma: no cover - depends on license setup
         pytest.skip(f"Gurobi environment unavailable: {exc}")
 
@@ -158,8 +159,11 @@ def test_to_highspy_raises_not_implemented() -> None:
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
 
-    with pytest.raises(
-        NotImplementedError,
-        match="SOS constraints are not supported by the HiGHS direct API",
+    with (
+        pytest.warns(DeprecationWarning, match="to_highspy is deprecated"),
+        pytest.raises(
+            NotImplementedError,
+            match="SOS constraints are not supported by the HiGHS direct API",
+        ),
     ):
         m.to_highspy()

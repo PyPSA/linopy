@@ -93,6 +93,11 @@ def test_prepare_solver_set_names_false_run(
     assert float(simple_model.variables["y"].solution) == pytest.approx(1.7)
 
 
+def test_prepare_solver_unknown_name_raises(simple_model: Model) -> None:
+    with pytest.raises(ValueError, match="Unknown solver name"):
+        simple_model.prepare_solver("not_a_real_solver")
+
+
 @pytest.mark.skipif(
     "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
 )

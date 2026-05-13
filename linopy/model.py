@@ -1800,7 +1800,9 @@ class Model:
         the native model object (e.g. `gurobipy.Model`). Pair with `run_solver()`
         for a two-step build-then-solve workflow.
         """
-        solver_class = getattr(solvers, solvers.SolverName(solver_name).name)
+        solver_class = solvers._solver_class_for(solver_name)
+        if solver_class is None:
+            raise ValueError(f"Unknown solver name: {solver_name}")
         if not solver_class.supports(SolverFeature.DIRECT_API):
             raise NotImplementedError(
                 f"Solver {solver_name} does not support direct API model export."
