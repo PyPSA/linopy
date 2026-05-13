@@ -79,11 +79,6 @@ Post-solve access
    model.Model.dual
    model.Model.status
    model.Model.termination_condition
-   constants.SolverStatus
-   constants.TerminationCondition
-   constants.Status
-   constants.Solution
-   constants.Result
 
 
 Diagnostics
@@ -144,8 +139,8 @@ Attributes
    variables.Variable.type
    variables.Variable.solution
 
-Modifying state
-~~~~~~~~~~~~~~~
+Modification
+~~~~~~~~~~~~
 
 .. autosummary::
    :toctree: generated/
@@ -242,8 +237,8 @@ Linear combination of variables. Arithmetic on ``Variable`` /
 
    expressions.LinearExpression
 
-Building blocks
-~~~~~~~~~~~~~~~
+Structure
+~~~~~~~~~
 
 .. autosummary::
    :toctree: generated/
@@ -262,8 +257,8 @@ Construction
    expressions.LinearExpression.from_tuples
    expressions.merge
 
-Manipulation
-~~~~~~~~~~~~
+Operations
+~~~~~~~~~~
 
 .. autosummary::
    :toctree: generated/
@@ -302,13 +297,34 @@ Quadratic combination of variables, returned when squared
    :toctree: generated/
 
    expressions.QuadraticExpression
+
+Structure
+~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
    expressions.QuadraticExpression.vars
    expressions.QuadraticExpression.coeffs
    expressions.QuadraticExpression.const
    expressions.QuadraticExpression.nterm
+
+Conversion
+~~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
    expressions.QuadraticExpression.to_constraint
    expressions.QuadraticExpression.to_matrix
    expressions.QuadraticExpression.to_polars
+
+Post-solve access
+~~~~~~~~~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
    expressions.QuadraticExpression.solution
 
 
@@ -364,13 +380,34 @@ CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
    :toctree: generated/
 
    constraints.CSRConstraint
+
+Structure
+~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
    constraints.CSRConstraint.coeffs
    constraints.CSRConstraint.vars
    constraints.CSRConstraint.sign
    constraints.CSRConstraint.rhs
-   constraints.CSRConstraint.dual
    constraints.CSRConstraint.ncons
    constraints.CSRConstraint.nterm
+
+Post-solve access
+~~~~~~~~~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
+   constraints.CSRConstraint.dual
+
+Conversion
+~~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
    constraints.CSRConstraint.to_polars
 
 
@@ -512,6 +549,22 @@ Remote solving
    :toctree: generated/
 
    remote.RemoteHandler
+
+
+Solver status and result types
+------------------------------
+
+Types returned by or compared against :attr:`Model.status`,
+:attr:`Model.termination_condition`, and :attr:`Model.solution`.
+
+.. autosummary::
+   :toctree: generated/
+
+   constants.SolverStatus
+   constants.TerminationCondition
+   constants.Status
+   constants.Solution
+   constants.Result
 
 
 Warnings
