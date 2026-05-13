@@ -346,11 +346,10 @@ class PiecewiseFormulation:
     name : str
         Formulation name (used as prefix for auxiliary variables and
         constraints).
-    method : str
-        Resolved method — one of ``{"sos2", "incremental", "lp"}``.  Never
-        ``"auto"``; if the caller passed ``method="auto"``, this holds the
-        method actually chosen.
-    convexity : {"convex", "concave", "linear", "mixed"} or None
+    method : PWL_METHOD
+        Resolved method actually used. Never ``"auto"``; if the caller
+        passed ``method="auto"``, this holds the method that was chosen.
+    convexity : PWL_CONVEXITY or None
         Shape of the piecewise curve along the breakpoint axis when it is
         well-defined (exactly two expressions, non-disjunctive, strictly
         monotonic ``x`` breakpoints).  ``None`` otherwise.
@@ -358,10 +357,12 @@ class PiecewiseFormulation:
 
     name: str
     method: PWL_METHOD
+    """Resolved formulation method (see :data:`PWL_METHOD`)."""
     variable_names: list[str]
     constraint_names: list[str]
     model: Model
     convexity: PWL_CONVEXITY | None = None
+    """Shape of the piecewise curve when well-defined (see :data:`PWL_CONVEXITY`), else ``None``."""
 
     @property
     def variables(self) -> Variables:

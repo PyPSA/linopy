@@ -923,6 +923,7 @@ class BaseExpression(ABC):
 
     @property
     def vars(self) -> DataArray:
+        """Variable labels referenced by each term of the expression."""
         return self.data.vars
 
     @vars.setter
@@ -931,6 +932,7 @@ class BaseExpression(ABC):
 
     @property
     def coeffs(self) -> DataArray:
+        """Coefficient applied to each term of the expression."""
         return self.data.coeffs
 
     @coeffs.setter
@@ -939,6 +941,7 @@ class BaseExpression(ABC):
 
     @property
     def const(self) -> DataArray:
+        """Constant offset added to the expression."""
         return self.data.const
 
     @const.setter

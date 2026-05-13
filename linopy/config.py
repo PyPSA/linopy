@@ -11,6 +11,8 @@ from typing import Any
 
 
 class OptionSettings:
+    """Runtime configuration knobs (e.g. display widths). Use as a context manager or set values directly via ``options(key=value)``."""
+
     def __init__(self, **kwargs: Any) -> None:
         self._defaults = kwargs
         self._current_values = kwargs.copy()
