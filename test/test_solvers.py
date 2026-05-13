@@ -18,9 +18,9 @@ from linopy.solver_capabilities import (
     SOLVER_REGISTRY,
     SolverFeature,
     SolverInfo,
-    _xpress_supports_gpu,
     solver_supports,
 )
+from linopy.solvers import _installed_version_in
 
 
 @pytest.fixture
@@ -422,4 +422,6 @@ def test_solver_registry_iter_and_index() -> None:
     "xpress" not in set(solvers.available_solvers), reason="Xpress is not installed"
 )
 def test_xpress_gpu_feature_reflects_installed_version() -> None:
-    assert solvers.Xpress.supports(SolverFeature.GPU_ACCELERATION) == _xpress_supports_gpu()
+    assert solvers.Xpress.supports(
+        SolverFeature.GPU_ACCELERATION
+    ) == _installed_version_in("xpress", ">=9.8.0")

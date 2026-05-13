@@ -13,13 +13,12 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from linopy.solvers import Solver, SolverFeature, _xpress_supports_gpu
+    from linopy.solvers import Solver, SolverFeature
 
 __all__ = (
     "SOLVER_REGISTRY",
     "SolverFeature",
     "SolverInfo",
-    "_xpress_supports_gpu",
     "get_available_solvers_with_feature",
     "get_solvers_with_feature",
     "solver_supports",
@@ -27,10 +26,10 @@ __all__ = (
 
 
 def __getattr__(name: str) -> object:
-    if name in {"SolverFeature", "_xpress_supports_gpu"}:
+    if name == "SolverFeature":
         from linopy import solvers as _solvers_mod
 
-        return getattr(_solvers_mod, name)
+        return _solvers_mod.SolverFeature
     raise AttributeError(name)
 
 
@@ -82,7 +81,9 @@ class _LazyRegistry(Mapping[str, SolverInfo]):
         if cls is None:
             raise KeyError(key)
         return SolverInfo(
-            name=key, features=cls.features, display_name=cls.display_name
+            name=key,
+            features=cls.supported_features(),
+            display_name=cls.display_name,
         )
 
     def __iter__(self) -> Iterator[str]:

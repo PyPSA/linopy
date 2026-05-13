@@ -56,10 +56,10 @@ class SolverFeature(Enum):
     SOLVER_ATTRIBUTE_ACCESS = auto()
 
 
-def _xpress_supports_gpu() -> bool:
-    """Check if installed xpress version supports GPU acceleration (>=9.8.0)."""
+def _installed_version_in(pkg: str, spec: str) -> bool:
+    """Check whether the installed version of `pkg` satisfies `spec`."""
     try:
-        return package_version("xpress") in SpecifierSet(">=9.8.0")
+        return package_version(pkg) in SpecifierSet(spec)
     except PackageNotFoundError:
         return False
 
@@ -329,9 +329,20 @@ class Solver(ABC, Generic[EnvType]):
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
 
     @classmethod
+    def runtime_features(cls) -> frozenset[SolverFeature]:
+        """Features whose availability depends on the installed solver version
+        or runtime environment. Override in subclasses; the default is empty."""
+        return frozenset()
+
+    @classmethod
+    def supported_features(cls) -> frozenset[SolverFeature]:
+        """All features supported by this solver, static plus runtime."""
+        return cls.features | cls.runtime_features()
+
+    @classmethod
     def supports(cls, feature: SolverFeature) -> bool:
         """Check if this solver supports a given feature."""
-        return feature in cls.features
+        return feature in cls.features or feature in cls.runtime_features()
 
     def __init__(
         self,
@@ -1835,11 +1846,13 @@ class Xpress(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.IIS_COMPUTATION,
         }
-    ) | (
-        frozenset({SolverFeature.GPU_ACCELERATION})
-        if _xpress_supports_gpu()
-        else frozenset()
     )
+
+    @classmethod
+    def runtime_features(cls) -> frozenset[SolverFeature]:
+        if _installed_version_in("xpress", ">=9.8.0"):
+            return frozenset({SolverFeature.GPU_ACCELERATION})
+        return frozenset()
 
     def __init__(
         self,
