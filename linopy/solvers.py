@@ -465,11 +465,36 @@ class Solver(ABC, Generic[EnvType]):
         set_names: bool = True,
     ) -> Result:
         """
-        Abstract method to solve a linear problem from a model.
+        Solve a linear problem directly from a linopy model.
 
-        Needs to be implemented in the specific solver subclass. Even if the solver
-        does not support solving from a model, this method should be implemented and
-        raise a NotImplementedError.
+        Subclasses that support the direct API translate the model into the
+        solver's native representation and run it. Subclasses without direct
+        API support must still implement this method and raise NotImplementedError.
+
+        Parameters
+        ----------
+        model : linopy.Model
+            Linopy model for the problem.
+        solution_fn : Path, optional
+            Path to the solution file.
+        log_fn : Path, optional
+            Path to the log file.
+        warmstart_fn : Path, optional
+            Path to the warmstart file.
+        basis_fn : Path, optional
+            Path to the basis file.
+        env : EnvType, optional
+            Solver-specific environment object (or None when not applicable).
+        explicit_coordinate_names : bool, optional
+            Transfer variable and constraint coordinate names to the solver
+            (default: False).
+        set_names : bool, optional
+            Whether to set variable and constraint names (default: True).
+            Setting to False can significantly speed up model export.
+
+        Returns
+        -------
+        Result
         """
         pass
 
@@ -2334,35 +2359,6 @@ class Mosek(Solver[None]):
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
     ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the MOSEK solver.
-
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional, deprecated
-            Deprecated. This parameter is ignored. MOSEK now uses the global
-            environment automatically. Will be removed in a future version.
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-
         if env is not None:
             warnings.warn(
                 "The 'env' parameter in solve_problem_from_model is deprecated and will be "
@@ -3112,35 +3108,6 @@ class cuPDLPx(Solver[None]):
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
     ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model using the solver cuPDLPx.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        model : linopy.model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint names to the solver (default: False)
-        set_names : bool, optional
-            Ignored. cuPDLPx does not support named variables/constraints.
-
-        Returns
-        -------
-        Result
-        """
-
         self.to_solver_model(model)
 
         return self._solve(
