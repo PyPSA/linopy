@@ -117,6 +117,14 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
+   :caption: Examples
+
+   transport-tutorial
+   migrating-from-pyomo
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
    :caption: Advanced Features
 
    sos-constraints
@@ -131,14 +139,6 @@ This package is published under MIT license.
    solve-on-remote
    solve-on-oetc
    gpu-acceleration
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
-   :caption: Examples
-
-   transport-tutorial
-   migrating-from-pyomo
 
 .. toctree::
    :hidden:

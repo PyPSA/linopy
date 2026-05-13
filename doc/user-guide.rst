@@ -48,12 +48,12 @@ bound, swap a constraint, or copy it for what-if analysis.
 Where to go next
 ----------------
 
+- **Examples** — end-to-end problem walkthroughs:
+  :doc:`transport-tutorial`, :doc:`migrating-from-pyomo`.
 - **Advanced features** — :doc:`sos-constraints`,
   :doc:`piecewise-linear-constraints`, and the
   :doc:`testing-framework` for asserting structural properties of a
   model.
-- **Examples** — end-to-end problem walkthroughs:
-  :doc:`transport-tutorial`, :doc:`migrating-from-pyomo`.
 - **Solving** — :doc:`solve-on-remote` (SSH),
   :doc:`solve-on-oetc` (OET Cloud), :doc:`gpu-acceleration` (cuPDLPx).
 - **Troubleshooting** — :doc:`infeasible-model` (diagnosing infeasible
