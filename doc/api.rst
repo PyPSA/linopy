@@ -41,9 +41,6 @@ Building a model
    model.Model.add_objective
    model.Model.add_sos_constraints
    model.Model.add_piecewise_formulation
-   piecewise.breakpoints
-   piecewise.segments
-   piecewise.Slopes
 
 Inspecting a model
 ------------------
@@ -453,12 +450,20 @@ Wraps the objective expression on a model. Accessed via
 Piecewise
 =========
 
-``PiecewiseFormulation`` is returned by
-:func:`Model.add_piecewise_formulation` and exposes the resolved
-formulation method together with the auxiliary variables/constraints
-that were generated. :func:`tangent_lines` is a standalone helper for
-composing chord-based bounds by hand, without going through
-:func:`Model.add_piecewise_formulation`.
+Construction helpers
+--------------------
+
+.. autosummary::
+   :toctree: generated/
+
+   piecewise.breakpoints
+   piecewise.segments
+   piecewise.Slopes
+
+PiecewiseFormulation
+--------------------
+
+Returned by :func:`Model.add_piecewise_formulation`.
 
 .. autosummary::
    :toctree: generated/
@@ -468,7 +473,21 @@ composing chord-based bounds by hand, without going through
    piecewise.PiecewiseFormulation.convexity
    piecewise.PiecewiseFormulation.variables
    piecewise.PiecewiseFormulation.constraints
+
+Low-level helper
+----------------
+
+.. autosummary::
+   :toctree: generated/
+
    piecewise.tangent_lines
+
+Type aliases
+------------
+
+.. autosummary::
+   :toctree: generated/
+
    constants.PWL_METHOD
    constants.PWL_METHODS
    constants.PWL_CONVEXITY
