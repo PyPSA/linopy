@@ -35,9 +35,7 @@ def simple_model() -> Model:
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_solver_instance_attached_after_solve(
-    simple_model: Model, solver: str
-) -> None:
+def test_solver_instance_attached_after_solve(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
     assert isinstance(simple_model.solver, solvers.Solver)
     assert simple_model.solver.status is not None
@@ -78,9 +76,7 @@ def test_prepare_solver_then_run(simple_model: Model, solver: str) -> None:
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_prepare_solver_set_names_false_run(
-    simple_model: Model, solver: str
-) -> None:
+def test_prepare_solver_set_names_false_run(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
     simple_model.prepare_solver(solver, set_names=False)
@@ -134,9 +130,7 @@ def test_solver_state_compatibility_setters(simple_model: Model) -> None:
 def test_apply_result_explicit(simple_model: Model) -> None:
     x_labels = simple_model.variables["x"].labels.values
     y_labels = simple_model.variables["y"].labels.values
-    primal = pd.Series(
-        {int(x_labels): 1.5, int(y_labels): 2.0}, dtype=float
-    )
+    primal = pd.Series({int(x_labels): 1.5, int(y_labels): 2.0}, dtype=float)
     solution = Solution(primal=primal, objective=5.5)
     result = Result(
         status=Status.from_termination_condition("optimal"),
@@ -170,6 +164,7 @@ def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     solver_instance.close()
     assert solver_instance.solver_model is None
     assert solver_instance.env is None
+
 
 free_mps_problem = """NAME               sample_mip
 ROWS

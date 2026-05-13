@@ -337,8 +337,10 @@ class Solver(ABC, Generic[EnvType]):
 
     @classmethod
     def runtime_features(cls) -> frozenset[SolverFeature]:
-        """Features whose availability depends on the installed solver version
-        or runtime environment. Override in subclasses; the default is empty."""
+        """
+        Features whose availability depends on the installed solver version
+        or runtime environment. Override in subclasses; the default is empty.
+        """
         return frozenset()
 
     @classmethod
@@ -1339,9 +1341,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
     ) -> None:
         super().__init__(**solver_options)
 
-    def _resolve_env(
-        self, env: gurobipy.Env | dict[str, Any] | None
-    ) -> gurobipy.Env:
+    def _resolve_env(self, env: gurobipy.Env | dict[str, Any] | None) -> gurobipy.Env:
         self.close()
         self._env_stack = contextlib.ExitStack()
         if env is None:
@@ -1623,7 +1623,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             try:
                 constrs = m.getConstrs()
                 if self._clabels is not None:
-                    dual = pd.Series([c.Pi for c in constrs], self._clabels, dtype=float)
+                    dual = pd.Series(
+                        [c.Pi for c in constrs], self._clabels, dtype=float
+                    )
                 else:
                     dual = pd.Series({c.ConstrName: c.Pi for c in constrs}, dtype=float)
             except AttributeError:
@@ -2439,9 +2441,7 @@ class Knitro(Solver[None]):
                 status,
                 solution,
                 solver_model=knitro_model,
-                report=SolverReport(
-                    runtime=reported_runtime, mip_gap=mip_rel_gap
-                ),
+                report=SolverReport(runtime=reported_runtime, mip_gap=mip_rel_gap),
             )
         finally:
             with contextlib.suppress(Exception):

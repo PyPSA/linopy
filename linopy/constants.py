@@ -311,9 +311,7 @@ class Result:
             )
         else:
             solution_string = "Solution: None\n"
-        solver_name_string = (
-            f"Solver: {self.solver_name}\n" if self.solver_name else ""
-        )
+        solver_name_string = f"Solver: {self.solver_name}\n" if self.solver_name else ""
         report_string = ""
         if self.report is not None:
             if self.report.runtime is not None:

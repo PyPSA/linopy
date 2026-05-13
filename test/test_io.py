@@ -309,9 +309,7 @@ def test_to_mosek_deprecation_warning(model: Model) -> None:
         model.to_mosek()
 
 
-@pytest.mark.skipif(
-    "cupdlpx" not in available_solvers, reason="cuPDLPx not installed"
-)
+@pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
 def test_to_cupdlpx_deprecation_warning(model: Model) -> None:
     with pytest.warns(DeprecationWarning, match="to_cupdlpx is deprecated"):
         model.to_cupdlpx()
