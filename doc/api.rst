@@ -119,8 +119,8 @@ Top-level helpers
    options
 
 
-Classes and types
-=================
+Other classes and types
+=======================
 
 Variable
 --------
