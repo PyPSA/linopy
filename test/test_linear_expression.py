@@ -14,6 +14,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 from xarray.testing import assert_equal
 
 from linopy import LinearExpression, Model, QuadraticExpression, Variable, merge
@@ -1920,7 +1921,8 @@ class TestJoinParameter:
         def test_add_same_coords_all_joins(self, a: Variable, c: Variable) -> None:
             expr_a = 1 * a + 5
             const = xr.DataArray([1, 2, 3], dims=["i"], coords={"i": [0, 1, 2]})
-            for join in ["override", "outer", "inner"]:
+            joins: list[JoinOptions] = ["override", "outer", "inner"]
+            for join in joins:
                 result = expr_a.add(const, join=join)
                 assert list(result.coords["i"].values) == [0, 1, 2]
                 np.testing.assert_array_equal(result.const.values, [6, 7, 8])

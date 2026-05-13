@@ -17,15 +17,15 @@ from benchmarks.models import (
 
 def _access_matrices(m):
     """Access all matrix properties to force computation."""
-    m.matrices.clean_cached_properties()
-    _ = m.matrices.A
-    _ = m.matrices.b
-    _ = m.matrices.c
-    _ = m.matrices.lb
-    _ = m.matrices.ub
-    _ = m.matrices.sense
-    _ = m.matrices.vlabels
-    _ = m.matrices.clabels
+    matrices = m.matrices
+    _ = matrices.A
+    _ = matrices.b
+    _ = matrices.c
+    _ = matrices.lb
+    _ = matrices.ub
+    _ = matrices.sense
+    _ = matrices.vlabels
+    _ = matrices.clabels
 
 
 @pytest.mark.parametrize("n", BASIC_SIZES, ids=[f"n={n}" for n in BASIC_SIZES])
