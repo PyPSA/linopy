@@ -264,6 +264,9 @@ class Status:
 class Solution:
     """
     Solution returned by the solver.
+
+    ``primal`` and ``dual`` are values in ``vlabels``/``clabels`` build order
+    -- ``primal[i]`` is the value for variable label ``vlabels[i]``.
     """
 
     primal: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))
