@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, nan, ndarray
+from numpy import inf, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
@@ -1870,7 +1870,6 @@ class Model:
 
         sol = result.solution.primal.copy()
         sol = set_int_index(sol)
-        sol.loc[-1] = nan
 
         sol_arr = series_to_lookup_array(sol)
 
@@ -1881,7 +1880,6 @@ class Model:
         if not result.solution.dual.empty:
             dual = result.solution.dual.copy()
             dual = set_int_index(dual)
-            dual.loc[-1] = nan
 
             dual_arr = series_to_lookup_array(dual)
 
