@@ -123,7 +123,6 @@ html_title = "Linopy: Optimization with n-dimensional labeled variables"
 html_theme_options = {
     "repository_url": "https://github.com/pypsa/linopy",
     "use_repository_button": True,
-    "show_toc_level": 2,
 }
 
 
