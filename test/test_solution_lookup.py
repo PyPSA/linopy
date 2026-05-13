@@ -1,36 +1,45 @@
 import numpy as np
-import pandas as pd
 from numpy import nan
 
-from linopy.common import lookup_vals, series_to_lookup_array
+from linopy.common import lookup_vals, values_to_lookup_array
 
 
-class TestSeriesToLookupArray:
+class TestValuesToLookupArray:
     def test_basic(self) -> None:
-        s = pd.Series([10.0, 20.0, 30.0], index=pd.Index([0, 1, 2]))
-        arr = series_to_lookup_array(s)
+        arr = values_to_lookup_array(
+            np.array([10.0, 20.0, 30.0]), np.array([0, 1, 2])
+        )
         np.testing.assert_array_equal(arr, [10.0, 20.0, 30.0])
 
-    def test_with_negative_index(self) -> None:
-        s = pd.Series([nan, 10.0, 20.0], index=pd.Index([-1, 0, 2]))
-        arr = series_to_lookup_array(s)
+    def test_negative_labels_skipped(self) -> None:
+        arr = values_to_lookup_array(
+            np.array([nan, 10.0, 20.0]), np.array([-1, 0, 2])
+        )
         assert arr[0] == 10.0
         assert np.isnan(arr[1])
         assert arr[2] == 20.0
 
-    def test_sparse_index(self) -> None:
-        s = pd.Series([5.0, 7.0], index=pd.Index([0, 100]))
-        arr = series_to_lookup_array(s)
+    def test_sparse_labels(self) -> None:
+        arr = values_to_lookup_array(np.array([5.0, 7.0]), np.array([0, 100]))
         assert len(arr) == 101
         assert arr[0] == 5.0
         assert arr[100] == 7.0
         assert np.isnan(arr[50])
 
-    def test_only_negative_index(self) -> None:
-        s = pd.Series([nan], index=pd.Index([-1]))
-        arr = series_to_lookup_array(s)
-        assert len(arr) == 1
-        assert np.isnan(arr[0])
+    def test_only_negative_labels(self) -> None:
+        arr = values_to_lookup_array(np.array([nan]), np.array([-1]))
+        assert len(arr) == 0
+
+    def test_explicit_size(self) -> None:
+        arr = values_to_lookup_array(
+            np.array([5.0, 7.0]), np.array([0, 2]), size=5
+        )
+        assert len(arr) == 5
+        assert arr[0] == 5.0
+        assert arr[2] == 7.0
+        assert np.isnan(arr[1])
+        assert np.isnan(arr[3])
+        assert np.isnan(arr[4])
 
 
 class TestLookupVals:

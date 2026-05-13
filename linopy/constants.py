@@ -9,7 +9,6 @@ from enum import Enum
 from typing import Any, Literal, TypeAlias, Union, get_args
 
 import numpy as np
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -261,18 +260,14 @@ class Status:
         return self.status == SolverStatus.ok
 
 
-def _pd_series_float() -> pd.Series:
-    return pd.Series(dtype=float)
-
-
 @dataclass
 class Solution:
     """
     Solution returned by the solver.
     """
 
-    primal: pd.Series = field(default_factory=_pd_series_float)
-    dual: pd.Series = field(default_factory=_pd_series_float)
+    primal: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))
+    dual: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))
     objective: float = field(default=np.nan)
 
 

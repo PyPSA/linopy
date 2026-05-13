@@ -35,8 +35,6 @@ from linopy.common import (
     lookup_vals,
     maybe_replace_signs,
     replace_by_map,
-    series_to_lookup_array,
-    set_int_index,
     to_path,
 )
 from linopy.constants import (
@@ -1868,21 +1866,13 @@ class Model:
         if result.solution is None or len(result.solution.primal) == 0:
             return status_value, termination_condition
 
-        sol = result.solution.primal.copy()
-        sol = set_int_index(sol)
-
-        sol_arr = series_to_lookup_array(sol)
-
+        sol_arr = result.solution.primal
         for _, var in self.variables.items():
             vals = lookup_vals(sol_arr, np.ravel(var.labels))
             var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
-        if not result.solution.dual.empty:
-            dual = result.solution.dual.copy()
-            dual = set_int_index(dual)
-
-            dual_arr = series_to_lookup_array(dual)
-
+        if len(result.solution.dual):
+            dual_arr = result.solution.dual
             for _, con in self.constraints.items():
                 vals = lookup_vals(dual_arr, np.ravel(con.labels))
                 con.dual = xr.DataArray(

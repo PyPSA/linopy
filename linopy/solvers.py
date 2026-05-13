@@ -32,6 +32,7 @@ from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
 
 import linopy.io
+from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
@@ -42,6 +43,23 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+
+
+def _parse_int_label(name: str) -> int:
+    """Strip leading non-digits and parse the integer label."""
+    s = str(name)
+    cutoff = count_initial_letters(s)
+    try:
+        return int(s[cutoff:])
+    except ValueError:
+        return int(re.sub(r".*#", "", s))
+
+
+def _names_to_labels(names: Any) -> np.ndarray:
+    """Vectorised conversion of solver-provided names to integer labels."""
+    return np.fromiter(
+        (_parse_int_label(n) for n in names), dtype=np.int64, count=len(names)
+    )
 
 
 class SolverFeature(Enum):
@@ -746,9 +764,16 @@ class CBC(Solver[None]):
             )
             variables_b = df.index.isin(variables)
 
-            sol = df[variables_b][2]
-            dual = df[~variables_b][3]
-
+            sol_df = df[variables_b]
+            dual_df = df[~variables_b]
+            sol = values_to_lookup_array(
+                sol_df[2].to_numpy(dtype=float),
+                _names_to_labels(sol_df.index.to_list()),
+            )
+            dual = values_to_lookup_array(
+                dual_df[3].to_numpy(dtype=float),
+                _names_to_labels(dual_df.index.to_list()),
+            )
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -937,16 +962,21 @@ class GLPK(Solver[None]):
             dual_io = io.StringIO("".join(read_until_break(f))[:-2])
             dual_ = pd.read_fwf(dual_io)[1:].set_index("Row name")
             if "Marginal" in dual_:
-                dual = pd.to_numeric(dual_["Marginal"], "coerce").fillna(0)
+                dual_values = (
+                    pd.to_numeric(dual_["Marginal"], "coerce").fillna(0).to_numpy(dtype=float)
+                )
+                dual = values_to_lookup_array(
+                    dual_values, _names_to_labels(dual_.index.to_list())
+                )
             else:
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             sol_io = io.StringIO("".join(read_until_break(f))[:-2])
-            sol = (
-                pd.read_fwf(sol_io)[1:]
-                .set_index("Column name")["Activity"]
-                .astype(float)
+            sol_df = pd.read_fwf(sol_io)[1:].set_index("Column name")
+            sol = values_to_lookup_array(
+                sol_df["Activity"].astype(float).to_numpy(),
+                _names_to_labels(sol_df.index.to_list()),
             )
             f.close()
             return Solution(sol, dual, objective)
@@ -1279,15 +1309,22 @@ class Highs(Solver[None]):
             solution = h.getSolution()
 
             if model is not None:
-                sol = pd.Series(solution.col_value, model.matrices.vlabels, dtype=float)
-                dual = pd.Series(solution.row_dual, model.matrices.clabels, dtype=float)
+                vlabels = model.matrices.vlabels
+                clabels = model.matrices.clabels
             elif self._vlabels is not None and self._clabels is not None:
-                sol = pd.Series(solution.col_value, self._vlabels, dtype=float)
-                dual = pd.Series(solution.row_dual, self._clabels, dtype=float)
+                vlabels = self._vlabels
+                clabels = self._clabels
             else:
-                sol = pd.Series(solution.col_value, h.getLp().col_names_, dtype=float)
-                dual = pd.Series(solution.row_dual, h.getLp().row_names_, dtype=float)
+                lp = h.getLp()
+                vlabels = _names_to_labels(lp.col_names_)
+                clabels = _names_to_labels(lp.row_names_)
 
+            sol = values_to_lookup_array(
+                np.asarray(solution.col_value, dtype=float), vlabels
+            )
+            dual = values_to_lookup_array(
+                np.asarray(solution.row_dual, dtype=float), clabels
+            )
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -1615,22 +1652,24 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             objective = m.ObjVal
 
             vars = m.getVars()
+            sol_values = np.array([v.X for v in vars], dtype=float)
             if self._vlabels is not None:
-                sol = pd.Series([v.X for v in vars], self._vlabels, dtype=float)
+                vlabels = self._vlabels
             else:
-                sol = pd.Series({v.VarName: v.X for v in vars}, dtype=float)
+                vlabels = _names_to_labels([v.VarName for v in vars])
+            sol = values_to_lookup_array(sol_values, vlabels)
 
             try:
                 constrs = m.getConstrs()
+                dual_values = np.array([c.Pi for c in constrs], dtype=float)
                 if self._clabels is not None:
-                    dual = pd.Series(
-                        [c.Pi for c in constrs], self._clabels, dtype=float
-                    )
+                    clabels = self._clabels
                 else:
-                    dual = pd.Series({c.ConstrName: c.Pi for c in constrs}, dtype=float)
+                    clabels = _names_to_labels([c.ConstrName for c in constrs])
+                dual = values_to_lookup_array(dual_values, clabels)
             except AttributeError:
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -1801,21 +1840,21 @@ class Cplex(Solver[None]):
 
             objective = m.solution.get_objective_value()
 
-            solution = pd.Series(
-                m.solution.get_values(), m.variables.get_names(), dtype=float
+            solution = values_to_lookup_array(
+                np.asarray(m.solution.get_values(), dtype=float),
+                _names_to_labels(m.variables.get_names()),
             )
 
             try:
-                dual = pd.Series(
-                    m.solution.get_dual_values(),
-                    m.linear_constraints.get_names(),
-                    dtype=float,
+                dual = values_to_lookup_array(
+                    np.asarray(m.solution.get_dual_values(), dtype=float),
+                    _names_to_labels(m.linear_constraints.get_names()),
                 )
             except Exception:
                 logger.warning(
                     "Dual values not available (e.g. barrier solution without crossover)"
                 )
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
             return Solution(solution, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -1965,22 +2004,28 @@ class SCIP(Solver[None]):
             vars_to_ignore = {"quadobjvar", "qmatrixvar", "quadobj", "qmatrix"}
 
             s = m.getSols()[0]
-            sol = pd.Series(
-                {v.name: s[v] for v in m.getVars() if v.name not in vars_to_ignore}
+            var_items = [
+                (v.name, s[v]) for v in m.getVars() if v.name not in vars_to_ignore
+            ]
+            sol = values_to_lookup_array(
+                np.array([val for _, val in var_items], dtype=float),
+                _names_to_labels([name for name, _ in var_items]),
             )
 
             cons = m.getConss(False)
             if len(cons) != 0:
-                dual = pd.Series(
-                    {
-                        c.name: m.getDualSolVal(c)
-                        for c in cons
-                        if c.name not in vars_to_ignore
-                    }
+                con_items = [
+                    (c.name, m.getDualSolVal(c))
+                    for c in cons
+                    if c.name not in vars_to_ignore
+                ]
+                dual = values_to_lookup_array(
+                    np.array([val for _, val in con_items], dtype=float),
+                    _names_to_labels([name for name, _ in con_items]),
                 )
             else:
                 logger.warning("Dual values not available (is this an MILP?)")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -2151,11 +2196,13 @@ class Xpress(Solver[None]):
                 var = m.getNameList(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
             except AttributeError:  # Fallback to old API
                 var = m.getnamelist(xpress_Namespaces.COLUMN, 0, m.attributes.cols - 1)
-            sol = pd.Series(m.getSolution(), index=var, dtype=float)
+            sol = values_to_lookup_array(
+                np.asarray(m.getSolution(), dtype=float), _names_to_labels(var)
+            )
 
             try:
                 if m.attributes.rows == 0:
-                    dual = pd.Series(dtype=float)
+                    dual = np.array([], dtype=float)
                 else:
                     try:  # Try new API first
                         _dual = m.getDuals()
@@ -2170,10 +2217,12 @@ class Xpress(Solver[None]):
                         constraints = m.getnamelist(
                             xpress_Namespaces.ROW, 0, m.attributes.rows - 1
                         )
-                    dual = pd.Series(_dual, index=constraints, dtype=float)
+                    dual = values_to_lookup_array(
+                        np.asarray(_dual, dtype=float), _names_to_labels(constraints)
+                    )
             except (xpress.SolverError, xpress.ModelError, SystemError):
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -2257,10 +2306,10 @@ class Knitro(Solver[None]):
         get_count_fn: Callable[..., Any],
         get_values_fn: Callable[..., Any],
         get_names_fn: Callable[..., Any],
-    ) -> pd.Series:
+    ) -> np.ndarray:
         n = int(get_count_fn(kc))
         if n == 0:
-            return pd.Series(dtype=float)
+            return np.array([], dtype=float)
 
         try:
             # Compatible with KNITRO >= 15
@@ -2270,7 +2319,9 @@ class Knitro(Solver[None]):
             values = get_values_fn(kc, list(range(n)))
 
         names = list(get_names_fn(kc))
-        return pd.Series(values, index=names, dtype=float)
+        return values_to_lookup_array(
+            np.asarray(values, dtype=float), _names_to_labels(names)
+        )
 
     def solve_problem_from_file(
         self,
@@ -2409,7 +2460,7 @@ class Knitro(Solver[None]):
                     )
                 except Exception:
                     logger.warning("Dual values couldn't be parsed")
-                    dual = pd.Series(dtype=float)
+                    dual = np.array([], dtype=float)
 
                 return Solution(sol, dual, objective)
 
@@ -2884,25 +2935,27 @@ class Mosek(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.getprimalobj(soltype)
 
-            sol_values = m.getxx(soltype)
+            sol_values = np.asarray(m.getxx(soltype), dtype=float)
             if self._vlabels is not None:
-                sol = pd.Series(sol_values, self._vlabels, dtype=float)
+                vlabels = self._vlabels
             else:
-                sol = {m.getvarname(i): sol_values[i] for i in range(m.getnumvar())}
-                sol = pd.Series(sol, dtype=float)
+                vlabels = _names_to_labels(
+                    [m.getvarname(i) for i in range(m.getnumvar())]
+                )
+            sol = values_to_lookup_array(sol_values, vlabels)
 
             try:
-                dual_values = m.gety(soltype)
+                dual_values = np.asarray(m.gety(soltype), dtype=float)
                 if self._clabels is not None:
-                    dual = pd.Series(dual_values, self._clabels, dtype=float)
+                    clabels = self._clabels
                 else:
-                    dual = {
-                        m.getconname(i): dual_values[i] for i in range(m.getnumcon())
-                    }
-                    dual = pd.Series(dual, dtype=float)
+                    clabels = _names_to_labels(
+                        [m.getconname(i) for i in range(m.getnumcon())]
+                    )
+                dual = values_to_lookup_array(dual_values, clabels)
             except (mosek.Error, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -3048,13 +3101,21 @@ class COPT(Solver[None]):
             # TODO: check if this suffices
             objective = m.BestObj if m.ismip else m.LpObjVal
 
-            sol = pd.Series({v.name: v.x for v in m.getVars()}, dtype=float)
+            vars_ = m.getVars()
+            sol = values_to_lookup_array(
+                np.array([v.x for v in vars_], dtype=float),
+                _names_to_labels([v.name for v in vars_]),
+            )
 
             try:
-                dual = pd.Series({v.name: v.pi for v in m.getConstrs()}, dtype=float)
+                constrs = m.getConstrs()
+                dual = values_to_lookup_array(
+                    np.array([c.pi for c in constrs], dtype=float),
+                    _names_to_labels([c.name for c in constrs]),
+                )
             except (coptpy.CoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -3204,13 +3265,21 @@ class MindOpt(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.objval
 
-            sol = pd.Series({v.varname: v.X for v in m.getVars()}, dtype=float)
+            vars_ = m.getVars()
+            sol = values_to_lookup_array(
+                np.array([v.X for v in vars_], dtype=float),
+                _names_to_labels([v.varname for v in vars_]),
+            )
 
             try:
-                dual = pd.Series({c.constrname: c.DualSoln for c in m.getConstrs()})
+                constrs = m.getConstrs()
+                dual = values_to_lookup_array(
+                    np.array([c.DualSoln for c in constrs], dtype=float),
+                    _names_to_labels([c.constrname for c in constrs]),
+                )
             except (mindoptpy.MindoptError, AttributeError):
                 logger.warning("Dual values of MILP couldn't be parsed")
-                dual = pd.Series(dtype=float)
+                dual = np.array([], dtype=float)
 
             return Solution(sol, dual, objective)
 
@@ -3498,14 +3567,19 @@ class cuPDLPx(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = cu_model.ObjVal
 
-            vlabels = l_model.matrices.vlabels if l_model is not None else self._vlabels
-            clabels = l_model.matrices.clabels if l_model is not None else self._clabels
+            if l_model is not None:
+                vlabels = l_model.matrices.vlabels
+                clabels = l_model.matrices.clabels
+            else:
+                assert self._vlabels is not None and self._clabels is not None
+                vlabels = self._vlabels
+                clabels = self._clabels
 
-            sol = pd.Series(cu_model.X, vlabels, dtype=float)
-            dual = pd.Series(cu_model.Pi, clabels, dtype=float)
+            sol = values_to_lookup_array(np.asarray(cu_model.X, dtype=float), vlabels)
+            dual = values_to_lookup_array(np.asarray(cu_model.Pi, dtype=float), clabels)
 
             if cu_model.ModelSense == cupdlpx.PDLP.MAXIMIZE:
-                dual *= -1  # flip sign of duals for max problems
+                dual = -dual
 
             return Solution(sol, dual, objective)
 

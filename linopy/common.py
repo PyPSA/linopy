@@ -1509,27 +1509,36 @@ def is_constant(x: SideLike) -> bool:
     )
 
 
-def series_to_lookup_array(s: pd.Series) -> np.ndarray:
+def values_to_lookup_array(
+    values: np.ndarray, labels: np.ndarray, size: int | None = None
+) -> np.ndarray:
     """
-    Convert an integer-indexed Series to a dense numpy lookup array.
+    Build a dense NaN-padded lookup array from values and integer labels.
 
-    Non-negative indices are placed at their corresponding positions;
-    negative indices are ignored. Gaps are filled with NaN.
+    Non-negative labels are placed at their corresponding positions; negative
+    labels are skipped. Gaps are filled with NaN.
 
     Parameters
     ----------
-    s : pd.Series
-        Series with an integer index.
+    values : np.ndarray
+        Values to place into the lookup array.
+    labels : np.ndarray
+        Integer labels giving the target position for each value.
+    size : int, optional
+        Length of the returned array. Defaults to ``max(labels) + 1`` if any
+        non-negative label is present, otherwise 0.
 
     Returns
     -------
     np.ndarray
-        Dense array of length ``max(index) + 1``.
+        Dense float lookup array.
     """
-    max_idx = max(int(s.index.max()), 0)
-    arr = np.full(max_idx + 1, nan)
-    mask = s.index >= 0
-    arr[s.index[mask]] = s.values[mask]
+    labels = np.asarray(labels, dtype=int)
+    mask = labels >= 0
+    if size is None:
+        size = int(labels[mask].max()) + 1 if mask.any() else 0
+    arr = np.full(size, nan, dtype=float)
+    arr[labels[mask]] = values[mask]
     return arr
 
 
@@ -1542,7 +1551,7 @@ def lookup_vals(arr: np.ndarray, idx: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     arr : np.ndarray
-        Dense lookup array (e.g. from :func:`series_to_lookup_array`).
+        Dense lookup array (e.g. from :func:`values_to_lookup_array`).
     idx : np.ndarray
         Integer label indices.
 
