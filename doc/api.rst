@@ -5,14 +5,17 @@ API reference
 #############
 
 Reference for linopy's public API. Most workflows start at
-:class:`Model` — variables, constraints, expressions and the
-objective are all built through ``model.add_*`` and accessed through
-the matching ``model.<attr>`` accessor (``model.variables``,
-``model.constraints``, ``model.objective``). The supporting classes
-below cover the types those accessors return, grouped by what each
-one is for (Structure / Modification / Conversion / Post-solve
-access). Each entry links to a dedicated page with the full
-signature and docstring.
+:class:`~linopy.model.Model` — :class:`~linopy.variables.Variable`,
+:class:`~linopy.constraints.Constraint`, and
+:class:`~linopy.objective.Objective` are all built through
+:meth:`Model.add_variables <linopy.model.Model.add_variables>`,
+:meth:`Model.add_constraints <linopy.model.Model.add_constraints>`,
+:meth:`Model.add_objective <linopy.model.Model.add_objective>`,
+and accessed through the matching
+:attr:`Model.variables <linopy.model.Model.variables>`,
+:attr:`Model.constraints <linopy.model.Model.constraints>`, and
+:attr:`Model.objective <linopy.model.Model.objective>` accessors.
+The supporting classes below cover those types in detail.
 
 .. contents::
    :local:
@@ -171,8 +174,8 @@ Container for the collection of variables on a model. Accessed via
 
    variables.Variables
 
-Aggregate access
-----------------
+Attributes
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -181,10 +184,8 @@ Aggregate access
    variables.Variables.upper
    variables.Variables.solution
 
-Bulk modify
------------
-
-Container-wide analogues of :func:`Variable.fix`, etc.
+Modification
+------------
 
 .. autosummary::
    :toctree: generated/
@@ -194,8 +195,8 @@ Container-wide analogues of :func:`Variable.fix`, etc.
    variables.Variables.relax
    variables.Variables.unrelax
 
-Inventory by type
------------------
+Inventory
+---------
 
 .. autosummary::
    :toctree: generated/
