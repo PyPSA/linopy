@@ -410,6 +410,10 @@ composing chord-based bounds by hand, without going through
    piecewise.PiecewiseFormulation.variables
    piecewise.PiecewiseFormulation.constraints
    piecewise.tangent_lines
+   constants.PWL_METHOD
+   constants.PWL_METHODS
+   constants.PWL_CONVEXITY
+   constants.PWL_CONVEXITIES
 
 
 Solver interface

@@ -60,9 +60,16 @@ PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
 
 PWL_METHOD: TypeAlias = Literal["sos2", "lp", "incremental", "auto"]
+"""Allowed values for the ``method`` argument of :func:`Model.add_piecewise_formulation`."""
+
 PWL_METHODS: frozenset[str] = frozenset(get_args(PWL_METHOD))
+"""Set of valid :data:`~linopy.constants.PWL_METHOD` values."""
+
 PWL_CONVEXITY: TypeAlias = Literal["convex", "concave", "linear", "mixed"]
+"""Possible values for :attr:`~linopy.piecewise.PiecewiseFormulation.convexity`."""
+
 PWL_CONVEXITIES: frozenset[str] = frozenset(get_args(PWL_CONVEXITY))
+"""Set of valid :data:`~linopy.constants.PWL_CONVEXITY` values."""
 BREAKPOINT_DIM = "_breakpoint"
 SEGMENT_DIM = "_segment"
 LP_PIECE_DIM = f"{BREAKPOINT_DIM}_piece"

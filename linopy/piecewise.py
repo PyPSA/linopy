@@ -357,12 +357,12 @@ class PiecewiseFormulation:
 
     name: str
     method: PWL_METHOD
-    """Resolved formulation method (see :data:`PWL_METHOD`)."""
+    """Resolved formulation method (see :data:`~linopy.constants.PWL_METHOD`)."""
     variable_names: list[str]
     constraint_names: list[str]
     model: Model
     convexity: PWL_CONVEXITY | None = None
-    """Shape of the piecewise curve when well-defined (see :data:`PWL_CONVEXITY`), else ``None``."""
+    """Shape of the piecewise curve when well-defined (see :data:`~linopy.constants.PWL_CONVEXITY`), else ``None``."""
 
     @property
     def variables(self) -> Variables:
