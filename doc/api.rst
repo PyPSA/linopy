@@ -119,8 +119,8 @@ Top-level helpers
    options
 
 
-Classes under the hood
-======================
+Classes and types
+=================
 
 Variable
 --------
@@ -475,7 +475,7 @@ composing chord-based bounds by hand, without going through
 
 
 Solver interface
-================
+----------------
 
 .. autosummary::
    :toctree: generated/
@@ -486,7 +486,7 @@ Solver interface
 
 
 Solver implementations
-======================
+----------------------
 
 .. autosummary::
    :toctree: generated/
@@ -506,7 +506,7 @@ Solver implementations
 
 
 Remote solving
-==============
+--------------
 
 .. autosummary::
    :toctree: generated/
@@ -515,7 +515,7 @@ Remote solving
 
 
 Warnings
-========
+--------
 
 These warning classes can be silenced or filtered via
 :func:`warnings.filterwarnings`.
