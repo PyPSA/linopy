@@ -1,7 +1,7 @@
 .. _benchmark:
 
-Benchmarks
-==========
+Performance comparison
+======================
 
 
 Linopy's performance scales well with the problem size. Its overall speed is comparable with the famous `JuMP <https://jump.dev/>`_ package written in `Julia <https://julialang.org/>`_. It even outperforms `JuMP` in total memory efficiency when it comes to large models. Compared to `Pyomo <https://pyomo.org>`_, the common optimization package in python, one can expect

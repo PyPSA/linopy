@@ -52,7 +52,7 @@ Where to go next
   :doc:`piecewise-linear-constraints`, and the
   :doc:`testing-framework` for asserting structural properties of a
   model.
-- **Tutorials** — end-to-end problem walkthroughs:
+- **Examples** — end-to-end problem walkthroughs:
   :doc:`transport-tutorial`, :doc:`migrating-from-pyomo`.
 - **Solving** — :doc:`solve-on-remote` (SSH),
   :doc:`solve-on-oetc` (OET Cloud), :doc:`gpu-acceleration` (cuPDLPx).

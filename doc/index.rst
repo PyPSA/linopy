@@ -126,19 +126,19 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Tutorials
-
-   transport-tutorial
-   migrating-from-pyomo
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
    :caption: Solving
 
    solve-on-remote
    solve-on-oetc
    gpu-acceleration
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Examples
+
+   transport-tutorial
+   migrating-from-pyomo
 
 .. toctree::
    :hidden:
@@ -151,7 +151,7 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Benchmarking
+   :caption: Comparisons
 
    benchmark
    syntax
