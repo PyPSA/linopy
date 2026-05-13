@@ -4,9 +4,14 @@
 API reference
 #############
 
-Reference for linopy's public API. Top sections are task-oriented
-(creating, inspecting, modifying, solving, IO); supporting classes
-are grouped below. Each entry links to a dedicated page with the full
+Reference for linopy's public API. Most workflows start at
+:class:`Model` — variables, constraints, expressions and the
+objective are all built through ``model.add_*`` and accessed through
+the matching ``model.<attr>`` accessor (``model.variables``,
+``model.constraints``, ``model.objective``). The supporting classes
+below cover the types those accessors return, grouped by what each
+one is for (Structure / Modification / Conversion / Post-solve
+access). Each entry links to a dedicated page with the full
 signature and docstring.
 
 .. contents::
@@ -14,13 +19,23 @@ signature and docstring.
    :depth: 2
 
 
-Creating a model
-================
+Model
+=====
+
+Central container for an optimization problem. Most of linopy's
+surface lives here.
 
 .. autosummary::
    :toctree: generated/
 
    model.Model
+
+Building a model
+----------------
+
+.. autosummary::
+   :toctree: generated/
+
    model.Model.add_variables
    model.Model.add_constraints
    model.Model.add_objective
@@ -30,9 +45,8 @@ Creating a model
    piecewise.segments
    piecewise.Slopes
 
-
 Inspecting a model
-==================
+------------------
 
 .. autosummary::
    :toctree: generated/
@@ -45,9 +59,8 @@ Inspecting a model
    model.Model.is_linear
    model.Model.is_quadratic
 
-
 Modifying a model
-=================
+-----------------
 
 .. autosummary::
    :toctree: generated/
@@ -59,18 +72,16 @@ Modifying a model
    model.Model.copy
    model.Model.reformulate_sos_constraints
 
-
 Solving
-=======
+-------
 
 .. autosummary::
    :toctree: generated/
 
    model.Model.solve
 
-
 Post-solve access
-=================
+-----------------
 
 .. autosummary::
    :toctree: generated/
@@ -80,9 +91,8 @@ Post-solve access
    model.Model.status
    model.Model.termination_condition
 
-
 Diagnostics
-===========
+-----------
 
 .. autosummary::
    :toctree: generated/
@@ -90,38 +100,22 @@ Diagnostics
    model.Model.compute_infeasibilities
    model.Model.format_infeasibilities
 
-
 IO
-==
+--
 
 .. autosummary::
    :toctree: generated/
 
    model.Model.to_file
    model.Model.to_netcdf
-   model.Model.get_problem_file
-   model.Model.get_solution_file
    io.read_netcdf
 
 
-Top-level helpers
-=================
-
-.. autosummary::
-   :toctree: generated/
-
-   align
-   options
-
-
-Other classes and types
-=======================
-
 Variable
---------
+========
 
-``Variable`` is a subclass of ``xarray.DataArray`` and carries labels
-for a multi-dimensional decision variable.
+Subclass of ``xarray.DataArray`` carrying labels for a multi-dimensional
+decision variable.
 
 .. autosummary::
    :toctree: generated/
@@ -129,7 +123,7 @@ for a multi-dimensional decision variable.
    variables.Variable
 
 Attributes
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -140,7 +134,7 @@ Attributes
    variables.Variable.solution
 
 Modification
-~~~~~~~~~~~~
+------------
 
 .. autosummary::
    :toctree: generated/
@@ -151,17 +145,16 @@ Modification
    variables.Variable.unrelax
 
 Operations
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
 
    variables.Variable.sum
    variables.Variable.where
-   variables.Variable.sanitize
 
 Conversion
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -171,30 +164,18 @@ Conversion
 
 
 Variables
----------
+=========
 
-``Variables`` is a container for the collection of variables on a
-model. Accessed via ``model.variables``.
+Container for the collection of variables on a model. Accessed via
+``model.variables``.
 
 .. autosummary::
    :toctree: generated/
 
    variables.Variables
 
-Inventory by type
-~~~~~~~~~~~~~~~~~
-
-.. autosummary::
-   :toctree: generated/
-
-   variables.Variables.continuous
-   variables.Variables.binaries
-   variables.Variables.integers
-   variables.Variables.semi_continuous
-   variables.Variables.sos
-
 Aggregate access
-~~~~~~~~~~~~~~~~
+----------------
 
 .. autosummary::
    :toctree: generated/
@@ -203,17 +184,8 @@ Aggregate access
    variables.Variables.upper
    variables.Variables.solution
 
-Modification
-~~~~~~~~~~~~
-
-.. autosummary::
-   :toctree: generated/
-
-   variables.Variables.add
-   variables.Variables.remove
-
 Bulk modify
-~~~~~~~~~~~
+-----------
 
 Container-wide analogues of :func:`Variable.fix`, etc.
 
@@ -225,9 +197,21 @@ Container-wide analogues of :func:`Variable.fix`, etc.
    variables.Variables.relax
    variables.Variables.unrelax
 
+Inventory by type
+-----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   variables.Variables.continuous
+   variables.Variables.binaries
+   variables.Variables.integers
+   variables.Variables.semi_continuous
+   variables.Variables.sos
+
 
 LinearExpression
-----------------
+================
 
 Linear combination of variables. Arithmetic on ``Variable`` /
 ``LinearExpression`` returns a ``LinearExpression``.
@@ -237,28 +221,16 @@ Linear combination of variables. Arithmetic on ``Variable`` /
 
    expressions.LinearExpression
 
-Structure
-~~~~~~~~~
+Post-solve access
+-----------------
 
 .. autosummary::
    :toctree: generated/
 
-   expressions.LinearExpression.vars
-   expressions.LinearExpression.coeffs
-   expressions.LinearExpression.const
-   expressions.LinearExpression.nterm
-
-Construction
-~~~~~~~~~~~~
-
-.. autosummary::
-   :toctree: generated/
-
-   expressions.LinearExpression.from_tuples
-   expressions.merge
+   expressions.LinearExpression.solution
 
 Operations
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -268,27 +240,37 @@ Operations
    expressions.LinearExpression.groupby
    expressions.LinearExpression.rolling
 
-Conversion
-~~~~~~~~~~
+Structure
+---------
 
 .. autosummary::
    :toctree: generated/
 
-   expressions.LinearExpression.to_constraint
-   expressions.LinearExpression.to_quadexpr
+   expressions.LinearExpression.vars
+   expressions.LinearExpression.coeffs
+   expressions.LinearExpression.const
+   expressions.LinearExpression.nterm
+
+Conversion
+----------
+
+.. autosummary::
+   :toctree: generated/
+
    expressions.LinearExpression.to_polars
 
-Post-solve access
-~~~~~~~~~~~~~~~~~
+Construction
+------------
 
 .. autosummary::
    :toctree: generated/
 
-   expressions.LinearExpression.solution
+   expressions.LinearExpression.from_tuples
+   expressions.merge
 
 
 QuadraticExpression
--------------------
+===================
 
 Quadratic combination of variables, returned when squared
 ``Variable`` / ``LinearExpression`` arithmetic is performed.
@@ -299,7 +281,7 @@ Quadratic combination of variables, returned when squared
    expressions.QuadraticExpression
 
 Structure
-~~~~~~~~~
+---------
 
 .. autosummary::
    :toctree: generated/
@@ -310,17 +292,16 @@ Structure
    expressions.QuadraticExpression.nterm
 
 Conversion
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
 
-   expressions.QuadraticExpression.to_constraint
    expressions.QuadraticExpression.to_matrix
    expressions.QuadraticExpression.to_polars
 
 Post-solve access
-~~~~~~~~~~~~~~~~~
+-----------------
 
 .. autosummary::
    :toctree: generated/
@@ -329,10 +310,10 @@ Post-solve access
 
 
 Constraint
-----------
+==========
 
-``Constraint`` is a subclass of ``xarray.DataArray`` and carries labels
-for a multi-dimensional constraint.
+Subclass of ``xarray.DataArray`` carrying labels for a multi-dimensional
+constraint.
 
 .. autosummary::
    :toctree: generated/
@@ -340,7 +321,7 @@ for a multi-dimensional constraint.
    constraints.Constraint
 
 Structure
-~~~~~~~~~
+---------
 
 .. autosummary::
    :toctree: generated/
@@ -352,7 +333,7 @@ Structure
    constraints.Constraint.vars
 
 Post-solve access
-~~~~~~~~~~~~~~~~~
+-----------------
 
 .. autosummary::
    :toctree: generated/
@@ -360,7 +341,7 @@ Post-solve access
    constraints.Constraint.dual
 
 Conversion
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -369,7 +350,7 @@ Conversion
 
 
 CSRConstraint
--------------
+=============
 
 Memory-efficient, immutable constraint representation backed by a scipy
 CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
@@ -382,7 +363,7 @@ CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
    constraints.CSRConstraint
 
 Structure
-~~~~~~~~~
+---------
 
 .. autosummary::
    :toctree: generated/
@@ -395,7 +376,7 @@ Structure
    constraints.CSRConstraint.nterm
 
 Post-solve access
-~~~~~~~~~~~~~~~~~
+-----------------
 
 .. autosummary::
    :toctree: generated/
@@ -403,7 +384,7 @@ Post-solve access
    constraints.CSRConstraint.dual
 
 Conversion
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -412,7 +393,7 @@ Conversion
 
 
 Constraints
------------
+===========
 
 Container for the collection of constraints on a model. Accessed via
 ``model.constraints``.
@@ -423,7 +404,7 @@ Container for the collection of constraints on a model. Accessed via
    constraints.Constraints
 
 Inventory
-~~~~~~~~~
+---------
 
 .. autosummary::
    :toctree: generated/
@@ -432,7 +413,7 @@ Inventory
    constraints.Constraints.equalities
 
 Aggregate access
-~~~~~~~~~~~~~~~~
+----------------
 
 .. autosummary::
    :toctree: generated/
@@ -443,25 +424,8 @@ Aggregate access
    constraints.Constraints.rhs
    constraints.Constraints.dual
 
-Modification
-~~~~~~~~~~~~
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.Constraints.add
-   constraints.Constraints.remove
-
-Cleanup
-~~~~~~~
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.Constraints.sanitize_missings
-
 Conversion
-~~~~~~~~~~
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -470,7 +434,7 @@ Conversion
 
 
 Objective
----------
+=========
 
 Wraps the objective expression on a model. Accessed via
 ``model.objective``.
@@ -487,7 +451,7 @@ Wraps the objective expression on a model. Accessed via
 
 
 Piecewise
----------
+=========
 
 ``PiecewiseFormulation`` is returned by
 :func:`Model.add_piecewise_formulation` and exposes the resolved
@@ -511,23 +475,13 @@ composing chord-based bounds by hand, without going through
    constants.PWL_CONVEXITIES
 
 
-Solver interface
-----------------
+Solvers
+=======
 
 .. autosummary::
    :toctree: generated/
 
    solvers.available_solvers
-   solvers.quadratic_solvers
-   solvers.Solver
-
-
-Solver implementations
-----------------------
-
-.. autosummary::
-   :toctree: generated/
-
    solvers.CBC
    solvers.COPT
    solvers.Cplex
@@ -543,7 +497,7 @@ Solver implementations
 
 
 Remote solving
---------------
+==============
 
 .. autosummary::
    :toctree: generated/
@@ -552,7 +506,7 @@ Remote solving
 
 
 Solver status and result types
-------------------------------
+==============================
 
 Types returned by or compared against :attr:`Model.status`,
 :attr:`Model.termination_condition`, and :attr:`Model.solution`.
@@ -567,8 +521,18 @@ Types returned by or compared against :attr:`Model.status`,
    constants.Result
 
 
+Utilities
+=========
+
+.. autosummary::
+   :toctree: generated/
+
+   align
+   options
+
+
 Warnings
---------
+========
 
 These warning classes can be silenced or filtered via
 :func:`warnings.filterwarnings`.
