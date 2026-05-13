@@ -4,8 +4,10 @@
 API reference
 #############
 
-Auto-generated summary of linopy's public API. Each entry links to a
-dedicated page with the full signature and docstring.
+Reference for linopy's public API. Top sections are task-oriented
+(creating, inspecting, modifying, solving, IO); supporting classes
+are grouped below. Each entry links to a dedicated page with the full
+signature and docstring.
 
 .. contents::
    :local:
@@ -55,6 +57,7 @@ Modifying a model
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.copy
+   model.Model.reformulate_sos_constraints
 
 
 Solving
@@ -214,6 +217,19 @@ Modification
    variables.Variables.add
    variables.Variables.remove
 
+Bulk modify
+~~~~~~~~~~~
+
+Container-wide analogues of :func:`Variable.fix`, etc.
+
+.. autosummary::
+   :toctree: generated/
+
+   variables.Variables.fix
+   variables.Variables.unfix
+   variables.Variables.relax
+   variables.Variables.unrelax
+
 
 LinearExpression
 ----------------
@@ -276,6 +292,26 @@ Post-solve access
    expressions.LinearExpression.solution
 
 
+QuadraticExpression
+-------------------
+
+Quadratic combination of variables, returned when squared
+``Variable`` / ``LinearExpression`` arithmetic is performed.
+
+.. autosummary::
+   :toctree: generated/
+
+   expressions.QuadraticExpression
+   expressions.QuadraticExpression.vars
+   expressions.QuadraticExpression.coeffs
+   expressions.QuadraticExpression.const
+   expressions.QuadraticExpression.nterm
+   expressions.QuadraticExpression.to_constraint
+   expressions.QuadraticExpression.to_matrix
+   expressions.QuadraticExpression.to_polars
+   expressions.QuadraticExpression.solution
+
+
 Constraint
 ----------
 
@@ -314,6 +350,28 @@ Conversion
    :toctree: generated/
 
    constraints.Constraint.to_polars
+
+
+CSRConstraint
+-------------
+
+Memory-efficient, immutable constraint representation backed by a scipy
+CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
+``Model.add_constraints(..., freeze=True)``. See the
+:doc:`creating-constraints` guide for usage.
+
+.. autosummary::
+   :toctree: generated/
+
+   constraints.CSRConstraint
+   constraints.CSRConstraint.coeffs
+   constraints.CSRConstraint.vars
+   constraints.CSRConstraint.sign
+   constraints.CSRConstraint.rhs
+   constraints.CSRConstraint.dual
+   constraints.CSRConstraint.ncons
+   constraints.CSRConstraint.nterm
+   constraints.CSRConstraint.to_polars
 
 
 Constraints
@@ -447,78 +505,8 @@ Solver implementations
    solvers.cuPDLPx
 
 
-Advanced
-========
-
-Surface that most users don't reach for. Listed for completeness.
-
-QuadraticExpression
--------------------
-
-Quadratic combination of variables, returned when squared
-``Variable``/``LinearExpression`` arithmetic is performed.
-
-.. autosummary::
-   :toctree: generated/
-
-   expressions.QuadraticExpression
-   expressions.QuadraticExpression.vars
-   expressions.QuadraticExpression.coeffs
-   expressions.QuadraticExpression.const
-   expressions.QuadraticExpression.nterm
-   expressions.QuadraticExpression.to_constraint
-   expressions.QuadraticExpression.to_matrix
-   expressions.QuadraticExpression.to_polars
-   expressions.QuadraticExpression.solution
-
-
-CSRConstraint
--------------
-
-Memory-efficient, immutable constraint representation backed by a scipy
-CSR sparse matrix. Opt in via ``Model(freeze_constraints=True)`` or
-``Model.add_constraints(..., freeze=True)``. See the
-:doc:`creating-constraints` guide for usage.
-
-.. autosummary::
-   :toctree: generated/
-
-   constraints.CSRConstraint
-   constraints.CSRConstraint.coeffs
-   constraints.CSRConstraint.vars
-   constraints.CSRConstraint.sign
-   constraints.CSRConstraint.rhs
-   constraints.CSRConstraint.dual
-   constraints.CSRConstraint.ncons
-   constraints.CSRConstraint.nterm
-   constraints.CSRConstraint.to_polars
-
-
-Bulk variable operations
-------------------------
-
-Container-wide analogues of :func:`Variable.fix`, etc.
-
-.. autosummary::
-   :toctree: generated/
-
-   variables.Variables.fix
-   variables.Variables.unfix
-   variables.Variables.relax
-   variables.Variables.unrelax
-
-
-Auto-reformulation
-------------------
-
-.. autosummary::
-   :toctree: generated/
-
-   model.Model.reformulate_sos_constraints
-
-
 Remote solving
---------------
+==============
 
 .. autosummary::
    :toctree: generated/
@@ -527,7 +515,7 @@ Remote solving
 
 
 Warnings
---------
+========
 
 These warning classes can be silenced or filtered via
 :func:`warnings.filterwarnings`.
