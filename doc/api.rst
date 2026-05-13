@@ -18,6 +18,7 @@ Creating a model
     model.Model.add_variables
     model.Model.add_constraints
     model.Model.add_objective
+    model.Model.add_sos_constraints
     model.Model.add_piecewise_formulation
     piecewise.PiecewiseFormulation
     piecewise.Slopes
@@ -26,10 +27,26 @@ Creating a model
     piecewise.tangent_lines
     model.Model.linexpr
     model.Model.remove_constraints
+    model.Model.reformulate_sos_constraints
+    model.Model.compute_infeasibilities
+    model.Model.format_infeasibilities
     model.Model.copy
 
 
-Classes under the hook
+Top-level helpers
+=================
+
+.. autosummary::
+    :toctree: generated/
+
+    align
+    merge
+    options
+    EvolvingAPIWarning
+    PerformanceWarning
+
+
+Classes under the hood
 ======================
 
 Variable
@@ -46,7 +63,11 @@ Variable
     variables.Variable.sum
     variables.Variable.where
     variables.Variable.sanitize
-    variables.Variables
+    variables.Variable.to_linexpr
+    variables.Variable.fix
+    variables.Variable.unfix
+    variables.Variable.relax
+    variables.Variable.unrelax
     variables.ScalarVariable
 
 Variables
@@ -61,7 +82,6 @@ Variables
     variables.Variables.add
     variables.Variables.remove
     variables.Variables.continuous
-    variables.Variables.integers
     variables.Variables.binaries
     variables.Variables.integers
     variables.Variables.flat
@@ -81,6 +101,24 @@ LinearExpressions
     expressions.LinearExpression.from_tuples
     expressions.merge
     expressions.ScalarLinearExpression
+
+
+QuadraticExpressions
+--------------------
+
+.. autosummary::
+    :toctree: generated/
+
+    expressions.QuadraticExpression
+
+
+Objective
+---------
+
+.. autosummary::
+    :toctree: generated/
+
+    objective.Objective
 
 Constraint
 ----------
@@ -167,13 +205,27 @@ Solvers
     :toctree: generated/
 
     solvers.CBC
+    solvers.COPT
     solvers.Cplex
     solvers.GLPK
     solvers.Gurobi
     solvers.Highs
+    solvers.Knitro
+    solvers.MindOpt
     solvers.Mosek
+    solvers.PIPS
     solvers.SCIP
     solvers.Xpress
+    solvers.cuPDLPx
+
+
+Remote solving
+==============
+
+.. autosummary::
+    :toctree: generated/
+
+    remote.RemoteHandler
 
 
 Solving

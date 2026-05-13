@@ -13,9 +13,9 @@ for large problems. The following figure shows the memory usage and speed for so
 
 .. math::
 
-    & \min \;\; \sum_{i,j} 2 x_{i,j} \; y_{i,j} \\
+    & \min \;\; \sum_{i,j} 2 x_{i,j} + y_{i,j} \\
     s.t. & \\
-    & x_{i,j} - y_{i,j} \; \ge \; i \qquad \forall \; i,j \in \{1,...,N\} \\
+    & x_{i,j} - y_{i,j} \; \ge \; i-1 \qquad \forall \; i,j \in \{1,...,N\} \\
     & x_{i,j} + y_{i,j} \; \ge \; 0 \qquad \forall \; i,j \in \{1,...,N\}
 
 

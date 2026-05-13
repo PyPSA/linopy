@@ -23,7 +23,7 @@ Main features
 `xarray <https://github.com/pydata/xarray>`__ which allows for many
 flexible data-handling features:
 
--  Define (arrays of) contnuous or binary variables with
+-  Define (arrays of) continuous or binary variables with
    **coordinates**, e.g. time, consumers, etc.
 -  Apply **arithmetic operations** on the variables like adding,
    subtracting, multiplying with all the **broadcasting** potentials of
@@ -81,7 +81,7 @@ A BibTeX entry for LaTeX users is
 License
 -------
 
-Copyright 2021-2023 Fabian Hofmann
+Copyright 2021-2026 Fabian Hofmann
 
 This package is published under MIT license.
 

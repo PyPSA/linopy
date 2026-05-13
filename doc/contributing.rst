@@ -13,14 +13,13 @@ You are invited to submit pull requests / issues to our
 Development Setup
 =================
 
-For linting, formatting and checking your code contributions
-against our guidelines (e.g. we use `Black <https://github.com/psf/black>`_ as code style
-and use `pre-commit <https://pre-commit.com/index.html>`_:
+For linting and formatting, we use `ruff <https://docs.astral.sh/ruff/>`_
+and run it via `pre-commit <https://pre-commit.com/index.html>`_:
 
 1. Installation ``conda install -c conda-forge pre-commit`` or ``pip install pre-commit``
 2. Usage:
     * To automatically activate ``pre-commit`` on every ``git commit``: Run ``pre-commit install``
-    * To manually run it: ``pre-commit run --all``
+    * To manually run it: ``pre-commit run --all-files``
 
 Running Tests
 =============
@@ -122,23 +121,25 @@ Then for every notebook:
       e.g. `Edit -> Clear all output` in JupyterLab.
 
 3. Provide a link to the documentation:
-   Include a file ``foo.nblink`` located in ``doc/examples/foo.nblink``
+   Include a file ``foo.nblink`` located in ``doc/foo.nblink``
    with this content
 
-   .. code-block:
-        {
-            'path' : '../../examples/foo.ipynb'
-        }
+   .. code-block:: json
 
-    Adjust the path for your file's name.
-    This ``nblink`` allows us to link your notebook into the documentation.
+      {
+          "path": "../examples/foo.ipynb"
+      }
+
+   Adjust the path for your file's name.
+   This ``nblink`` allows us to link your notebook into the documentation.
+
 4. Link your file in the documentation:
 
    Either
 
-    * Include your ``examples/foo.nblink`` directly into one of
-      the documentations toctrees; or
-    * Tell us where in the documentation you want your example to show up
+   * Include your ``foo.nblink`` directly into one of
+     the documentation's toctrees; or
+   * Tell us where in the documentation you want your example to show up
 
 5. Commit your changes.
    If the precommit hook you installed above kicks in, confirm
