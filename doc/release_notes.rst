@@ -4,6 +4,7 @@ Release Notes
 Upcoming Version
 ----------------
 
+* Add documentation about `LinearExpression.where` with `drop=True`. Add `BaseExpression.variable_names` property.
 * Increase speed of direct solver communication (~10x) in conversion functions like `to_highspy` through faster matrix creation (see below), leading to significant overall speed-up when setting `io_api="direct"`.
 * Add ``CSRConstraint``, a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Provides up to 90% memory savings for constraints with many terms and 30–120x faster matrix generation for direct solver APIs.
   - Add ``freeze_constraints`` parameter to ``Model`` for globally storing constraints in CSR format on ``add_constraints``.
