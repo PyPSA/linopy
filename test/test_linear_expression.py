@@ -1910,6 +1910,7 @@ def test_nterm() -> None:
     expr = expr.simplify()
     assert expr.nterm == 1
 
+
 class TestJoinParameter:
     @pytest.fixture
     def m2(self) -> Model:
