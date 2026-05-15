@@ -999,6 +999,43 @@ class VariableLabelIndex:
         self.__dict__.pop("label_to_pos", None)
 
 
+class ConstraintLabelIndex:
+    """
+    Index for O(1) mapping between constraint labels and dense positions.
+
+    Mirrors VariableLabelIndex on the constraint side, but without building
+    the full constraint matrix — only labels and the row mask are computed.
+    """
+
+    def __init__(self, constraints: Any) -> None:
+        self._constraints = constraints
+
+    @cached_property
+    def clabels(self) -> np.ndarray:
+        """Active constraint labels in build order, shape (n_active_cons,)."""
+        label_lists = [c.active_labels() for c in self._constraints.data.values()]
+        return (
+            np.concatenate(label_lists) if label_lists else np.array([], dtype=np.intp)
+        )
+
+    @cached_property
+    def label_to_pos(self) -> np.ndarray:
+        """Mapping from constraint label to dense position, shape (_cCounter,)."""
+        clabels = self.clabels
+        n = self._constraints.model._cCounter
+        label_to_pos = np.full(n, -1, dtype=np.intp)
+        label_to_pos[clabels] = np.arange(len(clabels), dtype=np.intp)
+        return label_to_pos
+
+    @property
+    def n_active_cons(self) -> int:
+        return len(self.clabels)
+
+    def invalidate(self) -> None:
+        self.__dict__.pop("clabels", None)
+        self.__dict__.pop("label_to_pos", None)
+
+
 def get_label_position(
     obj: Any,
     values: int | np.ndarray,

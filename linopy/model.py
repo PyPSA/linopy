@@ -1868,14 +1868,14 @@ class Model:
             return status_value, termination_condition
 
         primal = result.solution.primal
-        sol_arr = values_to_lookup_array(primal, self.matrices.vlabels)
+        sol_arr = values_to_lookup_array(primal, self.variables.label_index.vlabels)
         for _, var in self.variables.items():
             vals = lookup_vals(sol_arr, np.ravel(var.labels))
             var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
 
         if len(result.solution.dual):
             dual = result.solution.dual
-            dual_arr = values_to_lookup_array(dual, self.matrices.clabels)
+            dual_arr = values_to_lookup_array(dual, self.constraints.label_index.clabels)
             for _, con in self.constraints.items():
                 vals = lookup_vals(dual_arr, np.ravel(con.labels))
                 con.dual = xr.DataArray(
@@ -2018,7 +2018,7 @@ class Model:
         if solver_model.attributes.numiis == 0:
             return []
 
-        clabels = self.matrices.clabels
+        clabels = self.constraints.label_index.clabels
         constraint_position_map = {}
         for position, constraint_obj in enumerate(solver_model.getConstraint()):
             if 0 <= position < len(clabels):

@@ -81,18 +81,16 @@ class MatrixAccessor:
 
         label_index = m.variables.label_index
         csrs = []
-        clabels_list = []
         b_list = []
         sense_list = []
         for c in m.constraints.data.values():
-            csr, con_labels, b, sense = c.to_matrix_with_rhs(label_index)
+            csr, _, b, sense = c.to_matrix_with_rhs(label_index)
             csrs.append(csr)
-            clabels_list.append(con_labels)
             b_list.append(b)
             sense_list.append(sense)
 
         self.A = cast(scipy.sparse.csr_array, scipy.sparse.vstack(csrs, format="csr"))
-        self.clabels = np.concatenate(clabels_list)
+        self.clabels = m.constraints.label_index.clabels
         self.b = np.concatenate(b_list) if b_list else np.array([])
         self.sense = (
             np.concatenate(sense_list) if sense_list else np.array([], dtype=object)
