@@ -1321,7 +1321,9 @@ class Highs(Solver[None]):
             status,
             solution,
             solver_model=h,
-            report=SolverReport(runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound),
+            report=SolverReport(
+                runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound
+            ),
         )
 
 
@@ -1670,7 +1672,9 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             status,
             solution,
             solver_model=m,
-            report=SolverReport(runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound),
+            report=SolverReport(
+                runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound
+            ),
         )
 
 
@@ -1988,11 +1992,7 @@ class SCIP(Solver[None]):
             cons = m.getConss(False)
             if len(cons) != 0:
                 dual = np.array(
-                    [
-                        m.getDualSolVal(c)
-                        for c in cons
-                        if c.name not in vars_to_ignore
-                    ],
+                    [m.getDualSolVal(c) for c in cons if c.name not in vars_to_ignore],
                     dtype=float,
                 )
             else:

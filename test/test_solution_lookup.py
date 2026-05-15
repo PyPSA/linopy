@@ -6,15 +6,11 @@ from linopy.common import lookup_vals, values_to_lookup_array
 
 class TestValuesToLookupArray:
     def test_basic(self) -> None:
-        arr = values_to_lookup_array(
-            np.array([10.0, 20.0, 30.0]), np.array([0, 1, 2])
-        )
+        arr = values_to_lookup_array(np.array([10.0, 20.0, 30.0]), np.array([0, 1, 2]))
         np.testing.assert_array_equal(arr, [10.0, 20.0, 30.0])
 
     def test_negative_labels_skipped(self) -> None:
-        arr = values_to_lookup_array(
-            np.array([nan, 10.0, 20.0]), np.array([-1, 0, 2])
-        )
+        arr = values_to_lookup_array(np.array([nan, 10.0, 20.0]), np.array([-1, 0, 2]))
         assert arr[0] == 10.0
         assert np.isnan(arr[1])
         assert arr[2] == 20.0
@@ -31,9 +27,7 @@ class TestValuesToLookupArray:
         assert len(arr) == 0
 
     def test_explicit_size(self) -> None:
-        arr = values_to_lookup_array(
-            np.array([5.0, 7.0]), np.array([0, 2]), size=5
-        )
+        arr = values_to_lookup_array(np.array([5.0, 7.0]), np.array([0, 2]), size=5)
         assert len(arr) == 5
         assert arr[0] == 5.0
         assert arr[2] == 7.0
