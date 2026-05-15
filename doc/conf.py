@@ -18,7 +18,7 @@ import linopy
 # -- Project information -----------------------------------------------------
 
 project = "linopy"
-copyright = "2021, Fabian Hofmann"
+copyright = "2021-2026, Fabian Hofmann"
 author = "Fabian Hofmann"
 
 # The full version, including alpha/beta/rc tags

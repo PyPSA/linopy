@@ -36,21 +36,26 @@ CPU-based solvers
 -  `Cbc <https://projects.coin-or.org/Cbc>`__ - open source, free, fast
 -  `GLPK <https://www.gnu.org/software/glpk/>`__ - open source, free, not very fast
 -  `HiGHS <https://highs.dev/>`__ - open source, free, fast
+-  `SCIP <https://www.scipopt.org/>`__ - open source (Apache-2.0), fast MIP solver
 -  `Gurobi <https://www.gurobi.com/>`__  - closed source, commercial, very fast
 -  `Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`__ - closed source, commercial, very fast (GPU acceleration available in v9.8+)
 -  `Cplex <https://www.ibm.com/de-de/analytics/cplex-optimizer>`__ - closed source, commercial, very fast
--  `MOSEK <https://www.mosek.com/>`__
--  `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__ -
+-  `MOSEK <https://www.mosek.com/>`__ - closed source, commercial, strong on conic/QP
+-  `MindOpt <https://solver.damo.alibaba.com/doc/en/html/index.html>`__ - closed source, commercial
 -  `COPT <https://www.shanshu.ai/copt>`__ - closed source, commercial, very fast
 
-For a subset of the solvers, Linopy provides a wrapper.
+The ``linopy[solvers]`` extra installs the Python clients for the
+supported solvers (HiGHS, SCIP, Gurobi, CPLEX, MOSEK, MindOpt, COPT,
+Xpress, Knitro). For the commercial ones a separate license is still
+required:
 
 .. code:: bash
 
     pip install linopy[solvers]
 
 
-We recommend to install the HiGHS solver if possible, which is free and open source but not yet available on all platforms.
+We recommend installing the HiGHS solver, which is free, open source, and
+fast across a wide range of problem sizes:
 
 .. code:: bash
 
