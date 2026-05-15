@@ -265,8 +265,10 @@ class Solution:
     """
     Solution returned by the solver.
 
-    ``primal`` and ``dual`` are values in ``vlabels``/``clabels`` build order
-    -- ``primal[i]`` is the value for variable label ``vlabels[i]``.
+    ``primal`` and ``dual`` are dense float arrays indexed by linopy label:
+    ``primal[label]`` is the value for variable ``label``, with ``NaN`` where
+    no value is available (masked labels, vars dropped by the solver, etc.).
+    Each solver is responsible for emitting arrays in this label-indexed form.
     """
 
     primal: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))

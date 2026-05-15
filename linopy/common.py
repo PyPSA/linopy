@@ -1577,27 +1577,3 @@ def values_to_lookup_array(
     arr = np.full(size, nan, dtype=float)
     arr[labels[mask]] = values[mask]
     return arr
-
-
-def lookup_vals(arr: np.ndarray, idx: np.ndarray) -> np.ndarray:
-    """
-    Look up values from a dense array by integer labels.
-
-    Negative labels and labels beyond the array length map to NaN.
-
-    Parameters
-    ----------
-    arr : np.ndarray
-        Dense lookup array (e.g. from :func:`values_to_lookup_array`).
-    idx : np.ndarray
-        Integer label indices.
-
-    Returns
-    -------
-    np.ndarray
-        Array of looked-up values with the same shape as *idx*.
-    """
-    valid = (idx >= 0) & (idx < len(arr))
-    vals = np.full(idx.shape, nan)
-    vals[valid] = arr[idx[valid]]
-    return vals

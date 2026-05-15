@@ -32,11 +32,9 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
-    lookup_vals,
     maybe_replace_signs,
     replace_by_map,
     to_path,
-    values_to_lookup_array,
 )
 from linopy.constants import (
     GREATER_EQUAL,
@@ -1763,6 +1761,7 @@ class Model:
                     slice_size=slice_size,
                     progress=progress,
                 )
+                solver._cache_model_sizes(self)
                 solver.solve_problem_from_file(
                     problem_fn=to_path(problem_fn),
                     solution_fn=to_path(solution_fn),
@@ -1868,18 +1867,19 @@ class Model:
             return status_value, termination_condition
 
         primal = result.solution.primal
-        sol_arr = values_to_lookup_array(primal, self.variables.label_index.vlabels)
         for _, var in self.variables.items():
-            vals = lookup_vals(sol_arr, np.ravel(var.labels))
-            var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
+            start, end = var.range
+            var.solution = xr.DataArray(
+                primal[start:end].reshape(var.shape), var.coords
+            )
 
         if len(result.solution.dual):
             dual = result.solution.dual
-            dual_arr = values_to_lookup_array(dual, self.constraints.label_index.clabels)
             for _, con in self.constraints.items():
-                vals = lookup_vals(dual_arr, np.ravel(con.labels))
+                start, end = con.range
+                coords = {dim: con.coords[dim] for dim in con.coord_dims}
                 con.dual = xr.DataArray(
-                    vals.reshape(con.labels.shape), con.labels.coords
+                    dual[start:end].reshape(con.shape), coords, dims=con.coord_dims
                 )
 
         return status_value, termination_condition

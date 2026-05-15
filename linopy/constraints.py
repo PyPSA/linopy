@@ -146,6 +146,11 @@ class ConstraintBase(ABC):
 
     @property
     @abstractmethod
+    def range(self) -> tuple[int, int]:
+        """Return the label range of the constraint."""
+
+    @property
+    @abstractmethod
     def coeffs(self) -> DataArray:
         """Get the LHS coefficients DataArray."""
 
@@ -565,6 +570,10 @@ class CSRConstraint(ConstraintBase):
         if self._cindex is not None:
             d["label_range"] = (self._cindex, self._cindex + self.full_size)
         return d
+
+    @property
+    def coords(self) -> DatasetCoordinates:
+        return Dataset(coords={c.name: c for c in self._coords}).coords
 
     @property
     def dims(self) -> Frozen[Hashable, int]:

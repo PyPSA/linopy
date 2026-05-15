@@ -8,12 +8,12 @@ Created on Tue Jan 28 09:03:35 2025.
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 from test_io import model  # noqa: F401
 
 from linopy import GREATER_EQUAL, Model, solvers
 from linopy.constants import Result, Solution, Status
+from linopy.constraints import CSRConstraint
 from linopy.solver_capabilities import (
     SOLVER_REGISTRY,
     SolverFeature,
@@ -130,7 +130,9 @@ def test_solver_state_compatibility_setters(simple_model: Model) -> None:
 def test_apply_result_explicit(simple_model: Model) -> None:
     x_labels = simple_model.variables["x"].labels.values
     y_labels = simple_model.variables["y"].labels.values
-    primal = pd.Series({int(x_labels): 1.5, int(y_labels): 2.0}, dtype=float)
+    primal = np.full(simple_model._xCounter, np.nan)
+    primal[int(x_labels)] = 1.5
+    primal[int(y_labels)] = 2.0
     solution = Solution(primal=primal, objective=5.5)
     result = Result(
         status=Status.from_termination_condition("optimal"),
@@ -144,6 +146,33 @@ def test_apply_result_explicit(simple_model: Model) -> None:
     assert simple_model.objective.value == 5.5
     assert float(simple_model.variables["x"].solution) == 1.5
     assert float(simple_model.variables["y"].solution) == 2.0
+
+
+def test_apply_result_with_csr_constraints_avoids_data_reconstruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m = Model(freeze_constraints=True)
+    x = m.add_variables(coords=[range(3)], name="x")
+    m.add_constraints(x >= 0, name="c")
+    con = m.constraints["c"]
+    assert isinstance(con, CSRConstraint)
+
+    primal = np.arange(m._xCounter, dtype=float)
+    dual = np.arange(m._cCounter, dtype=float) + 10
+    result = Result(
+        status=Status.from_termination_condition("optimal"),
+        solution=Solution(primal=primal, dual=dual, objective=1.0),
+        solver_name="mock",
+    )
+
+    def fail_data(self: CSRConstraint) -> None:
+        raise AssertionError("CSRConstraint.data was accessed")
+
+    monkeypatch.setattr(CSRConstraint, "data", property(fail_data))
+    m.apply_result(result)
+
+    np.testing.assert_array_equal(m.variables["x"].solution.values, primal)
+    np.testing.assert_array_equal(m.constraints["c"].dual.values, dual)
 
 
 @pytest.mark.skipif(

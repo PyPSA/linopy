@@ -1,7 +1,8 @@
 import numpy as np
 from numpy import nan
 
-from linopy.common import lookup_vals, values_to_lookup_array
+from linopy.common import values_to_lookup_array
+from linopy.solvers import _solution_from_names
 
 
 class TestValuesToLookupArray:
@@ -36,41 +37,18 @@ class TestValuesToLookupArray:
         assert np.isnan(arr[4])
 
 
-class TestLookupVals:
-    def test_basic(self) -> None:
-        arr = np.array([10.0, 20.0, 30.0])
-        idx = np.array([0, 1, 2])
-        result = lookup_vals(arr, idx)
-        np.testing.assert_array_equal(result, [10.0, 20.0, 30.0])
+class TestSolutionFromNames:
+    def test_default_names(self) -> None:
+        arr = _solution_from_names(
+            np.array([1.0, 2.0, 3.0]), ["x2", "x0", "x1"], size=4
+        )
+        np.testing.assert_array_equal(arr[:3], [2.0, 3.0, 1.0])
+        assert np.isnan(arr[3])
 
-    def test_negative_labels_become_nan(self) -> None:
-        arr = np.array([10.0, 20.0])
-        idx = np.array([0, -1, 1, -1])
-        result = lookup_vals(arr, idx)
-        assert result[0] == 10.0
-        assert np.isnan(result[1])
-        assert result[2] == 20.0
-        assert np.isnan(result[3])
-
-    def test_out_of_range_labels_become_nan(self) -> None:
-        arr = np.array([10.0, 20.0])
-        idx = np.array([0, 1, 999])
-        result = lookup_vals(arr, idx)
-        assert result[0] == 10.0
-        assert result[1] == 20.0
-        assert np.isnan(result[2])
-
-    def test_all_negative(self) -> None:
-        arr = np.array([10.0])
-        idx = np.array([-1, -1, -1])
-        result = lookup_vals(arr, idx)
-        assert all(np.isnan(result))
-
-    def test_no_mutation_of_source(self) -> None:
-        arr = np.array([10.0, 20.0, 30.0])
-        idx1 = np.array([-1, 1])
-        idx2 = np.array([0, 2])
-        lookup_vals(arr, idx1)
-        result2 = lookup_vals(arr, idx2)
-        np.testing.assert_array_equal(result2, [10.0, 30.0])
-        np.testing.assert_array_equal(arr, [10.0, 20.0, 30.0])
+    def test_explicit_coordinate_names(self) -> None:
+        arr = _solution_from_names(
+            np.array([1.0, 2.0]), ["power[1]#5", "power[0]#3"], size=7
+        )
+        assert arr[3] == 2.0
+        assert arr[5] == 1.0
+        assert np.isnan(arr[4])
