@@ -25,7 +25,13 @@ from linopy.solver_capabilities import (
     get_available_solvers_with_feature,
     solver_supports,
 )
-from linopy.solvers import _new_highspy_mps_layout, available_solvers, quadratic_solvers
+from linopy.solvers import (
+    SolverFeature,
+    _new_highspy_mps_layout,
+    _solver_class_for,
+    available_solvers,
+    quadratic_solvers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -769,6 +775,14 @@ def test_milp_model(
     )
     assert condition == "optimal"
     assert ((milp_model.solution.y == 9) | (milp_model.solution.x == 0.5)).all()
+
+    solver_cls = _solver_class_for(solver)
+    if solver_cls is not None and solver_cls.supports(
+        SolverFeature.MIP_DUAL_BOUND_REPORT
+    ):
+        report = milp_model.solver.report
+        assert report is not None
+        assert report.dual_bound is not None
 
 
 @pytest.mark.parametrize(

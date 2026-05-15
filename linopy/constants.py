@@ -282,6 +282,7 @@ class SolverReport:
 
     runtime: float | None = None
     mip_gap: float | None = None
+    dual_bound: float | None = None
     barrier_iterations: int | None = None
     simplex_iterations: int | None = None
 
@@ -316,6 +317,8 @@ class Result:
                 report_string += f"Runtime: {self.report.runtime:.2f}s\n"
             if self.report.mip_gap is not None:
                 report_string += f"MIP gap: {self.report.mip_gap:.2e}\n"
+            if self.report.dual_bound is not None:
+                report_string += f"Dual bound: {self.report.dual_bound:.2e}\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"

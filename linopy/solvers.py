@@ -76,6 +76,7 @@ class SolverFeature(Enum):
     SOS_CONSTRAINTS = auto()
     SEMI_CONTINUOUS_VARIABLES = auto()
     SOLVER_ATTRIBUTE_ACCESS = auto()
+    MIP_DUAL_BOUND_REPORT = auto()
 
 
 def _installed_version_in(pkg: str, spec: str) -> bool:
@@ -999,6 +1000,7 @@ class Highs(Solver[None]):
             SolverFeature.READ_MODEL_FROM_FILE,
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
 
@@ -1306,17 +1308,20 @@ class Highs(Solver[None]):
 
         runtime: float | None = None
         mip_gap: float | None = None
+        dual_bound: float | None = None
         with contextlib.suppress(Exception):
             runtime = float(h.getRunTime())
         with contextlib.suppress(Exception):
             mip_gap = float(h.getInfo().mip_gap)
+        with contextlib.suppress(Exception):
+            dual_bound = float(h.getInfo().mip_dual_bound)
 
         self.io_api = io_api
         return self._make_result(
             status,
             solution,
             solver_model=h,
-            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound),
         )
 
 
@@ -1343,6 +1348,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             SolverFeature.SOS_CONSTRAINTS,
             SolverFeature.SEMI_CONTINUOUS_VARIABLES,
             SolverFeature.SOLVER_ATTRIBUTE_ACCESS,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
 
@@ -1651,17 +1657,20 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         runtime: float | None = None
         mip_gap: float | None = None
+        dual_bound: float | None = None
         with contextlib.suppress(Exception):
             runtime = float(m.Runtime)
         with contextlib.suppress(Exception):
             mip_gap = float(m.MIPGap)
+        with contextlib.suppress(Exception):
+            dual_bound = float(m.ObjBound)
 
         self.io_api = io_api
         return self._make_result(
             status,
             solution,
             solver_model=m,
-            report=SolverReport(runtime=runtime, mip_gap=mip_gap),
+            report=SolverReport(runtime=runtime, mip_gap=mip_gap, dual_bound=dual_bound),
         )
 
 
@@ -2206,6 +2215,7 @@ class Knitro(Solver[None]):
             SolverFeature.LP_FILE_NAMES,
             SolverFeature.READ_MODEL_FROM_FILE,
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
+            SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
 
