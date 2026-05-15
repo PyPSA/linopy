@@ -9,7 +9,6 @@ import json
 import logging
 import shutil
 import time
-import warnings
 from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
@@ -641,17 +640,7 @@ def to_mosek(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Any:
-    """Deprecated. Build the MOSEK task via ``Mosek`` or ``Model.prepare_solver``."""
-    warnings.warn(
-        "to_mosek is deprecated and will be removed in a future version. "
-        "To obtain the MOSEK task, either:\n"
-        "  1) solver = linopy.solvers.Mosek(); "
-        "task = solver.to_solver_model(model); "
-        "or\n"
-        "  2) task = model.prepare_solver('mosek').",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    """Build the MOSEK task for `m`."""
     import mosek
 
     if task is None:
@@ -670,23 +659,15 @@ def to_gurobipy(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Any:
-    """Deprecated. Build the gurobipy model via ``Gurobi`` or ``Model.prepare_solver``."""
-    warnings.warn(
-        "to_gurobipy is deprecated and will be removed in a future version. "
-        "To obtain the gurobipy.Model, either:\n"
-        "  1) solver = linopy.solvers.Gurobi(); "
-        "gm = solver.to_solver_model(model, env=env); "
-        "or\n"
-        "  2) gm = model.prepare_solver('gurobi', env=env).",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return solvers.Gurobi._build_solver_model(
+    """Build the gurobipy.Model for `m`."""
+    solver = solvers.Gurobi.from_model(
         m,
-        env=env,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
+        env=env,
     )
+    return solver.solver_model
 
 
 def to_highspy(
@@ -694,37 +675,20 @@ def to_highspy(
     explicit_coordinate_names: bool = False,
     set_names: bool = True,
 ) -> Highs:
-    """Deprecated. Build the highspy model via ``Highs`` or ``Model.prepare_solver``."""
-    warnings.warn(
-        "to_highspy is deprecated and will be removed in a future version. "
-        "To obtain the highspy.Highs instance, either:\n"
-        "  1) solver = linopy.solvers.Highs(); "
-        "h = solver.to_solver_model(model); "
-        "or\n"
-        "  2) h = model.prepare_solver('highs').",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return solvers.Highs._build_solver_model(
+    """Build the highspy.Highs instance for `m`."""
+    solver = solvers.Highs.from_model(
         m,
+        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
+    return solver.solver_model
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:
-    """Deprecated. Build the cupdlpx model via ``cuPDLPx`` or ``Model.prepare_solver``."""
-    warnings.warn(
-        "to_cupdlpx is deprecated and will be removed in a future version. "
-        "To obtain the cupdlpx.Model, either:\n"
-        "  1) solver = linopy.solvers.cuPDLPx(); "
-        "cu = solver.to_solver_model(model); "
-        "or\n"
-        "  2) cu = model.prepare_solver('cupdlpx').",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return solvers.cuPDLPx._build_solver_model(m)
+    """Build the cupdlpx.Model for `m`."""
+    solver = solvers.cuPDLPx.from_model(m, io_api="direct")
+    return solver.solver_model
 
 
 def to_block_files(m: Model, fn: Path) -> None:

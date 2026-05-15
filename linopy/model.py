@@ -191,7 +191,7 @@ class Model:
     the optimization process.
     """
 
-    solver: solvers.Solver | None
+    _solver: solvers.Solver | None
     _variables: Variables
     _constraints: Constraints
     _objective: Objective
@@ -238,7 +238,7 @@ class Model:
         "_solver_dir",
         "_relaxed_registry",
         "_piecewise_formulations",
-        "solver",
+        "_solver",
         "__weakref__",
     )
 
@@ -308,7 +308,17 @@ class Model:
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
-        self.solver: solvers.Solver | None = None
+        self._solver: solvers.Solver | None = None
+
+    @property
+    def solver(self) -> solvers.Solver | None:
+        return self._solver
+
+    @solver.setter
+    def solver(self, value: solvers.Solver | None) -> None:
+        if self._solver is not None and self._solver is not value:
+            self._solver.close()
+        self._solver = value
 
     @property
     def solver_model(self) -> Any:
@@ -318,8 +328,6 @@ class Model:
     def solver_model(self, value: Any) -> None:
         if value is not None:
             raise AttributeError("solver state is managed via model.solver")
-        if self.solver is not None:
-            self.solver.close()
         self.solver = None
 
     @property
@@ -330,8 +338,6 @@ class Model:
     def solver_name(self, value: str | None) -> None:
         if value is not None:
             raise AttributeError("solver state is managed via model.solver")
-        if self.solver is not None:
-            self.solver.close()
         self.solver = None
 
     @property
@@ -1727,129 +1733,52 @@ class Model:
                 )
 
         try:
-            if self.solver is not None:
-                self.solver.close()
-            solver = solver_class(**solver_options)
-            self.solver = solver
-
+            self.solver = None  # closes any previous solver
             if io_api == "direct":
                 if set_names is None:
                     set_names = self.set_names_in_solver_io
-                solver.solve_problem_from_model(
-                    model=self,
-                    solution_fn=to_path(solution_fn),
-                    log_fn=to_path(log_fn),
-                    warmstart_fn=to_path(warmstart_fn),
-                    basis_fn=to_path(basis_fn),
-                    env=env,
-                    explicit_coordinate_names=explicit_coordinate_names,
-                    set_names=set_names,
-                )
+                build_kwargs: dict[str, Any] = {
+                    "explicit_coordinate_names": explicit_coordinate_names,
+                    "set_names": set_names,
+                    "log_fn": to_path(log_fn),
+                }
+                if env is not None:
+                    build_kwargs["env"] = env
             else:
-                if (
-                    not solver_class.supports(SolverFeature.LP_FILE_NAMES)
-                    and explicit_coordinate_names
-                ):
-                    logger.warning(
-                        f"{solver_name} does not support writing names to lp files, disabling it."
-                    )
-                    explicit_coordinate_names = False
-                problem_fn = self.to_file(
-                    to_path(problem_fn),
-                    io_api=io_api,
-                    explicit_coordinate_names=explicit_coordinate_names,
-                    slice_size=slice_size,
-                    progress=progress,
-                )
-                solver._cache_model_sizes(self)
-                solver.solve_problem_from_file(
-                    problem_fn=to_path(problem_fn),
-                    solution_fn=to_path(solution_fn),
-                    log_fn=to_path(log_fn),
-                    warmstart_fn=to_path(warmstart_fn),
-                    basis_fn=to_path(basis_fn),
-                    env=env,
-                )
-
+                build_kwargs = {
+                    "explicit_coordinate_names": explicit_coordinate_names,
+                    "slice_size": slice_size,
+                    "progress": progress,
+                    "problem_fn": to_path(problem_fn),
+                }
+            self.solver = solver = solvers.Solver.from_name(
+                solver_name,
+                model=self,
+                io_api=io_api,
+                options=solver_options,
+                **build_kwargs,
+            )
+            if io_api != "direct":
+                problem_fn = solver._problem_fn
+            result = solver.solve(
+                solution_fn=to_path(solution_fn),
+                log_fn=to_path(log_fn),
+                warmstart_fn=to_path(warmstart_fn),
+                basis_fn=to_path(basis_fn),
+                env=env,
+            )
         finally:
             for fn in (problem_fn, solution_fn):
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
 
         try:
-            return self.apply_result()
+            return self.apply_result(result)
         finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
 
-    def prepare_solver(
-        self,
-        solver_name: str,
-        explicit_coordinate_names: bool = False,
-        set_names: bool | None = None,
-        env: Any = None,
-        log_fn: Path | None = None,
-        **solver_options: Any,
-    ) -> Any:
-        """
-        Build the solver-native model for `solver_name` without solving.
-
-        Instantiates the solver, attaches it as `self.solver`, and returns
-        the native model object (e.g. `gurobipy.Model`). Pair with `run_solver()`
-        for a two-step build-then-solve workflow.
-        """
-        solver_class = solvers._solver_class_for(solver_name)
-        if solver_class is None:
-            raise ValueError(f"Unknown solver name: {solver_name}")
-        if not solver_class.supports(SolverFeature.DIRECT_API):
-            raise NotImplementedError(
-                f"Solver {solver_name} does not support direct API model export."
-            )
-        if set_names is None:
-            set_names = self.set_names_in_solver_io
-        if self.solver is not None:
-            self.solver.close()
-        solver = solver_class(**solver_options)
-        self.solver = solver
-        try:
-            return solver.to_solver_model(
-                self,
-                explicit_coordinate_names=explicit_coordinate_names,
-                set_names=set_names,
-                env=env,
-                log_fn=to_path(log_fn),
-            )
-        except Exception:
-            solver.close()
-            self.solver = None
-            raise
-
-    def run_solver(self) -> tuple[str, str]:
-        """
-        Solve the previously prepared solver model and apply the result.
-
-        Requires a prior `prepare_solver(...)`. Returns the
-        `(status, termination_condition)` tuple from `apply_result`.
-        """
-        if self.solver is None:
-            raise RuntimeError("call prepare_solver() first")
-        self.solver.run()
-        return self.apply_result()
-
-    def apply_result(self, result: Result | None = None) -> tuple[str, str]:
-        if result is None:
-            if self.solver is None or self.solver.status is None:
-                raise RuntimeError(
-                    "No solver state available; call solve() first or pass a Result."
-                )
-            result = Result(
-                status=self.solver.status,
-                solution=self.solver.solution,
-                solver_model=self.solver.solver_model,
-                solver_name=self.solver.solver_name.value,
-                report=self.solver.report,
-            )
-
+    def apply_result(self, result: Result) -> tuple[str, str]:
         result.info()
 
         if result.solution is not None:
@@ -1892,8 +1821,6 @@ class Model:
         solver_name = "mock"
 
         logger.info(f" Solve problem using {solver_name.title()} solver")
-        if self.solver is not None:
-            self.solver.close()
         self.solver = None
         # reset result
         self.reset_solution()

@@ -49,19 +49,19 @@ def test_solver_instance_attached_after_solve(simple_model: Model, solver: str) 
 def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    solver_enum = solvers.SolverName(solver.lower())
-    solver_class = getattr(solvers, solver_enum.name)
-    instance = solver_class()
-    result = instance.solve_problem(model=simple_model)
+    instance = solvers.Solver.from_name(solver, simple_model, io_api="direct")
+    result = instance.solve()
     assert result.solver_name == solver
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_prepare_solver_then_run(simple_model: Model, solver: str) -> None:
+def test_from_name_then_solve(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    simple_model.prepare_solver(solver)
-    simple_model.run_solver()
+    built = solvers.Solver.from_name(solver, simple_model, io_api="direct")
+    assert built.solver_model is not None
+    result = built.solve()
+    simple_model.apply_result(result)
 
     reference = Model(chunk=None)
     rx = reference.add_variables(name="x")
@@ -76,11 +76,14 @@ def test_prepare_solver_then_run(simple_model: Model, solver: str) -> None:
 
 
 @pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
-def test_prepare_solver_set_names_false_run(simple_model: Model, solver: str) -> None:
+def test_from_name_set_names_false(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
-    simple_model.prepare_solver(solver, set_names=False)
-    status, condition = simple_model.run_solver()
+    built = solvers.Solver.from_name(
+        solver, simple_model, io_api="direct", set_names=False
+    )
+    result = built.solve()
+    status, condition = simple_model.apply_result(result)
 
     assert status == "ok"
     assert condition == "optimal"
@@ -89,18 +92,19 @@ def test_prepare_solver_set_names_false_run(simple_model: Model, solver: str) ->
     assert float(simple_model.variables["y"].solution) == pytest.approx(1.7)
 
 
-def test_prepare_solver_unknown_name_raises(simple_model: Model) -> None:
-    with pytest.raises(ValueError, match="Unknown solver name"):
-        simple_model.prepare_solver("not_a_real_solver")
+def test_from_name_unknown_solver_raises(simple_model: Model) -> None:
+    with pytest.raises(ValueError, match="unknown solver"):
+        solvers.Solver.from_name("not_a_real_solver", simple_model, io_api="direct")
 
 
 @pytest.mark.skipif(
     "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
 )
-def test_highs_prepare_solver_applies_solver_options(simple_model: Model) -> None:
-    highs_model = simple_model.prepare_solver("highs", time_limit=123)
-
-    option_status, time_limit = highs_model.getOptionValue("time_limit")
+def test_from_name_applies_solver_options(simple_model: Model) -> None:
+    built = solvers.Solver.from_name(
+        "highs", simple_model, io_api="direct", options={"time_limit": 123}
+    )
+    option_status, time_limit = built.solver_model.getOptionValue("time_limit")
     assert str(option_status) == "HighsStatus.kOk"
     assert time_limit == 123
 
@@ -109,13 +113,17 @@ def test_highs_prepare_solver_applies_solver_options(simple_model: Model) -> Non
     "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
 )
 def test_solver_state_compatibility_setters(simple_model: Model) -> None:
-    simple_model.prepare_solver("highs")
+    simple_model.solver = solvers.Solver.from_name(
+        "highs", simple_model, io_api="direct"
+    )
     simple_model.solver_model = None
     assert simple_model.solver is None
     assert simple_model.solver_model is None
     assert simple_model.solver_name is None
 
-    simple_model.prepare_solver("highs")
+    simple_model.solver = solvers.Solver.from_name(
+        "highs", simple_model, io_api="direct"
+    )
     simple_model.solver_name = None
     assert simple_model.solver is None
     assert simple_model.solver_model is None
@@ -306,7 +314,7 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
 )
 def test_knitro_solver_with_options(tmp_path: Path) -> None:
     """Test Knitro solver with custom options."""
-    knitro = solvers.Knitro(maxit=100, feastol=1e-6)
+    knitro = solvers.Knitro(options={"maxit": 100, "feastol": 1e-6})
 
     mps_file = tmp_path / "problem.mps"
     mps_file.write_text(free_mps_problem)
@@ -336,7 +344,7 @@ def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F
 )
 def test_knitro_solver_no_log(tmp_path: Path) -> None:
     """Test Knitro solver without log file."""
-    knitro = solvers.Knitro(outlev=0)
+    knitro = solvers.Knitro(options={"outlev": 0})
 
     mps_file = tmp_path / "problem.mps"
     mps_file.write_text(free_mps_problem)

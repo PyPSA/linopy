@@ -15,9 +15,10 @@ import subprocess as sub
 import sys
 import threading
 import warnings
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections import namedtuple
 from collections.abc import Callable, Generator
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -383,17 +384,56 @@ def maybe_adjust_objective_sign(
     return solution
 
 
+@dataclass
 class Solver(ABC, Generic[EnvType]):
     """
     Abstract base class for solving a given linear problem.
 
-    All relevant functions are passed on to the specific solver subclasses.
-    Subclasses must implement the `solve_problem_from_model()` and
-    `solve_problem_from_file()` methods.
+    Subclasses provide ``_build_direct`` / ``_run_direct`` (when supporting the
+    direct API) and ``_run_file`` (when supporting LP/MPS files). Construction
+    goes via :meth:`Solver.from_name` or :meth:`Solver.from_model`.
     """
+
+    model: Model | None = None
+    io_api: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
+
+    # Runtime state — never set via constructor.
+    status: Status | None = field(init=False, default=None, repr=False)
+    solution: Solution | None = field(init=False, default=None, repr=False)
+    report: SolverReport | None = field(init=False, default=None, repr=False)
+    solver_model: Any = field(init=False, default=None, repr=False)
+    sense: str | None = field(init=False, default=None, repr=False)
+    env: Any = field(init=False, default=None, repr=False)
+    _env_stack: contextlib.ExitStack | None = field(
+        init=False, default=None, repr=False
+    )
+    _vlabels: np.ndarray | None = field(init=False, default=None, repr=False)
+    _clabels: np.ndarray | None = field(init=False, default=None, repr=False)
+    _n_vars: int = field(init=False, default=0, repr=False)
+    _n_cons: int = field(init=False, default=0, repr=False)
+    _problem_fn: Path | None = field(init=False, default=None, repr=False)
 
     display_name: ClassVar[str] = ""
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
+    accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
+
+    def __post_init__(self) -> None:
+        if type(self) is Solver:
+            raise TypeError(
+                "Solver is abstract; instantiate a concrete subclass instead."
+            )
+        if self.solver_name.value not in available_solvers:
+            msg = (
+                f"Solver package for '{self.solver_name.value}' is not installed. "
+                "Please install first to initialize solver instance."
+            )
+            raise ImportError(msg)
+
+    @property
+    def solver_options(self) -> dict[str, Any]:
+        """Back-compat alias for ``self.options``."""
+        return self.options
 
     @classmethod
     def runtime_features(cls) -> frozenset[SolverFeature]:
@@ -413,32 +453,179 @@ class Solver(ABC, Generic[EnvType]):
         """Check if this solver supports a given feature."""
         return feature in cls.features or feature in cls.runtime_features()
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        self.options: dict[str, Any] = solver_options
-        self.solver_options: dict[str, Any] = solver_options
-        self.status: Status | None = None
-        self.solution: Solution | None = None
-        self.report: SolverReport | None = None
-        self.solver_model: Any = None
-        self.io_api: str | None = None
-        self.sense: str | None = None
-        self.env: Any = None
-        self._env_stack: contextlib.ExitStack | None = None
-        # cached at to_solver_model time so direct-API solvers can build
-        # label-indexed Solution.primal/dual without re-fetching the model.
-        self._vlabels: np.ndarray | None = None
-        self._clabels: np.ndarray | None = None
-        # Total label counts (model._xCounter / _cCounter), sized so that
-        # masked label slots are preserved in the dense Solution arrays.
-        self._n_vars: int = 0
-        self._n_cons: int = 0
+    @staticmethod
+    def from_name(
+        name: str,
+        model: Model,
+        io_api: str | None = None,
+        options: dict[str, Any] | None = None,
+        **build_kwargs: Any,
+    ) -> Solver:
+        """Construct and build the solver subclass registered as ``name``."""
+        cls = _solver_class_for(name)
+        if cls is None:
+            raise ValueError(f"unknown solver: {name}")
+        return cls.from_model(
+            model, io_api=io_api, options=options or {}, **build_kwargs
+        )
 
-        if self.solver_name.value not in available_solvers:
-            msg = f"Solver package for '{self.solver_name.value}' is not installed. Please install first to initialize solver instance."
-            raise ImportError(msg)
+    @classmethod
+    def from_model(
+        cls,
+        model: Model,
+        io_api: str | None = None,
+        options: dict[str, Any] | None = None,
+        **build_kwargs: Any,
+    ) -> Solver:
+        """Instantiate and build the solver against ``model``."""
+        instance = cls(model=model, io_api=io_api, options=options or {})
+        instance._build(**build_kwargs)
+        return instance
+
+    def _build(self, **build_kwargs: Any) -> None:
+        """Dispatch to direct or file build based on ``io_api``."""
+        if self.model is None:
+            raise RuntimeError("Solver has no model attached; cannot build.")
+        if self.io_api == "direct":
+            self._build_direct(**build_kwargs)
+        else:
+            self._build_file(**build_kwargs)
+
+    def _build_direct(self, **build_kwargs: Any) -> None:
+        """Build the native solver model from ``self.model``. Override per-solver."""
+        if not self.supports(SolverFeature.DIRECT_API):
+            raise NotImplementedError(
+                f"Solver {self.solver_name.value} does not support direct API model export."
+            )
+        # Default: delegate to legacy to_solver_model on the subclass.
+        self.to_solver_model(self.model, **build_kwargs)
+
+    def _build_file(self, **build_kwargs: Any) -> None:
+        """Write the LP/MPS file for ``self.model`` and cache its path."""
+        model = self.model
+        assert model is not None
+        io_api = self.io_api
+        if io_api is not None and io_api not in FILE_IO_APIS:
+            raise ValueError(
+                f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
+            )
+        explicit_coordinate_names = build_kwargs.pop(
+            "explicit_coordinate_names", False
+        )
+        slice_size = build_kwargs.pop("slice_size", 2_000_000)
+        progress = build_kwargs.pop("progress", None)
+        problem_fn = build_kwargs.pop("problem_fn", None)
+        if problem_fn is None:
+            problem_fn = model.get_problem_file(io_api=io_api)
+        if (
+            not self.supports(SolverFeature.LP_FILE_NAMES)
+            and explicit_coordinate_names
+        ):
+            logger.warning(
+                f"{self.solver_name.value} does not support writing names to "
+                "lp files, disabling it."
+            )
+            explicit_coordinate_names = False
+        problem_fn = model.to_file(
+            Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn,
+            io_api=io_api,
+            explicit_coordinate_names=explicit_coordinate_names,
+            slice_size=slice_size,
+            progress=progress,
+        )
+        self._problem_fn = problem_fn
+        if self.io_api is None:
+            self.io_api = read_io_api_from_problem_file(problem_fn)
+        self._cache_model_sizes(model)
+
+    def solve(self, **run_kwargs: Any) -> Result:
+        """Run the prepared solver and return a :class:`Result`."""
+        if self.io_api == "direct" or self.solver_model is not None:
+            return self._run_direct(**run_kwargs)
+        if self._problem_fn is not None:
+            return self._run_file(**run_kwargs)
+        raise RuntimeError(
+            "Solver has not been built; call Solver.from_name(...) or _build() first."
+        )
+
+    def _run_direct(self, **run_kwargs: Any) -> Result:
+        """Run the pre-built native solver model. Override per-solver."""
+        raise NotImplementedError(
+            f"Direct API run not implemented for {self.solver_name.value}"
+        )
+
+    def _run_file(self, **run_kwargs: Any) -> Result:
+        """Invoke the solver binary on ``self._problem_fn``. Override per-solver."""
+        if self._problem_fn is None:
+            raise RuntimeError("No problem file built; call _build_file() first.")
+        return self.solve_problem_from_file(self._problem_fn, **run_kwargs)
+
+    def solve_problem(
+        self,
+        model: Model | None = None,
+        problem_fn: Path | None = None,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Result:
+        """Legacy wrapper. Dispatches to model- or file-based entry point."""
+        if problem_fn is not None and model is not None:
+            raise ValueError(
+                "Both problem file and model are given. Please specify only one."
+            )
+        if model is not None:
+            return self.solve_problem_from_model(
+                model=model,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
+                explicit_coordinate_names=explicit_coordinate_names,
+            )
+        if problem_fn is not None:
+            return self.solve_problem_from_file(
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                warmstart_fn=warmstart_fn,
+                basis_fn=basis_fn,
+                env=env,
+            )
+        raise ValueError("No problem file or model specified.")
+
+    def solve_problem_from_model(
+        self,
+        model: Model,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> Result:
+        """Legacy direct-API entry point. Default raises NotImplementedError."""
+        raise NotImplementedError(
+            f"Direct API not implemented for {self.solver_name.value}"
+        )
+
+    def solve_problem_from_file(
+        self,
+        problem_fn: Path,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: EnvType | None = None,
+    ) -> Result:
+        """Legacy file-based entry point. Default raises NotImplementedError."""
+        raise NotImplementedError(
+            f"File-based API not implemented for {self.solver_name.value}"
+        )
 
     def to_solver_model(self, model: Model, **kwargs: Any) -> Any:
         raise NotImplementedError
@@ -456,16 +643,6 @@ class Solver(ABC, Generic[EnvType]):
         self._n_cons = model._cCounter
 
     def update_solver_model(self, model: Model, **kwargs: Any) -> None:
-        raise NotImplementedError
-
-    def run(self) -> Result:
-        if self.solver_model is None:
-            raise RuntimeError("call to_solver_model first")
-        if self.sense is None:
-            raise RuntimeError("sense not set; call to_solver_model first")
-        return self._run()
-
-    def _run(self) -> Result:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -533,115 +710,6 @@ class Solver(ABC, Generic[EnvType]):
                 logger.error(f"Failed to parse solution: {e}")
         return Solution()
 
-    @abstractmethod
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        """
-        Solve a linear problem directly from a linopy model.
-
-        Subclasses that support the direct API translate the model into the
-        solver's native representation and run it. Subclasses without direct
-        API support must still implement this method and raise NotImplementedError.
-
-        Parameters
-        ----------
-        model : linopy.Model
-            Linopy model for the problem.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : EnvType, optional
-            Solver-specific environment object (or None when not applicable).
-        explicit_coordinate_names : bool, optional
-            Transfer variable and constraint coordinate names to the solver
-            (default: False).
-        set_names : bool, optional
-            Whether to set variable and constraint names (default: True).
-            Setting to False can significantly speed up model export.
-
-        Returns
-        -------
-        Result
-        """
-        pass
-
-    @abstractmethod
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-    ) -> Result:
-        """
-        Abstract method to solve a linear problem from a problem file.
-
-        Needs to be implemented in the specific solver subclass. Even if the solver
-        does not support solving from a file, this method should be implemented and
-        raise a NotImplementedError.
-        """
-        pass
-
-    def solve_problem(
-        self,
-        model: Model | None = None,
-        problem_fn: Path | None = None,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-    ) -> Result:
-        """
-        Solve a linear problem either from a model or a problem file.
-
-        Wraps around `self.solve_problem_from_model()` and
-        `self.solve_problem_from_file()` and calls the appropriate method
-        based on the input arguments (`model` or `problem_fn`).
-        """
-        if problem_fn is not None and model is not None:
-            msg = "Both problem file and model are given. Please specify only one."
-            raise ValueError(msg)
-        elif model is not None:
-            return self.solve_problem_from_model(
-                model=model,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                env=env,
-                explicit_coordinate_names=explicit_coordinate_names,
-            )
-        elif problem_fn is not None:
-            return self.solve_problem_from_file(
-                problem_fn=problem_fn,
-                solution_fn=solution_fn,
-                log_fn=log_fn,
-                warmstart_fn=warmstart_fn,
-                basis_fn=basis_fn,
-                env=env,
-            )
-        else:
-            msg = "No problem file or model specified."
-            raise ValueError(msg)
-
     @property
     def solver_name(self) -> SolverName:
         return SolverName[self.__class__.__name__]
@@ -664,12 +732,6 @@ class CBC(Solver[None]):
             SolverFeature.READ_MODEL_FROM_FILE,
         }
     )
-
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
 
     def solve_problem_from_model(
         self,
@@ -875,12 +937,6 @@ class GLPK(Solver[None]):
         }
     )
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -1079,12 +1135,6 @@ class Highs(Solver[None]):
         }
     )
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def to_solver_model(
         self,
         model: Model,
@@ -1213,8 +1263,23 @@ class Highs(Solver[None]):
             sense=model.sense,
         )
 
-    def _run(self) -> Result:
-        return self._solve(self.solver_model, io_api=self.io_api, sense=self.sense)
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
+        )
 
     def solve_problem_from_file(
         self,
@@ -1427,12 +1492,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         }
     )
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def _resolve_env(self, env: gurobipy.Env | dict[str, Any] | None) -> gurobipy.Env:
         self.close()
         self._env_stack = contextlib.ExitStack()
@@ -1557,13 +1616,21 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             sense=model.sense,
         )
 
-    def _run(self) -> Result:
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
         return self._solve(
             self.solver_model,
-            solution_fn=None,
-            log_fn=None,
-            warmstart_fn=None,
-            basis_fn=None,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
             io_api=self.io_api,
             sense=self.sense,
         )
@@ -1784,12 +1851,6 @@ class Cplex(Solver[None]):
         }
     )
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -1952,12 +2013,6 @@ class SCIP(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
-
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
 
     def solve_problem_from_model(
         self,
@@ -2130,12 +2185,6 @@ class Xpress(Solver[None]):
         if _installed_version_in("xpress", ">=9.8.0"):
             return frozenset({SolverFeature.GPU_ACCELERATION})
         return frozenset()
-
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
 
     def solve_problem_from_model(
         self,
@@ -2318,12 +2367,6 @@ class Knitro(Solver[None]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
-
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
 
     def solve_problem_from_model(
         self,
@@ -2590,12 +2633,6 @@ class Mosek(Solver[None]):
         }
     )
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -2630,13 +2667,21 @@ class Mosek(Solver[None]):
             sense=model.sense,
         )
 
-    def _run(self) -> Result:
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
         return self._solve(
             self.solver_model,
-            solution_fn=None,
-            log_fn=None,
-            warmstart_fn=None,
-            basis_fn=None,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
             io_api=self.io_api,
             sense=self.sense,
         )
@@ -3056,12 +3101,6 @@ class COPT(Solver[None]):
         }
     )
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -3220,12 +3259,6 @@ class MindOpt(Solver[None]):
         }
     )
 
-    def __init(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
-
     def solve_problem_from_model(
         self,
         model: Model,
@@ -3366,11 +3399,7 @@ class PIPS(Solver[None]):
     Solver subclass for the PIPS solver.
     """
 
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
+    def __post_init__(self) -> None:
         msg = "The PIPS solver interface is not yet implemented."
         raise NotImplementedError(msg)
 
@@ -3403,12 +3432,6 @@ class cuPDLPx(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
-
-    def __init__(
-        self,
-        **solver_options: Any,
-    ) -> None:
-        super().__init__(**solver_options)
 
     def solve_problem_from_file(
         self,
@@ -3545,9 +3568,21 @@ class cuPDLPx(Solver[None]):
 
         return cu_model
 
-    def _run(self) -> Result:
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: Any = None,
+        **kw: Any,
+    ) -> Result:
         return self._solve(
             self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
             io_api=self.io_api,
             sense=self.sense,
         )

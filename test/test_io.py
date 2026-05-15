@@ -274,15 +274,14 @@ def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_gurobipy is deprecated"):
-        model.to_gurobipy()
+    gm = model.to_gurobipy()
+    assert gm.NumVars > 0
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy_no_names(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_gurobipy is deprecated"):
-        m_with = model.to_gurobipy(set_names=True)
-        m_without = model.to_gurobipy(set_names=False)
+    m_with = model.to_gurobipy(set_names=True)
+    m_without = model.to_gurobipy(set_names=False)
     names_with = [v.VarName for v in m_with.getVars()]
     names_without = [v.VarName for v in m_without.getVars()]
     assert names_with != names_without
@@ -290,29 +289,28 @@ def test_to_gurobipy_no_names(model: Model) -> None:
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_highspy is deprecated"):
-        model.to_highspy()
+    h = model.to_highspy()
+    assert h.getLp().num_col_ > 0
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 def test_to_highspy_no_names(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_highspy is deprecated"):
-        h = model.to_highspy(set_names=False)
+    h = model.to_highspy(set_names=False)
     lp = h.getLp()
     assert len(lp.col_names_) == 0
     assert len(lp.row_names_) == 0
 
 
 @pytest.mark.skipif("mosek" not in available_solvers, reason="Mosek not installed")
-def test_to_mosek_deprecation_warning(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_mosek is deprecated"):
-        model.to_mosek()
+def test_to_mosek(model: Model) -> None:
+    task = model.to_mosek()
+    assert task.getnumvar() > 0
 
 
 @pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
-def test_to_cupdlpx_deprecation_warning(model: Model) -> None:
-    with pytest.warns(DeprecationWarning, match="to_cupdlpx is deprecated"):
-        model.to_cupdlpx()
+def test_to_cupdlpx(model: Model) -> None:
+    cu = model.to_cupdlpx()
+    assert cu is not None
 
 
 def test_model_set_names_in_solver_io_default() -> None:

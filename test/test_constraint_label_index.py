@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 import linopy
+import linopy.constants
 from linopy.constraints import Constraint
 
 
@@ -42,7 +43,15 @@ def test_apply_result_does_not_build_matrix(
     assert model_with_mask.status == "ok"
     # one build for solver input is fine; the post-solve mapping must not add more
     n_after_solve = calls["n"]
-    model_with_mask.apply_result()
+    solver = model_with_mask.solver
+    result = linopy.constants.Result(
+        status=solver.status,
+        solution=solver.solution,
+        solver_model=solver.solver_model,
+        solver_name=solver.solver_name.value,
+        report=solver.report,
+    )
+    model_with_mask.apply_result(result)
     assert calls["n"] == n_after_solve
 
 
