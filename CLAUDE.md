@@ -7,22 +7,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Running Tests
 ```bash
 # Run all tests (excluding GPU tests by default)
-pytest
+uv run --extra dev --extra solvers pytest
 
 # Run tests with coverage
-pytest --cov=./ --cov-report=xml linopy --doctest-modules test
+uv run --extra dev --extra solvers pytest --cov=./ --cov-report=xml linopy --doctest-modules test
 
 # Run a specific test file
-pytest test/test_model.py
+uv run --extra dev --extra solvers pytest test/test_model.py
 
 # Run a specific test function
-pytest test/test_model.py::test_model_creation
+uv run --extra dev --extra solvers pytest test/test_model.py::test_model_creation
 
 # Run GPU tests (requires GPU hardware and cuPDLPx installation)
-pytest --run-gpu
+uv run --extra dev --extra solvers pytest --run-gpu
 
 # Run only GPU tests
-pytest -m gpu --run-gpu
+uv run --extra dev --extra solvers pytest -m gpu --run-gpu
 ```
 
 **GPU Testing**: Tests that require GPU hardware (e.g., cuPDLPx solver) are automatically skipped by default since CI machines typically don't have GPUs. To run GPU tests locally, use the `--run-gpu` flag. The tests are automatically marked with `@pytest.mark.gpu` based on solver capabilities.
@@ -30,17 +30,17 @@ pytest -m gpu --run-gpu
 ### Linting and Type Checking
 ```bash
 # Run linter (ruff)
-ruff check .
-ruff check --fix .  # Auto-fix issues
+uv run --extra dev ruff check .
+uv run --extra dev ruff check --fix .  # Auto-fix issues
 
 # Run formatter
-ruff format .
+uv run --extra dev ruff format .
 
 # Run type checker
-mypy .
+uv run --extra dev mypy .
 
 # Run all pre-commit hooks
-pre-commit run --all-files
+uv run --extra dev pre-commit run --all-files
 ```
 
 ### Development Setup
