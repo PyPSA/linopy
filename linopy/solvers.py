@@ -506,18 +506,13 @@ class Solver(ABC, Generic[EnvType]):
             raise ValueError(
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
-        explicit_coordinate_names = build_kwargs.pop(
-            "explicit_coordinate_names", False
-        )
+        explicit_coordinate_names = build_kwargs.pop("explicit_coordinate_names", False)
         slice_size = build_kwargs.pop("slice_size", 2_000_000)
         progress = build_kwargs.pop("progress", None)
         problem_fn = build_kwargs.pop("problem_fn", None)
         if problem_fn is None:
             problem_fn = model.get_problem_file(io_api=io_api)
-        if (
-            not self.supports(SolverFeature.LP_FILE_NAMES)
-            and explicit_coordinate_names
-        ):
+        if not self.supports(SolverFeature.LP_FILE_NAMES) and explicit_coordinate_names:
             logger.warning(
                 f"{self.solver_name.value} does not support writing names to "
                 "lp files, disabling it."
@@ -658,7 +653,9 @@ class Solver(ABC, Generic[EnvType]):
             DeprecationWarning,
             stacklevel=2,
         )
-        problem_fn = Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn
+        problem_fn = (
+            Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn
+        )
         self._problem_fn = problem_fn
         self.io_api = read_io_api_from_problem_file(problem_fn)
         return self._run_file(
