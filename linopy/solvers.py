@@ -493,12 +493,9 @@ class Solver(ABC, Generic[EnvType]):
 
     def _build_direct(self, **build_kwargs: Any) -> None:
         """Build the native solver model from ``self.model``. Override per-solver."""
-        if not self.supports(SolverFeature.DIRECT_API):
-            raise NotImplementedError(
-                f"Solver {self.solver_name.value} does not support direct API model export."
-            )
-        # Default: delegate to legacy to_solver_model on the subclass.
-        self.to_solver_model(self.model, **build_kwargs)
+        raise NotImplementedError(
+            f"Solver {self.solver_name.value} does not support direct API model export."
+        )
 
     def _build_file(self, **build_kwargs: Any) -> None:
         """Write the LP/MPS file for ``self.model`` and cache its path."""
@@ -551,14 +548,14 @@ class Solver(ABC, Generic[EnvType]):
     def _run_direct(self, **run_kwargs: Any) -> Result:
         """Run the pre-built native solver model. Override per-solver."""
         raise NotImplementedError(
-            f"Direct API run not implemented for {self.solver_name.value}"
+            f"Direct API not implemented for {self.solver_name.value}"
         )
 
     def _run_file(self, **run_kwargs: Any) -> Result:
         """Invoke the solver binary on ``self._problem_fn``. Override per-solver."""
-        if self._problem_fn is None:
-            raise RuntimeError("No problem file built; call _build_file() first.")
-        return self.solve_problem_from_file(self._problem_fn, **run_kwargs)
+        raise NotImplementedError(
+            f"File-based API not implemented for {self.solver_name.value}"
+        )
 
     def solve_problem(
         self,
@@ -571,7 +568,14 @@ class Solver(ABC, Generic[EnvType]):
         env: EnvType | None = None,
         explicit_coordinate_names: bool = False,
     ) -> Result:
-        """Legacy wrapper. Dispatches to model- or file-based entry point."""
+        """Deprecated. Use ``Solver.from_name(...).solve(...)`` or ``Model.solve(...)``."""
+        warnings.warn(
+            "Solver.solve_problem is deprecated and will be removed in a future "
+            "release. Use Solver.from_name(name, model, ...).solve(...) or "
+            "Model.solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if problem_fn is not None and model is not None:
             raise ValueError(
                 "Both problem file and model are given. Please specify only one."
@@ -608,9 +612,33 @@ class Solver(ABC, Generic[EnvType]):
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
     ) -> Result:
-        """Legacy direct-API entry point. Default raises NotImplementedError."""
-        raise NotImplementedError(
-            f"Direct API not implemented for {self.solver_name.value}"
+        """Deprecated shim that builds via ``_build_direct`` and runs via ``_run_direct``."""
+        warnings.warn(
+            "Solver.solve_problem_from_model is deprecated and will be removed in a "
+            "future release. Use Solver.from_name(name, model, io_api='direct', ...)"
+            ".solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not self.supports(SolverFeature.DIRECT_API):
+            raise NotImplementedError(
+                f"Direct API not implemented for {self.solver_name.value}"
+            )
+        self.model = model
+        build_kwargs: dict[str, Any] = {
+            "explicit_coordinate_names": explicit_coordinate_names,
+            "set_names": set_names,
+            "log_fn": log_fn,
+        }
+        if env is not None:
+            build_kwargs["env"] = env
+        self._build_direct(**build_kwargs)
+        return self._run_direct(
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
         )
 
     def solve_problem_from_file(
@@ -622,13 +650,24 @@ class Solver(ABC, Generic[EnvType]):
         basis_fn: Path | None = None,
         env: EnvType | None = None,
     ) -> Result:
-        """Legacy file-based entry point. Default raises NotImplementedError."""
-        raise NotImplementedError(
-            f"File-based API not implemented for {self.solver_name.value}"
+        """Deprecated shim that caches ``problem_fn`` and runs via ``_run_file``."""
+        warnings.warn(
+            "Solver.solve_problem_from_file is deprecated and will be removed in a "
+            "future release. Use Solver.from_name(name, model, problem_fn=..., ...)"
+            ".solve(...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-
-    def to_solver_model(self, model: Model, **kwargs: Any) -> Any:
-        raise NotImplementedError
+        problem_fn = Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn
+        self._problem_fn = problem_fn
+        self.io_api = read_io_api_from_problem_file(problem_fn)
+        return self._run_file(
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            env=env,
+        )
 
     def _cache_model_labels(self, model: Model) -> None:
         """Cache vlabels/clabels and total label counts for label-indexed solutions."""
@@ -733,55 +772,17 @@ class CBC(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for CBC"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the CBC solver.
-
-        The function reads the linear problem file and passes it to the solver.
-        If the solution is successful it returns variable solutions
-        and constraint dual values.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with CBC.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
 
@@ -937,59 +938,17 @@ class GLPK(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for GLPK"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the glpk solver.
-
-        This function reads the linear problem file and passes it to the
-        glpk solver. If the solution is successful it returns variable solutions
-        and constraint dual values.
-
-        For more information on the glpk solver options, see
-
-        https://kam.mff.cuni.cz/~elias/glpk.pdf
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path
-            Path to the solution file. This is necessary for solving with GLPK.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             "integer optimal": "optimal",
             "integer undefined": "infeasible_or_unbounded",
@@ -1135,14 +1094,15 @@ class Highs(Solver[None]):
         }
     )
 
-    def to_solver_model(
+    def _build_direct(
         self,
-        model: Model,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
         log_fn: Path | None = None,
         **kwargs: Any,
-    ) -> highspy.Highs:
+    ) -> None:
+        model = self.model
+        assert model is not None
         if self.solver_options.get("solver") in [
             "simplex",
             "ipm",
@@ -1166,7 +1126,6 @@ class Highs(Solver[None]):
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
-        return h
 
     @staticmethod
     def _build_solver_model(
@@ -1236,33 +1195,6 @@ class Highs(Solver[None]):
 
         return h
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        self.to_solver_model(
-            model,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
-            log_fn=log_fn,
-        )
-
-        return self._solve(
-            self.solver_model,
-            solution_fn,
-            warmstart_fn,
-            basis_fn,
-            io_api="direct",
-            sense=model.sense,
-        )
-
     def _run_direct(
         self,
         solution_fn: Path | None = None,
@@ -1281,41 +1213,17 @@ class Highs(Solver[None]):
             sense=self.sense,
         )
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the HiGHS solver.
-        Reads a linear problem file and passes it to the HiGHS solver.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
-
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         problem_fn_ = path_to_string(problem_fn)
         h = highspy.Highs()
         self._set_solver_params(h, log_fn)
@@ -1504,14 +1412,15 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         self.env = resolved
         return resolved
 
-    def to_solver_model(
+    def _build_direct(
         self,
-        model: Model,
         explicit_coordinate_names: bool = False,
         env: gurobipy.Env | dict[str, Any] | None = None,
         set_names: bool = True,
         **kwargs: Any,
-    ) -> gurobipy.Model:
+    ) -> None:
+        model = self.model
+        assert model is not None
         env_ = self._resolve_env(env)
         m = self._build_solver_model(
             model,
@@ -1523,7 +1432,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
-        return m
 
     @staticmethod
     def _build_solver_model(
@@ -1589,33 +1497,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         gm.update()
         return gm
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: gurobipy.Env | dict[str, Any] | None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        self.to_solver_model(
-            model,
-            explicit_coordinate_names=explicit_coordinate_names,
-            env=env,
-            set_names=set_names,
-        )
-        return self._solve(
-            self.solver_model,
-            solution_fn=solution_fn,
-            log_fn=log_fn,
-            warmstart_fn=warmstart_fn,
-            basis_fn=basis_fn,
-            io_api="direct",
-            sense=model.sense,
-        )
-
     def _run_direct(
         self,
         solution_fn: Path | None = None,
@@ -1635,39 +1516,17 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             sense=self.sense,
         )
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: gurobipy.Env | dict[str, Any] | None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Gurobi solver.
-        Reads a problem file and passes it to the Gurobi solver.
-        This function communicates with gurobi using the gurobipy package.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : gurobipy.Env or dict, optional
-            Gurobi environment for the solver, pass env directly or kwargs for creation.
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)
@@ -1851,55 +1710,17 @@ class Cplex(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for Cplex"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the cplex solver.
-
-        This function reads the linear problem file and passes it to the cplex
-        solver. If the solution is successful it returns variable solutions and
-        constraint dual values. Cplex must be installed for using this function.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             "integer optimal solution": "optimal",
             "integer optimal, tolerance": "optimal",
@@ -2014,53 +1835,17 @@ class SCIP(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for SCIP"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the scip solver.
-
-        This function communicates with scip using the pyscipopt package.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP: dict[str, TerminationCondition] = {
             # https://github.com/scipopt/scip/blob/b2bac412222296ff2b7f2347bb77d5fc4e05a2a1/src/scip/type_stat.h#L40
             "inforunbd": TerminationCondition.infeasible_or_unbounded,
@@ -2186,56 +1971,17 @@ class Xpress(Solver[None]):
             return frozenset({SolverFeature.GPU_ACCELERATION})
         return frozenset()
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for Xpress"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Xpress solver.
-
-        This function reads the linear problem file and passes it to
-        the Xpress solver. If the solution is successful it returns
-        variable solutions and constraint dual values. The `xpress` module
-        must be installed for using this function.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             xpress.SolStatus.NOTFOUND: "unknown",
             xpress.SolStatus.OPTIMAL: "optimal",
@@ -2368,20 +2114,6 @@ class Knitro(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        msg = "Direct API not implemented for Knitro"
-        raise NotImplementedError(msg)
-
     @staticmethod
     def _set_option(kc: Any, name: str, value: Any) -> None:
         param_id = knitro.KN_get_param_id(kc, name)
@@ -2418,37 +2150,17 @@ class Knitro(Solver[None]):
 
         return np.asarray(values, dtype=float)
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the Knitro solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver.
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP: dict[int, TerminationCondition] = {
             0: TerminationCondition.optimal,
             -100: TerminationCondition.suboptimal,
@@ -2633,40 +2345,6 @@ class Mosek(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        if env is not None:
-            warnings.warn(
-                "The 'env' parameter in solve_problem_from_model is deprecated and will be "
-                "removed in a future version. MOSEK now uses the global environment "
-                "automatically, avoiding unnecessary license checkouts.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        self.to_solver_model(
-            model,
-            explicit_coordinate_names=explicit_coordinate_names,
-            set_names=set_names,
-        )
-        return self._solve(
-            self.solver_model,
-            solution_fn=solution_fn,
-            log_fn=log_fn,
-            warmstart_fn=warmstart_fn,
-            basis_fn=basis_fn,
-            io_api="direct",
-            sense=model.sense,
-        )
-
     def _run_direct(
         self,
         solution_fn: Path | None = None,
@@ -2686,13 +2364,14 @@ class Mosek(Solver[None]):
             sense=self.sense,
         )
 
-    def to_solver_model(
+    def _build_direct(
         self,
-        model: Model,
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
         **kwargs: Any,
-    ) -> mosek.Task:
+    ) -> None:
+        model = self.model
+        assert model is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
         task = self._env_stack.enter_context(mosek.Task())
@@ -2706,7 +2385,6 @@ class Mosek(Solver[None]):
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
-        return m
 
     @staticmethod
     def _build_solver_model(
@@ -2798,47 +2476,17 @@ class Mosek(Solver[None]):
             task.putobjsense(mosek.objsense.minimize)
         return task
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the MOSEK solver. Both mps and
-        lp files are supported; MPS does not support quadratic terms.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional, deprecated
-            Deprecated. This parameter is ignored. MOSEK now uses the global
-            environment automatically. Will be removed in a future version.
-
-        Returns
-        -------
-        Result
-        """
-        if env is not None:
-            warnings.warn(
-                "The 'env' parameter in solve_problem_from_file is deprecated and will be "
-                "removed in a future version. MOSEK now uses the global environment "
-                "automatically, avoiding unnecessary license checkouts.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
         m = self._env_stack.enter_context(mosek.Task())
@@ -3101,51 +2749,17 @@ class COPT(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for COPT"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the COPT solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            COPT environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         # conditions: https://guide.coap.online/copt/en-doc/constant.html#chapconst-solstatus
         CONDITION_MAP = {
             0: "unstarted",
@@ -3259,52 +2873,17 @@ class MindOpt(Solver[None]):
         }
     )
 
-    def solve_problem_from_model(
+    def _run_file(
         self,
-        model: Model,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
+        **kw: Any,
     ) -> Result:
-        msg = "Direct API not implemented for MindOpt"
-        raise NotImplementedError(msg)
-
-    def solve_problem_from_file(
-        self,
-        problem_fn: Path,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: None = None,
-    ) -> Result:
-        """
-        Solve a linear problem from a problem file using the MindOpt solver.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            MindOpt environment for the solver
-
-        Returns
-        -------
-        Result
-
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         CONDITION_MAP = {
             -1: "error",
             0: "unknown",
@@ -3433,42 +3012,17 @@ class cuPDLPx(Solver[None]):
         }
     )
 
-    def solve_problem_from_file(
+    def _run_file(
         self,
-        problem_fn: Path,
         solution_fn: Path | None = None,
         log_fn: Path | None = None,
         warmstart_fn: Path | None = None,
         basis_fn: Path | None = None,
         env: EnvType | None = None,
+        **kw: Any,
     ) -> Result:
-        """
-        Solve a linear problem from a problem file using the solver cuPDLPx.
-        cuPDLPx does not currently support its own file IO, so this function
-        reads the problem file using linopy (only support netcf files) and
-        then passes the model to cuPDLPx for solving.
-        If the solution is feasible the function returns the
-        objective, solution and dual constraint variables.
-
-        Parameters
-        ----------
-        problem_fn : Path
-            Path to the problem file.
-        solution_fn : Path, optional
-            Path to the solution file.
-        log_fn : Path, optional
-            Path to the log file.
-        warmstart_fn : Path, optional
-            Path to the warmstart file.
-        basis_fn : Path, optional
-            Path to the basis file.
-        env : None, optional
-            Environment for the solver
-
-        Returns
-        -------
-        Result
-        """
+        problem_fn = self._problem_fn
+        assert problem_fn is not None
         logger.warning(
             "cuPDLPx doesn't currently support file IO. Building model from file using linopy."
         )
@@ -3480,8 +3034,9 @@ class cuPDLPx(Solver[None]):
             msg = "linopy currently only supports reading models from netcdf files. Try using io_api='direct' instead."
             raise NotImplementedError(msg)
 
-        return self.solve_problem_from_model(
-            model,
+        self.model = model
+        self._build_direct()
+        return self._run_direct(
             solution_fn=solution_fn,
             log_fn=log_fn,
             warmstart_fn=warmstart_fn,
@@ -3489,30 +3044,9 @@ class cuPDLPx(Solver[None]):
             env=env,
         )
 
-    def solve_problem_from_model(
-        self,
-        model: Model,
-        solution_fn: Path | None = None,
-        log_fn: Path | None = None,
-        warmstart_fn: Path | None = None,
-        basis_fn: Path | None = None,
-        env: EnvType | None = None,
-        explicit_coordinate_names: bool = False,
-        set_names: bool = True,
-    ) -> Result:
-        self.to_solver_model(model)
-
-        return self._solve(
-            self.solver_model,
-            solution_fn=solution_fn,
-            log_fn=log_fn,
-            warmstart_fn=warmstart_fn,
-            basis_fn=basis_fn,
-            io_api="direct",
-            sense=model.sense,
-        )
-
-    def to_solver_model(self, model: Model, **kwargs: Any) -> cupdlpx.Model:
+    def _build_direct(self, **kwargs: Any) -> None:
+        model = self.model
+        assert model is not None
         if model.type in ["QP", "MILP"]:
             msg = "cuPDLPx does not currently support QP or MILP problems."
             raise NotImplementedError(msg)
@@ -3528,7 +3062,6 @@ class cuPDLPx(Solver[None]):
         self.io_api = "direct"
         self.sense = model.sense
         self._cache_model_labels(model)
-        return cu_model
 
     @staticmethod
     def _build_solver_model(model: Model) -> cupdlpx.Model:
