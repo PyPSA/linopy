@@ -144,6 +144,7 @@ EnvType = TypeVar("EnvType")
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
+
 def _run_highs_with_keyboard_interrupt(h: Any) -> None:
     """
     Run `highspy.Highs.run()` while ensuring Ctrl-C cancels the solve.
