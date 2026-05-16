@@ -7,17 +7,19 @@ from __future__ import annotations
 
 import contextlib
 import enum
+import functools
 import io
 import logging
 import os
 import re
+import shutil
 import subprocess as sub
 import sys
 import threading
 import warnings
 from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -142,11 +144,6 @@ EnvType = TypeVar("EnvType")
 FILE_IO_APIS = ["lp", "lp-polars", "mps"]
 IO_APIS = FILE_IO_APIS + ["direct"]
 
-available_solvers: list[str] = []
-
-which = "where" if os.name == "nt" else "which"
-
-
 def _run_highs_with_keyboard_interrupt(h: Any) -> None:
     """
     Run `highspy.Highs.run()` while ensuring Ctrl-C cancels the solve.
@@ -213,47 +210,12 @@ def _run_highs_with_keyboard_interrupt(h: Any) -> None:
             h.HandleUserInterrupt = old_handle_user_interrupt
 
 
-# the first available solver will be the default solver
-with contextlib.suppress(ModuleNotFoundError):
-    import gurobipy
-
-    available_solvers.append("gurobi")
-with contextlib.suppress(ModuleNotFoundError):
-    _new_highspy_mps_layout = None
-    import highspy
-
-    available_solvers.append("highs")
-    from importlib.metadata import version
-
-    if parse_version(version("highspy")) < parse_version("1.7.1"):
-        # Fallback if parse_version is not available or version string is invalid
-        _new_highspy_mps_layout = False
-    else:
-        _new_highspy_mps_layout = True
-
-if sub.run([which, "glpsol"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("glpk")
-
-
-if sub.run([which, "cbc"], stdout=sub.DEVNULL, stderr=sub.STDOUT).returncode == 0:
-    available_solvers.append("cbc")
-
-with contextlib.suppress(ModuleNotFoundError):
-    import pyscipopt as scip
-
-    available_solvers.append("scip")
-
-with contextlib.suppress(ModuleNotFoundError):
-    import cplex
-
-    available_solvers.append("cplex")
-
+# xpress.Namespaces was added in xpress 9.6. Importing xpress is pure-Python
+# and does not acquire a license, so this shim stays eager so downstream code
+# can ``from linopy.solvers import xpress_Namespaces``.
 with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import xpress
+    import xpress  # noqa: F401
 
-    available_solvers.append("xpress")
-
-    # xpress.Namespaces was added in xpress 9.6
     try:
         from xpress import Namespaces as xpress_Namespaces
     except ImportError:
@@ -264,48 +226,61 @@ with contextlib.suppress(ModuleNotFoundError, ImportError):
             SET = 3
 
 
-with contextlib.suppress(ModuleNotFoundError, ImportError):
-    import knitro
+class _LazyModule:
+    """
+    Module proxy that imports the underlying package on first attribute access.
 
-    with contextlib.suppress(Exception):
-        kc = knitro.KN_new()
-        knitro.KN_free(kc)
-        available_solvers.append("knitro")
+    Lets us keep ``gurobipy.Env`` / ``mindoptpy.read`` references throughout the
+    file while deferring the actual ``import`` (and its license-server side
+    effects, for mindoptpy/coptpy) until a Solver subclass really needs them.
+    """
 
-with contextlib.suppress(ModuleNotFoundError):
-    import mosek
+    __slots__ = ("_name", "_module")
 
-    with contextlib.suppress(mosek.Error):
-        t = mosek.Task()
-        t.optimize()
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._module: Any = None
 
-        available_solvers.append("mosek")
+    def __getattr__(self, attr: str) -> Any:
+        if attr in ("_name", "_module"):
+            raise AttributeError(attr)
+        if self._module is None:
+            import importlib
 
-with contextlib.suppress(ModuleNotFoundError):
-    import mindoptpy
+            self._module = importlib.import_module(self._name)
+        return getattr(self._module, attr)
 
-    with contextlib.suppress(mindoptpy.MindoptError):
-        mindoptpy.Env()
 
-        available_solvers.append("mindopt")
+gurobipy = _LazyModule("gurobipy")  # type: ignore[assignment]
+highspy = _LazyModule("highspy")
+scip = _LazyModule("pyscipopt")
+cplex = _LazyModule("cplex")
+knitro = _LazyModule("knitro")
+mosek = _LazyModule("mosek")
+mindoptpy = _LazyModule("mindoptpy")
+coptpy = _LazyModule("coptpy")
+cupdlpx = _LazyModule("cupdlpx")
 
-with contextlib.suppress(ModuleNotFoundError):
-    import coptpy
+
+def _has_module(name: str) -> bool:
+    """True if ``name`` is importable, without executing its ``__init__``."""
+    import importlib.util
 
     try:
-        coptpy.Envr()
-        available_solvers.append("copt")
-    except coptpy.CoptError:
-        pass
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
-with contextlib.suppress(ModuleNotFoundError):
-    import cupdlpx
 
+@functools.cache
+def _new_highspy_mps_layout() -> bool:
+    """True for highspy >= 1.7.1 (new MPS coefficient layout)."""
+    if not _has_module("highspy"):
+        return False
     try:
-        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
-        available_solvers.append("cupdlpx")
-    except ImportError:
-        pass
+        return parse_version(package_version("highspy")) >= parse_version("1.7.1")
+    except PackageNotFoundError:
+        return False
 
 
 logger = logging.getLogger(__name__)
@@ -376,12 +351,24 @@ def maybe_adjust_objective_sign(
         return solution
     if np.isnan(solution.objective):
         return solution
-    if io_api == "mps" and not _new_highspy_mps_layout:
+    if io_api == "mps" and not _new_highspy_mps_layout():
         logger.info(
             "Adjusting objective sign due to switched coefficients in MPS file."
         )
         solution.objective *= -1
     return solution
+
+
+@dataclass(frozen=True)
+class LicenseStatus:
+    """Result of :meth:`Solver.license_status` — license/runtime probe outcome."""
+
+    solver: str
+    ok: bool
+    message: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.ok
 
 
 @dataclass
@@ -423,7 +410,7 @@ class Solver(ABC, Generic[EnvType]):
             raise TypeError(
                 "Solver is abstract; instantiate a concrete subclass instead."
             )
-        if self.solver_name.value not in available_solvers:
+        if not type(self).is_available():
             msg = (
                 f"Solver package for '{self.solver_name.value}' is not installed. "
                 "Please install first to initialize solver instance."
@@ -434,6 +421,39 @@ class Solver(ABC, Generic[EnvType]):
     def solver_options(self) -> dict[str, Any]:
         """Back-compat alias for ``self.options``."""
         return self.options
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        """
+        Return True if this solver's package/binary is importable.
+
+        Must not acquire a license. Subclasses override with the cheapest
+        possible probe. Base returns False so a forgotten override fails
+        safe (the solver simply does not show up in ``available_solvers``).
+        """
+        return False
+
+    @classmethod
+    def license_status(cls) -> LicenseStatus:
+        """
+        Probe license/runtime availability. May acquire a license slot.
+
+        Not cached — license state is mutable (server reachability, expiry).
+        """
+        name = SolverName[cls.__name__].value
+        if not cls.is_available():
+            return LicenseStatus(name, ok=False, message="package not installed")
+        try:
+            cls._license_probe()
+        except Exception as e:
+            return LicenseStatus(name, ok=False, message=f"{type(e).__name__}: {e}")
+        return LicenseStatus(name, ok=True)
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        """Subclass hook. Default no-op. Raises on failure."""
+        return None
 
     @classmethod
     def runtime_features(cls) -> frozenset[SolverFeature]:
@@ -772,6 +792,11 @@ class CBC(Solver[None]):
         }
     )
 
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return shutil.which("cbc") is not None
+
     def _run_file(
         self,
         solution_fn: Path | None = None,
@@ -790,7 +815,7 @@ class CBC(Solver[None]):
             msg = "No solution file specified. For solving with CBC this is necessary."
             raise ValueError(msg)
 
-        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout():
             msg = (
                 "CBC does not support maximization in MPS format highspy versions "
                 " >=1.7.1"
@@ -938,6 +963,11 @@ class GLPK(Solver[None]):
         }
     )
 
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return shutil.which("glpsol") is not None
+
     def _run_file(
         self,
         solution_fn: Path | None = None,
@@ -960,7 +990,7 @@ class GLPK(Solver[None]):
             msg = "No solution file specified. For solving with GLPK this is necessary."
             raise ValueError(msg)
 
-        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout:
+        if io_api == "mps" and sense == "max" and _new_highspy_mps_layout():
             msg = (
                 "GLPK does not support maximization in MPS format highspy versions "
                 " >=1.7.1"
@@ -1093,6 +1123,11 @@ class Highs(Solver[None]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("highspy")
 
     def _build_direct(
         self,
@@ -1399,6 +1434,16 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("gurobipy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        with gurobipy.Env():
+            pass
 
     def _resolve_env(self, env: gurobipy.Env | dict[str, Any] | None) -> gurobipy.Env:
         self.close()
@@ -1710,6 +1755,11 @@ class Cplex(Solver[None]):
         }
     )
 
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("cplex")
+
     def _run_file(
         self,
         solution_fn: Path | None = None,
@@ -1834,6 +1884,11 @@ class SCIP(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("pyscipopt")
 
     def _run_file(
         self,
@@ -1964,6 +2019,11 @@ class Xpress(Solver[None]):
             SolverFeature.IIS_COMPUTATION,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("xpress")
 
     @classmethod
     def runtime_features(cls) -> frozenset[SolverFeature]:
@@ -2113,6 +2173,16 @@ class Knitro(Solver[None]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("knitro")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        kc = knitro.KN_new()
+        knitro.KN_free(kc)
 
     @staticmethod
     def _set_option(kc: Any, name: str, value: Any) -> None:
@@ -2344,6 +2414,16 @@ class Mosek(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("mosek")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        t = mosek.Task()
+        t.optimize()
 
     def _run_direct(
         self,
@@ -2749,6 +2829,15 @@ class COPT(Solver[None]):
         }
     )
 
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("coptpy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        coptpy.Envr()
+
     def _run_file(
         self,
         solution_fn: Path | None = None,
@@ -2872,6 +2961,15 @@ class MindOpt(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("mindoptpy")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        mindoptpy.Env()
 
     def _run_file(
         self,
@@ -3011,6 +3109,15 @@ class cuPDLPx(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+
+    @classmethod
+    @functools.cache
+    def is_available(cls) -> bool:
+        return _has_module("cupdlpx")
+
+    @classmethod
+    def _license_probe(cls) -> None:
+        cupdlpx.Model(np.array([0.0]), np.array([[0.0]]), None, None)
 
     def _run_file(
         self,
@@ -3255,4 +3362,103 @@ NO_SOLUTION_FILE_SOLVERS = [
     if (cls := _solver_class_for(n.value)) is not None
     and cls.supports(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
 ]
-quadratic_solvers = [s for s in QUADRATIC_SOLVERS if s in available_solvers]
+
+
+# Defines the iteration order of ``available_solvers`` — the first installed
+# entry is the default solver in :meth:`Model.solve`. Matches the historical
+# eager-probe order from before lazy availability landed.
+_SOLVER_PROBE_ORDER: tuple[str, ...] = (
+    "gurobi",
+    "highs",
+    "glpk",
+    "cbc",
+    "scip",
+    "cplex",
+    "xpress",
+    "knitro",
+    "mosek",
+    "mindopt",
+    "copt",
+    "cupdlpx",
+    "pips",
+)
+
+
+class _AvailableSolvers(Sequence[str]):
+    """
+    Lazy sequence of installed solver names.
+
+    Probes each solver's :meth:`Solver.is_available` on first access and caches
+    the result. Membership means the solver's Python package or binary is
+    importable — it does **not** mean a working license exists. Call
+    :func:`check_solver_licenses` for an opt-in eager license probe.
+
+    :meth:`refresh` clears the cache (and each per-class ``is_available``
+    cache) so the probe re-runs.
+    """
+
+    _filter: ClassVar[frozenset[str] | None] = None
+
+    @functools.cached_property
+    def _names(self) -> list[str]:
+        names: list[str] = []
+        for name in _SOLVER_PROBE_ORDER:
+            if self._filter is not None and name not in self._filter:
+                continue
+            cls = _solver_class_for(name)
+            if cls is not None and cls.is_available():
+                names.append(name)
+        return names
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._names
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __getitem__(self, idx: int | slice) -> Any:
+        return self._names[idx]
+
+    def __repr__(self) -> str:
+        return repr(self._names)
+
+    def __bool__(self) -> bool:
+        return bool(self._names)
+
+    def refresh(self) -> None:
+        self.__dict__.pop("_names", None)
+        seen: set[int] = set()
+        for name in _SOLVER_PROBE_ORDER:
+            cls = _solver_class_for(name)
+            if cls is None:
+                continue
+            fn = cls.__dict__.get("is_available")
+            if fn is None:
+                continue
+            cache_clear = getattr(fn, "cache_clear", None)
+            if cache_clear is not None and id(fn) not in seen:
+                cache_clear()
+                seen.add(id(fn))
+
+
+class _QuadraticSolvers(_AvailableSolvers):
+    _filter: ClassVar[frozenset[str] | None] = frozenset(QUADRATIC_SOLVERS)
+
+
+available_solvers = _AvailableSolvers()
+quadratic_solvers = _QuadraticSolvers()
+
+
+def check_solver_licenses(*names: str) -> dict[str, LicenseStatus]:
+    """Probe license status for the given solvers, or all installed ones."""
+    targets = names or tuple(available_solvers)
+    out: dict[str, LicenseStatus] = {}
+    for n in targets:
+        cls = _solver_class_for(n)
+        if cls is None:
+            raise ValueError(f"unknown solver: {n!r}")
+        out[n] = cls.license_status()
+    return out
