@@ -87,7 +87,6 @@ from linopy.solvers import (
     IO_APIS,
     SolverFeature,
     available_solvers,
-    licensed_solvers,
 )
 from linopy.sos_reformulation import (
     reformulate_sos_constraints,
