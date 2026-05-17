@@ -3446,8 +3446,24 @@ class _QuadraticSolvers(_AvailableSolvers):
     _filter: ClassVar[frozenset[str] | None] = frozenset(QUADRATIC_SOLVERS)
 
 
+class _LicensedSolvers(_AvailableSolvers):
+    """Installed solvers whose ``license_status()`` probe currently succeeds."""
+
+    @functools.cached_property
+    def _names(self) -> list[str]:
+        names: list[str] = []
+        for name in _SOLVER_PROBE_ORDER:
+            cls = _solver_class_for(name)
+            if cls is None or not cls.is_available():
+                continue
+            if cls.license_status().ok:
+                names.append(name)
+        return names
+
+
 available_solvers = _AvailableSolvers()
 quadratic_solvers = _QuadraticSolvers()
+licensed_solvers = _LicensedSolvers()
 
 
 def check_solver_licenses(*names: str) -> dict[str, LicenseStatus]:

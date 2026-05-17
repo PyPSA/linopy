@@ -34,7 +34,7 @@ def simple_model() -> Model:
     return m
 
 
-@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+@pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_instance_attached_after_solve(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
     assert isinstance(simple_model.solver, solvers.Solver)
@@ -45,7 +45,7 @@ def test_solver_instance_attached_after_solve(simple_model: Model, solver: str) 
     assert simple_model.solver_name == solver
 
 
-@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+@pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
@@ -54,7 +54,7 @@ def test_result_carries_solver_name(simple_model: Model, solver: str) -> None:
     assert result.solver_name == solver
 
 
-@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+@pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_from_name_then_solve(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
@@ -75,7 +75,7 @@ def test_from_name_then_solve(simple_model: Model, solver: str) -> None:
     assert np.isclose(simple_model.objective.value, reference.objective.value)
 
 
-@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+@pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_from_name_set_names_false(simple_model: Model, solver: str) -> None:
     if not solver_supports(solver, SolverFeature.DIRECT_API):
         pytest.skip("Solver does not support direct API.")
@@ -98,7 +98,7 @@ def test_from_name_unknown_solver_raises(simple_model: Model) -> None:
 
 
 @pytest.mark.skipif(
-    "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
+    "highs" not in set(solvers.licensed_solvers), reason="HiGHS is not installed"
 )
 def test_from_name_applies_solver_options(simple_model: Model) -> None:
     built = solvers.Solver.from_name(
@@ -110,7 +110,7 @@ def test_from_name_applies_solver_options(simple_model: Model) -> None:
 
 
 @pytest.mark.skipif(
-    "highs" not in set(solvers.available_solvers), reason="HiGHS is not installed"
+    "highs" not in set(solvers.licensed_solvers), reason="HiGHS is not installed"
 )
 def test_solver_state_compatibility_setters(simple_model: Model) -> None:
     simple_model.solver = solvers.Solver.from_name(
@@ -184,7 +184,7 @@ def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
 
 
 @pytest.mark.skipif(
-    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+    "gurobi" not in set(solvers.licensed_solvers), reason="Gurobi is not installed"
 )
 def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
     simple_model.solve("gurobi", io_api="direct")
@@ -193,7 +193,7 @@ def test_gurobi_env_persists_after_solve(simple_model: Model) -> None:
     assert isinstance(simple_model.solver_model.NumVars, int)
 
 
-@pytest.mark.parametrize("solver", sorted(set(solvers.available_solvers)))
+@pytest.mark.parametrize("solver", sorted(set(solvers.licensed_solvers)))
 def test_solver_close_releases_state(simple_model: Model, solver: str) -> None:
     simple_model.solve(solver)
     solver_instance = simple_model.solver
@@ -248,7 +248,7 @@ End
 """
 
 
-@pytest.mark.parametrize("solver", set(solvers.available_solvers))
+@pytest.mark.parametrize("solver", set(solvers.licensed_solvers))
 def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
     try:
         solver_enum = solvers.SolverName(solver.lower())
@@ -274,7 +274,7 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+    "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_mps(tmp_path: Path) -> None:
     """Test Knitro solver with a simple MPS problem."""
@@ -292,7 +292,7 @@ def test_knitro_solver_mps(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+    "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_for_lp(tmp_path: Path) -> None:
     """Test Knitro solver with a simple LP problem."""
@@ -310,7 +310,7 @@ def test_knitro_solver_for_lp(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+    "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_with_options(tmp_path: Path) -> None:
     """Test Knitro solver with custom options."""
@@ -328,19 +328,19 @@ def test_knitro_solver_with_options(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+    "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_with_model_raises_error(model: Model) -> None:  # noqa: F811
     """Test Knitro solver raises NotImplementedError for model-based solving."""
     knitro = solvers.Knitro()
     with pytest.raises(
-        NotImplementedError, match="Direct API not implemented for Knitro"
+        NotImplementedError, match="Direct API not implemented for knitro"
     ):
         knitro.solve_problem(model=model)
 
 
 @pytest.mark.skipif(
-    "knitro" not in set(solvers.available_solvers), reason="Knitro is not installed"
+    "knitro" not in set(solvers.licensed_solvers), reason="Knitro is not installed"
 )
 def test_knitro_solver_no_log(tmp_path: Path) -> None:
     """Test Knitro solver without log file."""
@@ -356,7 +356,7 @@ def test_knitro_solver_no_log(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+    "gurobi" not in set(solvers.licensed_solvers), reason="Gurobi is not installed"
 )
 def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # noqa: F811
     gurobi = solvers.Gurobi()
@@ -382,7 +382,7 @@ def test_gurobi_environment_with_dict(model: Model, tmp_path: Path) -> None:  # 
 
 
 @pytest.mark.skipif(
-    "gurobi" not in set(solvers.available_solvers), reason="Gurobi is not installed"
+    "gurobi" not in set(solvers.licensed_solvers), reason="Gurobi is not installed"
 )
 def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> None:  # noqa: F811
     import gurobipy as gp
@@ -434,7 +434,7 @@ def test_solver_class_supports_feature(
 def test_solver_instance_supports_matches_class() -> None:
     feature = SolverFeature.QUADRATIC_OBJECTIVE
     assert solvers.Gurobi.supports(feature) is True
-    if "gurobi" in solvers.available_solvers:
+    if "gurobi" in solvers.licensed_solvers:
         assert solvers.Gurobi().supports(feature) is True
 
 
@@ -456,7 +456,7 @@ def test_solver_registry_iter_and_index() -> None:
 
 
 @pytest.mark.skipif(
-    "xpress" not in set(solvers.available_solvers), reason="Xpress is not installed"
+    "xpress" not in set(solvers.licensed_solvers), reason="Xpress is not installed"
 )
 def test_xpress_gpu_feature_reflects_installed_version() -> None:
     assert solvers.Xpress.supports(

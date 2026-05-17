@@ -29,7 +29,13 @@ from linopy.constraints import (
 )
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.io import read_netcdf
-from linopy.model import Model, Variable, Variables, available_solvers
+from linopy.model import (
+    Model,
+    Variable,
+    Variables,
+    available_solvers,
+    licensed_solvers,
+)
 from linopy.objective import Objective
 from linopy.piecewise import (
     PiecewiseFormulation,
@@ -69,6 +75,7 @@ __all__ = (
     "Variables",
     "align",
     "available_solvers",
+    "licensed_solvers",
     "breakpoints",
     "merge",
     "options",
