@@ -26,7 +26,7 @@ def test_clabels_parity_with_matrices(model_with_mask: linopy.Model) -> None:
     np.testing.assert_array_equal(actual, expected)
 
 
-def test_apply_result_does_not_build_matrix(
+def test_assign_result_does_not_build_matrix(
     monkeypatch: pytest.MonkeyPatch, model_with_mask: linopy.Model
 ) -> None:
     calls = {"n": 0}
@@ -51,7 +51,7 @@ def test_apply_result_does_not_build_matrix(
         solver_name=solver.solver_name.value,
         report=solver.report,
     )
-    model_with_mask.apply_result(result)
+    model_with_mask.assign_result(result)
     assert calls["n"] == n_after_solve
 
 
@@ -71,7 +71,7 @@ def test_label_index_invalidated_on_remove(model_with_mask: linopy.Model) -> Non
     assert after == before - removed
 
 
-def test_apply_result_correctness_with_mask(model_with_mask: linopy.Model) -> None:
+def test_assign_result_correctness_with_mask(model_with_mask: linopy.Model) -> None:
     model_with_mask.solve("highs")
     assert model_with_mask.status == "ok"
     x_sol = model_with_mask.variables["x"].solution.values

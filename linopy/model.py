@@ -1773,12 +1773,12 @@ class Model:
                     os.remove(fn)
 
         try:
-            return self.apply_result(result)
+            return self.assign_result(result)
         finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
 
-    def apply_result(self, result: Result) -> tuple[str, str]:
+    def assign_result(self, result: Result) -> tuple[str, str]:
         result.info()
 
         if result.solution is not None:

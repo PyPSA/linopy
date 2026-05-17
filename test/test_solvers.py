@@ -61,7 +61,7 @@ def test_from_name_then_solve(simple_model: Model, solver: str) -> None:
     built = solvers.Solver.from_name(solver, simple_model, io_api="direct")
     assert built.solver_model is not None
     result = built.solve()
-    simple_model.apply_result(result)
+    simple_model.assign_result(result)
 
     reference = Model(chunk=None)
     rx = reference.add_variables(name="x")
@@ -83,7 +83,7 @@ def test_from_name_set_names_false(simple_model: Model, solver: str) -> None:
         solver, simple_model, io_api="direct", set_names=False
     )
     result = built.solve()
-    status, condition = simple_model.apply_result(result)
+    status, condition = simple_model.assign_result(result)
 
     assert status == "ok"
     assert condition == "optimal"
@@ -135,7 +135,7 @@ def test_solver_state_compatibility_setters(simple_model: Model) -> None:
         simple_model.solver_name = "highs"
 
 
-def test_apply_result_explicit(simple_model: Model) -> None:
+def test_assign_result_explicit(simple_model: Model) -> None:
     x_labels = simple_model.variables["x"].labels.values
     y_labels = simple_model.variables["y"].labels.values
     primal = np.full(simple_model._xCounter, np.nan)
@@ -148,7 +148,7 @@ def test_apply_result_explicit(simple_model: Model) -> None:
         solver_name="mock",
     )
     simple_model.solver = None
-    simple_model.apply_result(result)
+    simple_model.assign_result(result)
     assert simple_model.status == "ok"
     assert simple_model.termination_condition == "optimal"
     assert simple_model.objective.value == 5.5
@@ -156,7 +156,7 @@ def test_apply_result_explicit(simple_model: Model) -> None:
     assert float(simple_model.variables["y"].solution) == 2.0
 
 
-def test_apply_result_with_csr_constraints_avoids_data_reconstruction(
+def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     m = Model(freeze_constraints=True)
@@ -177,7 +177,7 @@ def test_apply_result_with_csr_constraints_avoids_data_reconstruction(
         raise AssertionError("CSRConstraint.data was accessed")
 
     monkeypatch.setattr(CSRConstraint, "data", property(fail_data))
-    m.apply_result(result)
+    m.assign_result(result)
 
     np.testing.assert_array_equal(m.variables["x"].solution.values, primal)
     np.testing.assert_array_equal(m.constraints["c"].dual.values, dual)
