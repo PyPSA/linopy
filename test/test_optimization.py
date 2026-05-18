@@ -779,6 +779,7 @@ def test_milp_model(
     if solver_cls is not None and solver_cls.supports(
         SolverFeature.MIP_DUAL_BOUND_REPORT
     ):
+        assert milp_model.solver is not None
         report = milp_model.solver.report
         assert report is not None
         assert report.dual_bound is not None
@@ -1127,7 +1128,7 @@ def test_solver_classes_from_problem_file(
 ) -> None:
     # first test initialization of super class. Should not be possible to initialize
     with pytest.raises(TypeError):
-        solvers.Solver()  # type: ignore
+        solvers.Solver()
 
     # initialize the solver as object of solver subclass <solver_class>
     solver_class = getattr(solvers, f"{solvers.SolverName(solver).name}")

@@ -243,7 +243,7 @@ class _LazyModule:
         self._module: Any = None
 
     def __getattr__(self, attr: str) -> Any:
-        if attr in ("_name", "_module"):
+        if attr.startswith("__") and attr.endswith("__"):
             raise AttributeError(attr)
         if self._module is None:
             import importlib
@@ -1504,6 +1504,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         x = gm.addMVar(M.vlabels.shape, M.lb, M.ub, **kwargs)
 
         if model.is_quadratic:
+            assert M.Q is not None
             gm.setObjective(0.5 * x.T @ M.Q @ x + M.c @ x)
         else:
             gm.setObjective(M.c @ x)
@@ -1512,6 +1513,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             gm.ModelSense = -1
 
         if len(model.constraints):
+            assert M.A is not None
             c = gm.addMConstr(M.A, x, M.sense, M.b)
             if set_names:
                 names = print_constraints(M.clabels)
@@ -1520,8 +1522,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         if model.variables.sos:
             for var_name in model.variables.sos:
                 var = model.variables.sos[var_name]
-                sos_type: int = var.attrs[SOS_TYPE_ATTR]
-                sos_dim: str = var.attrs[SOS_DIM_ATTR]
+                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
+                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
 
                 def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                     s = s.squeeze()

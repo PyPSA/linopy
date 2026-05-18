@@ -166,6 +166,7 @@ class TestInfeasibility:
         # Solve the model first
         m.solve(solver_name=solver)
 
+        assert m.solver is not None
         m.solver.solver_model = None
 
         # Should raise ValueError since we know it was solved with supported solver

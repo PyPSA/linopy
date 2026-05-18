@@ -72,6 +72,8 @@ def test_from_name_then_solve(simple_model: Model, solver: str) -> None:
     reference.solve(solver, io_api="direct")
 
     assert simple_model.status == "ok"
+    assert simple_model.objective.value is not None
+    assert reference.objective.value is not None
     assert np.isclose(simple_model.objective.value, reference.objective.value)
 
 
@@ -426,7 +428,7 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
     ],
 )
 def test_solver_class_supports_feature(
-    solver_cls: type, feature: SolverFeature, expected: bool
+    solver_cls: type[solvers.Solver], feature: SolverFeature, expected: bool
 ) -> None:
     assert solver_cls.supports(feature) is expected
 

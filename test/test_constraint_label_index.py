@@ -44,6 +44,8 @@ def test_assign_result_does_not_build_matrix(
     # one build for solver input is fine; the post-solve mapping must not add more
     n_after_solve = calls["n"]
     solver = model_with_mask.solver
+    assert solver is not None
+    assert solver.status is not None
     result = linopy.constants.Result(
         status=solver.status,
         solution=solver.solution,
