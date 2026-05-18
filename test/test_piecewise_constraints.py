@@ -2313,23 +2313,26 @@ class TestSignParameter:
         Per-entity NaN-padded breakpoints with method='lp': padded
         segments must be masked out so they don't create spurious
         ``y ≤ 0`` constraints (bug-2 regression).
-
-        ``method='sos2'`` would emit a masked SOS lambda variable, which the
-        native SOS path doesn't yet support (#688) — exercised separately in
-        :py:meth:`test_sos2_per_entity_nan_padding_errors`.
         """
         m = nan_padded_pwl_model("lp")
         m.solve()
         # f_b(10) on chord (5,10)→(15,15) is 12.5
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
-    def test_sos2_per_entity_nan_padding_errors(
+    def test_sos2_per_entity_nan_padding(
         self, nan_padded_pwl_model: Callable[[Method], Model]
     ) -> None:
-        """Masked SOS lambdas hit the #688 guard at solve time."""
+        """
+        Per-entity NaN-padded breakpoints with method='sos2': the SOS
+        lambda variable's masked entries must flow through both the
+        direct API (via label→position resolution) and the LP writer
+        (via masked-member filtering) so the solve returns the same
+        answer as ``method='lp'``. Regression for #688.
+        """
         m = nan_padded_pwl_model("sos2")
-        with pytest.raises(NotImplementedError, match="masked"):
-            m.solve()
+        m.solve()
+        # f_b(10) on chord (5,10)→(15,15) is 12.5 — same oracle as lp variant
+        assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
     def test_lp_rejects_decreasing_x_concave_ge(self) -> None:
         """
