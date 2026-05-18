@@ -5,6 +5,7 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -505,26 +506,24 @@ class TestValidateModelOnBuild:
     @pytest.mark.skipif(
         "highs" not in solvers.available_solvers, reason="HiGHS not installed"
     )
-    def test_solve_without_objective_raises_on_solver_path(self) -> None:
-        m = Model()
-        m.add_variables(name="x", lower=0, upper=10)
-        # No objective added.
-
-        # Build is permitted (translate-only paths like to_gurobipy() need this).
-        solver = solvers.Solver.from_name("highs", m, io_api="lp")
-        # Solve is not — the check fires at the submit primitive.
-        with pytest.raises(ValueError, match="No objective has been set"):
-            solver.solve()
-
-    @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    @pytest.mark.parametrize(
+        "submit",
+        [
+            pytest.param(
+                lambda m: solvers.Solver.from_name("highs", m, io_api="lp").solve(),
+                id="Solver.from_name(...).solve()",
+            ),
+            pytest.param(lambda m: m.solve("highs"), id="Model.solve()"),
+        ],
     )
-    def test_solve_without_objective_raises_on_model_path(self) -> None:
+    def test_solve_without_objective_raises(
+        self, submit: "Callable[[Model], object]"
+    ) -> None:
         m = Model()
         m.add_variables(name="x", lower=0, upper=10)
-
+        # No objective added — both entry points should raise the same error.
         with pytest.raises(ValueError, match="No objective has been set"):
-            m.solve("highs")
+            submit(m)
 
 
 class TestSanitizeKwargs:
