@@ -71,6 +71,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_xpress,
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
@@ -1256,6 +1257,34 @@ class Model:
         self._sos_reformulation_state = None
         undo_sos_reformulation(self, state)
 
+    def _check_sos_unmasked(self) -> None:
+        """
+        Reject the model if any SOS variable has masked entries.
+
+        The SOS plumbing (both direct-API solvers and the LP file writer) treats
+        linopy variable labels as solver column indices / names, which breaks as
+        soon as a label is ``-1`` (linopy's ``FILL_VALUE["labels"]`` for masked
+        slots). The downstream symptoms are solver-specific — ``IndexError`` on
+        gurobipy, ``?404 Invalid column number`` on xpress, parse errors on
+        xpress/cplex LP readers, silent SOS-set corruption on gurobi's LP reader.
+
+        Surface a single clear error until #688 lands the proper fix.
+        """
+        if not self.variables.sos:
+            return
+        affected = [
+            name
+            for name in self.variables.sos
+            if (self.variables[name].labels.values == -1).any()
+        ]
+        if affected:
+            raise NotImplementedError(
+                f"SOS constraints on masked variables are not yet supported "
+                f"(affected: {affected}; "
+                "see https://github.com/PyPSA/linopy/issues/688). "
+                "Pass reformulate_sos=True as a workaround."
+            )
+
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
@@ -1629,13 +1658,12 @@ class Model:
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         reformulate_sos : bool | Literal["auto"], optional
-            Whether to automatically reformulate SOS constraints as binary + linear
-            constraints for solvers that don't support them natively.
-            If True, always reformulates (warns if solver supports SOS natively).
-            If "auto", silently reformulates only when the solver lacks SOS support.
-            If False, raises if solver doesn't support SOS.
-            This uses the Big-M method and requires all SOS variables to have finite bounds.
-            Default is False.
+            Whether to reformulate SOS constraints as binary + linear constraints.
+            If True, always reformulates, even when the solver supports SOS natively.
+            If "auto", reformulates only when the solver lacks SOS support.
+            If False, raises if the solver doesn't support SOS.
+            Reformulation uses the Big-M method and requires all SOS variables
+            to have finite bounds. Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1741,15 +1769,14 @@ class Model:
         applied_sos_reformulation_here = False
         if self.variables.sos:
             supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
-            if reformulate_sos in (True, "auto") and not supports_sos:
+            should_reformulate = reformulate_sos is True or (
+                reformulate_sos == "auto" and not supports_sos
+            )
+
+            if should_reformulate:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
                 self.apply_sos_reformulation()
                 applied_sos_reformulation_here = True
-            elif reformulate_sos is True and supports_sos:
-                logger.warning(
-                    f"Solver {solver_name} supports SOS natively; "
-                    "reformulate_sos=True is ignored."
-                )
             # If SOS is present and the solver doesn't support it (and the user
             # didn't ask for reformulation), Solver._build() will raise.
 
@@ -2165,5 +2192,7 @@ class Model:
     to_highspy = to_highspy
 
     to_cupdlpx = to_cupdlpx
+
+    to_xpress = to_xpress
 
     to_block_files = to_block_files
