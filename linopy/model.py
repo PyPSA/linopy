@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from deprecation import deprecated
-from numpy import inf, nan, ndarray
+from numpy import inf, ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from xarray import DataArray, Dataset
@@ -32,11 +32,8 @@ from linopy.common import (
     assign_multiindex_safe,
     best_int,
     broadcast_mask,
-    lookup_vals,
     maybe_replace_signs,
     replace_by_map,
-    series_to_lookup_array,
-    set_int_index,
     to_path,
 )
 from linopy.constants import (
@@ -48,6 +45,7 @@ from linopy.constants import (
     SOS_TYPE_ATTR,
     TERM_DIM,
     ModelStatus,
+    Result,
     TerminationCondition,
 )
 from linopy.constraints import (
@@ -85,9 +83,9 @@ try:
     from linopy.remote import OetcHandler
 except ImportError:
     OetcHandler = None  # type: ignore
-from linopy.solver_capabilities import SolverFeature, solver_supports
 from linopy.solvers import (
     IO_APIS,
+    SolverFeature,
     available_solvers,
 )
 from linopy.sos_reformulation import (
@@ -193,8 +191,7 @@ class Model:
     the optimization process.
     """
 
-    solver_model: Any
-    solver_name: str
+    _solver: solvers.Solver | None
     _variables: Variables
     _constraints: Constraints
     _objective: Objective
@@ -241,8 +238,7 @@ class Model:
         "_solver_dir",
         "_relaxed_registry",
         "_piecewise_formulations",
-        "solver_model",
-        "solver_name",
+        "_solver",
         "__weakref__",
     )
 
@@ -312,6 +308,37 @@ class Model:
         self._solver_dir: Path = Path(
             gettempdir() if solver_dir is None else solver_dir
         )
+        self._solver: solvers.Solver | None = None
+
+    @property
+    def solver(self) -> solvers.Solver | None:
+        return self._solver
+
+    @solver.setter
+    def solver(self, value: solvers.Solver | None) -> None:
+        if self._solver is not None and self._solver is not value:
+            self._solver.close()
+        self._solver = value
+
+    @property
+    def solver_model(self) -> Any:
+        return self.solver.solver_model if self.solver is not None else None
+
+    @solver_model.setter
+    def solver_model(self, value: Any) -> None:
+        if value is not None:
+            raise AttributeError("solver state is managed via model.solver")
+        self.solver = None
+
+    @property
+    def solver_name(self) -> str | None:
+        return self.solver.solver_name.value if self.solver is not None else None
+
+    @solver_name.setter
+    def solver_name(self, value: str | None) -> None:
+        if value is not None:
+            raise AttributeError("solver state is managed via model.solver")
+        self.solver = None
 
     @property
     def matrices(self) -> MatrixAccessor:
@@ -1648,11 +1675,13 @@ class Model:
             )
             logger.info(f"Solver options:\n{options_string}")
 
+        solver_class = getattr(solvers, solvers.SolverName(solver_name).name)
+
         if problem_fn is None:
             problem_fn = self.get_problem_file(io_api=io_api)
         if solution_fn is None:
             if (
-                solver_supports(solver_name, SolverFeature.SOLUTION_FILE_NOT_NEEDED)
+                solver_class.supports(SolverFeature.SOLUTION_FILE_NOT_NEEDED)
                 and not keep_files
             ):
                 # these (solver, keep_files=False) combos do not need a solution file
@@ -1666,8 +1695,8 @@ class Model:
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
 
-        if self.is_quadratic and not solver_supports(
-            solver_name, SolverFeature.QUADRATIC_OBJECTIVE
+        if self.is_quadratic and not solver_class.supports(
+            SolverFeature.QUADRATIC_OBJECTIVE
         ):
             raise ValueError(
                 f"Solver {solver_name} does not support quadratic problems."
@@ -1681,7 +1710,7 @@ class Model:
 
         sos_reform_result = None
         if self.variables.sos:
-            supports_sos = solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+            supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
             if reformulate_sos in (True, "auto") and not supports_sos:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
                 sos_reform_result = reformulate_sos_constraints(self)
@@ -1697,107 +1726,92 @@ class Model:
                 )
 
         if self.variables.semi_continuous:
-            if not solver_supports(
-                solver_name, SolverFeature.SEMI_CONTINUOUS_VARIABLES
-            ):
+            if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
                 raise ValueError(
                     f"Solver {solver_name} does not support semi-continuous variables. "
                     "Use a solver that supports them (gurobi, cplex, highs)."
                 )
 
         try:
-            solver_class = getattr(solvers, f"{solvers.SolverName(solver_name).name}")
-            # initialize the solver as object of solver subclass <solver_class>
-            solver = solver_class(
-                **solver_options,
-            )
+            self.solver = None  # closes any previous solver
             if io_api == "direct":
                 if set_names is None:
                     set_names = self.set_names_in_solver_io
-                # no problem file written and direct model is set for solver
-                result = solver.solve_problem_from_model(
-                    model=self,
-                    solution_fn=to_path(solution_fn),
-                    log_fn=to_path(log_fn),
-                    warmstart_fn=to_path(warmstart_fn),
-                    basis_fn=to_path(basis_fn),
-                    env=env,
-                    explicit_coordinate_names=explicit_coordinate_names,
-                    set_names=set_names,
-                )
+                build_kwargs: dict[str, Any] = {
+                    "explicit_coordinate_names": explicit_coordinate_names,
+                    "set_names": set_names,
+                    "log_fn": to_path(log_fn),
+                }
+                if env is not None:
+                    build_kwargs["env"] = env
             else:
-                if (
-                    not solver_supports(solver_name, SolverFeature.LP_FILE_NAMES)
-                    and explicit_coordinate_names
-                ):
-                    logger.warning(
-                        f"{solver_name} does not support writing names to lp files, disabling it."
-                    )
-                    explicit_coordinate_names = False
-                problem_fn = self.to_file(
-                    to_path(problem_fn),
-                    io_api=io_api,
-                    explicit_coordinate_names=explicit_coordinate_names,
-                    slice_size=slice_size,
-                    progress=progress,
-                )
-                result = solver.solve_problem_from_file(
-                    problem_fn=to_path(problem_fn),
-                    solution_fn=to_path(solution_fn),
-                    log_fn=to_path(log_fn),
-                    warmstart_fn=to_path(warmstart_fn),
-                    basis_fn=to_path(basis_fn),
-                    env=env,
-                )
-
+                build_kwargs = {
+                    "explicit_coordinate_names": explicit_coordinate_names,
+                    "slice_size": slice_size,
+                    "progress": progress,
+                    "problem_fn": to_path(problem_fn),
+                }
+            self.solver = solver = solvers.Solver.from_name(
+                solver_name,
+                model=self,
+                io_api=io_api,
+                options=solver_options,
+                **build_kwargs,
+            )
+            if io_api != "direct":
+                problem_fn = solver._problem_fn
+            result = solver.solve(
+                solution_fn=to_path(solution_fn),
+                log_fn=to_path(log_fn),
+                warmstart_fn=to_path(warmstart_fn),
+                basis_fn=to_path(basis_fn),
+                env=env,
+            )
         finally:
             for fn in (problem_fn, solution_fn):
                 if fn is not None and (os.path.exists(fn) and not keep_files):
                     os.remove(fn)
 
         try:
-            result.info()
-
-            self.objective._value = result.solution.objective
-            self.status = result.status.status.value
-            self.termination_condition = result.status.termination_condition.value
-            self.solver_model = result.solver_model
-            self.solver_name = solver_name
-
-            if not result.status.is_ok:
-                return (
-                    result.status.status.value,
-                    result.status.termination_condition.value,
-                )
-
-            # map solution and dual to original shape which includes missing values
-            sol = result.solution.primal.copy()
-            sol = set_int_index(sol)
-            sol.loc[-1] = nan
-
-            sol_arr = series_to_lookup_array(sol)
-
-            for _, var in self.variables.items():
-                vals = lookup_vals(sol_arr, np.ravel(var.labels))
-                var.solution = xr.DataArray(vals.reshape(var.labels.shape), var.coords)
-
-            if not result.solution.dual.empty:
-                dual = result.solution.dual.copy()
-                dual = set_int_index(dual)
-                dual.loc[-1] = nan
-
-                dual_arr = series_to_lookup_array(dual)
-
-                for _, con in self.constraints.items():
-                    vals = lookup_vals(dual_arr, np.ravel(con.labels))
-                    con.dual = xr.DataArray(
-                        vals.reshape(con.labels.shape), con.labels.coords
-                    )
-
-            return result.status.status.value, result.status.termination_condition.value
+            return self.assign_result(result)
         finally:
             if sos_reform_result is not None:
                 undo_sos_reformulation(self, sos_reform_result)
+
+    def assign_result(self, result: Result) -> tuple[str, str]:
+        result.info()
+
+        if result.solution is not None:
+            self.objective._value = result.solution.objective
+
+        status_value = result.status.status.value
+        termination_condition = result.status.termination_condition.value
+        self.status = status_value
+        self.termination_condition = termination_condition
+
+        if not result.status.is_ok:
+            return status_value, termination_condition
+
+        if result.solution is None or len(result.solution.primal) == 0:
+            return status_value, termination_condition
+
+        primal = result.solution.primal
+        for _, var in self.variables.items():
+            start, end = var.range
+            var.solution = xr.DataArray(
+                primal[start:end].reshape(var.shape), var.coords
+            )
+
+        if len(result.solution.dual):
+            dual = result.solution.dual
+            for _, con in self.constraints.items():
+                start, end = con.range
+                coords = {dim: con.coords[dim] for dim in con.coord_dims}
+                con.dual = xr.DataArray(
+                    dual[start:end].reshape(con.shape), coords, dims=con.coord_dims
+                )
+
+        return status_value, termination_condition
 
     def _mock_solve(
         self,
@@ -1807,6 +1821,7 @@ class Model:
         solver_name = "mock"
 
         logger.info(f" Solve problem using {solver_name.title()} solver")
+        self.solver = None
         # reset result
         self.reset_solution()
 
@@ -1819,8 +1834,6 @@ class Model:
         self.objective._value = 0.0
         self.status = "ok"
         self.termination_condition = TerminationCondition.optimal.value
-        self.solver_model = None
-        self.solver_name = solver_name
 
         for name, var in self.variables.items():
             var.solution = xr.DataArray(0.0, var.coords)
@@ -1843,7 +1856,7 @@ class Model:
         labels : list[int]
             Labels of the infeasible constraints.
         """
-        solver_model = getattr(self, "solver_model", None)
+        solver_model = self.solver_model
 
         # Check for Gurobi
         if "gurobi" in available_solvers:
@@ -1872,8 +1885,10 @@ class Model:
         # If we get here, either the solver doesn't support IIS or no solver model is available
         if solver_model is None:
             # Check if this is a supported solver without a stored model
-            solver_name = getattr(self, "solver_name", "unknown")
-            if solver_supports(solver_name, SolverFeature.IIS_COMPUTATION):
+            solver_name = self.solver_name or "unknown"
+            if self.solver is not None and self.solver.supports(
+                SolverFeature.IIS_COMPUTATION
+            ):
                 raise ValueError(
                     "No solver model available. The model must be solved first with "
                     "a solver that supports IIS computation and the result must be infeasible."
@@ -1930,7 +1945,7 @@ class Model:
         if solver_model.attributes.numiis == 0:
             return []
 
-        clabels = self.matrices.clabels
+        clabels = self.constraints.label_index.clabels
         constraint_position_map = {}
         for position, constraint_obj in enumerate(solver_model.getConstraint()):
             if 0 <= position < len(clabels):

@@ -4,6 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Development Commands
 
+Before running any commands, ensure you have activated the virtual environment:
+
+```bash
+uv sync --extra dev --extra solvers --extra oetc
+source .venv/bin/activate
+```
+
 ### Running Tests
 ```bash
 # Run all tests (excluding GPU tests by default)
@@ -41,15 +48,6 @@ mypy .
 
 # Run all pre-commit hooks
 pre-commit run --all-files
-```
-
-### Development Setup
-```bash
-# Create virtual environment and install development dependencies
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install uv
-uv pip install -e .[dev,solvers]
 ```
 
 ## High-Level Architecture

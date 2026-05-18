@@ -32,6 +32,7 @@ from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
 from linopy.common import (
+    ConstraintLabelIndex,
     LabelPositionIndex,
     LocIndexer,
     VariableLabelIndex,
@@ -145,6 +146,11 @@ class ConstraintBase(ABC):
 
     @property
     @abstractmethod
+    def range(self) -> tuple[int, int]:
+        """Return the label range of the constraint."""
+
+    @property
+    @abstractmethod
     def coeffs(self) -> DataArray:
         """Get the LHS coefficients DataArray."""
 
@@ -211,6 +217,10 @@ class ConstraintBase(ABC):
         Avoids computing the CSR matrix twice when both the matrix and
         the RHS/sense vectors are needed.
         """
+
+    @abstractmethod
+    def active_labels(self) -> np.ndarray:
+        """Active constraint labels in build order, without building the CSR."""
 
     def __getitem__(
         self, selector: str | int | slice | list | tuple | dict
@@ -562,6 +572,10 @@ class CSRConstraint(ConstraintBase):
         return d
 
     @property
+    def coords(self) -> DatasetCoordinates:
+        return Dataset(coords={c.name: c for c in self._coords}).coords
+
+    @property
     def dims(self) -> Frozen[Hashable, int]:
         d: dict[Hashable, int] = {c.name: len(c) for c in self._coords}
         d[TERM_DIM] = self.nterm
@@ -864,6 +878,9 @@ class CSRConstraint(ConstraintBase):
         else:
             sense = np.array([s[0] for s in self._sign])
         return self._csr, self._con_labels, self._rhs, sense
+
+    def active_labels(self) -> np.ndarray:
+        return self._con_labels
 
     def sanitize_zeros(self) -> CSRConstraint:
         """Remove terms with zero or near-zero coefficients (mutates in-place)."""
@@ -1222,6 +1239,18 @@ class Constraint(ConstraintBase):
         csr.sum_duplicates()
         return csr, con_labels
 
+    def active_labels(self) -> np.ndarray:
+        labels_flat = self.labels.values.ravel()
+        vars_vals = self.vars.values
+        n_rows = len(labels_flat)
+        vars_2d = (
+            vars_vals.reshape(n_rows, -1)
+            if n_rows > 0
+            else vars_vals.reshape(0, max(1, vars_vals.size))
+        )
+        row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+        return labels_flat[row_mask]
+
     def to_matrix_with_rhs(
         self, label_index: VariableLabelIndex
     ) -> tuple[scipy.sparse.csr_array, np.ndarray, np.ndarray, np.ndarray]:
@@ -1427,6 +1456,7 @@ class Constraints:
     data: dict[str, ConstraintBase]
     model: Model
     _label_position_index: LabelPositionIndex | None = None
+    _constraint_label_index: ConstraintLabelIndex | None = None
 
     dataset_attrs = ["labels", "coeffs", "vars", "sign", "rhs"]
     dataset_names = [
@@ -1548,6 +1578,15 @@ class Constraints:
         """Invalidate the label position index cache."""
         if self._label_position_index is not None:
             self._label_position_index.invalidate()
+        if self._constraint_label_index is not None:
+            self._constraint_label_index.invalidate()
+
+    @property
+    def label_index(self) -> ConstraintLabelIndex:
+        """Index for O(1) label->position mapping and compact clabels array."""
+        if self._constraint_label_index is None:
+            self._constraint_label_index = ConstraintLabelIndex(self)
+        return self._constraint_label_index
 
     @property
     def labels(self) -> Dataset:
