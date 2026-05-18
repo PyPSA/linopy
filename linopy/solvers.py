@@ -106,6 +106,41 @@ def _solution_from_labels(
     return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
 
 
+def _sos_set_positions(
+    labels: np.ndarray, weights: np.ndarray, label_to_pos: np.ndarray
+) -> tuple[list[int], list[float]]:
+    """
+    Convert a SOS set's linopy labels to solver column positions.
+
+    Direct-API solvers (gurobi, xpress) accept SOS members as 0-based column
+    positions in the solver's variable array, which corresponds to the active
+    (non-masked) variable order — i.e., the order of
+    ``model.variables.label_index.vlabels``. Masked entries (label ``-1``) are
+    dropped along with their weights.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        Flat array of linopy labels for the SOS members.
+    weights : np.ndarray
+        Matching weights; same length as ``labels``.
+    label_to_pos : np.ndarray
+        ``model.variables.label_index.label_to_pos`` — lookup of label →
+        active-variable position.
+
+    Returns
+    -------
+    tuple[list[int], list[float]]
+        Solver column positions and matching weights, with masked entries
+        removed.
+    """
+    mask = labels != -1
+    return (
+        label_to_pos[labels[mask]].tolist(),
+        weights[mask].tolist(),
+    )
+
+
 class SolverFeature(Enum):
     """Enumeration of all solver capabilities tracked by linopy."""
 
@@ -1581,6 +1616,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 c.setAttr("ConstrName", names)
 
         if model.variables.sos:
+            label_to_pos = model.variables.label_index.label_to_pos
             for var_name in model.variables.sos:
                 var = model.variables.sos[var_name]
                 sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
@@ -1588,9 +1624,14 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
                 def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                     s = s.squeeze()
-                    indices = s.values.flatten().tolist()
-                    weights = s.coords[sos_dim].values.tolist()
-                    gm.addSOS(sos_type, x[indices].tolist(), weights)
+                    labels = s.values.flatten()
+                    weights = s.coords[sos_dim].values
+                    positions, weights_kept = _sos_set_positions(
+                        labels, weights, label_to_pos
+                    )
+                    if not positions:
+                        return
+                    gm.addSOS(sos_type, x[positions].tolist(), weights_kept)
 
                 others = [dim for dim in var.labels.dims if dim != sos_dim]
                 if not others:
@@ -2223,6 +2264,7 @@ class Xpress(Solver[None]):
                 problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
         if model.variables.sos:
+            label_to_pos = model.variables.label_index.label_to_pos
             for var_name in model.variables.sos:
                 var = model.variables.sos[var_name]
                 sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
@@ -2230,9 +2272,14 @@ class Xpress(Solver[None]):
 
                 def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                     s = s.squeeze()
-                    indices = s.values.flatten().tolist()
-                    weights = s.coords[sos_dim].values.tolist()
-                    problem.addSOS(indices, weights, type=sos_type)
+                    labels = s.values.flatten()
+                    weights = s.coords[sos_dim].values
+                    positions, weights_kept = _sos_set_positions(
+                        labels, weights, label_to_pos
+                    )
+                    if not positions:
+                        return
+                    problem.addSOS(positions, weights_kept, type=sos_type)
 
                 others = [dim for dim in var.labels.dims if dim != sos_dim]
                 if not others:
