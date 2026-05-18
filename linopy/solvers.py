@@ -507,6 +507,7 @@ class Solver(ABC, Generic[EnvType]):
         """Dispatch to direct or file build based on ``io_api``."""
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
+        self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:
@@ -2169,12 +2170,8 @@ class Xpress(Solver[None]):
 
                 def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
                     s = s.squeeze()
-                    labels = s.values.flatten()
-                    mask = labels != -1
-                    if not mask.any():
-                        return
-                    indices = labels[mask].tolist()
-                    weights = s.coords[sos_dim].values[mask].tolist()
+                    indices = s.values.flatten().tolist()
+                    weights = s.coords[sos_dim].values.tolist()
                     problem.addSOS(indices, weights, type=sos_type)
 
                 others = [dim for dim in var.labels.dims if dim != sos_dim]

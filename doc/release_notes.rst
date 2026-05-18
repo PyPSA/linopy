@@ -50,6 +50,11 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
 
+**Bug Fixes**
+
+* SOS constraints on masked variables no longer cause solver-specific failures (Gurobi ``IndexError``, Xpress ``?404 Invalid column number``, LP parse errors, silent set corruption). ``Model.solve()`` and ``Model.to_file()`` now raise a clear ``NotImplementedError`` referring users to `#688 <https://github.com/PyPSA/linopy/issues/688>`__; pass ``reformulate_sos=True`` as a workaround.
+* ``Model.solve(..., reformulate_sos=True)`` now actually reformulates SOS constraints even when the solver supports them natively. Previously it was silently ignored with a warning.
+
 **Breaking Changes**
 
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
