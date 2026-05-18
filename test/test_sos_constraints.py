@@ -208,11 +208,27 @@ def test_lp_writer_raises_on_masked_sos(tmp_path: Path) -> None:
         m.to_file(tmp_path / "sos.lp", io_api="lp")
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
-def test_reformulate_sos_true_solves_masked_sos() -> None:
+@pytest.mark.parametrize(
+    "solver_name",
+    [
+        pytest.param(
+            "gurobi",
+            marks=pytest.mark.skipif(
+                "gurobi" not in available_solvers, reason="Gurobi not installed"
+            ),
+        ),
+        pytest.param(
+            "highs",
+            marks=pytest.mark.skipif(
+                "highs" not in available_solvers, reason="HiGHS not installed"
+            ),
+        ),
+    ],
+)
+def test_reformulate_sos_true_solves_masked_sos(solver_name: str) -> None:
     """The documented workaround for the masked-SOS bug actually solves."""
     m = _masked_sos_model()
-    m.solve(solver_name="gurobi", reformulate_sos=True)
+    m.solve(solver_name=solver_name, reformulate_sos=True)
     sol = m.variables["sos_var"].solution.values
     # SOS1 over 3 unmasked entries, max sum, each in [0, 1]:
     # one entry == 1, others == 0, masked stays NaN.
@@ -225,22 +241,37 @@ def test_reformulate_sos_true_solves_masked_sos() -> None:
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
-def test_reformulate_sos_true_reformulates_on_native_solver(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """``reformulate_sos=True`` must reformulate even when the solver supports SOS."""
-    import logging
+def test_reformulate_sos_true_reformulates_on_native_solver(tmp_path: Path) -> None:
+    """
+    ``reformulate_sos=True`` must reformulate even when the solver supports SOS.
 
+    Asserted against the artifacts ``reformulate_sos_constraints`` writes into
+    the LP file (the auxiliary binary + cardinality constraint, no ``sos``
+    section). The reformulation is undone after solve, so the model itself
+    looks unchanged — the LP snapshot is the durable evidence.
+    """
     m = Model()
     idx = pd.Index([0, 1, 2], name="i")
     x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
     m.add_sos_constraints(x, sos_type=1, sos_dim="i")
     m.add_objective(x.sum())
 
-    with caplog.at_level(logging.INFO, logger="linopy.model"):
-        m.solve(solver_name="gurobi", reformulate_sos=True)
+    problem_fn = tmp_path / "problem.lp"
+    m.solve(
+        solver_name="gurobi",
+        io_api="lp",
+        reformulate_sos=True,
+        problem_fn=problem_fn,
+        keep_files=True,
+        explicit_coordinate_names=True,
+    )
 
-    assert any("Reformulating SOS" in msg for msg in caplog.messages)
+    content = problem_fn.read_text()
+    # SOS got rewritten to binary + linear: no `sos` section, the auxiliary
+    # binary indicator and cardinality constraint appear instead.
+    assert "\nsos\n" not in content
+    assert "_sos_reform_x_y" in content
+    assert "_sos_reform_x_card" in content
 
 
 def test_unsupported_solver_raises_error() -> None:
