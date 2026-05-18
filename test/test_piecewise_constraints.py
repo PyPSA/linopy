@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
@@ -2064,6 +2064,31 @@ class TestValidationEdgeCases:
 # ===========================================================================
 
 
+@pytest.fixture
+def nan_padded_pwl_model() -> Callable[[Method], Model]:
+    """Factory: NaN-padded per-entity piecewise model parametrized by method."""
+    from linopy.piecewise import breakpoints
+
+    def _build(method: Method) -> Model:
+        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
+        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
+
+        m = Model()
+        coord = pd.Index(["a", "b"], name="entity")
+        x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
+        y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
+        m.add_piecewise_formulation(
+            (y, breakpoints(bp_y, dim="entity"), "<="),
+            (x, breakpoints(bp_x, dim="entity")),
+            method=method,
+        )
+        m.add_constraints(x.sel(entity="b") == 10)
+        m.add_objective(-y.sel(entity="b"))
+        return m
+
+    return _build
+
+
 class TestSignParameter:
     """Tests for per-tuple sign on add_piecewise_formulation."""
 
@@ -2281,7 +2306,9 @@ class TestSignParameter:
         assert f_asc.method != "lp"
         assert f_desc.method != "lp"
 
-    def test_lp_per_entity_nan_padding(self) -> None:
+    def test_lp_per_entity_nan_padding(
+        self, nan_padded_pwl_model: Callable[[Method], Model]
+    ) -> None:
         """
         Per-entity NaN-padded breakpoints with method='lp': padded
         segments must be masked out so they don't create spurious
@@ -2291,44 +2318,16 @@ class TestSignParameter:
         native SOS path doesn't yet support (#688) — exercised separately in
         :py:meth:`test_sos2_per_entity_nan_padding_errors`.
         """
-        from linopy.piecewise import breakpoints
-
-        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
-        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
-
-        m = Model()
-        coord = pd.Index(["a", "b"], name="entity")
-        x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
-        y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
-        m.add_piecewise_formulation(
-            (y, breakpoints(bp_y, dim="entity"), "<="),
-            (x, breakpoints(bp_x, dim="entity")),
-            method="lp",
-        )
-        m.add_constraints(x.sel(entity="b") == 10)
-        m.add_objective(-y.sel(entity="b"))
+        m = nan_padded_pwl_model("lp")
         m.solve()
         # f_b(10) on chord (5,10)→(15,15) is 12.5
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
-    def test_sos2_per_entity_nan_padding_errors(self) -> None:
+    def test_sos2_per_entity_nan_padding_errors(
+        self, nan_padded_pwl_model: Callable[[Method], Model]
+    ) -> None:
         """Masked SOS lambdas hit the #688 guard at solve time."""
-        from linopy.piecewise import breakpoints
-
-        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
-        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
-
-        m = Model()
-        coord = pd.Index(["a", "b"], name="entity")
-        x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
-        y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
-        m.add_piecewise_formulation(
-            (y, breakpoints(bp_y, dim="entity"), "<="),
-            (x, breakpoints(bp_x, dim="entity")),
-            method="sos2",
-        )
-        m.add_constraints(x.sel(entity="b") == 10)
-        m.add_objective(-y.sel(entity="b"))
+        m = nan_padded_pwl_model("sos2")
         with pytest.raises(NotImplementedError, match="masked"):
             m.solve()
 
