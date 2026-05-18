@@ -307,6 +307,22 @@ def test_to_mosek(model: Model) -> None:
     assert task.getnumvar() > 0
 
 
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress(model: Model) -> None:
+    p = model.to_xpress()
+    assert p.attributes.cols > 0
+    assert p.attributes.rows > 0
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_no_names(model: Model) -> None:
+    p_with = model.to_xpress(set_names=True)
+    p_without = model.to_xpress(set_names=False)
+    names_with = [v.name for v in p_with.getVariable()]
+    names_without = [v.name for v in p_without.getVariable()]
+    assert names_with != names_without
+
+
 @pytest.mark.skipif("cupdlpx" not in available_solvers, reason="cuPDLPx not installed")
 def test_to_cupdlpx(model: Model) -> None:
     cu = model.to_cupdlpx()

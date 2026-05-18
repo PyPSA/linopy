@@ -71,6 +71,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_xpress,
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
@@ -2112,5 +2113,7 @@ class Model:
     to_highspy = to_highspy
 
     to_cupdlpx = to_cupdlpx
+
+    to_xpress = to_xpress
 
     to_block_files = to_block_files

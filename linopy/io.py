@@ -685,6 +685,21 @@ def to_highspy(
     return solver.solver_model
 
 
+def to_xpress(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Any:
+    """Build the xpress.problem instance for `m`."""
+    solver = solvers.Xpress.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
+    return solver.solver_model
+
+
 def to_cupdlpx(m: Model) -> cupdlpxModel:
     """Build the cupdlpx.Model for `m`."""
     solver = solvers.cuPDLPx.from_model(m, io_api="direct")
