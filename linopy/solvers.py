@@ -507,6 +507,7 @@ class Solver(ABC, Generic[EnvType]):
         """Dispatch to direct or file build based on ``io_api``."""
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
+        linopy.io._raise_if_sos_has_masked(self.model)
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:

@@ -1594,12 +1594,10 @@ class Model:
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         reformulate_sos : bool | Literal["auto"], optional
-            Whether to automatically reformulate SOS constraints as binary + linear
-            constraints for solvers that don't support them natively.
-            If True, always reformulates (warns if solver supports SOS natively).
-            If "auto", silently reformulates only when the solver lacks SOS support.
-            If False, raises if solver doesn't support SOS.
-            This uses the Big-M method and requires all SOS variables to have finite bounds.
+            Whether to reformulate SOS constraints as binary + linear constraints.
+            If True, always reformulates, even when the solver supports SOS natively.
+            If "auto", reformulates only when the solver lacks SOS support.
+            If False, raises if the solver doesn't support SOS.
             Default is False.
         **solver_options : kwargs
             Options passed to the solver.
@@ -1715,18 +1713,17 @@ class Model:
         sos_reform_result = None
         if self.variables.sos:
             supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
-            if reformulate_sos in (True, "auto") and not supports_sos:
+            should_reformulate = reformulate_sos is True or (
+                reformulate_sos == "auto" and not supports_sos
+            )
+
+            if should_reformulate:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
                 sos_reform_result = reformulate_sos_constraints(self)
-            elif reformulate_sos is True and supports_sos:
-                logger.warning(
-                    f"Solver {solver_name} supports SOS natively; "
-                    "reformulate_sos=True is ignored."
-                )
             elif reformulate_sos is False and not supports_sos:
                 raise ValueError(
                     f"Solver {solver_name} does not support SOS constraints. "
-                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
+                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS."
                 )
 
         if self.variables.semi_continuous:

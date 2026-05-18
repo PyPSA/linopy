@@ -394,6 +394,35 @@ def integers_to_file(
             _format_and_write(df, columns, f)
 
 
+def _raise_if_sos_has_masked(m: Model) -> None:
+    """
+    Reject models whose SOS variables have masked entries.
+
+    The SOS plumbing (both direct-API solvers and the LP file writer) treats
+    linopy variable labels as solver column indices / names, which breaks as
+    soon as a label is ``-1`` (linopy's ``FILL_VALUE["labels"]`` for masked
+    slots). The downstream symptoms are solver-specific — ``IndexError`` on
+    gurobipy, ``?404 Invalid column number`` on xpress, parse errors on
+    xpress/cplex LP readers, silent SOS-set corruption on gurobi's LP reader.
+
+    Surface a single clear error until #688 lands the proper fix.
+    """
+    if not m.variables.sos:
+        return
+    affected = [
+        name
+        for name in m.variables.sos
+        if (m.variables[name].labels.values == -1).any()
+    ]
+    if affected:
+        raise NotImplementedError(
+            f"SOS constraints on masked variables are not yet supported "
+            f"(affected: {affected}; "
+            "see https://github.com/PyPSA/linopy/issues/688). "
+            "Pass reformulate_sos=True as a workaround."
+        )
+
+
 def sos_to_file(
     m: Model,
     f: BufferedWriter,
@@ -407,6 +436,8 @@ def sos_to_file(
     names = m.variables.sos
     if not len(list(names)):
         return
+
+    _raise_if_sos_has_masked(m)
 
     print_variable, _ = get_printers(
         m, explicit_coordinate_names=explicit_coordinate_names

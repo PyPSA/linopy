@@ -2286,30 +2286,51 @@ class TestSignParameter:
         Per-entity NaN-padded breakpoints with method='lp': padded
         segments must be masked out so they don't create spurious
         ``y ≤ 0`` constraints (bug-2 regression).
+
+        ``method='sos2'`` would emit a masked SOS lambda variable, which the
+        native SOS path doesn't yet support (#688) — exercised separately in
+        :py:meth:`test_sos2_per_entity_nan_padding_errors`.
         """
         from linopy.piecewise import breakpoints
 
         bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
         bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
-        results: dict[str, float] = {}
-        methods: list[Method] = ["lp", "sos2"]
-        for method in methods:
-            m = Model()
-            coord = pd.Index(["a", "b"], name="entity")
-            x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
-            y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
-            m.add_piecewise_formulation(
-                (y, breakpoints(bp_y, dim="entity"), "<="),
-                (x, breakpoints(bp_x, dim="entity")),
-                method=method,
-            )
-            m.add_constraints(x.sel(entity="b") == 10)
-            m.add_objective(-y.sel(entity="b"))
-            m.solve()
-            results[method] = float(m.solution.sel({"entity": "b"})["y"])
+
+        m = Model()
+        coord = pd.Index(["a", "b"], name="entity")
+        x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
+        y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
+        m.add_piecewise_formulation(
+            (y, breakpoints(bp_y, dim="entity"), "<="),
+            (x, breakpoints(bp_x, dim="entity")),
+            method="lp",
+        )
+        m.add_constraints(x.sel(entity="b") == 10)
+        m.add_objective(-y.sel(entity="b"))
+        m.solve()
         # f_b(10) on chord (5,10)→(15,15) is 12.5
-        assert abs(results["lp"] - 12.5) < 1e-3
-        assert abs(results["sos2"] - results["lp"]) < 1e-3
+        assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
+
+    def test_sos2_per_entity_nan_padding_errors(self) -> None:
+        """Masked SOS lambdas hit the #688 guard at solve time."""
+        from linopy.piecewise import breakpoints
+
+        bp_y = pd.DataFrame([[0, 20, 30, 35], [0, 10, 15, np.nan]], index=["a", "b"])
+        bp_x = pd.DataFrame([[0, 10, 20, 30], [0, 5, 15, np.nan]], index=["a", "b"])
+
+        m = Model()
+        coord = pd.Index(["a", "b"], name="entity")
+        x = m.add_variables(lower=0, upper=20, coords=[coord], name="x")
+        y = m.add_variables(lower=0, upper=40, coords=[coord], name="y")
+        m.add_piecewise_formulation(
+            (y, breakpoints(bp_y, dim="entity"), "<="),
+            (x, breakpoints(bp_x, dim="entity")),
+            method="sos2",
+        )
+        m.add_constraints(x.sel(entity="b") == 10)
+        m.add_objective(-y.sel(entity="b"))
+        with pytest.raises(NotImplementedError, match="masked"):
+            m.solve()
 
     def test_lp_rejects_decreasing_x_concave_ge(self) -> None:
         """
