@@ -2310,7 +2310,11 @@ class Xpress(Solver[None]):
                         dual = _solution_from_labels(
                             dual_values, self._clabels, self._n_cons
                         )
-            except (xpress.SolverError, xpress.ModelError, SystemError):  # pragma: no cover
+            except (
+                xpress.SolverError,
+                xpress.ModelError,
+                SystemError,
+            ):  # pragma: no cover
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = np.array([], dtype=float)
 
