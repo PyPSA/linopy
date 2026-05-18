@@ -12,11 +12,11 @@ Before you start, make sure you have the following:
 Install Linopy
 --------------
 
-You can install Linopy using pip or conda. Here are the commands for each method:
+You can install Linopy using uv or conda. Here are the commands for each method:
 
 .. code-block:: bash
 
-   pip install linopy
+   uv pip install linopy
 
 or
 
@@ -51,15 +51,12 @@ required:
 
 .. code:: bash
 
-    pip install linopy[solvers]
+    uv pip install "linopy[solvers]"
 
 
-We recommend installing the HiGHS solver, which is free, open source, and
-fast across a wide range of problem sizes:
-
-.. code:: bash
-
-    pip install highspy
+We recommend the HiGHS solver, which is free, open source, and fast
+across a wide range of problem sizes. It is included in both the
+``solvers`` and ``dev`` extras.
 
 
 GPU-accelerated solvers
@@ -73,7 +70,7 @@ For large-scale optimization problems, GPU-accelerated solvers can provide signi
 
 .. code:: bash
 
-    pip install cupdlpx
+    uv pip install cupdlpx
 
 
 For most of the other solvers, please click on the links to get further installation information.
