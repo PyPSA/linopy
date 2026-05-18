@@ -592,6 +592,8 @@ def to_file(
     """
     Write out a model to a lp or mps file.
     """
+    m._check_sos_unmasked()
+
     if fn is None:
         fn = Path(m.get_problem_file())
     if isinstance(fn, str):
@@ -678,6 +680,21 @@ def to_highspy(
 ) -> Highs:
     """Build the highspy.Highs instance for `m`."""
     solver = solvers.Highs.from_model(
+        m,
+        io_api="direct",
+        explicit_coordinate_names=explicit_coordinate_names,
+        set_names=set_names,
+    )
+    return solver.solver_model
+
+
+def to_xpress(
+    m: Model,
+    explicit_coordinate_names: bool = False,
+    set_names: bool = True,
+) -> Any:
+    """Build the xpress.problem instance for `m`."""
+    solver = solvers.Xpress.from_model(
         m,
         io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,

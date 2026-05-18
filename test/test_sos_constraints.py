@@ -5,8 +5,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model, available_solvers
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
+
+_direct_sos_solvers = [
+    s
+    for s in get_available_solvers_with_feature(
+        SolverFeature.SOS_CONSTRAINTS, available_solvers
+    )
+    if solver_supports(s, SolverFeature.DIRECT_API)
+]
 
 
 def test_add_sos_constraints_registers_variable() -> None:
@@ -135,6 +149,158 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
     assert np.isclose(build.solution.values, [0, 1, 1]).all()
     assert m.objective.value is not None
     assert np.isclose(m.objective.value, 4)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_sos_constraints() -> None:
+    m = Model()
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == 1
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_grouped_sos_constraints() -> None:
+    m = Model()
+    groups = pd.Index(["a", "b"], name="group")
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[groups, segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == len(groups)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_sos2_xpress_direct() -> None:
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 5)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_qp_sos1_xpress_direct() -> None:
+    m = Model()
+    seg = pd.Index([0, 1, 2], name="seg")
+    x = m.add_variables(lower=0, upper=10, coords=[seg], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="seg")
+    m.add_constraints(x.sum() >= 5)
+
+    linear_coeffs = xr.DataArray([0.0, -10.0, 0.0], coords=[seg])
+    m.add_objective((x * x).sum() + (linear_coeffs * x).sum(), sense="min")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(x.solution.values, [0, 5, 0]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, -25)
+
+
+@pytest.fixture
+def masked_sos_model() -> Model:
+    """Tiny model with a single masked SOS1 variable."""
+    m = Model()
+    coords = pd.Index([0, 1, 2, 3], name="i")
+    mask = pd.Series([True, True, False, True], index=coords)
+    var = m.add_variables(lower=0, upper=1, coords=[coords], mask=mask, name="sos_var")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="i")
+    m.add_objective(-var.sum())
+    return m
+
+
+@pytest.mark.parametrize("solver_name", _direct_sos_solvers)
+def test_direct_api_raises_on_masked_sos(
+    solver_name: str, masked_sos_model: Model
+) -> None:
+    with pytest.raises(NotImplementedError, match="masked"):
+        masked_sos_model.solve(solver_name=solver_name, io_api="direct")
+
+
+def test_lp_writer_raises_on_masked_sos(
+    masked_sos_model: Model, tmp_path: Path
+) -> None:
+    with pytest.raises(NotImplementedError, match="masked"):
+        masked_sos_model.to_file(tmp_path / "sos.lp", io_api="lp")
+
+
+@pytest.mark.parametrize(
+    "solver_name",
+    [
+        pytest.param(
+            "gurobi",
+            marks=pytest.mark.skipif(
+                "gurobi" not in available_solvers, reason="Gurobi not installed"
+            ),
+        ),
+        pytest.param(
+            "highs",
+            marks=pytest.mark.skipif(
+                "highs" not in available_solvers, reason="HiGHS not installed"
+            ),
+        ),
+    ],
+)
+def test_reformulate_sos_true_solves_masked_sos(
+    solver_name: str, masked_sos_model: Model
+) -> None:
+    """The documented workaround for the masked-SOS bug actually solves."""
+    masked_sos_model.solve(solver_name=solver_name, reformulate_sos=True)
+    sol = masked_sos_model.variables["sos_var"].solution.values
+    # SOS1 over 3 unmasked entries, max sum, each in [0, 1]:
+    # one entry == 1, others == 0, masked stays NaN.
+    assert masked_sos_model.objective.value is not None
+    assert np.isclose(masked_sos_model.objective.value, -1.0)
+    assert np.isnan(sol[2])
+    nonzero = np.flatnonzero(~np.isnan(sol) & (sol > 1e-6))
+    assert len(nonzero) == 1
+    assert np.isclose(sol[nonzero[0]], 1.0)
+
+
+@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+def test_reformulate_sos_true_reformulates_on_native_solver(tmp_path: Path) -> None:
+    """
+    ``reformulate_sos=True`` must reformulate even when the solver supports SOS.
+
+    Asserted against the artifacts ``reformulate_sos_constraints`` writes into
+    the LP file (the auxiliary binary + cardinality constraint, no ``sos``
+    section). The reformulation is undone after solve, so the model itself
+    looks unchanged — the LP snapshot is the durable evidence.
+    """
+    m = Model()
+    idx = pd.Index([0, 1, 2], name="i")
+    x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+    m.add_objective(x.sum())
+
+    problem_fn = tmp_path / "problem.lp"
+    m.solve(
+        solver_name="gurobi",
+        io_api="lp",
+        reformulate_sos=True,
+        problem_fn=problem_fn,
+        keep_files=True,
+        explicit_coordinate_names=True,
+    )
+
+    content = problem_fn.read_text()
+    # SOS got rewritten to binary + linear: no `sos` section, the auxiliary
+    # binary indicator and cardinality constraint appear instead.
+    assert "\nsos\n" not in content
+    assert "_sos_reform_x_y" in content
+    assert "_sos_reform_x_card" in content
 
 
 def test_unsupported_solver_raises_error() -> None:
