@@ -2089,9 +2089,7 @@ class Xpress(Solver[None]):
         objqcol2: np.ndarray | None
         objqcoef: np.ndarray | None
         if Q is not None and Q.nnz:
-            Qt = (
-                Q if Q.format == "coo" else triu(Q, format="coo")
-            )  # codespell:ignore coo
+            Qt = Q if Q.format == "coo" else triu(Q, format="coo")  # codespell:ignore
             mask = Qt.row <= Qt.col
             objqcol1 = Qt.row[mask].astype(np.int64, copy=False)
             objqcol2 = Qt.col[mask].astype(np.int64, copy=False)
