@@ -8,7 +8,7 @@ Before running any commands, ensure you have activated the virtual environment:
 
 ```bash
 uv sync --extra dev --extra solvers --extra oetc
-source .venv/bin/activate 
+source .venv/bin/activate
 ```
 
 ### Running Tests
