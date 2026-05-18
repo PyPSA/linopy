@@ -2075,6 +2075,8 @@ class Xpress(Solver[None]):
         np.place(lb, np.isneginf(lb), -xpress.infinity)
         np.place(ub, np.isposinf(ub), xpress.infinity)
 
+        rowtype: np.ndarray
+        rhs: np.ndarray
         if len(M.clabels):
             sense = M.sense
             rowtype = np.full(sense.shape, "E", dtype="U1")
