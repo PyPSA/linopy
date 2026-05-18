@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -210,35 +209,34 @@ def masked_sos_model() -> Model:
 
 
 @pytest.mark.parametrize(
-    "trigger",
+    "solver_name",
     [
         pytest.param(
-            lambda m, tmp_path: m.solve(solver_name="gurobi", io_api="direct"),
-            id="gurobi-direct",
+            "gurobi",
             marks=pytest.mark.skipif(
                 "gurobi" not in available_solvers, reason="Gurobi not installed"
             ),
         ),
         pytest.param(
-            lambda m, tmp_path: m.solve(solver_name="xpress", io_api="direct"),
-            id="xpress-direct",
+            "xpress",
             marks=pytest.mark.skipif(
                 "xpress" not in available_solvers, reason="Xpress not installed"
             ),
         ),
-        pytest.param(
-            lambda m, tmp_path: m.to_file(tmp_path / "sos.lp", io_api="lp"),
-            id="lp-writer",
-        ),
     ],
 )
-def test_masked_sos_raises(
-    trigger: Callable[[Model, Path], object],
-    masked_sos_model: Model,
-    tmp_path: Path,
+def test_direct_api_raises_on_masked_sos(
+    solver_name: str, masked_sos_model: Model
 ) -> None:
     with pytest.raises(NotImplementedError, match="masked"):
-        trigger(masked_sos_model, tmp_path)
+        masked_sos_model.solve(solver_name=solver_name, io_api="direct")
+
+
+def test_lp_writer_raises_on_masked_sos(
+    masked_sos_model: Model, tmp_path: Path
+) -> None:
+    with pytest.raises(NotImplementedError, match="masked"):
+        masked_sos_model.to_file(tmp_path / "sos.lp", io_api="lp")
 
 
 @pytest.mark.parametrize(
