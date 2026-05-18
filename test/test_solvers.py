@@ -24,6 +24,14 @@ from linopy.solvers import _installed_version_in
 
 
 @pytest.fixture
+def lp_only_solver() -> str:
+    for name in ("glpk", "cbc"):
+        if name in solvers.available_solvers:
+            return name
+    pytest.skip("Need an LP-only solver (glpk or cbc) installed")
+
+
+@pytest.fixture
 def simple_model() -> Model:
     m = Model(chunk=None)
     x = m.add_variables(name="x")
@@ -469,38 +477,21 @@ def test_xpress_gpu_feature_reflects_installed_version() -> None:
 class TestValidateModelOnBuild:
     """Solver._build() runs solver-feature checks regardless of entry point."""
 
-    @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
-    )
-    def test_quadratic_without_qp_support_raises(self) -> None:
-        # GLPK is LP-only; if not installed, fall back to a different LP-only path.
-        # CBC and GLPK both lack QUADRATIC_OBJECTIVE.
-        lp_only = next(
-            (s for s in ("glpk", "cbc") if s in solvers.available_solvers), None
-        )
-        if lp_only is None:
-            pytest.skip("Need an LP-only solver (glpk or cbc) to run this test")
-
+    def test_quadratic_without_qp_support_raises(self, lp_only_solver: str) -> None:
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=10)
         m.add_objective(x * x, sense="min")
 
         with pytest.raises(ValueError, match="does not support quadratic"):
-            solvers.Solver.from_name(lp_only, m, io_api="lp")
+            solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
 
-    def test_semi_continuous_without_support_raises(self) -> None:
-        lp_only = next(
-            (s for s in ("glpk", "cbc") if s in solvers.available_solvers), None
-        )
-        if lp_only is None:
-            pytest.skip("Need an LP-only solver (glpk or cbc) to run this test")
-
+    def test_semi_continuous_without_support_raises(self, lp_only_solver: str) -> None:
         m = Model()
         x = m.add_variables(name="x", lower=1, upper=10, semi_continuous=True)
         m.add_objective(x)
 
         with pytest.raises(ValueError, match="does not support semi-continuous"):
-            solvers.Solver.from_name(lp_only, m, io_api="lp")
+            solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
 
     @pytest.mark.skipif(
         "highs" not in solvers.available_solvers, reason="HiGHS not installed"

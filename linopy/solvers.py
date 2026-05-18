@@ -546,8 +546,8 @@ class Solver(ABC, Generic[EnvType]):
         if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
             raise ValueError(
                 f"Solver {solver_name} does not support SOS constraints. "
-                "Call `model.apply_sos_reformulation()` first, or use a solver that "
-                "supports SOS."
+                "Reformulate first via `Model.solve(reformulate_sos=True)` or "
+                "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
             )
 
     def _build_direct(self, **build_kwargs: Any) -> None:

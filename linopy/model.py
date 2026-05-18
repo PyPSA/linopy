@@ -1851,10 +1851,10 @@ class Model:
             The :class:`linopy.constants.Result` returned by
             :meth:`linopy.solvers.Solver.solve`.
         solver : Solver, optional
-            The solver instance that produced the result. Pass this when going
-            through the low-level ``Solver.from_name(...).solve()`` path so the
-            model's solver reference is wired up the same way ``Model.solve()``
-            wires it.
+            The solver instance that produced the result. Pass it on the
+            low-level ``Solver.from_name(...).solve()`` path to attach it as
+            ``self.solver`` for post-solve introspection. ``Model.solve()``
+            attaches the solver itself and does not pass this argument.
         """
         if solver is not None:
             self.solver = solver
