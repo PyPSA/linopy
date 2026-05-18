@@ -598,7 +598,18 @@ class Solver(ABC, Generic[EnvType]):
         Passing ``solver=`` to :meth:`Model.assign_result` wires
         ``model.solver`` so post-solve helpers like
         :meth:`Model.compute_infeasibilities` keep working.
+
+        Raises
+        ------
+        ValueError
+            If the attached model has no objective set. Submit-time check
+            shared by both ``Model.solve()`` and direct-Solver callers.
         """
+        if self.model is not None and self.model.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use `m.add_objective(...)` "
+                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+            )
         if self.io_api == "direct" or self.solver_model is not None:
             return self._run_direct(**run_kwargs)
         if self._problem_fn is not None:

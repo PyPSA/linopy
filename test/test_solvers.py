@@ -502,6 +502,30 @@ class TestValidateModelOnBuild:
         with pytest.raises(ValueError, match="does not support semi-continuous"):
             solvers.Solver.from_name(lp_only, m, io_api="lp")
 
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_solve_without_objective_raises_on_solver_path(self) -> None:
+        m = Model()
+        m.add_variables(name="x", lower=0, upper=10)
+        # No objective added.
+
+        # Build is permitted (translate-only paths like to_gurobipy() need this).
+        solver = solvers.Solver.from_name("highs", m, io_api="lp")
+        # Solve is not — the check fires at the submit primitive.
+        with pytest.raises(ValueError, match="No objective has been set"):
+            solver.solve()
+
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_solve_without_objective_raises_on_model_path(self) -> None:
+        m = Model()
+        m.add_variables(name="x", lower=0, upper=10)
+
+        with pytest.raises(ValueError, match="No objective has been set"):
+            m.solve("highs")
+
 
 class TestSanitizeKwargs:
     """sanitize_zeros / sanitize_infinities on Solver.from_model() control the build."""
