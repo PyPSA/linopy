@@ -16,7 +16,7 @@ Development Setup
 For linting and formatting, we use `ruff <https://docs.astral.sh/ruff/>`_
 and run it via `pre-commit <https://pre-commit.com/index.html>`_:
 
-1. Installation ``conda install -c conda-forge pre-commit`` or ``pip install pre-commit``
+1. Installation ``conda install -c conda-forge pre-commit`` or ``uv pip install pre-commit``
 2. Usage:
     * To automatically activate ``pre-commit`` on every ``git commit``: Run ``pre-commit install``
     * To manually run it: ``pre-commit run --all-files``
@@ -34,7 +34,7 @@ To run the test suite:
 .. code-block:: bash
 
     # Install development dependencies
-    pip install -e .[dev,solvers]
+    uv sync --extra dev --extra solvers
 
     # Run all tests
     pytest
@@ -75,7 +75,7 @@ When working on performance-sensitive code, use the internal benchmark suite in 
 .. code-block:: bash
 
     # Install benchmark dependencies
-    pip install -e ".[benchmarks]"
+    uv sync --extra benchmarks
 
     # Quick timing benchmarks
     pytest benchmarks/ --quick

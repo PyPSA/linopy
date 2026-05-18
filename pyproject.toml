@@ -48,6 +48,9 @@ oetc = [
     "google-cloud-storage",
     "requests",
 ]
+remote = [
+    "paramiko",
+]
 docs = [
     "ipython==8.26.0",
     "numpydoc==1.7.0",

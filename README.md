@@ -45,7 +45,7 @@
 So far **linopy** is available on the PyPI repository
 
 ```bash
-pip install linopy
+uv pip install linopy
 ```
 
 or on conda-forge
@@ -159,10 +159,8 @@ Note that these do have to be installed by the user separately.
 To set up a local development environment for linopy and to run the same tests that are run in the CI, you can run:
 
 ```sh
-python -m venv venv
-source venv/bin/activate
-pip install uv
-uv pip install -e .[dev,solvers]
+uv sync --extra dev --extra solvers
+source .venv/bin/activate
 pytest
 ```
 
