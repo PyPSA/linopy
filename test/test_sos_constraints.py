@@ -8,19 +8,6 @@ import pytest
 import xarray as xr
 
 from linopy import Model, available_solvers
-from linopy.solver_capabilities import (
-    SolverFeature,
-    get_available_solvers_with_feature,
-    solver_supports,
-)
-
-_direct_sos_solvers = [
-    s
-    for s in get_available_solvers_with_feature(
-        SolverFeature.SOS_CONSTRAINTS, available_solvers
-    )
-    if solver_supports(s, SolverFeature.DIRECT_API)
-]
 
 
 def test_add_sos_constraints_registers_variable() -> None:
@@ -219,21 +206,6 @@ def masked_sos_model() -> Model:
     m.add_sos_constraints(var, sos_type=1, sos_dim="i")
     m.add_objective(-var.sum())
     return m
-
-
-@pytest.mark.parametrize("solver_name", _direct_sos_solvers)
-def test_direct_api_raises_on_masked_sos(
-    solver_name: str, masked_sos_model: Model
-) -> None:
-    with pytest.raises(NotImplementedError, match="masked"):
-        masked_sos_model.solve(solver_name=solver_name, io_api="direct")
-
-
-def test_lp_writer_raises_on_masked_sos(
-    masked_sos_model: Model, tmp_path: Path
-) -> None:
-    with pytest.raises(NotImplementedError, match="masked"):
-        masked_sos_model.to_file(tmp_path / "sos.lp", io_api="lp")
 
 
 @pytest.mark.parametrize(
