@@ -150,7 +150,7 @@ def test_unsupported_solver_raises_error() -> None:
                 m.solve(solver_name=solver)
 
 
-def test_to_highspy_raises_not_implemented() -> None:
+def test_to_highspy_raises_when_sos_present() -> None:
     pytest.importorskip("highspy")
 
     m = Model()
@@ -158,8 +158,5 @@ def test_to_highspy_raises_not_implemented() -> None:
     build = m.add_variables(coords=[locations], name="build", binary=True)
     m.add_sos_constraints(build, sos_type=1, sos_dim="locations")
 
-    with pytest.raises(
-        NotImplementedError,
-        match="SOS constraints are not supported by the HiGHS direct API",
-    ):
+    with pytest.raises(ValueError, match="does not support SOS constraints"):
         m.to_highspy()

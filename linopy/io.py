@@ -5,6 +5,7 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 import logging
 import shutil
@@ -828,7 +829,20 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
+
+    Raises
+    ------
+    RuntimeError
+        If the model has an active SOS reformulation. Call
+        :meth:`Model.undo_sos_reformulation` before serializing.
     """
+    if m._sos_reformulation_state is not None:
+        raise RuntimeError(
+            "Cannot serialize a model with an active SOS reformulation. "
+            "Call `model.undo_sos_reformulation()` first to restore the "
+            "original SOS form, or save the model in its reformulated form "
+            "after explicitly clearing `model._sos_reformulation_state`."
+        )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -1099,6 +1113,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+
+    if m._sos_reformulation_state is not None:
+        new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
 
     return new_model
 

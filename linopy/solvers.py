@@ -507,6 +507,14 @@ class Solver(ABC, Generic[EnvType]):
         """Dispatch to direct or file build based on ``io_api``."""
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
+        if self.model.variables.sos and not type(self).supports(
+            SolverFeature.SOS_CONSTRAINTS
+        ):
+            raise ValueError(
+                f"Solver {self.solver_name.value} does not support SOS constraints. "
+                "Call `model.apply_sos_reformulation()` first, or use a solver that "
+                "supports SOS."
+            )
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:

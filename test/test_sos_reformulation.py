@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -310,6 +312,128 @@ class TestModelReformulateSOS:
         assert result.reformulated == ["x"]
         assert len(list(m.variables.sos)) == 0
         assert "_sos_reform_x_y" in m.variables
+
+
+class TestApplyUndoSOSReformulation:
+    """Tests for Model.apply_sos_reformulation / undo_sos_reformulation."""
+
+    @staticmethod
+    def _build_sos1_model() -> Model:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        return m
+
+    def test_apply_stashes_state(self) -> None:
+        m = self._build_sos1_model()
+        assert m._sos_reformulation_state is None
+
+        m.apply_sos_reformulation()
+
+        assert m._sos_reformulation_state is not None
+        assert m._sos_reformulation_state.reformulated == ["x"]
+        assert len(list(m.variables.sos)) == 0
+        assert "_sos_reform_x_y" in m.variables
+
+    def test_undo_restores_and_clears_state(self) -> None:
+        m = self._build_sos1_model()
+        m.apply_sos_reformulation()
+
+        m.undo_sos_reformulation()
+
+        assert m._sos_reformulation_state is None
+        assert list(m.variables.sos) == ["x"]
+        assert "_sos_reform_x_y" not in m.variables
+
+    def test_double_apply_raises(self) -> None:
+        m = self._build_sos1_model()
+        m.apply_sos_reformulation()
+
+        with pytest.raises(RuntimeError, match="already been applied"):
+            m.apply_sos_reformulation()
+
+    def test_undo_without_apply_is_noop(self) -> None:
+        m = self._build_sos1_model()
+        assert m._sos_reformulation_state is None
+
+        m.undo_sos_reformulation()  # should not raise
+
+        assert m._sos_reformulation_state is None
+        assert list(m.variables.sos) == ["x"]
+
+    @pytest.mark.parametrize(
+        "copy_fn",
+        [
+            pytest.param(lambda m: m.copy(), id="model.copy()"),
+            pytest.param(lambda m: __import__("copy").copy(m), id="copy.copy(model)"),
+            pytest.param(
+                lambda m: __import__("copy").deepcopy(m), id="copy.deepcopy(model)"
+            ),
+        ],
+    )
+    def test_copy_persists_state_and_undo_works_on_copy(
+        self, copy_fn: Callable[[Model], Model]
+    ) -> None:
+        m = self._build_sos1_model()
+        m.apply_sos_reformulation()
+
+        c = copy_fn(m)
+
+        # State is carried over but is an independent object
+        assert c._sos_reformulation_state is not None
+        assert c._sos_reformulation_state is not m._sos_reformulation_state
+        # Aux vars/cons exist on the copy (they were copied as part of the
+        # reformulated model state)
+        assert "_sos_reform_x_y" in c.variables
+        assert "_sos_reform_x_upper" in c.constraints
+        assert "_sos_reform_x_card" in c.constraints
+        # SOS attrs are not on the copy's "x" yet (still in reformulated form)
+        assert "x" not in list(c.variables.sos)
+
+        # Undo on the copy fully restores the original SOS form
+        c.undo_sos_reformulation()
+        assert c._sos_reformulation_state is None
+        assert list(c.variables.sos) == ["x"]
+        assert "_sos_reform_x_y" not in c.variables
+        assert "_sos_reform_x_upper" not in c.constraints
+        assert "_sos_reform_x_card" not in c.constraints
+
+        # Original is entirely unaffected
+        assert m._sos_reformulation_state is not None
+        assert "_sos_reform_x_y" in m.variables
+        assert len(list(m.variables.sos)) == 0
+
+    def test_to_netcdf_raises_when_state_active(self, tmp_path: Path) -> None:
+        m = self._build_sos1_model()
+        m.apply_sos_reformulation()
+
+        with pytest.raises(RuntimeError, match="active SOS reformulation"):
+            m.to_netcdf(tmp_path / "m.nc")
+
+    def test_to_netcdf_works_after_undo(self, tmp_path: Path) -> None:
+        m = self._build_sos1_model()
+        m.apply_sos_reformulation()
+        m.undo_sos_reformulation()
+
+        m.to_netcdf(tmp_path / "m.nc")  # should not raise
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestSolverPathSOSCheck:
+    """Solver._build() must raise on SOS-bearing model with non-SOS solver."""
+
+    def test_solver_from_name_raises_without_reformulation(self) -> None:
+        from linopy import solvers
+
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        with pytest.raises(ValueError, match="does not support SOS"):
+            solvers.Solver.from_name("highs", m, io_api="lp")
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")

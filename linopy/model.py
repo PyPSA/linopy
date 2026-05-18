@@ -89,6 +89,7 @@ from linopy.solvers import (
     available_solvers,
 )
 from linopy.sos_reformulation import (
+    SOSReformulationResult,
     reformulate_sos_constraints,
     undo_sos_reformulation,
 )
@@ -239,6 +240,7 @@ class Model:
         "_relaxed_registry",
         "_piecewise_formulations",
         "_solver",
+        "_sos_reformulation_state",
         "__weakref__",
     )
 
@@ -309,6 +311,7 @@ class Model:
             gettempdir() if solver_dir is None else solver_dir
         )
         self._solver: solvers.Solver | None = None
+        self._sos_reformulation_state: SOSReformulationResult | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -1220,6 +1223,39 @@ class Model:
 
     reformulate_sos_constraints = reformulate_sos_constraints
 
+    def apply_sos_reformulation(self) -> None:
+        """
+        Reformulate SOS constraints into binary + linear form, in place.
+
+        The reformulation token is stored on the model so it can be reverted
+        with :meth:`undo_sos_reformulation`. This is the stateful counterpart
+        to :func:`linopy.sos_reformulation.reformulate_sos_constraints`, where
+        the caller owns the token.
+
+        Raises
+        ------
+        RuntimeError
+            If a reformulation has already been applied and not undone.
+        """
+        if self._sos_reformulation_state is not None:
+            raise RuntimeError(
+                "SOS reformulation has already been applied to this model. "
+                "Call `undo_sos_reformulation()` before applying again."
+            )
+        self._sos_reformulation_state = reformulate_sos_constraints(self)
+
+    def undo_sos_reformulation(self) -> None:
+        """
+        Revert a previously applied SOS reformulation.
+
+        No-op if no reformulation is currently applied.
+        """
+        if self._sos_reformulation_state is None:
+            return
+        state = self._sos_reformulation_state
+        self._sos_reformulation_state = None
+        undo_sos_reformulation(self, state)
+
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
@@ -1711,22 +1747,20 @@ class Model:
                 "Must be True, False, or 'auto'."
             )
 
-        sos_reform_result = None
+        applied_sos_reformulation_here = False
         if self.variables.sos:
             supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
             if reformulate_sos in (True, "auto") and not supports_sos:
                 logger.info(f"Reformulating SOS constraints for solver {solver_name}")
-                sos_reform_result = reformulate_sos_constraints(self)
+                self.apply_sos_reformulation()
+                applied_sos_reformulation_here = True
             elif reformulate_sos is True and supports_sos:
                 logger.warning(
                     f"Solver {solver_name} supports SOS natively; "
                     "reformulate_sos=True is ignored."
                 )
-            elif reformulate_sos is False and not supports_sos:
-                raise ValueError(
-                    f"Solver {solver_name} does not support SOS constraints. "
-                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
-                )
+            # If SOS is present and the solver doesn't support it (and the user
+            # didn't ask for reformulation), Solver._build() will raise.
 
         if self.variables.semi_continuous:
             if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
@@ -1778,8 +1812,8 @@ class Model:
         try:
             return self.assign_result(result)
         finally:
-            if sos_reform_result is not None:
-                undo_sos_reformulation(self, sos_reform_result)
+            if applied_sos_reformulation_here:
+                self.undo_sos_reformulation()
 
     def assign_result(self, result: Result) -> tuple[str, str]:
         result.info()
