@@ -504,16 +504,19 @@ class Solver(ABC, Generic[EnvType]):
         return instance
 
     def _build(self, **build_kwargs: Any) -> None:
-        """Dispatch to direct or file build based on ``io_api``."""
+        """
+        Dispatch to direct or file build based on ``io_api``.
+
+        The Solver never mutates ``self.model``. Constraint sanitization
+        (``model.constraints.sanitize_zeros()`` /
+        ``.sanitize_infinities()``) and SOS reformulation
+        (``model.apply_sos_reformulation()``) are Model-level operations
+        the caller applies first; this builder consumes whatever shape it
+        is handed.
+        """
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
-        sanitize_zeros = build_kwargs.pop("sanitize_zeros", True)
-        sanitize_infinities = build_kwargs.pop("sanitize_infinities", True)
         self._validate_model()
-        if sanitize_zeros:
-            self.model.constraints.sanitize_zeros()
-        if sanitize_infinities:
-            self.model.constraints.sanitize_infinities()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:

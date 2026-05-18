@@ -515,40 +515,30 @@ class TestValidateModelOnBuild:
             m.solve("highs")
 
 
-class TestSanitizeKwargs:
-    """sanitize_zeros / sanitize_infinities on Solver.from_model() control the build."""
+class TestSolverDoesNotMutateModel:
+    """Solver.from_model() must not mutate model state (sanitize stays Model-level)."""
 
     @pytest.mark.skipif(
         "highs" not in solvers.available_solvers, reason="HiGHS not installed"
     )
-    def test_sanitize_zeros_default_on_mutates_constraints(self) -> None:
+    def test_from_model_leaves_constraints_untouched(self) -> None:
         m = Model()
         x = m.add_variables(name="x", lower=0, upper=10)
-        # Constraint with a near-zero coefficient
-        m.add_constraints(1e-12 * x + x >= 0, name="c")
-        m.add_objective(x)
-
-        # Default: sanitize_zeros=True -> the near-zero term gets masked
-        solvers.Solver.from_name("highs", m, io_api="lp")
-        coeffs = m.constraints["c"].coeffs.values.ravel()
-        assert np.isnan(coeffs[0]) or coeffs[0] == 0 or coeffs[1] != 0
-
-    @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
-    )
-    def test_sanitize_zeros_off_leaves_constraints_alone(self) -> None:
-        m = Model()
-        x = m.add_variables(name="x", lower=0, upper=10)
+        # Constraint with a near-zero coefficient — would be sanitized away if
+        # the Solver path were sanitizing on build.
         m.add_constraints(1e-12 * x + x >= 0, name="c")
         m.add_objective(x)
 
         before = m.constraints["c"].coeffs.values.copy()
-        solvers.Solver.from_name(
-            "highs", m, io_api="lp", sanitize_zeros=False, sanitize_infinities=False
-        )
+        solvers.Solver.from_name("highs", m, io_api="lp")
         after = m.constraints["c"].coeffs.values
-        # Without sanitization, the near-zero coefficient is preserved verbatim.
-        assert np.allclose(before, after, equal_nan=True)
+
+        assert np.allclose(before, after, equal_nan=True), (
+            "Solver.from_model() must not mutate model constraints. "
+            "Sanitization is a Model-level primitive; call "
+            "model.constraints.sanitize_zeros() / .sanitize_infinities() "
+            "explicitly before building."
+        )
 
 
 class TestAssignResultWiring:

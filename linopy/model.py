@@ -1753,6 +1753,11 @@ class Model:
             # If SOS is present and the solver doesn't support it (and the user
             # didn't ask for reformulation), Solver._build() will raise.
 
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
+
         try:
             self.solver = None  # closes any previous solver
             if io_api == "direct":
@@ -1762,8 +1767,6 @@ class Model:
                     "explicit_coordinate_names": explicit_coordinate_names,
                     "set_names": set_names,
                     "log_fn": to_path(log_fn),
-                    "sanitize_zeros": sanitize_zeros,
-                    "sanitize_infinities": sanitize_infinities,
                 }
                 if env is not None:
                     build_kwargs["env"] = env
@@ -1773,8 +1776,6 @@ class Model:
                     "slice_size": slice_size,
                     "progress": progress,
                     "problem_fn": to_path(problem_fn),
-                    "sanitize_zeros": sanitize_zeros,
-                    "sanitize_infinities": sanitize_infinities,
                 }
             self.solver = solver = solvers.Solver.from_name(
                 solver_name,
