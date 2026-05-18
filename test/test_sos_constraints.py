@@ -137,6 +137,33 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
     assert np.isclose(m.objective.value, 4)
 
 
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_sos_constraints() -> None:
+    m = Model()
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == 1
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_sos2_xpress_direct() -> None:
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 5)
+
+
 def test_unsupported_solver_raises_error() -> None:
     m = Model()
     locations = pd.Index([0, 1, 2], name="locations")
