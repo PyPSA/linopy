@@ -2140,10 +2140,7 @@ class Xpress(Solver[None]):
         )
 
         if model.objective.sense == "max":
-            try:
-                problem.chgObjSense(xpress.ObjSense.MAXIMIZE)
-            except AttributeError:
-                problem.chgobjsense(xpress.maximize)
+            problem.chgobjsense(xpress.maximize)
 
         if set_names:
             print_variable, print_constraint = linopy.io.get_printers_scalar(
@@ -2151,20 +2148,10 @@ class Xpress(Solver[None]):
             )
             vnames = print_variable(M.vlabels)
             if vnames:
-                try:
-                    problem.addNames(
-                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
-                    )
-                except AttributeError:
-                    problem.addnames(
-                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
-                    )
+                problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
             cnames = print_constraint(M.clabels)
             if cnames:
-                try:
-                    problem.addNames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
-                except AttributeError:
-                    problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
         if model.variables.sos:
             for var_name in model.variables.sos:
@@ -2232,10 +2219,7 @@ class Xpress(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = xpress.problem()
-        try:
-            m.readProb(path_to_string(problem_fn))
-        except AttributeError:
-            m.read(path_to_string(problem_fn))
+        m.read(path_to_string(problem_fn))
 
         return self._solve(
             m,
@@ -2271,40 +2255,25 @@ class Xpress(Solver[None]):
             m.setControl(self.solver_options)
 
         if log_fn is not None:
-            try:
-                m.setLogFile(path_to_string(log_fn))
-            except AttributeError:
-                m.setlogfile(path_to_string(log_fn))
+            m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            try:
-                m.readBasis(path_to_string(warmstart_fn))
-            except AttributeError:
-                m.readbasis(path_to_string(warmstart_fn))
+            m.readbasis(path_to_string(warmstart_fn))
 
         m.optimize()
 
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
-            try:
-                m.postSolve()
-            except AttributeError:
-                m.postsolve()
+            m.postsolve()
 
         if basis_fn is not None:
             try:
-                try:
-                    m.writeBasis(path_to_string(basis_fn))
-                except AttributeError:
-                    m.writebasis(path_to_string(basis_fn))
+                m.writebasis(path_to_string(basis_fn))
             except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                try:
-                    m.writeBinSol(path_to_string(solution_fn))
-                except AttributeError:
-                    m.writebinsol(path_to_string(solution_fn))
+                m.writebinsol(path_to_string(solution_fn))
             except (xpress.SolverError, xpress.ModelError) as err:
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -2330,11 +2299,7 @@ class Xpress(Solver[None]):
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    try:
-                        _dual = m.getDuals()
-                    except AttributeError:
-                        _dual = m.getDual()
-                    dual_values = np.asarray(_dual, dtype=float)
+                    dual_values = np.asarray(m.getDual(), dtype=float)
                     if from_file:
                         dual = _solution_from_names(
                             dual_values,
