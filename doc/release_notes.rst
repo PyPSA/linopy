@@ -4,11 +4,63 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Increase speed of direct solver communication (~10x) in conversion functions like `to_highspy` through faster matrix creation (see below), leading to significant overall speed-up when setting `io_api="direct"`.
-* Add ``CSRConstraint``, a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Provides up to 90% memory savings for constraints with many terms and 30–120x faster matrix generation for direct solver APIs.
-  - Add ``freeze_constraints`` parameter to ``Model`` for globally storing constraints in CSR format on ``add_constraints``.
-  - Add ``freeze`` parameter to ``Model.add_constraints`` for per-constraint opt-in to CSR storage.
-  - Add ``freeze()`` and ``mutable()`` methods on ``Constraint`` and ``CSRConstraint`` for lossless conversion between xarray-backed and CSR-backed representations.
+**Features**
+
+*Inspect the solver after solving*
+
+* After ``model.solve()``, the solver object stays available on ``model.solver``. You can inspect it, reuse it, or release the underlying solver (and its license) by calling ``model.solver.close()`` or assigning ``model.solver = None``. It is also released automatically when the model is garbage-collected.
+* New ``SolverReport`` on the result (``result.report``) reports runtime, MIP gap, dual (best) bound, and iteration counts. It is shown in ``repr(result)`` and currently populated by CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
+
+*A new way to call a solver (advanced)*
+
+Most users should keep calling ``model.solve(...)``. If you want more control, you can now build the solver yourself and run it in two steps:
+
+.. code-block:: python
+
+    solver = Solver.from_name("gurobi", model, io_api="direct", options=...)
+    result = solver.solve()
+    model.assign_result(result)  # write the solution back
+
+``Solver`` is now a dataclass, so writing a new solver backend is simpler — subclasses just override the hooks they need (``_build_direct``, ``_run_direct``, ``_run_file``).
+
+*Querying solver capabilities*
+
+* Ask a solver class what it can do via ``Gurobi.supports(SolverFeature.MIP)`` (or any other ``SolverFeature``). ``SolverFeature`` is importable from ``linopy``.
+* ``linopy.solver_capabilities`` still works (re-exports ``SolverFeature`` and ``solver_supports``), but the new ``SolverClass.supports(...)`` API is preferred.
+
+*Knowing which solvers you can actually use*
+
+* ``linopy.available_solvers`` no longer tries to acquire licenses at import time, so importing linopy is faster and doesn't grab a license from solvers like Gurobi or Mosek. **Note:** membership now means "the package is installed", not "I have a working license" (see Breaking Changes). Call ``available_solvers.refresh()`` to re-scan. Same for ``quadratic_solvers``.
+* New ``linopy.licensed_solvers``: the subset of installed solvers that currently pass a license check. Handy in tests and for picking a solver at runtime.
+* New helpers for explicit license checks: ``linopy.solvers.check_solver_licenses("gurobi", "mosek")``, ``Gurobi.license_status()``, ``Gurobi.is_available()``. They return a ``LicenseStatus`` dataclass (``name``, ``ok``, ``message``).
+
+*Constraints — CSR-backed storage*
+
+* Add ``CSRConstraint``: a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Up to 90% memory savings for constraints with many terms and 30–120× faster matrix generation for direct solver APIs.
+* Opt in globally via ``Model(freeze_constraints=True)`` or per-call via ``model.add_constraints(..., freeze=True)``.
+* Lossless conversion both ways with ``Constraint.freeze()`` / ``CSRConstraint.mutable()``.
+
+**Performance**
+
+* ~10× faster direct solver communication (``io_api="direct"``), thanks to the new CSR-based matrix construction. Conversion helpers like ``to_highspy`` benefit too.
+* Writing the solution back to the model after solving is faster: it no longer rebuilds the constraint matrix, and now uses positional (rather than label-based) indexing — roughly 2× faster overall.
+
+**Deprecations**
+
+* ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
+
+**Breaking Changes**
+
+* ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
+* ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
+* ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
+
+**Internal**
+
+* Each ``Solver`` subclass now overrides at most three hooks: ``_build_direct`` (build the native model), ``_run_direct`` (run it), and ``_run_file`` (run the solver on an LP/MPS file). File-only solvers (CBC, GLPK, CPLEX, SCIP, Xpress, Knitro, COPT, MindOpt) only override ``_run_file``.
+* New ``ConstraintLabelIndex`` cached on ``Model.constraints`` (mirrors the existing ``Variables.label_index``); ``ConstraintBase`` gains ``active_labels()`` and a ``range`` property; ``CSRConstraint`` exposes ``coords``.
+* ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
+``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
 
 Version 0.7.0
 -------------

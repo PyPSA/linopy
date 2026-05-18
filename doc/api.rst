@@ -496,7 +496,7 @@ Type aliases
 
 
 Solvers
-=======
+========
 
 .. autosummary::
    :toctree: generated/

@@ -9,7 +9,6 @@ from enum import Enum
 from typing import Any, Literal, TypeAlias, Union, get_args
 
 import numpy as np
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -268,19 +267,33 @@ class Status:
         return self.status == SolverStatus.ok
 
 
-def _pd_series_float() -> pd.Series:
-    return pd.Series(dtype=float)
-
-
 @dataclass
 class Solution:
     """
     Solution returned by the solver.
+
+    ``primal`` and ``dual`` are dense float arrays indexed by linopy label:
+    ``primal[label]`` is the value for variable ``label``, with ``NaN`` where
+    no value is available (masked labels, vars dropped by the solver, etc.).
+    Each solver is responsible for emitting arrays in this label-indexed form.
     """
 
-    primal: pd.Series = field(default_factory=_pd_series_float)
-    dual: pd.Series = field(default_factory=_pd_series_float)
+    primal: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))
+    dual: np.ndarray = field(default_factory=lambda: np.array([], dtype=float))
     objective: float = field(default=np.nan)
+
+
+@dataclass
+class SolverReport:
+    """
+    Solver-reported performance metrics.
+    """
+
+    runtime: float | None = None
+    mip_gap: float | None = None
+    dual_bound: float | None = None
+    barrier_iterations: int | None = None
+    simplex_iterations: int | None = None
 
 
 @dataclass
@@ -292,6 +305,8 @@ class Result:
     status: Status
     solution: Solution | None = None
     solver_model: Any = None
+    solver_name: str = ""
+    report: SolverReport | None = None
 
     def __repr__(self) -> str:
         solver_model_string = (
@@ -304,10 +319,21 @@ class Result:
             )
         else:
             solution_string = "Solution: None\n"
+        solver_name_string = f"Solver: {self.solver_name}\n" if self.solver_name else ""
+        report_string = ""
+        if self.report is not None:
+            if self.report.runtime is not None:
+                report_string += f"Runtime: {self.report.runtime:.2f}s\n"
+            if self.report.mip_gap is not None:
+                report_string += f"MIP gap: {self.report.mip_gap:.2e}\n"
+            if self.report.dual_bound is not None:
+                report_string += f"Dual bound: {self.report.dual_bound:.2e}\n"
         return (
             f"Status: {self.status.status.value}\n"
             f"Termination condition: {self.status.termination_condition.value}\n"
             + solution_string
+            + solver_name_string
+            + report_string
             + f"Solver model: {solver_model_string}\n"
             f"Solver message: {self.status.legacy_status}"
         )
