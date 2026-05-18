@@ -593,8 +593,6 @@ def to_file(
     """
     Write out a model to a lp or mps file.
     """
-    m._check_sos_unmasked()
-
     if fn is None:
         fn = Path(m.get_problem_file())
     if isinstance(fn, str):
