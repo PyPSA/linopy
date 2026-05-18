@@ -16,10 +16,8 @@ Development Setup
 For linting and formatting, we use `ruff <https://docs.astral.sh/ruff/>`_
 and run it via `pre-commit <https://pre-commit.com/index.html>`_:
 
-1. Installation ``conda install -c conda-forge pre-commit`` or ``uv pip install pre-commit``
-2. Usage:
-    * To automatically activate ``pre-commit`` on every ``git commit``: Run ``pre-commit install``
-    * To manually run it: ``pre-commit run --all-files``
+* Install the git hook (once): ``pre-commit install``
+* Run manually: ``pre-commit run --all-files``
 
 Running Tests
 =============

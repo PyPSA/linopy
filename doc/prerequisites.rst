@@ -54,12 +54,9 @@ required:
     uv pip install "linopy[solvers]"
 
 
-We recommend installing the HiGHS solver, which is free, open source, and
-fast across a wide range of problem sizes:
-
-.. code:: bash
-
-    uv pip install highspy
+We recommend the HiGHS solver, which is free, open source, and fast
+across a wide range of problem sizes. It is included in both the
+``solvers`` and ``dev`` extras.
 
 
 GPU-accelerated solvers
