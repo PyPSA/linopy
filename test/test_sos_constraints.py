@@ -8,6 +8,19 @@ import pytest
 import xarray as xr
 
 from linopy import Model, available_solvers
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
+
+_direct_sos_solvers = [
+    s
+    for s in get_available_solvers_with_feature(
+        SolverFeature.SOS_CONSTRAINTS, available_solvers
+    )
+    if solver_supports(s, SolverFeature.DIRECT_API)
+]
 
 
 def test_add_sos_constraints_registers_variable() -> None:
@@ -208,23 +221,7 @@ def masked_sos_model() -> Model:
     return m
 
 
-@pytest.mark.parametrize(
-    "solver_name",
-    [
-        pytest.param(
-            "gurobi",
-            marks=pytest.mark.skipif(
-                "gurobi" not in available_solvers, reason="Gurobi not installed"
-            ),
-        ),
-        pytest.param(
-            "xpress",
-            marks=pytest.mark.skipif(
-                "xpress" not in available_solvers, reason="Xpress not installed"
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("solver_name", _direct_sos_solvers)
 def test_direct_api_raises_on_masked_sos(
     solver_name: str, masked_sos_model: Model
 ) -> None:
