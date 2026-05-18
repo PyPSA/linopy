@@ -424,8 +424,8 @@ def sos_to_file(
 
     for name in names:
         var = m.variables[name]
-        sos_type = var.attrs[SOS_TYPE_ATTR]
-        sos_dim = var.attrs[SOS_DIM_ATTR]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
 
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):

@@ -19,7 +19,7 @@ import threading
 import warnings
 from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -139,6 +139,40 @@ def _sos_set_positions(
         label_to_pos[labels[mask]].tolist(),
         weights[mask].tolist(),
     )
+
+
+def _iter_sos_sets(model: Model) -> Iterator[tuple[int, list[int], list[float]]]:
+    """
+    Yield ``(sos_type, positions, weights)`` per active SOS set in ``model``.
+
+    Iterates 1D SOS variables as a single set and multi-dim SOS variables as
+    one set per non-SOS-dim coordinate. Masked members are dropped, surviving
+    linopy labels are resolved to solver column positions via
+    ``_sos_set_positions``, and empty sets are skipped.
+
+    Shared between direct-API solvers (Gurobi, Xpress). Each solver only
+    differs in the vendor ``addSOS`` call.
+    """
+    label_to_pos = model.variables.label_index.label_to_pos
+    for var_name in model.variables.sos:
+        var = model.variables.sos[var_name]
+        sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
+        sos_dim = str(var.attrs[SOS_DIM_ATTR])
+        others = [d for d in var.labels.dims if d != sos_dim]
+
+        if not others:
+            sets: Iterable[xr.DataArray] = [var.labels]
+        else:
+            stacked = var.labels.stack(_sos_group=others)
+            sets = (s.unstack("_sos_group") for _, s in stacked.groupby("_sos_group"))
+
+        for s in sets:
+            s = s.squeeze()
+            labels = s.values.flatten()
+            weights = s.coords[sos_dim].values
+            positions, kept_weights = _sos_set_positions(labels, weights, label_to_pos)
+            if positions:
+                yield sos_type, positions, kept_weights
 
 
 class SolverFeature(Enum):
@@ -1615,31 +1649,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 names = print_constraints(M.clabels)
                 c.setAttr("ConstrName", names)
 
-        if model.variables.sos:
-            label_to_pos = model.variables.label_index.label_to_pos
-            for var_name in model.variables.sos:
-                var = model.variables.sos[var_name]
-                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                    s = s.squeeze()
-                    labels = s.values.flatten()
-                    weights = s.coords[sos_dim].values
-                    positions, weights_kept = _sos_set_positions(
-                        labels, weights, label_to_pos
-                    )
-                    if not positions:
-                        return
-                    gm.addSOS(sos_type, x[positions].tolist(), weights_kept)
-
-                others = [dim for dim in var.labels.dims if dim != sos_dim]
-                if not others:
-                    add_sos(var.labels, sos_type, sos_dim)
-                else:
-                    stacked = var.labels.stack(_sos_group=others)
-                    for _, s in stacked.groupby("_sos_group"):
-                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            gm.addSOS(sos_type, x[positions].tolist(), weights)
 
         gm.update()
         return gm
@@ -2263,31 +2274,8 @@ class Xpress(Solver[None]):
             if cnames:
                 problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
-        if model.variables.sos:
-            label_to_pos = model.variables.label_index.label_to_pos
-            for var_name in model.variables.sos:
-                var = model.variables.sos[var_name]
-                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
-                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
-
-                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
-                    s = s.squeeze()
-                    labels = s.values.flatten()
-                    weights = s.coords[sos_dim].values
-                    positions, weights_kept = _sos_set_positions(
-                        labels, weights, label_to_pos
-                    )
-                    if not positions:
-                        return
-                    problem.addSOS(positions, weights_kept, type=sos_type)
-
-                others = [dim for dim in var.labels.dims if dim != sos_dim]
-                if not others:
-                    add_sos(var.labels, sos_type, sos_dim)
-                else:
-                    stacked = var.labels.stack(_sos_group=others)
-                    for _, s in stacked.groupby("_sos_group"):
-                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+        for sos_type, positions, weights in _iter_sos_sets(model):
+            problem.addSOS(positions, weights, type=sos_type)
 
         return problem
 
