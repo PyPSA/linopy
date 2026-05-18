@@ -1261,14 +1261,17 @@ class Model:
 
     @property
     def is_linear(self) -> bool:
+        """Whether the objective is linear."""
         return self.objective.is_linear
 
     @property
     def is_quadratic(self) -> bool:
+        """Whether the objective is quadratic."""
         return self.objective.is_quadratic
 
     @property
     def type(self) -> str:
+        """Short string identifying the problem type."""
         if (
             len(self.binaries) or len(self.integers) or len(self.semi_continuous)
         ) and len(self.continuous):
