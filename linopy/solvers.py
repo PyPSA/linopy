@@ -516,8 +516,8 @@ class Solver(ABC, Generic[EnvType]):
         """
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
-        self.model._check_sos_unmasked()
         self._validate_model()
+        self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:

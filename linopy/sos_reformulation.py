@@ -233,8 +233,10 @@ def reformulate_sos_constraints(
     1. If custom big_m was specified in add_sos_constraints(), use that
     2. Otherwise, use the variable bounds (tightest valid Big-M)
 
-    Note: This permanently mutates the model. To solve with automatic
-    undo, use ``model.solve(reformulate_sos=True)`` instead.
+    Note: This permanently mutates the model and returns a token the caller
+    owns. For a stateful, reversible API use ``model.apply_sos_reformulation()``
+    / ``model.undo_sos_reformulation()``; for automatic undo around a single
+    solve use ``model.solve(reformulate_sos=True)``.
 
     Parameters
     ----------

@@ -857,8 +857,7 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         raise RuntimeError(
             "Cannot serialize a model with an active SOS reformulation. "
             "Call `model.undo_sos_reformulation()` first to restore the "
-            "original SOS form, or save the model in its reformulated form "
-            "after explicitly clearing `model._sos_reformulation_state`."
+            "original SOS form before saving."
         )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:

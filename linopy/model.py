@@ -1249,10 +1249,15 @@ class Model:
         """
         Revert a previously applied SOS reformulation.
 
-        No-op if no reformulation is currently applied.
+        Raises
+        ------
+        RuntimeError
+            If no reformulation is currently applied.
         """
         if self._sos_reformulation_state is None:
-            return
+            raise RuntimeError(
+                "No SOS reformulation is currently applied to this model."
+            )
         state = self._sos_reformulation_state
         self._sos_reformulation_state = None
         undo_sos_reformulation(self, state)

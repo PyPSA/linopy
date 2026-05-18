@@ -353,14 +353,11 @@ class TestApplyUndoSOSReformulation:
         with pytest.raises(RuntimeError, match="already been applied"):
             m.apply_sos_reformulation()
 
-    def test_undo_without_apply_is_noop(self) -> None:
+    def test_undo_without_apply_raises(self) -> None:
         m = self._build_sos1_model()
-        assert m._sos_reformulation_state is None
 
-        m.undo_sos_reformulation()  # should not raise
-
-        assert m._sos_reformulation_state is None
-        assert list(m.variables.sos) == ["x"]
+        with pytest.raises(RuntimeError, match="No SOS reformulation"):
+            m.undo_sos_reformulation()
 
     @pytest.mark.parametrize(
         "copy_fn",
