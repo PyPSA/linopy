@@ -60,7 +60,7 @@ PWL_DOMAIN_LO_SUFFIX = "_domain_lo"
 PWL_DOMAIN_HI_SUFFIX = "_domain_hi"
 
 PWL_METHOD: TypeAlias = Literal["sos2", "lp", "incremental", "auto"]
-"""Allowed values for the ``method`` argument of :func:`Model.add_piecewise_formulation`."""
+"""Allowed values for the ``method`` argument of :meth:`Model.add_piecewise_formulation`."""
 
 PWL_METHODS: frozenset[str] = frozenset(get_args(PWL_METHOD))
 """Set of valid :data:`~linopy.constants.PWL_METHOD` values."""
