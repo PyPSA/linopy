@@ -39,7 +39,7 @@ from linopy.piecewise import (
     tangent_lines,
 )
 from linopy.remote import RemoteHandler
-from linopy.solvers import SolverFeature, licensed_solvers, available_solvers
+from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
 try:
     from linopy.remote import OetcCredentials, OetcHandler, OetcSettings  # noqa: F401
