@@ -136,6 +136,7 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Solving
 
+   working-with-solvers
    solve-on-remote
    solve-on-oetc
    gpu-acceleration
