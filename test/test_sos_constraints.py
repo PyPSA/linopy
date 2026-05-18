@@ -150,6 +150,19 @@ def test_to_xpress_emits_sos_constraints() -> None:
 
 
 @pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_grouped_sos_constraints() -> None:
+    m = Model()
+    groups = pd.Index(["a", "b"], name="group")
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[groups, segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == len(groups)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
 def test_sos2_xpress_direct() -> None:
     m = Model()
     locations = pd.Index([0, 1, 2], name="locations")
