@@ -17,9 +17,9 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 .. code-block:: python
 
-   solver = Solver.from_name("gurobi", model, io_api="direct", options=...)
-   result = solver.solve()
-   model.assign_result(result)  # write the solution back
+    solver = Solver.from_name("gurobi", model, io_api="direct", options=...)
+    result = solver.solve()
+    model.assign_result(result)  # write the solution back
 
 ``Solver`` is now a dataclass, so writing a new solver backend is simpler — subclasses just override the hooks they need (``_build_direct``, ``_run_direct``, ``_run_file``).
 
