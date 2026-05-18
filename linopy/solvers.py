@@ -2268,13 +2268,13 @@ class Xpress(Solver[None]):
         if basis_fn is not None:
             try:
                 m.writebasis(path_to_string(basis_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
                 m.writebinsol(path_to_string(solution_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
         condition = m.attributes.solstatus
@@ -2310,7 +2310,7 @@ class Xpress(Solver[None]):
                         dual = _solution_from_labels(
                             dual_values, self._clabels, self._n_cons
                         )
-            except (xpress.SolverError, xpress.ModelError, SystemError):
+            except (xpress.SolverError, xpress.ModelError, SystemError):  # pragma: no cover
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = np.array([], dtype=float)
 
