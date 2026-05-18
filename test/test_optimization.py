@@ -21,7 +21,6 @@ from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
-    SolverFeature,
     get_available_solvers_with_feature,
     solver_supports,
 )

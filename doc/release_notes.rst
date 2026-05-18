@@ -8,7 +8,7 @@ Upcoming Version
 
 *Solvers — stateful Solver instances*
 
-* Solver state (native model, results) now lives on a ``Solver`` instance attached to ``Model.solver``. After ``model.solve()`` you can introspect or re-use the solver via ``model.solver``; assigning ``model.solver = None`` closes it and releases the native handle/license.
+* Solver state (native model, results) now lives on a ``Solver`` instance attached to ``Model.solver``. After ``model.solve()`` you can introspect or reuse the solver via ``model.solver``; assigning ``model.solver = None`` closes it and releases the native handle/license.
 * New construct-then-solve workflow for advanced use: build a solver via ``solver = Solver.from_name("gurobi", model, io_api="direct", options=...)``, then call ``result = solver.solve()`` and ``model.assign_result(result)`` to write the solution back. An equivalent ``SolverClass.from_model(model, ...)`` classmethod is also available. ``Solver`` is now a dataclass — subclasses no longer need ``__init__`` overrides.
 * ``Result`` gains ``solver_name`` and ``report: SolverReport | None`` carrying runtime, MIP gap, dual bound, and iteration counts; printed in ``repr(result)``. Populated for CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
 * Solver capabilities are now declarative: query with ``Solver.supports(SolverFeature.MIP)`` etc. ``SolverFeature`` is exported from ``linopy`` (and ``linopy.solvers``). The previous ``linopy.solver_capabilities`` module remains as a back-compat shim with a lazy ``SOLVER_REGISTRY`` mapping.
@@ -34,7 +34,7 @@ Upcoming Version
 
 **Internal**
 
-* ``Solution.primal`` and ``Solution.dual`` are now dense ``np.ndarray`` lookup arrays indexed by integer linopy label (length = ``max_label + 1``, ``NaN`` for masked or solver-dropped slots) — previously ``pd.Series`` keyed by variable/constraint name. Direct-API solvers fill them via cached ``_vlabels``/``_clabels`` populated at solver build time; file-based solvers via a shared ``_solution_from_names`` helper that parses linopy labels from solver-side names. 
+* ``Solution.primal`` and ``Solution.dual`` are now dense ``np.ndarray`` lookup arrays indexed by integer linopy label (length = ``max_label + 1``, ``NaN`` for masked or solver-dropped slots) — previously ``pd.Series`` keyed by variable/constraint name. Direct-API solvers fill them via cached ``_vlabels``/``_clabels`` populated at solver build time; file-based solvers via a shared ``_solution_from_names`` helper that parses linopy labels from solver-side names.
 
 **Breaking Changes**
 
