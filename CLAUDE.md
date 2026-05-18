@@ -4,25 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Development Commands
 
+Before running any commands, ensure you have activated the virtual environment:
+
+```bash
+uv sync --extra dev --extra solvers --extra oetc
+source .venv/bin/activate 
+```
+
 ### Running Tests
 ```bash
 # Run all tests (excluding GPU tests by default)
-uv run --extra dev --extra solvers pytest
+pytest
 
 # Run tests with coverage
-uv run --extra dev --extra solvers pytest --cov=./ --cov-report=xml linopy --doctest-modules test
+pytest --cov=./ --cov-report=xml linopy --doctest-modules test
 
 # Run a specific test file
-uv run --extra dev --extra solvers pytest test/test_model.py
+pytest test/test_model.py
 
 # Run a specific test function
-uv run --extra dev --extra solvers pytest test/test_model.py::test_model_creation
+pytest test/test_model.py::test_model_creation
 
 # Run GPU tests (requires GPU hardware and cuPDLPx installation)
-uv run --extra dev --extra solvers pytest --run-gpu
+pytest --run-gpu
 
 # Run only GPU tests
-uv run --extra dev --extra solvers pytest -m gpu --run-gpu
+pytest -m gpu --run-gpu
 ```
 
 **GPU Testing**: Tests that require GPU hardware (e.g., cuPDLPx solver) are automatically skipped by default since CI machines typically don't have GPUs. To run GPU tests locally, use the `--run-gpu` flag. The tests are automatically marked with `@pytest.mark.gpu` based on solver capabilities.
@@ -30,26 +37,17 @@ uv run --extra dev --extra solvers pytest -m gpu --run-gpu
 ### Linting and Type Checking
 ```bash
 # Run linter (ruff)
-uv run --extra dev ruff check .
-uv run --extra dev ruff check --fix .  # Auto-fix issues
+ruff check .
+ruff check --fix .  # Auto-fix issues
 
 # Run formatter
-uv run --extra dev ruff format .
+ruff format .
 
 # Run type checker
-uv run --extra dev mypy .
+mypy .
 
 # Run all pre-commit hooks
-uv run --extra dev pre-commit run --all-files
-```
-
-### Development Setup
-```bash
-# Create virtual environment and install development dependencies
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install uv
-uv pip install -e .[dev,solvers]
+pre-commit run --all-files
 ```
 
 ## High-Level Architecture
