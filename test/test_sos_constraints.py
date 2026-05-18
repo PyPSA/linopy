@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model, available_solvers
 
@@ -177,7 +179,25 @@ def test_sos2_xpress_direct() -> None:
     assert np.isclose(m.objective.value, 5)
 
 
-def _masked_sos_model(sos_type: int = 1) -> Model:
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_qp_sos1_xpress_direct() -> None:
+    m = Model()
+    seg = pd.Index([0, 1, 2], name="seg")
+    x = m.add_variables(lower=0, upper=10, coords=[seg], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="seg")
+    m.add_constraints(x.sum() >= 5)
+
+    linear_coeffs = xr.DataArray([0.0, -10.0, 0.0], coords=[seg])
+    m.add_objective((x * x).sum() + (linear_coeffs * x).sum(), sense="min")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(x.solution.values, [0, 5, 0]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, -25)
+
+
+def _masked_sos_model(sos_type: Literal[1, 2] = 1) -> Model:
     """Build a tiny model with a single masked SOS variable."""
     m = Model()
     coords = pd.Index([0, 1, 2, 3], name="i")

@@ -2052,7 +2052,15 @@ class Xpress(Solver[None]):
         explicit_coordinate_names: bool = False,
         set_names: bool = True,
     ) -> xpress.problem:
-        """Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``."""
+        """
+        Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``.
+
+        ``loadproblem`` is Xpress' universal native-array entry point loading LP/QP/MIQP
+        in a single call; see the parameter reference at
+        https://www.fico.com/fico-xpress-optimization/docs/latest/solver/optimizer/python/HTML/problem.loadproblem.html.
+        SOS arguments are left ``None`` and sets are added afterwards via ``addSOS`` so
+        multi-dim ``add_sos_constraints`` can be grouped natively.
+        """
         model.constraints.sanitize_missings()
         problem = xpress.problem()
 
@@ -2112,7 +2120,7 @@ class Xpress(Solver[None]):
             coltype = None
 
         problem.loadproblem(
-            probname="",
+            probname="linopy",
             rowtype=rowtype,
             rhs=rhs,
             rng=None,
