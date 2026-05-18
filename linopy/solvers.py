@@ -2089,7 +2089,9 @@ class Xpress(Solver[None]):
         objqcol2: np.ndarray | None
         objqcoef: np.ndarray | None
         if Q is not None and Q.nnz:
-            Qt = Q if Q.format == "coo" else triu(Q, format="coo")  # codespell:ignore coo
+            Qt = (
+                Q if Q.format == "coo" else triu(Q, format="coo")
+            )  # codespell:ignore coo
             mask = Qt.row <= Qt.col
             objqcol1 = Qt.row[mask].astype(np.int64, copy=False)
             objqcol2 = Qt.col[mask].astype(np.int64, copy=False)
@@ -2150,9 +2152,13 @@ class Xpress(Solver[None]):
             vnames = print_variable(M.vlabels)
             if vnames:
                 try:
-                    problem.addNames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                    problem.addNames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
                 except AttributeError:
-                    problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                    problem.addnames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
             cnames = print_constraint(M.clabels)
             if cnames:
                 try:
