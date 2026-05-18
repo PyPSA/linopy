@@ -434,6 +434,38 @@ class TestSolverPathSOSCheck:
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestSolveAutoUndoOnFailure:
+    """Model.solve must auto-undo SOS reformulation when build/solve raises."""
+
+    def test_state_restored_when_build_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from linopy import solvers
+
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x.sum(), sense="max")
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("simulated build failure")
+
+        monkeypatch.setattr(solvers.Solver, "from_name", boom)
+
+        with pytest.raises(RuntimeError, match="simulated build failure"):
+            m.solve(solver_name="highs", reformulate_sos=True)
+
+        assert m._sos_reformulation_state is None
+        assert list(m.variables.sos) == ["x"]
+        assert "_sos_reform_x_y" not in m.variables
+
+        # A subsequent real solve must not hit "already applied"
+        monkeypatch.undo()
+        m.solve(solver_name="highs", reformulate_sos=True)
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
 class TestSolveWithReformulation:
     """Tests for solving with SOS reformulation."""
 

@@ -1785,52 +1785,52 @@ class Model:
             # If SOS is present and the solver doesn't support it (and the user
             # didn't ask for reformulation), Solver._build() will raise.
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
-
         try:
-            self.solver = None  # closes any previous solver
-            if io_api == "direct":
-                if set_names is None:
-                    set_names = self.set_names_in_solver_io
-                build_kwargs: dict[str, Any] = {
-                    "explicit_coordinate_names": explicit_coordinate_names,
-                    "set_names": set_names,
-                    "log_fn": to_path(log_fn),
-                }
-                if env is not None:
-                    build_kwargs["env"] = env
-            else:
-                build_kwargs = {
-                    "explicit_coordinate_names": explicit_coordinate_names,
-                    "slice_size": slice_size,
-                    "progress": progress,
-                    "problem_fn": to_path(problem_fn),
-                }
-            self.solver = solver = solvers.Solver.from_name(
-                solver_name,
-                model=self,
-                io_api=io_api,
-                options=solver_options,
-                **build_kwargs,
-            )
-            if io_api != "direct":
-                problem_fn = solver._problem_fn
-            result = solver.solve(
-                solution_fn=to_path(solution_fn),
-                log_fn=to_path(log_fn),
-                warmstart_fn=to_path(warmstart_fn),
-                basis_fn=to_path(basis_fn),
-                env=env,
-            )
-        finally:
-            for fn in (problem_fn, solution_fn):
-                if fn is not None and (os.path.exists(fn) and not keep_files):
-                    os.remove(fn)
+            if sanitize_zeros:
+                self.constraints.sanitize_zeros()
+            if sanitize_infinities:
+                self.constraints.sanitize_infinities()
 
-        try:
+            try:
+                self.solver = None  # closes any previous solver
+                if io_api == "direct":
+                    if set_names is None:
+                        set_names = self.set_names_in_solver_io
+                    build_kwargs: dict[str, Any] = {
+                        "explicit_coordinate_names": explicit_coordinate_names,
+                        "set_names": set_names,
+                        "log_fn": to_path(log_fn),
+                    }
+                    if env is not None:
+                        build_kwargs["env"] = env
+                else:
+                    build_kwargs = {
+                        "explicit_coordinate_names": explicit_coordinate_names,
+                        "slice_size": slice_size,
+                        "progress": progress,
+                        "problem_fn": to_path(problem_fn),
+                    }
+                self.solver = solver = solvers.Solver.from_name(
+                    solver_name,
+                    model=self,
+                    io_api=io_api,
+                    options=solver_options,
+                    **build_kwargs,
+                )
+                if io_api != "direct":
+                    problem_fn = solver._problem_fn
+                result = solver.solve(
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
+                )
+            finally:
+                for fn in (problem_fn, solution_fn):
+                    if fn is not None and (os.path.exists(fn) and not keep_files):
+                        os.remove(fn)
+
             return self.assign_result(result)
         finally:
             if applied_sos_reformulation_here:
