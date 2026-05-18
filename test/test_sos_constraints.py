@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -197,35 +197,48 @@ def test_qp_sos1_xpress_direct() -> None:
     assert np.isclose(m.objective.value, -25)
 
 
-def _masked_sos_model(sos_type: Literal[1, 2] = 1) -> Model:
-    """Build a tiny model with a single masked SOS variable."""
+@pytest.fixture
+def masked_sos_model() -> Model:
+    """Tiny model with a single masked SOS1 variable."""
     m = Model()
     coords = pd.Index([0, 1, 2, 3], name="i")
     mask = pd.Series([True, True, False, True], index=coords)
     var = m.add_variables(lower=0, upper=1, coords=[coords], mask=mask, name="sos_var")
-    m.add_sos_constraints(var, sos_type=sos_type, sos_dim="i")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="i")
     m.add_objective(-var.sum())
     return m
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
-def test_gurobi_direct_raises_on_masked_sos() -> None:
-    m = _masked_sos_model()
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        pytest.param(
+            lambda m, tmp_path: m.solve(solver_name="gurobi", io_api="direct"),
+            id="gurobi-direct",
+            marks=pytest.mark.skipif(
+                "gurobi" not in available_solvers, reason="Gurobi not installed"
+            ),
+        ),
+        pytest.param(
+            lambda m, tmp_path: m.solve(solver_name="xpress", io_api="direct"),
+            id="xpress-direct",
+            marks=pytest.mark.skipif(
+                "xpress" not in available_solvers, reason="Xpress not installed"
+            ),
+        ),
+        pytest.param(
+            lambda m, tmp_path: m.to_file(tmp_path / "sos.lp", io_api="lp"),
+            id="lp-writer",
+        ),
+    ],
+)
+def test_masked_sos_raises(
+    trigger: Callable[[Model, Path], object],
+    masked_sos_model: Model,
+    tmp_path: Path,
+) -> None:
     with pytest.raises(NotImplementedError, match="masked"):
-        m.solve(solver_name="gurobi", io_api="direct")
-
-
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
-def test_xpress_direct_raises_on_masked_sos() -> None:
-    m = _masked_sos_model()
-    with pytest.raises(NotImplementedError, match="masked"):
-        m.solve(solver_name="xpress", io_api="direct")
-
-
-def test_lp_writer_raises_on_masked_sos(tmp_path: Path) -> None:
-    m = _masked_sos_model()
-    with pytest.raises(NotImplementedError, match="masked"):
-        m.to_file(tmp_path / "sos.lp", io_api="lp")
+        trigger(masked_sos_model, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -245,15 +258,16 @@ def test_lp_writer_raises_on_masked_sos(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_reformulate_sos_true_solves_masked_sos(solver_name: str) -> None:
+def test_reformulate_sos_true_solves_masked_sos(
+    solver_name: str, masked_sos_model: Model
+) -> None:
     """The documented workaround for the masked-SOS bug actually solves."""
-    m = _masked_sos_model()
-    m.solve(solver_name=solver_name, reformulate_sos=True)
-    sol = m.variables["sos_var"].solution.values
+    masked_sos_model.solve(solver_name=solver_name, reformulate_sos=True)
+    sol = masked_sos_model.variables["sos_var"].solution.values
     # SOS1 over 3 unmasked entries, max sum, each in [0, 1]:
     # one entry == 1, others == 0, masked stays NaN.
-    assert m.objective.value is not None
-    assert np.isclose(m.objective.value, -1.0)
+    assert masked_sos_model.objective.value is not None
+    assert np.isclose(masked_sos_model.objective.value, -1.0)
     assert np.isnan(sol[2])
     nonzero = np.flatnonzero(~np.isnan(sol) & (sol > 1e-6))
     assert len(nonzero) == 1
