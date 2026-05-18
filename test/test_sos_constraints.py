@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model, available_solvers
 
@@ -135,6 +136,64 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
     assert np.isclose(build.solution.values, [0, 1, 1]).all()
     assert m.objective.value is not None
     assert np.isclose(m.objective.value, 4)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_sos_constraints() -> None:
+    m = Model()
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == 1
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_to_xpress_emits_grouped_sos_constraints() -> None:
+    m = Model()
+    groups = pd.Index(["a", "b"], name="group")
+    segments = pd.Index([0.0, 0.5, 1.0], name="seg")
+    var = m.add_variables(coords=[groups, segments], name="lambda")
+    m.add_sos_constraints(var, sos_type=1, sos_dim="seg")
+    m.add_objective(var.sum())
+
+    problem = m.to_xpress()
+    assert problem.attributes.sets == len(groups)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_sos2_xpress_direct() -> None:
+    m = Model()
+    locations = pd.Index([0, 1, 2], name="locations")
+    build = m.add_variables(coords=[locations], name="build", binary=True)
+    m.add_sos_constraints(build, sos_type=2, sos_dim="locations")
+    m.add_objective(build * np.array([1, 2, 3]), sense="max")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(build.solution.values, [0, 1, 1]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, 5)
+
+
+@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+def test_qp_sos1_xpress_direct() -> None:
+    m = Model()
+    seg = pd.Index([0, 1, 2], name="seg")
+    x = m.add_variables(lower=0, upper=10, coords=[seg], name="x")
+    m.add_sos_constraints(x, sos_type=1, sos_dim="seg")
+    m.add_constraints(x.sum() >= 5)
+
+    linear_coeffs = xr.DataArray([0.0, -10.0, 0.0], coords=[seg])
+    m.add_objective((x * x).sum() + (linear_coeffs * x).sum(), sense="min")
+
+    m.solve(solver_name="xpress", io_api="direct")
+
+    assert np.isclose(x.solution.values, [0, 5, 0]).all()
+    assert m.objective.value is not None
+    assert np.isclose(m.objective.value, -25)
 
 
 def test_unsupported_solver_raises_error() -> None:

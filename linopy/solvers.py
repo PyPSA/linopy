@@ -2013,10 +2013,12 @@ class Xpress(Solver[None]):
         {
             SolverFeature.INTEGER_VARIABLES,
             SolverFeature.QUADRATIC_OBJECTIVE,
+            SolverFeature.DIRECT_API,
             SolverFeature.LP_FILE_NAMES,
             SolverFeature.READ_MODEL_FROM_FILE,
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
             SolverFeature.IIS_COMPUTATION,
+            SolverFeature.SOS_CONSTRAINTS,
         }
     )
 
@@ -2025,11 +2027,190 @@ class Xpress(Solver[None]):
     def is_available(cls) -> bool:
         return _has_module("xpress")
 
+    def _build_direct(
+        self,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
+        problem = self._build_solver_model(
+            model,
+            explicit_coordinate_names=explicit_coordinate_names,
+            set_names=set_names,
+        )
+        self.solver_model = problem
+        self.io_api = "direct"
+        self.sense = model.sense
+        self._cache_model_labels(model)
+
+    @staticmethod
+    def _build_solver_model(
+        model: Model,
+        explicit_coordinate_names: bool = False,
+        set_names: bool = True,
+    ) -> xpress.problem:
+        """
+        Build an ``xpress.problem`` that mirrors the linopy ``model`` via ``loadproblem``.
+
+        ``loadproblem`` is Xpress' universal native-array entry point loading LP/QP/MIQP
+        in a single call; see the parameter reference at
+        https://www.fico.com/fico-xpress-optimization/docs/latest/solver/optimizer/python/HTML/problem.loadproblem.html.
+        SOS arguments are left ``None`` and sets are added afterwards via ``addSOS`` so
+        multi-dim ``add_sos_constraints`` can be grouped natively.
+        """
+        model.constraints.sanitize_missings()
+        problem = xpress.problem()
+
+        M = model.matrices
+        A = M.A
+        Q = M.Q
+
+        if A is not None and A.nnz:
+            if A.format != "csc":
+                A = A.tocsc()
+            start = A.indptr.astype(np.int64, copy=False)
+            rowind = A.indices.astype(np.int64, copy=False)
+            rowcoef = A.data.astype(float, copy=False)
+        else:
+            start = np.zeros(len(M.vlabels) + 1, dtype=np.int64)
+            rowind = np.empty(0, dtype=np.int64)
+            rowcoef = np.empty(0, dtype=float)
+
+        lb = np.asarray(M.lb, dtype=float)
+        ub = np.asarray(M.ub, dtype=float)
+        np.place(lb, np.isneginf(lb), -xpress.infinity)
+        np.place(ub, np.isposinf(ub), xpress.infinity)
+
+        rowtype: np.ndarray
+        rhs: np.ndarray
+        if len(M.clabels):
+            sense = M.sense
+            rowtype = np.full(sense.shape, "E", dtype="U1")
+            rowtype[sense == "<"] = "L"
+            rowtype[sense == ">"] = "G"
+            rhs = np.asarray(M.b, dtype=float)
+        else:
+            rowtype = np.empty(0, dtype="U1")
+            rhs = np.empty(0, dtype=float)
+
+        objqcol1: np.ndarray | None
+        objqcol2: np.ndarray | None
+        objqcoef: np.ndarray | None
+        if Q is not None and Q.nnz:
+            Qt = Q if Q.format == "coo" else triu(Q, format="coo")  # codespell:ignore
+            mask = Qt.row <= Qt.col
+            objqcol1 = Qt.row[mask].astype(np.int64, copy=False)
+            objqcol2 = Qt.col[mask].astype(np.int64, copy=False)
+            objqcoef = Qt.data[mask].astype(float, copy=False)
+        else:
+            objqcol1 = None
+            objqcol2 = None
+            objqcoef = None
+
+        vtypes = M.vtypes
+        integer_mask = (vtypes == "B") | (vtypes == "I")
+        if integer_mask.any():
+            entind = np.flatnonzero(integer_mask).astype(np.int64, copy=False)
+            coltype = vtypes[entind]
+        else:
+            entind = None
+            coltype = None
+
+        problem.loadproblem(
+            probname="linopy",
+            rowtype=rowtype,
+            rhs=rhs,
+            rng=None,
+            objcoef=np.asarray(M.c, dtype=float),
+            start=start,
+            collen=None,
+            rowind=rowind,
+            rowcoef=rowcoef,
+            lb=lb,
+            ub=ub,
+            objqcol1=objqcol1,
+            objqcol2=objqcol2,
+            objqcoef=objqcoef,
+            qrowind=None,
+            nrowqcoefs=None,
+            rowqcol1=None,
+            rowqcol2=None,
+            rowqcoef=None,
+            coltype=coltype,
+            entind=entind,
+            limit=None,
+            settype=None,
+            setstart=None,
+            setind=None,
+            refval=None,
+        )
+
+        if model.objective.sense == "max":
+            problem.chgobjsense(xpress.maximize)
+
+        if set_names:
+            print_variable, print_constraint = linopy.io.get_printers_scalar(
+                model, explicit_coordinate_names=explicit_coordinate_names
+            )
+            vnames = print_variable(M.vlabels)
+            if vnames:
+                problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+            cnames = print_constraint(M.clabels)
+            if cnames:
+                problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+
+        if model.variables.sos:
+            for var_name in model.variables.sos:
+                var = model.variables.sos[var_name]
+                sos_type: int = var.attrs[SOS_TYPE_ATTR]  # type: ignore[assignment]
+                sos_dim: str = var.attrs[SOS_DIM_ATTR]  # type: ignore[assignment]
+
+                def add_sos(s: xr.DataArray, sos_type: int, sos_dim: str) -> None:
+                    s = s.squeeze()
+                    labels = s.values.flatten()
+                    mask = labels != -1
+                    if not mask.any():
+                        return
+                    indices = labels[mask].tolist()
+                    weights = s.coords[sos_dim].values[mask].tolist()
+                    problem.addSOS(indices, weights, type=sos_type)
+
+                others = [dim for dim in var.labels.dims if dim != sos_dim]
+                if not others:
+                    add_sos(var.labels, sos_type, sos_dim)
+                else:
+                    stacked = var.labels.stack(_sos_group=others)
+                    for _, s in stacked.groupby("_sos_group"):
+                        add_sos(s.unstack("_sos_group"), sos_type, sos_dim)
+
+        return problem
+
     @classmethod
     def runtime_features(cls) -> frozenset[SolverFeature]:
         if _installed_version_in("xpress", ">=9.8.0"):
             return frozenset({SolverFeature.GPU_ACCELERATION})
         return frozenset()
+
+    def _run_direct(
+        self,
+        solution_fn: Path | None = None,
+        log_fn: Path | None = None,
+        warmstart_fn: Path | None = None,
+        basis_fn: Path | None = None,
+        env: None = None,
+        **kw: Any,
+    ) -> Result:
+        return self._solve(
+            self.solver_model,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=self.io_api,
+            sense=self.sense,
+        )
 
     def _run_file(
         self,
@@ -2042,6 +2223,34 @@ class Xpress(Solver[None]):
     ) -> Result:
         problem_fn = self._problem_fn
         assert problem_fn is not None
+        io_api = read_io_api_from_problem_file(problem_fn)
+        sense = read_sense_from_problem_file(problem_fn)
+
+        m = xpress.problem()
+        m.read(path_to_string(problem_fn))
+
+        return self._solve(
+            m,
+            solution_fn=solution_fn,
+            log_fn=log_fn,
+            warmstart_fn=warmstart_fn,
+            basis_fn=basis_fn,
+            io_api=io_api,
+            sense=sense,
+            from_file=True,
+        )
+
+    def _solve(
+        self,
+        m: xpress.problem,
+        solution_fn: Path | None,
+        log_fn: Path | None,
+        warmstart_fn: Path | None,
+        basis_fn: Path | None,
+        io_api: str | None,
+        sense: str | None,
+        from_file: bool = False,
+    ) -> Result:
         CONDITION_MAP = {
             xpress.SolStatus.NOTFOUND: "unknown",
             xpress.SolStatus.OPTIMAL: "optimal",
@@ -2050,57 +2259,30 @@ class Xpress(Solver[None]):
             xpress.SolStatus.UNBOUNDED: "unbounded",
         }
 
-        io_api = read_io_api_from_problem_file(problem_fn)
-        sense = read_sense_from_problem_file(problem_fn)
-
-        m = xpress.problem()
-
-        try:  # Try new API first
-            m.readProb(path_to_string(problem_fn))
-        except AttributeError:  # Fallback to old API
-            m.read(path_to_string(problem_fn))
-
-        # Set solver options - new API uses setControl per option, old API accepts dict
         if self.solver_options is not None:
             m.setControl(self.solver_options)
 
         if log_fn is not None:
-            try:  # Try new API first
-                m.setLogFile(path_to_string(log_fn))
-            except AttributeError:  # Fallback to old API
-                m.setlogfile(path_to_string(log_fn))
+            m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            try:  # Try new API first
-                m.readBasis(path_to_string(warmstart_fn))
-            except AttributeError:  # Fallback to old API
-                m.readbasis(path_to_string(warmstart_fn))
+            m.readbasis(path_to_string(warmstart_fn))
 
         m.optimize()
 
-        # if the solver is stopped (timelimit for example), postsolve the problem
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
-            try:  # Try new API first
-                m.postSolve()
-            except AttributeError:  # Fallback to old API
-                m.postsolve()
+            m.postsolve()
 
         if basis_fn is not None:
             try:
-                try:  # Try new API first
-                    m.writeBasis(path_to_string(basis_fn))
-                except AttributeError:  # Fallback to old API
-                    m.writebasis(path_to_string(basis_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+                m.writebasis(path_to_string(basis_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                try:  # Try new API first
-                    m.writeBinSol(path_to_string(solution_fn))
-                except AttributeError:  # Fallback to old API
-                    m.writebinsol(path_to_string(solution_fn))
-            except (xpress.SolverError, xpress.ModelError) as err:
+                m.writebinsol(path_to_string(solution_fn))
+            except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
         condition = m.attributes.solstatus
@@ -2111,26 +2293,36 @@ class Xpress(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = m.attributes.objval
 
-            sol = _solution_from_names(
-                np.asarray(m.getSolution(), dtype=float),
-                [v.name for v in m.getVariable()],
-                self._n_vars,
-            )
+            sol_values = np.asarray(m.getSolution(), dtype=float)
+            if from_file:
+                sol = _solution_from_names(
+                    sol_values,
+                    [v.name for v in m.getVariable()],
+                    self._n_vars,
+                )
+            else:
+                sol = _solution_from_labels(sol_values, self._vlabels, self._n_vars)
 
             try:
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    try:  # Try new API first
-                        _dual = m.getDuals()
-                    except AttributeError:  # Fallback to old API
-                        _dual = m.getDual()
-                    dual = _solution_from_names(
-                        np.asarray(_dual, dtype=float),
-                        [c.name for c in m.getConstraint()],
-                        self._n_cons,
-                    )
-            except (xpress.SolverError, xpress.ModelError, SystemError):
+                    dual_values = np.asarray(m.getDual(), dtype=float)
+                    if from_file:
+                        dual = _solution_from_names(
+                            dual_values,
+                            [c.name for c in m.getConstraint()],
+                            self._n_cons,
+                        )
+                    else:
+                        dual = _solution_from_labels(
+                            dual_values, self._clabels, self._n_cons
+                        )
+            except (
+                xpress.SolverError,
+                xpress.ModelError,
+                SystemError,
+            ):  # pragma: no cover
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = np.array([], dtype=float)
 
