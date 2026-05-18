@@ -112,23 +112,46 @@ This package is published under MIT license.
    creating-expressions
    creating-constraints
    coordinate-alignment
-   sos-constraints
-   piecewise-linear-constraints
    manipulating-models
-   testing-framework
-   transport-tutorial
-   infeasible-model
-   solve-on-remote
-   solve-on-oetc
-   gpu-acceleration
-   migrating-from-pyomo
-   gurobi-double-logging
-
 
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Benchmarking
+   :caption: Examples
+
+   transport-tutorial
+   migrating-from-pyomo
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Advanced Features
+
+   sos-constraints
+   piecewise-linear-constraints
+   testing-framework
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Solving
+
+   solve-on-remote
+   solve-on-oetc
+   gpu-acceleration
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Troubleshooting
+
+   infeasible-model
+   gurobi-double-logging
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Comparisons
 
    benchmark
    syntax
@@ -136,7 +159,7 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: References
+   :caption: Reference
 
    api
    release_notes
