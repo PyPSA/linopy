@@ -1678,12 +1678,6 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
-        if self.objective.expression.empty:
-            raise ValueError(
-                "No objective has been set on the model. Use `m.add_objective(...)` "
-                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
-            )
-
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -1691,6 +1685,16 @@ class Model:
             )
 
         if remote is not None:
+            # The remote branch short-circuits before reaching Solver.solve(),
+            # which is where the empty-objective check normally fires. Replicate
+            # it here. This duplication becomes obsolete once OETC is folded
+            # into the Solver pipeline (see PyPSA/linopy#683).
+            if self.objective.expression.empty:
+                raise ValueError(
+                    "No objective has been set on the model. Use "
+                    "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
+                    "for a pure feasibility problem)."
+                )
             if isinstance(remote, OetcHandler):
                 solved = remote.solve_on_oetc(
                     self, solver_name=solver_name, **solver_options
@@ -1756,19 +1760,6 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
-
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
-
-        if self.is_quadratic and not solver_class.supports(
-            SolverFeature.QUADRATIC_OBJECTIVE
-        ):
-            raise ValueError(
-                f"Solver {solver_name} does not support quadratic problems."
-            )
-
         if reformulate_sos not in (True, False, "auto"):
             raise ValueError(
                 f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
@@ -1789,12 +1780,10 @@ class Model:
             # If SOS is present and the solver doesn't support it (and the user
             # didn't ask for reformulation), Solver._build() will raise.
 
-        if self.variables.semi_continuous:
-            if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
-                raise ValueError(
-                    f"Solver {solver_name} does not support semi-continuous variables. "
-                    "Use a solver that supports them (gurobi, cplex, highs)."
-                )
+        if sanitize_zeros:
+            self.constraints.sanitize_zeros()
+        if sanitize_infinities:
+            self.constraints.sanitize_infinities()
 
         try:
             self.solver = None  # closes any previous solver
@@ -1842,7 +1831,34 @@ class Model:
             if applied_sos_reformulation_here:
                 self.undo_sos_reformulation()
 
-    def assign_result(self, result: Result) -> tuple[str, str]:
+    def assign_result(
+        self,
+        result: Result,
+        solver: solvers.Solver | None = None,
+    ) -> tuple[str, str]:
+        """
+        Write a solver Result back onto the model.
+
+        Copies primal / dual values onto variables / constraints, sets
+        :attr:`status`, :attr:`termination_condition`, and
+        :attr:`objective.value`. When ``solver`` is provided, also stores it on
+        ``self.solver`` so post-solve introspection (``model.solver_model``,
+        ``compute_infeasibilities()``) works.
+
+        Parameters
+        ----------
+        result : Result
+            The :class:`linopy.constants.Result` returned by
+            :meth:`linopy.solvers.Solver.solve`.
+        solver : Solver, optional
+            The solver instance that produced the result. Pass it on the
+            low-level ``Solver.from_name(...).solve()`` path to attach it as
+            ``self.solver`` for post-solve introspection. ``Model.solve()``
+            attaches the solver itself and does not pass this argument.
+        """
+        if solver is not None:
+            self.solver = solver
+
         result.info()
 
         if result.solution is not None:
