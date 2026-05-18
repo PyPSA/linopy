@@ -2111,7 +2111,7 @@ class Xpress(Solver[None]):
             coltype = None
 
         problem.loadproblem(
-            probname="",
+            probname="linopy",
             rowtype=rowtype,
             rhs=rhs,
             rng=None,
