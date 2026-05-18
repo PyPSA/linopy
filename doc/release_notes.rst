@@ -4,20 +4,43 @@ Release Notes
 Upcoming Version
 ----------------
 
-* Lazy ``available_solvers`` + per-class ``Solver.is_available()``. Module import no longer probes license-managed solvers (Gurobi, Mosek, Knitro, MindOpt, COPT, cuPDLPx); ``linopy.available_solvers`` lazily probes on first access and caches the result. Membership now means *the Python package or binary is installed*, not *a working license exists*. For the old eager verification, use the new ``linopy.solvers.check_solver_licenses(*names)`` helper (or ``SolverClass.license_status()``), which acquires a license slot and returns a ``LicenseStatus``. Call ``available_solvers.refresh()`` to clear the cache. Same lazy behaviour for ``quadratic_solvers``.
-* Breaking: ``available_solvers`` now includes all installed solvers, not just those with a working license.
-* Add ``linopy.licensed_solvers``: a lazy sequence of installed solvers whose ``license_status()`` probe currently succeeds. Useful for parametrising tests or runtime selection so unlicensed solvers drop out cleanly. Same ``refresh()`` semantics as ``available_solvers``.
-* Solver refactor: solver state now lives on a stateful ``Solver`` instance attached to ``Model.solver``. ``Model.solver_model`` and ``Model.solver_name`` become read-only properties delegating to ``model.solver`` (assigning anything other than ``None`` raises; setting ``None`` closes the solver). ``Model.solver_name`` may be ``None`` before a solve. The latter two properties may be deprecated in future versions.
-* Advanced solve workflow: construct via ``Solver.from_name(name, model, io_api=..., options=...)`` (or ``SolverClass.from_model(model, ...)``), then call ``solver.solve()`` to run and obtain a ``Result``, and ``model.assign_result(result)`` to write the solution back to the model. ``Solver`` is now a dataclass; subclasses no longer need ``__init__`` overrides. The previous two-step ``Model.prepare_solver`` / ``Model.run_solver`` API has been removed (it was added in the same upcoming release and not yet shipped).
-* Solver capabilities are declared as ``features: frozenset[SolverFeature]`` ClassVars on each ``Solver`` subclass; use ``Solver.supports(feature)``. ``SolverFeature`` is now exported from ``linopy`` (and from ``linopy.solvers``); ``linopy.solver_capabilities`` remains as a back-compat shim with a lazy ``SOLVER_REGISTRY`` mapping.
-* ``Result`` gains ``solver_name`` and ``report: SolverReport | None`` (runtime, MIP gap, dual bound, iteration counts) and prints them in ``__repr__``. CBC, HiGHS, Gurobi, Knitro, and cuPDLPx populate ``report``; when possible also populate the MIP ``dual_bound``.
-* ``Solution.primal`` and ``Solution.dual`` are now ``np.ndarray`` lookup arrays keyed by integer model labels (length = ``max_label + 1``, ``NaN`` for unfilled positions); previously ``pd.Series`` keyed by variable/constraint name. Each solver is responsible for emitting the label-indexed form — direct-API solvers via cached ``_vlabels``/``_clabels`` populated at ``_build_direct`` time, file-based solvers via the shared ``_solution_from_names`` helper which parses linopy labels from solver-side names. Fixes solution mapping for file-based solvers that may iterate variables in a different order than linopy's build order or drop unused variables entirely. Internal — code that introspected these must use ``np.ndarray`` semantics. Solution mapping reads labels from a cached ``ConstraintLabelIndex`` on ``Model.constraints`` and no longer triggers a constraint-matrix rebuild.
-* Per-solver translation helpers are unified under ``Solver._build_solver_model``. The module-level ``to_gurobipy`` / ``to_highspy`` / ``to_mosek`` / ``to_cupdlpx`` (and their ``Model`` bindings) are kept as thin wrappers that route through ``Solver.from_model(model, io_api="direct")`` and return the native solver model.
-* Increase speed of direct solver communication (~10x) in conversion functions like `to_highspy` through faster matrix creation (see below), leading to significant overall speed-up when setting `io_api="direct"`.
-* Add ``CSRConstraint``, a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Provides up to 90% memory savings for constraints with many terms and 30–120x faster matrix generation for direct solver APIs.
-  - Add ``freeze_constraints`` parameter to ``Model`` for globally storing constraints in CSR format on ``add_constraints``.
-  - Add ``freeze`` parameter to ``Model.add_constraints`` for per-constraint opt-in to CSR storage.
-  - Add ``freeze()`` and ``mutable()`` methods on ``Constraint`` and ``CSRConstraint`` for lossless conversion between xarray-backed and CSR-backed representations.
+**Features**
+
+*Solvers — stateful Solver instances*
+
+* Solver state (native model, results) now lives on a ``Solver`` instance attached to ``Model.solver``. After ``model.solve()`` you can introspect or re-use the solver via ``model.solver``; assigning ``model.solver = None`` closes it and releases the native handle/license.
+* New construct-then-solve workflow for advanced use: build a solver via ``solver = Solver.from_name("gurobi", model, io_api="direct", options=...)``, then call ``result = solver.solve()`` and ``model.assign_result(result)`` to write the solution back. An equivalent ``SolverClass.from_model(model, ...)`` classmethod is also available. ``Solver`` is now a dataclass — subclasses no longer need ``__init__`` overrides.
+* ``Result`` gains ``solver_name`` and ``report: SolverReport | None`` carrying runtime, MIP gap, dual bound, and iteration counts; printed in ``repr(result)``. Populated for CBC, HiGHS, Gurobi, Knitro, and cuPDLPx.
+* Solver capabilities are now declarative: query with ``Solver.supports(SolverFeature.MIP)`` etc. ``SolverFeature`` is exported from ``linopy`` (and ``linopy.solvers``). The previous ``linopy.solver_capabilities`` module remains as a back-compat shim with a lazy ``SOLVER_REGISTRY`` mapping.
+* Unified native-model access: ``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and friends) now route through ``Solver.from_model(model, io_api="direct")``. Behaviour is unchanged for users.
+
+*Solver discovery — lazy and license-aware*
+
+* ``linopy.available_solvers`` is now lazy and no longer probes license-managed solvers (Gurobi, Mosek, Knitro, MindOpt, COPT, cuPDLPx) at import time. **Membership now means "package/binary installed", not "working license exists"** (see Breaking Changes). Call ``available_solvers.refresh()`` to clear the cache. Same lazy behaviour for ``quadratic_solvers``.
+* New ``linopy.licensed_solvers``: a lazy sequence of installed solvers whose ``license_status()`` probe currently succeeds. Useful for parametrising tests and runtime solver selection so unlicensed solvers drop out cleanly. Same ``refresh()`` semantics as ``available_solvers``.
+* New ``linopy.solvers.check_solver_licenses(*names)`` helper and per-class ``SolverClass.license_status()`` / ``SolverClass.is_available()`` for explicit license probing returning a ``LicenseStatus``.
+
+*Constraints — CSR-backed storage*
+
+* Add ``CSRConstraint``: a memory-efficient immutable constraint representation backed by scipy CSR sparse matrices. Up to 90% memory savings for constraints with many terms and 30–120× faster matrix generation for direct solver APIs.
+* Opt in globally via ``Model(freeze_constraints=True)`` or per-call via ``model.add_constraints(..., freeze=True)``.
+* Lossless conversion both ways with ``Constraint.freeze()`` / ``CSRConstraint.mutable()``.
+
+**Performance**
+
+* ~10× faster direct solver communication (``io_api="direct"``) through the faster CSR-based matrix construction above, leading to significant overall speed-up in conversion functions like ``to_highspy``.
+* Solution mapping no longer triggers a constraint-matrix rebuild: it now reads labels from a cached ``ConstraintLabelIndex`` on ``Model.constraints`` (mirrors the existing ``Variables.label_index``).
+* Solution assignment to ``Model.solution`` now uses positional indexing instead of label-based indexing leading to ~2× faster solution assignment (see `Internal` below).
+
+**Internal**
+
+* ``Solution.primal`` and ``Solution.dual`` are now dense ``np.ndarray`` lookup arrays indexed by integer linopy label (length = ``max_label + 1``, ``NaN`` for masked or solver-dropped slots) — previously ``pd.Series`` keyed by variable/constraint name. Direct-API solvers fill them via cached ``_vlabels``/``_clabels`` populated at solver build time; file-based solvers via a shared ``_solution_from_names`` helper that parses linopy labels from solver-side names. 
+
+**Breaking Changes**
+
+* ``available_solvers`` now lists all *installed* solvers, including those without a working license. Code that relied on it for "can I actually solve with X?" should switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
+* ``Model.solver_model`` and ``Model.solver_name`` are read-only properties delegating to ``Model.solver``. Assigning anything other than ``None`` raises; setting ``None`` closes the solver. ``solver_name`` may be ``None`` before the first solve. Both properties are candidates for deprecation in a future release.
+* ``Solution.primal`` / ``Solution.dual`` are ``np.ndarray`` keyed by integer label (see Internal). Code that introspected them as named ``pd.Series`` must update — use ``model.variables[name].solution`` for label-indexed access by name.
 
 Version 0.7.0
 -------------
