@@ -507,18 +507,44 @@ class Solver(ABC, Generic[EnvType]):
         """Dispatch to direct or file build based on ``io_api``."""
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
-        if self.model.variables.sos and not type(self).supports(
-            SolverFeature.SOS_CONSTRAINTS
-        ):
-            raise ValueError(
-                f"Solver {self.solver_name.value} does not support SOS constraints. "
-                "Call `model.apply_sos_reformulation()` first, or use a solver that "
-                "supports SOS."
-            )
+        sanitize_zeros = build_kwargs.pop("sanitize_zeros", True)
+        sanitize_infinities = build_kwargs.pop("sanitize_infinities", True)
+        self._validate_model()
+        if sanitize_zeros:
+            self.model.constraints.sanitize_zeros()
+        if sanitize_infinities:
+            self.model.constraints.sanitize_infinities()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:
             self._build_file(**build_kwargs)
+
+    def _validate_model(self) -> None:
+        """Pre-build checks on whether this solver can handle ``self.model``."""
+        model = self.model
+        assert model is not None
+        solver_name = self.solver_name.value
+        cls = type(self)
+
+        if model.is_quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic problems."
+            )
+
+        if model.variables.semi_continuous and not cls.supports(
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES
+        ):
+            raise ValueError(
+                f"Solver {solver_name} does not support semi-continuous variables. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
+            raise ValueError(
+                f"Solver {solver_name} does not support SOS constraints. "
+                "Call `model.apply_sos_reformulation()` first, or use a solver that "
+                "supports SOS."
+            )
 
     def _build_direct(self, **build_kwargs: Any) -> None:
         """Build the native solver model from ``self.model``. Override per-solver."""
@@ -560,7 +586,19 @@ class Solver(ABC, Generic[EnvType]):
         self._cache_model_sizes(model)
 
     def solve(self, **run_kwargs: Any) -> Result:
-        """Run the prepared solver and return a :class:`Result`."""
+        """
+        Run the prepared solver and return a :class:`Result`.
+
+        The canonical low-level pattern is::
+
+            solver = Solver.from_name("gurobi", model, io_api="direct")
+            result = solver.solve()
+            model.assign_result(result, solver=solver)
+
+        Passing ``solver=`` to :meth:`Model.assign_result` wires
+        ``model.solver`` so post-solve helpers like
+        :meth:`Model.compute_infeasibilities` keep working.
+        """
         if self.io_api == "direct" or self.solver_model is not None:
             return self._run_direct(**run_kwargs)
         if self._problem_fn is not None:

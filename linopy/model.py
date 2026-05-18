@@ -1728,19 +1728,6 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
-
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
-
-        if self.is_quadratic and not solver_class.supports(
-            SolverFeature.QUADRATIC_OBJECTIVE
-        ):
-            raise ValueError(
-                f"Solver {solver_name} does not support quadratic problems."
-            )
-
         if reformulate_sos not in (True, False, "auto"):
             raise ValueError(
                 f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
@@ -1762,13 +1749,6 @@ class Model:
             # If SOS is present and the solver doesn't support it (and the user
             # didn't ask for reformulation), Solver._build() will raise.
 
-        if self.variables.semi_continuous:
-            if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
-                raise ValueError(
-                    f"Solver {solver_name} does not support semi-continuous variables. "
-                    "Use a solver that supports them (gurobi, cplex, highs)."
-                )
-
         try:
             self.solver = None  # closes any previous solver
             if io_api == "direct":
@@ -1778,6 +1758,8 @@ class Model:
                     "explicit_coordinate_names": explicit_coordinate_names,
                     "set_names": set_names,
                     "log_fn": to_path(log_fn),
+                    "sanitize_zeros": sanitize_zeros,
+                    "sanitize_infinities": sanitize_infinities,
                 }
                 if env is not None:
                     build_kwargs["env"] = env
@@ -1787,6 +1769,8 @@ class Model:
                     "slice_size": slice_size,
                     "progress": progress,
                     "problem_fn": to_path(problem_fn),
+                    "sanitize_zeros": sanitize_zeros,
+                    "sanitize_infinities": sanitize_infinities,
                 }
             self.solver = solver = solvers.Solver.from_name(
                 solver_name,
@@ -1815,7 +1799,34 @@ class Model:
             if applied_sos_reformulation_here:
                 self.undo_sos_reformulation()
 
-    def assign_result(self, result: Result) -> tuple[str, str]:
+    def assign_result(
+        self,
+        result: Result,
+        solver: solvers.Solver | None = None,
+    ) -> tuple[str, str]:
+        """
+        Write a solver Result back onto the model.
+
+        Copies primal / dual values onto variables / constraints, sets
+        :attr:`status`, :attr:`termination_condition`, and
+        :attr:`objective.value`. When ``solver`` is provided, also stores it on
+        ``self.solver`` so post-solve introspection (``model.solver_model``,
+        ``compute_infeasibilities()``) works.
+
+        Parameters
+        ----------
+        result : Result
+            The :class:`linopy.constants.Result` returned by
+            :meth:`linopy.solvers.Solver.solve`.
+        solver : Solver, optional
+            The solver instance that produced the result. Pass this when going
+            through the low-level ``Solver.from_name(...).solve()`` path so the
+            model's solver reference is wired up the same way ``Model.solve()``
+            wires it.
+        """
+        if solver is not None:
+            self.solver = solver
+
         result.info()
 
         if result.solution is not None:
