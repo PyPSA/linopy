@@ -2180,34 +2180,105 @@ class Xpress(Solver[None]):
             entind = None
             coltype = None
 
-        problem.loadproblem(
-            probname="linopy",
-            rowtype=rowtype,
-            rhs=rhs,
-            rng=None,
-            objcoef=np.asarray(M.c, dtype=float),
-            start=start,
-            collen=None,
-            rowind=rowind,
-            rowcoef=rowcoef,
-            lb=lb,
-            ub=ub,
-            objqcol1=objqcol1,
-            objqcol2=objqcol2,
-            objqcoef=objqcoef,
-            qrowind=None,
-            nrowqcoefs=None,
-            rowqcol1=None,
-            rowqcol2=None,
-            rowqcoef=None,
-            coltype=coltype,
-            entind=entind,
-            limit=None,
-            settype=None,
-            setstart=None,
-            setind=None,
-            refval=None,
-        )
+        objcoef = np.asarray(M.c, dtype=float)
+        has_q = objqcol1 is not None
+        has_int = coltype is not None
+        try:  # Try new API first (Xpress 9.8+)
+            if has_q and has_int:
+                problem.loadMIQP(
+                    probname="linopy",
+                    rowtype=rowtype,
+                    rhs=rhs,
+                    rng=None,
+                    objcoef=objcoef,
+                    start=start,
+                    collen=None,
+                    rowind=rowind,
+                    rowcoef=rowcoef,
+                    lb=lb,
+                    ub=ub,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            elif has_q:
+                problem.loadQP(
+                    probname="linopy",
+                    rowtype=rowtype,
+                    rhs=rhs,
+                    rng=None,
+                    objcoef=objcoef,
+                    start=start,
+                    collen=None,
+                    rowind=rowind,
+                    rowcoef=rowcoef,
+                    lb=lb,
+                    ub=ub,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                )
+            elif has_int:
+                problem.loadMIP(
+                    probname="linopy",
+                    rowtype=rowtype,
+                    rhs=rhs,
+                    rng=None,
+                    objcoef=objcoef,
+                    start=start,
+                    collen=None,
+                    rowind=rowind,
+                    rowcoef=rowcoef,
+                    lb=lb,
+                    ub=ub,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            else:
+                problem.loadLP(
+                    probname="linopy",
+                    rowtype=rowtype,
+                    rhs=rhs,
+                    rng=None,
+                    objcoef=objcoef,
+                    start=start,
+                    collen=None,
+                    rowind=rowind,
+                    rowcoef=rowcoef,
+                    lb=lb,
+                    ub=ub,
+                )
+        except AttributeError:  # Fallback to old API
+            problem.loadproblem(
+                probname="linopy",
+                rowtype=rowtype,
+                rhs=rhs,
+                rng=None,
+                objcoef=objcoef,
+                start=start,
+                collen=None,
+                rowind=rowind,
+                rowcoef=rowcoef,
+                lb=lb,
+                ub=ub,
+                objqcol1=objqcol1,
+                objqcol2=objqcol2,
+                objqcoef=objqcoef,
+                qrowind=None,
+                nrowqcoefs=None,
+                rowqcol1=None,
+                rowqcol2=None,
+                rowqcoef=None,
+                coltype=coltype,
+                entind=entind,
+                limit=None,
+                settype=None,
+                setstart=None,
+                setind=None,
+                refval=None,
+            )
 
         if model.objective.sense == "max":
             problem.chgobjsense(xpress.maximize)
@@ -2218,10 +2289,16 @@ class Xpress(Solver[None]):
             )
             vnames = print_variable(M.vlabels)
             if vnames:
-                problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
             cnames = print_constraint(M.clabels)
             if cnames:
-                problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
         if model.variables.sos:
             for var_name in model.variables.sos:
@@ -2285,7 +2362,7 @@ class Xpress(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = xpress.problem()
-        m.read(path_to_string(problem_fn))
+        m.readProb(path_to_string(problem_fn))
 
         return self._solve(
             m,
@@ -2321,25 +2398,40 @@ class Xpress(Solver[None]):
             m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(path_to_string(log_fn))
+            try:  # Try new API first
+                m.setLogFile(path_to_string(log_fn))
+            except AttributeError:  # Fallback to old API
+                m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(path_to_string(warmstart_fn))
+            try:  # Try new API first
+                m.readBasis(path_to_string(warmstart_fn))
+            except AttributeError:  # Fallback to old API
+                m.readbasis(path_to_string(warmstart_fn))
 
         m.optimize()
 
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
-            m.postsolve()
+            try:  # Try new API first
+                m.postSolve()
+            except AttributeError:  # Fallback to old API
+                m.postsolve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(path_to_string(basis_fn))
+                try:  # Try new API first
+                    m.writeBasis(path_to_string(basis_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebasis(path_to_string(basis_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                m.writebinsol(path_to_string(solution_fn))
+                try:  # Try new API first
+                    m.writeBinSol(path_to_string(solution_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebinsol(path_to_string(solution_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -2365,7 +2457,7 @@ class Xpress(Solver[None]):
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    dual_values = np.asarray(m.getDual(), dtype=float)
+                    dual_values = np.asarray(m.getDuals(), dtype=float)
                     if from_file:
                         dual = _solution_from_names(
                             dual_values,
