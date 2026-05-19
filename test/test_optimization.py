@@ -73,7 +73,7 @@ feasible_mip_solvers: list[str] = get_available_solvers_with_feature(
 )
 
 gpu_solvers: list[str] = get_available_solvers_with_feature(
-    SolverFeature.GPU_ACCELERATION, licensed_solvers
+    SolverFeature.GPU_ONLY, licensed_solvers
 )
 
 # set tolerances for solution checking based on solver type (CPU vs. GPU)
