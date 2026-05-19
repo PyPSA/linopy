@@ -2290,9 +2290,13 @@ class Xpress(Solver[None]):
             vnames = print_variable(M.vlabels)
             if vnames:
                 try:  # Try new API first (Xpress 9.8+)
-                    problem.addNames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                    problem.addNames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
                 except AttributeError:  # Fallback to old API
-                    problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                    problem.addnames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
             cnames = print_constraint(M.clabels)
             if cnames:
                 try:  # Try new API first (Xpress 9.8+)
