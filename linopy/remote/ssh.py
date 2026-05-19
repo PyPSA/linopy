@@ -45,6 +45,11 @@ class SshSettings:
 
     Inner solver name and solver options come from :meth:`Model.solve` —
     ``m.solve("gurobi", remote=SshSettings(hostname=...), presolve="on")``.
+
+    Use ``setup_commands`` to prepare the remote shell before the solve —
+    e.g. activate a conda environment or set ``PATH``::
+
+        SshSettings(hostname=..., setup_commands=["conda activate linopy-env"])
     """
 
     hostname: str
@@ -55,6 +60,7 @@ class SshSettings:
     python_file: str = "/tmp/linopy-execution.py"
     model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
+    setup_commands: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -352,6 +358,8 @@ class SSH:
                 model_solved_file=self.settings.model_solved_file,
                 _internal=True,
             )
+            for cmd in self.settings.setup_commands:
+                self._handler.execute(cmd)
 
         solve_kwargs: dict[str, Any] = {"solver_name": self.solver_name}
         if self.options:

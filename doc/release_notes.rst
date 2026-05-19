@@ -55,7 +55,8 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
       m.solve("gurobi", remote=OetcSettings(...), Method=2)
       m.solve("highs", remote=SshSettings(hostname=...), presolve="on")
 
-  ``solver_name`` and ``**solver_options`` work the same as for local solves; ``remote=`` selects *where* to run. After the call, ``model.remote`` holds the transport instance (mirrors :attr:`Model.solver`).
+  ``solver_name`` and ``**solver_options`` work the same as for local solves; ``remote=`` selects *where* to run. After the call, ``model.remote`` holds the remote instance (mirrors :attr:`Model.solver`).
+* ``SshSettings.setup_commands: list[str]`` — shell commands run on the remote before the solve, e.g. ``setup_commands=["conda activate linopy-env"]``.
 
 **Deprecations**
 
