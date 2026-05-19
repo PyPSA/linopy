@@ -137,8 +137,7 @@ This package is published under MIT license.
    :caption: Solving
 
    using-solvers
-   solve-on-remote
-   solve-on-oetc
+   remote-machines
    gpu-acceleration
 
 .. toctree::

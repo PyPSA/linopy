@@ -497,11 +497,22 @@ class Solver(ABC, Generic[EnvType]):
         model: Model,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
-        **build_kwargs: Any,
+        **kwargs: Any,
     ) -> Solver:
-        """Instantiate and build the solver against ``model``."""
-        instance = cls(model=model, io_api=io_api, options=options or {})
-        instance._build(**build_kwargs)
+        """
+        Instantiate and build the solver against ``model``.
+
+        Any ``kwargs`` whose name matches an ``init=True`` dataclass field on
+        the subclass (e.g. ``settings`` on :class:`Oetc` / :class:`SSH`) are
+        forwarded to the constructor; the rest go to ``_build`` as
+        ``build_kwargs``.
+        """
+        from dataclasses import fields
+
+        field_names = {f.name for f in fields(cls) if f.init}
+        ctor_kw = {k: kwargs.pop(k) for k in list(kwargs) if k in field_names}
+        instance = cls(model=model, io_api=io_api, options=options or {}, **ctor_kw)
+        instance._build(**kwargs)
         return instance
 
     def _build(self, **build_kwargs: Any) -> None:

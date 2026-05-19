@@ -7,7 +7,6 @@ import pytest
 
 from linopy.remote.oetc import (
     ComputeProvider,
-    OetcCredentials,
     OetcHandler,
     OetcSettings,
 )
@@ -48,8 +47,8 @@ def test_from_env_all_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OETC_DELETE_WORKER_ON_ERROR", "true")
 
     s = OetcSettings.from_env()
-    assert s.credentials.email == "test@example.com"
-    assert s.credentials.password == "secret"
+    assert s.email == "test@example.com"
+    assert s.password == "secret"
     assert s.name == "test-job"
     assert s.cpu_cores == 8
     assert s.disk_space_gb == 20
@@ -62,7 +61,7 @@ def test_from_env_kwargs_override(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
 
     s = OetcSettings.from_env(email="override@example.com")
-    assert s.credentials.email == "override@example.com"
+    assert s.email == "override@example.com"
 
 
 def test_from_env_missing_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,7 +92,7 @@ def test_from_env_partial_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OETC_ORCHESTRATOR_URL", "https://orch.example.com")
 
     s = OetcSettings.from_env(email="a@b.com", password="pw")
-    assert s.credentials.email == "a@b.com"
+    assert s.email == "a@b.com"
     assert s.name == "env-name"
 
 
@@ -169,7 +168,8 @@ def _make_handler(settings: OetcSettings) -> OetcHandler:
 
 def _default_settings(**overrides: Any) -> OetcSettings:
     defaults: dict[str, Any] = dict(
-        credentials=OetcCredentials(email="a@b.com", password="pw"),
+        email="a@b.com",
+        password="pw",
         name="test",
         authentication_server_url="https://auth",
         orchestrator_server_url="https://orch",

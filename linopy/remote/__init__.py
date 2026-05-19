@@ -8,16 +8,19 @@ on remote systems:
 - OetcHandler: Cloud-based execution via OET Cloud service
 """
 
-from linopy.remote.ssh import RemoteHandler
+from linopy.remote.ssh import SSH, RemoteHandler, SshSettings
 
 try:
-    from linopy.remote.oetc import OetcCredentials, OetcHandler, OetcSettings
+    from linopy.remote.oetc import Oetc, OetcCredentials, OetcHandler, OetcSettings
 except ImportError:
     pass
 
 __all__ = [
     "RemoteHandler",
+    "SSH",
+    "SshSettings",
     "OetcHandler",
+    "Oetc",
     "OetcSettings",
     "OetcCredentials",
 ]

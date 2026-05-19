@@ -52,7 +52,7 @@ oetc = [
     "google-cloud-storage",
     "requests",
 ]
-remote = [
+ssh = [
     "paramiko",
 ]
 docs = [
