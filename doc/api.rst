@@ -70,6 +70,8 @@ Modifying a model
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.copy
+   model.Model.apply_sos_reformulation
+   model.Model.undo_sos_reformulation
    model.Model.reformulate_sos_constraints
 
 Solving
@@ -498,10 +500,75 @@ Type aliases
 Solvers
 ========
 
+The stateful :class:`~linopy.solvers.Solver` instance owns the solver-side
+model and exposes a two-step :meth:`~linopy.solvers.Solver.from_name` /
+:meth:`~linopy.solvers.Solver.solve` workflow. :meth:`Model.solve` is a
+thin wrapper around it.
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver
+
+Construction
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.from_name
+   solvers.Solver.from_model
+
+Solving
+-------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.solve
+   solvers.Solver.update_solver_model
+   solvers.Solver.close
+
+Post-solve state
+----------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.status
+   solvers.Solver.solution
+   solvers.Solver.report
+   solvers.Solver.solver_model
+
+Capabilities
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   solvers.Solver.is_available
+   solvers.Solver.license_status
+   solvers.Solver.supports
+   solvers.Solver.supported_features
+   solvers.Solver.runtime_features
+
+Discovery
+---------
+
 .. autosummary::
    :toctree: generated/
 
    solvers.available_solvers
+   solvers.licensed_solvers
+   solvers.SolverFeature
+   solvers.LicenseStatus
+
+Implementations
+---------------
+
+.. autosummary::
+   :toctree: generated/
+
    solvers.CBC
    solvers.COPT
    solvers.Cplex
@@ -529,7 +596,10 @@ Solver status and result types
 ==============================
 
 Types returned by or compared against :attr:`Model.status`,
-:attr:`Model.termination_condition`, and :attr:`Model.solution`.
+:attr:`Model.termination_condition`, and :attr:`Model.solution`, plus
+:class:`~linopy.constants.SolverReport` surfaced on
+:attr:`Solver.report <linopy.solvers.Solver.report>` and
+:attr:`Result.report <linopy.constants.Result.report>`.
 
 .. autosummary::
    :toctree: generated/
@@ -538,6 +608,7 @@ Types returned by or compared against :attr:`Model.status`,
    constants.TerminationCondition
    constants.Status
    constants.Solution
+   constants.SolverReport
    constants.Result
 
 
