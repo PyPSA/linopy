@@ -1320,17 +1320,12 @@ class Highs(Solver[None]):
 
         h = self.solver_model
 
-        bounds_for_type_binary: dict[str, None] = {}
-        for name, vtype in diff.var_type.items():
-            if vtype == "binary":
-                bounds_for_type_binary[name] = None
-
-        updated_bounds: set[str] = set()
-        names_for_bounds = set(diff.var_lb) | set(diff.var_ub) | set(bounds_for_type_binary)
+        binary_names = {n for n, t in diff.var_type.items() if t == "binary"}
+        names_for_bounds = set(diff.var_lb) | set(diff.var_ub) | binary_names
         for name in names_for_bounds:
             var = variables[name]
             positions, mask = _container_positions_and_mask(var)
-            if name in bounds_for_type_binary:
+            if name in binary_names:
                 lb = np.zeros(positions.size, dtype=np.float64)
                 ub = np.ones(positions.size, dtype=np.float64)
             else:
@@ -1339,7 +1334,6 @@ class Highs(Solver[None]):
                 lb = np.asarray(lb_src, dtype=np.float64)
                 ub = np.asarray(ub_src, dtype=np.float64)
             h.changeColsBounds(positions.size, positions, lb, ub)
-            updated_bounds.add(name)
 
         type_map = {
             "continuous": highspy.HighsVarType.kContinuous,
@@ -1350,9 +1344,7 @@ class Highs(Solver[None]):
         for name, vtype in diff.var_type.items():
             var = variables[name]
             positions, _ = _container_positions_and_mask(var)
-            integrality = np.full(
-                positions.size, int(type_map[vtype]), dtype=np.uint8
-            )
+            integrality = np.full(positions.size, int(type_map[vtype]), dtype=np.uint8)
             h.changeColsIntegrality(positions.size, positions, integrality)
 
         for name, rhs in diff.con_rhs.items():
@@ -1366,22 +1358,17 @@ class Highs(Solver[None]):
             for pos, lo, up in zip(positions, lower, upper):
                 h.changeRowBounds(int(pos), float(lo), float(up))
 
-        for name, values in diff.con_coef_updates.items():
+        for name in diff.con_coef_updates:
             con = constraints[name]
             csr, _ = con.to_matrix(var_label_index)
             csr.sort_indices()
             csr.eliminate_zeros()
-            n_rows = csr.shape[0]
             con_positions, _ = _con_positions_and_mask(con)
-            assert len(con_positions) == n_rows
-            for row_idx in range(n_rows):
-                row_pos = int(con_positions[row_idx])
+            for row_idx, row_pos in enumerate(con_positions):
                 start = csr.indptr[row_idx]
                 end = csr.indptr[row_idx + 1]
-                cols = csr.indices[start:end]
-                vals = csr.data[start:end]
-                for col, val in zip(cols, vals):
-                    h.changeCoeff(row_pos, int(col), float(val))
+                for col, val in zip(csr.indices[start:end], csr.data[start:end]):
+                    h.changeCoeff(int(row_pos), int(col), float(val))
 
         if diff.obj_linear is not None:
             n = len(diff.obj_linear.values)
