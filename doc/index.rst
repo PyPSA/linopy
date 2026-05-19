@@ -101,6 +101,7 @@ This package is published under MIT license.
    installation
    quick-start
    first-real-model
+   coming-from-other-tools
 
 .. toctree::
    :hidden:
@@ -137,7 +138,6 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Reference
 
-   coming-from-other-tools
    transport-tutorial
    testing-framework
    api
