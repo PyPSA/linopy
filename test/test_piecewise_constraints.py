@@ -41,7 +41,11 @@ from linopy.constants import (
     SEGMENT_DIM,
 )
 from linopy.piecewise import _slopes_to_points
-from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
+from linopy.solver_capabilities import (
+    SolverFeature,
+    get_available_solvers_with_feature,
+    solver_supports,
+)
 
 if TYPE_CHECKING:
     from linopy.piecewise import BreaksLike, _PwlInputs
@@ -52,6 +56,13 @@ Method: TypeAlias = Literal["sos2", "incremental", "lp", "auto"]
 _sos2_solvers = get_available_solvers_with_feature(
     SolverFeature.SOS_CONSTRAINTS, available_solvers
 )
+_sos2_direct_solvers = sorted(
+    s for s in _sos2_solvers if solver_supports(s, SolverFeature.DIRECT_API)
+)
+_SOS_PATHS = [
+    *[pytest.param(s, "direct", id=f"{s}-direct") for s in _sos2_direct_solvers],
+    *[pytest.param(s, "lp", id=f"{s}-lp") for s in sorted(_sos2_solvers)],
+]
 _any_solvers = [
     s for s in ["highs", "gurobi", "glpk", "cplex"] if s in available_solvers
 ]
@@ -2319,8 +2330,13 @@ class TestSignParameter:
         # f_b(10) on chord (5,10)→(15,15) is 12.5
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
+    @pytest.mark.skipif(not _SOS_PATHS, reason="No SOS-capable solver installed")
+    @pytest.mark.parametrize(("solver", "io_api"), _SOS_PATHS)
     def test_sos2_per_entity_nan_padding(
-        self, nan_padded_pwl_model: Callable[[Method], Model]
+        self,
+        nan_padded_pwl_model: Callable[[Method], Model],
+        solver: str,
+        io_api: str,
     ) -> None:
         """
         Per-entity NaN-padded breakpoints with method='sos2': the SOS
@@ -2328,9 +2344,15 @@ class TestSignParameter:
         direct API (via label→position resolution) and the LP writer
         (via masked-member filtering) so the solve returns the same
         answer as ``method='lp'``. Regression for #688.
+
+        Parametrized across every SOS-capable solver × io_api so the
+        bug surfaces no matter which backend handles the SOS section
+        (gurobi-lp masked the bug on master by silently dropping
+        unknown ``x-1`` members; cplex-lp and gurobi-direct surfaced
+        it as a parse / OOB error).
         """
         m = nan_padded_pwl_model("sos2")
-        m.solve()
+        m.solve(solver_name=solver, io_api=io_api)
         # f_b(10) on chord (5,10)→(15,15) is 12.5 — same oracle as lp variant
         assert abs(float(m.solution.sel({"entity": "b"})["y"]) - 12.5) < 1e-3
 
