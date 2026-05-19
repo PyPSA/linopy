@@ -1151,13 +1151,30 @@ class TestRemoteBracket:
         Model.solve's suppression worked).
         """
         from linopy.io import read_netcdf
+        from linopy.sos_reformulation import (
+            sos_reformulation_context,
+            suppress_serialization_warning,
+        )
 
         class _Handler:
-            def solve_on_remote(_self, model: Model, **kwargs: object) -> Model:
-                observed["state_active"] = model._sos_reformulation_state is not None
-                observed["solver_name_arg"] = kwargs.get("solver_name")
-                model.to_netcdf(tmp_path / "sent.nc")
-                solved = read_netcdf(tmp_path / "sent.nc")
+            def solve_on_remote(
+                _self,
+                model: Model,
+                *,
+                reformulate_sos: bool | str = False,
+                **kwargs: object,
+            ) -> Model:
+                solver_name = kwargs.get("solver_name")
+                with sos_reformulation_context(
+                    model, solver_name, reformulate_sos
+                ) as applied:
+                    observed["state_active"] = (
+                        model._sos_reformulation_state is not None
+                    )
+                    observed["solver_name_arg"] = solver_name
+                    with suppress_serialization_warning(active=applied):
+                        model.to_netcdf(tmp_path / "sent.nc")
+                    solved = read_netcdf(tmp_path / "sent.nc")
                 for _name, var in solved.variables.items():
                     arr = np.zeros(var.labels.shape, dtype=float)
                     var.solution = xr.DataArray(arr, dims=var.labels.dims)

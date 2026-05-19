@@ -93,6 +93,7 @@ from linopy.solvers import (
 from linopy.sos_reformulation import (
     SOSReformulationResult,
     reformulate_sos_constraints,
+    sos_reformulation_context,
     undo_sos_reformulation,
 )
 from linopy.types import (
@@ -1737,62 +1738,39 @@ class Model:
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
-            # Reformulate before the model is serialized to netcdf inside the
-            # remote helper, so the worker just solves a plain MILP and the
-            # SOS lifecycle stays on this (caller's) Model.
-            applied_sos_reformulation_here = self._resolve_sos_reformulation(
-                solver_name, reformulate_sos
-            )
-            if applied_sos_reformulation_here:
-                logger.info(
-                    f"Reformulating SOS constraints for remote solver {solver_name}"
+            if isinstance(remote, OetcHandler):
+                solved = remote.solve_on_oetc(
+                    self,
+                    solver_name=solver_name,
+                    reformulate_sos=reformulate_sos,
+                    **solver_options,
                 )
-                self.apply_sos_reformulation()
+            else:
+                solved = remote.solve_on_remote(
+                    self,
+                    solver_name=solver_name,
+                    io_api=io_api,
+                    problem_fn=problem_fn,
+                    solution_fn=solution_fn,
+                    log_fn=log_fn,
+                    basis_fn=basis_fn,
+                    warmstart_fn=warmstart_fn,
+                    keep_files=keep_files,
+                    sanitize_zeros=sanitize_zeros,
+                    reformulate_sos=reformulate_sos,
+                    **solver_options,
+                )
 
-            try:
-                with warnings.catch_warnings():
-                    # The remote helpers call self.to_netcdf(...) internally;
-                    # serializing the reformulated form here is intentional, so
-                    # silence the UserWarning that to_netcdf emits in that case.
-                    if applied_sos_reformulation_here:
-                        warnings.filterwarnings(
-                            "ignore",
-                            message="Serializing a model with an active SOS "
-                            "reformulation",
-                            category=UserWarning,
-                        )
-                    if isinstance(remote, OetcHandler):
-                        solved = remote.solve_on_oetc(
-                            self, solver_name=solver_name, **solver_options
-                        )
-                    else:
-                        solved = remote.solve_on_remote(
-                            self,
-                            solver_name=solver_name,
-                            io_api=io_api,
-                            problem_fn=problem_fn,
-                            solution_fn=solution_fn,
-                            log_fn=log_fn,
-                            basis_fn=basis_fn,
-                            warmstart_fn=warmstart_fn,
-                            keep_files=keep_files,
-                            sanitize_zeros=sanitize_zeros,
-                            **solver_options,
-                        )
-
-                if solved.objective.value is not None:
-                    self.objective.set_value(float(solved.objective.value))
-                self.status = solved.status
-                self.termination_condition = solved.termination_condition
-                for k, v in self.variables.items():
-                    v.solution = solved.variables[k].solution
-                for k, c in self.constraints.items():
-                    if "dual" in solved.constraints[k]:
-                        c.dual = solved.constraints[k].dual
-                return self.status, self.termination_condition
-            finally:
-                if applied_sos_reformulation_here:
-                    self.undo_sos_reformulation()
+            if solved.objective.value is not None:
+                self.objective.set_value(float(solved.objective.value))
+            self.status = solved.status
+            self.termination_condition = solved.termination_condition
+            for k, v in self.variables.items():
+                v.solution = solved.variables[k].solution
+            for k, c in self.constraints.items():
+                if "dual" in solved.constraints[k]:
+                    c.dual = solved.constraints[k].dual
+            return self.status, self.termination_condition
 
         if len(available_solvers) == 0:
             raise RuntimeError("No solver installed.")
@@ -1829,16 +1807,7 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        applied_sos_reformulation_here = self._resolve_sos_reformulation(
-            solver_name, reformulate_sos
-        )
-        if applied_sos_reformulation_here:
-            logger.info(f"Reformulating SOS constraints for solver {solver_name}")
-            self.apply_sos_reformulation()
-        # If SOS is present and the solver doesn't support it (and the user
-        # didn't ask for reformulation), Solver._build() will raise.
-
-        try:
+        with sos_reformulation_context(self, solver_name, reformulate_sos):
             if sanitize_zeros:
                 self.constraints.sanitize_zeros()
             if sanitize_infinities:
@@ -1885,9 +1854,6 @@ class Model:
                         os.remove(fn)
 
             return self.assign_result(result)
-        finally:
-            if applied_sos_reformulation_here:
-                self.undo_sos_reformulation()
 
     def assign_result(
         self,

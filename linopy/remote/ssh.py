@@ -12,6 +12,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Union
 
 from linopy.io import read_netcdf
+from linopy.sos_reformulation import (
+    sos_reformulation_context,
+    suppress_serialization_warning,
+)
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -200,43 +204,52 @@ class RemoteHandler:
         if exit_status:
             raise OSError("Execution on remote raised an error, see above.")
 
-    def solve_on_remote(self, model: "Model", **kwargs: Any) -> "Model":
+    def solve_on_remote(
+        self,
+        model: "Model",
+        *,
+        reformulate_sos: bool | str = False,
+        **kwargs: Any,
+    ) -> "Model":
         """
         Solve a linopy model on the remote machine.
 
-        This function
-
-            1. saves the model to a file on the local machine.
-            2. copies that file to the remote machine.
-            3. loads, solves and writes out the model, all on the remote machine.
-            4. copies the solved model to the local machine.
-            5. loads and returns the solved model.
+        Reformulates SOS constraints locally before serialization when
+        requested, so the worker just solves a plain MILP and the SOS
+        lifecycle stays on the caller's model.
 
         Parameters
         ----------
         model : linopy.model.Model
+        reformulate_sos : bool | "auto", optional
+            Forwarded to ``Model._resolve_sos_reformulation`` to decide
+            whether to apply SOS reformulation locally before transfer.
         **kwargs :
-            Keyword arguments passed to `linopy.model.Model.solve`.
+            Keyword arguments passed to `linopy.model.Model.solve` on the
+            remote worker.
 
         Returns
         -------
         linopy.model.Model
             Solved model.
         """
-        self.write_python_file_on_remote(**kwargs)
-        self.write_model_on_remote(model)
+        solver_name = kwargs.get("solver_name")
+        with sos_reformulation_context(model, solver_name, reformulate_sos) as applied:
+            self.write_python_file_on_remote(**kwargs)
+            with suppress_serialization_warning(active=applied):
+                self.write_model_on_remote(model)
 
-        command = f"{self.python_executable} {self.python_file}"
+            command = f"{self.python_executable} {self.python_file}"
 
-        logger.info("Solving model on remote.")
-        self.execute(command)
+            logger.info("Solving model on remote.")
+            self.execute(command)
 
-        logger.info("Retrieve solved model from remote.")
-        with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-            self.sftp_client.get(self.model_solved_file, fn.name)
-            solved = read_netcdf(fn.name)
+            logger.info("Retrieve solved model from remote.")
+            with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
+                self.sftp_client.get(self.model_solved_file, fn.name)
+                solved = read_netcdf(fn.name)
 
-        self.sftp_client.remove(self.python_file)
-        self.sftp_client.remove(self.model_solved_file)
+            self.sftp_client.remove(self.python_file)
+            self.sftp_client.remove(self.model_solved_file)
 
-        return solved
+            return solved

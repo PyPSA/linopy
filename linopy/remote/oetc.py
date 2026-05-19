@@ -26,6 +26,10 @@ except ImportError:
     _oetc_deps_available = False
 
 import linopy
+from linopy.sos_reformulation import (
+    sos_reformulation_context,
+    suppress_serialization_warning,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -631,7 +635,12 @@ class OetcHandler:
             raise Exception(f"Failed to download file from GCP: {e}")
 
     def solve_on_oetc(
-        self, model: Model, solver_name: str | None = None, **solver_options: Any
+        self,
+        model: Model,
+        solver_name: str | None = None,
+        *,
+        reformulate_sos: bool | str = False,
+        **solver_options: Any,
     ) -> Model:
         """
         Solve a linopy model on the OET Cloud compute app.
@@ -657,10 +666,14 @@ class OetcHandler:
             effective_solver = solver_name or self.settings.solver
             merged_solver_options = {**self.settings.solver_options, **solver_options}
 
-            with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
-                fn.file.close()
-                model.to_netcdf(fn.name)
-                input_file_name = self._upload_file_to_gcp(fn.name)
+            with sos_reformulation_context(
+                model, effective_solver, reformulate_sos
+            ) as applied:
+                with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+                    fn.file.close()
+                    with suppress_serialization_warning(active=applied):
+                        model.to_netcdf(fn.name)
+                    input_file_name = self._upload_file_to_gcp(fn.name)
 
             job_uuid = self._submit_job_to_compute_service(
                 input_file_name, effective_solver, merged_solver_options
