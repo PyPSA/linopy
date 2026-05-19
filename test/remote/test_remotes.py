@@ -205,14 +205,14 @@ class TestSSHClass:
             solver_name="highs",
         )
 
-        built: list[RemoteHandler] = []
+        built: list[Any] = []
 
         class FakeRemoteHandler:
             def __init__(self, **kwargs: Any) -> None:
                 self.kwargs = kwargs
                 self.execute = MagicMock()
                 self.solve_on_remote = MagicMock(return_value=_solved_model_like(m))
-                built.append(self)  # type: ignore[arg-type]
+                built.append(self)
 
         monkeypatch.setattr("linopy.remote.ssh.RemoteHandler", FakeRemoteHandler)
         ssh.solve(m)
