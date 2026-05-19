@@ -1043,7 +1043,7 @@ class Constraint(ConstraintBase):
     Supports setters, xarray operations via conwrap, and from_rule construction.
     """
 
-    __slots__ = ("_data", "_model", "_assigned")
+    __slots__ = ("_data", "_model", "_assigned", "_coef_dirty")
 
     def __init__(
         self,
@@ -1072,6 +1072,7 @@ class Constraint(ConstraintBase):
         self._assigned = "labels" in data
         self._data = data
         self._model = model
+        self._coef_dirty = False
 
     @property
     def data(self) -> Dataset:
@@ -1121,6 +1122,7 @@ class Constraint(ConstraintBase):
     def coeffs(self, value: ConstantLike) -> None:
         value = DataArray(value).broadcast_like(self.vars, exclude=[self.term_dim])
         self._data = assign_multiindex_safe(self.data, coeffs=value)
+        self._coef_dirty = True
 
     @property
     def vars(self) -> DataArray:
@@ -1134,6 +1136,7 @@ class Constraint(ConstraintBase):
             raise TypeError("Expected value to be of type DataArray or Variable")
         value = value.broadcast_like(self.coeffs, exclude=[self.term_dim])
         self._data = assign_multiindex_safe(self.data, vars=value)
+        self._coef_dirty = True
 
     @property
     def sign(self) -> DataArray:
@@ -1154,7 +1157,11 @@ class Constraint(ConstraintBase):
         value = expressions.as_expression(
             value, self.model, coords=self.coords, dims=self.coord_dims
         )
-        self.lhs = self.lhs - value.reset_const()
+        residual = value.reset_const()
+        if residual.nterm == 0:
+            self._data = assign_multiindex_safe(self.data, rhs=value.const)
+            return
+        self.lhs = self.lhs - residual
         self._data = assign_multiindex_safe(self.data, rhs=value.const)
 
     @property
@@ -1170,6 +1177,7 @@ class Constraint(ConstraintBase):
         self._data = self.data.drop_vars(["coeffs", "vars"]).assign(
             coeffs=value.coeffs, vars=value.vars, rhs=self.rhs - value.const
         )
+        self._coef_dirty = True
 
     @property
     @has_optimized_model
