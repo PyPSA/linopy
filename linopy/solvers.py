@@ -46,6 +46,13 @@ from linopy.constants import (
     Status,
     TerminationCondition,
 )
+from linopy.persistent import (
+    ModelDiff,
+    ModelSnapshot,
+    RebuildReason,
+    UnsupportedUpdate,
+    compute_diff,
+)
 
 
 def _parse_int_label(name: str) -> int:
@@ -104,6 +111,11 @@ def _solution_from_labels(
         return np.array([], dtype=float)
     assert labels is not None
     return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
+
+
+def _clear_coef_dirty(constraints: Any) -> None:
+    for c in constraints.data.values():
+        c._coef_dirty = False
 
 
 class SolverFeature(Enum):
@@ -403,9 +415,17 @@ class Solver(ABC, Generic[EnvType]):
     _n_cons: int = field(init=False, default=0, repr=False)
     _problem_fn: Path | None = field(init=False, default=None, repr=False)
 
+    snapshot: ModelSnapshot | None = field(init=False, default=None, repr=False)
+    _rebuilds: int = field(init=False, default=0, repr=False)
+    _in_place_updates: int = field(init=False, default=0, repr=False)
+    _last_rebuild_reason: RebuildReason = field(
+        init=False, default=RebuildReason.NONE, repr=False
+    )
+
     display_name: ClassVar[str] = ""
     features: ClassVar[frozenset[SolverFeature]] = frozenset()
     accepted_io_apis: ClassVar[frozenset[str]] = frozenset()
+    supports_persistent_update: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if type(self) is Solver:
@@ -418,6 +438,15 @@ class Solver(ABC, Generic[EnvType]):
                 "Please install first to initialize solver instance."
             )
             raise ImportError(msg)
+        self._lock: threading.Lock = threading.Lock()
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        raise UnsupportedUpdate(type(self).__name__)
 
     @property
     def solver_options(self) -> dict[str, Any]:
@@ -521,6 +550,8 @@ class Solver(ABC, Generic[EnvType]):
         self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
+            self.snapshot = ModelSnapshot.capture(self.model)
+            _clear_coef_dirty(self.model.constraints)
         else:
             self._build_file(**build_kwargs)
 
@@ -590,38 +621,91 @@ class Solver(ABC, Generic[EnvType]):
             self.io_api = read_io_api_from_problem_file(problem_fn)
         self._cache_model_sizes(model)
 
-    def solve(self, **run_kwargs: Any) -> Result:
+    def solve(
+        self,
+        model: Model | None = None,
+        assign: bool = False,
+        **run_kwargs: Any,
+    ) -> Result:
         """
         Run the prepared solver and return a :class:`Result`.
 
-        The canonical low-level pattern is::
-
-            solver = Solver.from_name("gurobi", model, io_api="direct")
-            result = solver.solve()
-            model.assign_result(result, solver=solver)
-
-        Passing ``solver=`` to :meth:`Model.assign_result` wires
-        ``model.solver`` so post-solve helpers like
-        :meth:`Model.compute_infeasibilities` keep working.
-
-        Raises
-        ------
-        ValueError
-            If the attached model has no objective set. Submit-time check
-            shared by both ``Model.solve()`` and direct-Solver callers.
+        With ``model`` supplied, diff against the held snapshot and either
+        apply in place or rebuild before running. Requires ``io_api='direct'``.
+        With ``assign=True`` the Result is written back to the target Model
+        via :meth:`Model.assign_result`.
         """
+        if model is not None:
+            if self.io_api != "direct":
+                raise ValueError("solve(model=...) requires io_api='direct'")
+            with self._lock:
+                if self.solver_model is None:
+                    self.model = model
+                    self._build()
+                else:
+                    self._update_locked(model, apply=True)
+            target = model
+        else:
+            target = self.model  # type: ignore[assignment]
+
         if self.model is not None and self.model.objective.expression.empty:
             raise ValueError(
                 "No objective has been set on the model. Use `m.add_objective(...)` "
                 "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
             )
         if self.io_api == "direct" or self.solver_model is not None:
-            return self._run_direct(**run_kwargs)
-        if self._problem_fn is not None:
-            return self._run_file(**run_kwargs)
-        raise RuntimeError(
-            "Solver has not been built; call Solver.from_name(...) or _build() first."
-        )
+            result = self._run_direct(**run_kwargs)
+        elif self._problem_fn is not None:
+            result = self._run_file(**run_kwargs)
+        else:
+            raise RuntimeError(
+                "Solver has not been built; call Solver.from_name(...) or _build() first."
+            )
+
+        if assign and target is not None:
+            target.assign_result(result, solver=self)
+        return result
+
+    def update(self, model: Model, apply: bool = True) -> ModelDiff:
+        if self.io_api != "direct":
+            raise ValueError("update requires io_api='direct'")
+        if self.snapshot is None or self.solver_model is None:
+            raise RuntimeError("Solver has not been built")
+        with self._lock:
+            return self._update_locked(model, apply=apply)
+
+    def _update_locked(self, model: Model, apply: bool) -> ModelDiff:
+        assert self.snapshot is not None
+        same_model = model is self.model
+        diff = compute_diff(self.snapshot, model, same_model=same_model)
+        if not apply:
+            return diff
+        if diff.rebuild_required:
+            self._rebuild(model, diff.rebuild_reason)
+            return diff
+        try:
+            self.apply_update(
+                diff,
+                model.variables.label_index,
+                model.constraints.label_index,
+            )
+        except Exception:
+            self._last_rebuild_reason = RebuildReason.BACKEND_REJECTED
+            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
+            return diff
+        self.model = model
+        self.snapshot = ModelSnapshot.capture(model)
+        _clear_coef_dirty(model.constraints)
+        self._in_place_updates += 1
+        self._last_rebuild_reason = RebuildReason.NONE
+        return diff
+
+    def _rebuild(self, model: Model, reason: RebuildReason) -> None:
+        self.close()
+        self.model = model
+        self._build()
+        self._rebuilds += 1
+        self._last_rebuild_reason = reason
 
     def _run_direct(self, **run_kwargs: Any) -> Result:
         """Run the pre-built native solver model. Override per-solver."""
@@ -774,6 +858,18 @@ class Solver(ABC, Generic[EnvType]):
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
             self.close()
+
+    def __getstate__(self) -> dict[str, Any]:
+        drop = {"solver_model", "env", "_env_stack", "snapshot", "_lock"}
+        return {k: v for k, v in self.__dict__.items() if k not in drop}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.solver_model = None
+        self.env = None
+        self._env_stack = None
+        self.snapshot = None
+        self._lock = threading.Lock()
 
     def __repr__(self) -> str:
         status = self.status.status.value if self.status is not None else "unsolved"
