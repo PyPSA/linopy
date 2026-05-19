@@ -46,9 +46,32 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * Xpress now supports ``io_api="direct"``: the linopy model is loaded via the native ``loadproblem`` array API instead of being serialised through an LP/MPS file, with SOS constraints attached in-place. Adds ``model.to_xpress()`` matching the existing ``to_gurobipy`` / ``to_highspy`` / ``to_mosek`` helpers.
 * Writing the solution back to the model after solving is faster: it no longer rebuilds the constraint matrix, and now uses positional (rather than label-based) indexing — roughly 2× faster overall.
 
+*Remote solves*
+
+* Pass ``remote=`` to ``Model.solve`` to run the inner solver on a remote worker:
+
+  .. code-block:: python
+
+      m.solve("gurobi", remote=OetcSettings(...), Method=2)
+      m.solve("highs", remote=SshSettings(hostname=...), presolve="on")
+
+  ``solver_name`` and ``**solver_options`` work the same as for local solves; ``remote=`` selects *where* to run. After the call, ``model.remote`` holds the transport instance (mirrors :attr:`Model.solver`).
+
 **Deprecations**
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
+* ``linopy.remote.OetcHandler`` and ``linopy.remote.RemoteHandler`` are deprecated. Construction emits a ``DeprecationWarning``; the ``solve_on_oetc`` / ``solve_on_remote`` return contracts are unchanged. Migrate:
+
+  .. code-block:: python
+
+      # Before
+      handler = OetcHandler(settings_with_solver)
+      solved = handler.solve_on_oetc(m, TimeLimit=100)
+
+      # After
+      m.solve("gurobi", remote=OetcSettings(...), TimeLimit=100)
+
+  Passing an existing handler via ``Model.solve(remote=handler, ...)`` is also deprecated — pass the settings dataclass instead.
 
 **Bug Fixes**
 
