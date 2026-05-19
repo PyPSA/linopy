@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import gzip
 import json
 import logging
@@ -11,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
+
+from linopy.constants import Result, SolverReport, Status
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -46,6 +49,17 @@ class OetcCredentials:
 
 @dataclass
 class OetcSettings:
+    """
+    Config for the OET Cloud (OETC) remote service.
+
+    Carries the auth/orchestrator endpoints, the worker resource sizing,
+    and **defaults** for the inner solver and its options. The defaults
+    can be overridden per call:
+
+    >>> m.solve("gurobi", remote=OetcSettings(...), Method=2)  # doctest: +SKIP
+    >>> m.solve(remote=OetcSettings(..., solver="gurobi"))  # doctest: +SKIP
+    """
+
     credentials: OetcCredentials
     name: str
     authentication_server_url: str
@@ -786,3 +800,114 @@ class OetcHandler:
 
         except Exception as e:
             raise Exception(f"Failed to upload file to GCP: {e}")
+
+
+@dataclass
+class Oetc:
+    """
+    Remote handler that solves a linopy model on the OET Cloud (OETC) service.
+
+    This is a standalone class — *not* a :class:`linopy.solvers.Solver`
+    subclass. It ships a netcdf to a cloud worker which runs the inner
+    solver (``solver_name``) and returns a solved netcdf. The lifecycle
+    splits into ``upload`` / ``submit`` / ``collect`` so future async work
+    can drive the seam without changing callers.
+
+    Parameters
+    ----------
+    settings : OetcSettings
+        Auth + orchestrator config (where to talk to).
+    solver_name : str
+        Inner solver to run on the worker (e.g. ``"gurobi"``, ``"highs"``).
+    options : dict, optional
+        Solver options passed through to the inner solver.
+
+    Notes
+    -----
+    Construction is cheap; network I/O happens at :meth:`upload` /
+    :meth:`submit` / :meth:`collect`. :meth:`solve` runs all three
+    synchronously.
+    """
+
+    settings: OetcSettings
+    solver_name: str
+    options: dict[str, Any] = field(default_factory=dict)
+
+    _handler: OetcHandler | None = field(init=False, default=None, repr=False)
+    _input_file_name: str | None = field(init=False, default=None, repr=False)
+    _job_uuid: str | None = field(init=False, default=None, repr=False)
+    _solved_model: Any = field(init=False, default=None, repr=False)
+    _n_vars: int = field(init=False, default=0, repr=False)
+    _n_cons: int = field(init=False, default=0, repr=False)
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Return True iff the OETC network deps are importable."""
+        return _oetc_deps_available
+
+    def upload(self, model: Model) -> None:
+        """Serialize the model to netcdf and upload it to the cloud bucket."""
+        from linopy.remote._common import _validate_inner_solver
+
+        _validate_inner_solver(self.solver_name, model)
+
+        self._handler = OetcHandler(self.settings)
+        self._n_vars = model._xCounter
+        self._n_cons = model._cCounter
+
+        with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
+            fn.file.close()
+            model.to_netcdf(fn.name)
+            self._input_file_name = self._handler._upload_file_to_gcp(fn.name)
+
+    def submit(self) -> str:
+        """Submit the prepared job to the orchestrator; return the job uuid."""
+        if self._handler is None or self._input_file_name is None:
+            raise RuntimeError("Call `upload(model)` before `submit()`.")
+        self._job_uuid = self._handler._submit_job_to_compute_service(
+            self._input_file_name, self.solver_name, dict(self.options)
+        )
+        return self._job_uuid
+
+    def collect(self, model: Model) -> Result:
+        """Poll, download, parse, and return a label-indexed Result."""
+        from linopy.remote._common import _scatter_solution_from_solved_model
+
+        if self._handler is None or self._job_uuid is None:
+            raise RuntimeError(
+                "Call `upload(model)` and `submit()` before `collect()`."
+            )
+
+        job_result = self._handler.wait_and_get_job_data(self._job_uuid)
+        if not job_result.output_files:
+            raise Exception("No output files found in completed job")
+        output_file_name = job_result.output_files[0]
+        if isinstance(output_file_name, dict) and "name" in output_file_name:
+            output_file_name = output_file_name["name"]
+
+        solution_file_path = self._handler._download_file_from_gcp(output_file_name)
+        try:
+            solved = linopy.io.read_netcdf(solution_file_path)
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(solution_file_path)
+
+        self._solved_model = solved
+
+        status = Status.from_termination_condition(solved.termination_condition)
+        solution = _scatter_solution_from_solved_model(
+            model, solved, self._n_vars, self._n_cons
+        )
+        report = SolverReport(runtime=job_result.duration_in_seconds)
+        return Result(
+            status=status,
+            solution=solution,
+            solver_name=self.solver_name,
+            report=report,
+        )
+
+    def solve(self, model: Model) -> Result:
+        """Run the full upload → submit → collect pipeline synchronously."""
+        self.upload(model)
+        self.submit()
+        return self.collect(model)

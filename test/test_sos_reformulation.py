@@ -6,16 +6,13 @@ import logging
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, cast
 
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 
 from linopy import Model, Variable, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
-from linopy.remote import RemoteHandler
 from linopy.sos_reformulation import (
     compute_big_m_values,
     reformulate_sos1,
@@ -1139,64 +1136,57 @@ class TestRemoteBracket:
         m.add_objective(x * np.array([1.0, 2.0, 3.0]), sense="max")
         return m
 
-    def _fake_handler(
-        self, observed: dict[str, object], tmp_path: Path
-    ) -> RemoteHandler:
+    @staticmethod
+    def _patch_ssh_solve(
+        monkeypatch: pytest.MonkeyPatch,
+        observed: dict[str, object],
+        tmp_path: Path,
+    ) -> None:
         """
-        Non-OetcHandler stand-in with the SSH-shaped `solve_on_remote`.
-
-        Records whether the model arrives in reformulated form, then runs
-        `model.to_netcdf(...)` and `read_netcdf(...)` (naturally — no
-        warning recording here, so we can observe at the call-site whether
-        Model.solve's suppression worked).
+        Replace ``linopy.remote.ssh.SSH.solve`` with a stub that records
+        whether the model arrives in reformulated form, exercises the
+        ``to_netcdf`` warning path, and returns a synthetic
+        :class:`Result` so ``Model.assign_result`` is exercised end to end.
         """
-        from linopy.io import read_netcdf
-        from linopy.sos_reformulation import (
-            sos_reformulation_context,
-            suppress_serialization_warning,
-        )
+        from linopy.constants import Result, Solution, Status
+        from linopy.remote.ssh import SSH
 
-        class _Handler:
-            def solve_on_remote(
-                _self,
-                model: Model,
-                *,
-                reformulate_sos: bool | Literal["auto"] = False,
-                **kwargs: object,
-            ) -> Model:
-                solver_name = kwargs.get("solver_name")
-                assert solver_name is None or isinstance(solver_name, str)
-                with sos_reformulation_context(
-                    model, solver_name, reformulate_sos
-                ) as applied:
-                    observed["state_active"] = (
-                        model._sos_reformulation_state is not None
-                    )
-                    observed["solver_name_arg"] = solver_name
-                    with suppress_serialization_warning(active=applied):
-                        model.to_netcdf(tmp_path / "sent.nc")
-                    solved = read_netcdf(tmp_path / "sent.nc")
-                for _name, var in solved.variables.items():
-                    arr = np.zeros(var.labels.shape, dtype=float)
-                    var.solution = xr.DataArray(arr, dims=var.labels.dims)
-                solved.objective.set_value(0.0)
-                solved.status = "ok"
-                solved.termination_condition = "optimal"
-                return solved
+        def fake_solve(self: SSH, model: Model) -> Result:
+            observed["state_active"] = model._sos_reformulation_state is not None
+            observed["solver_name_arg"] = self.solver_name
+            model.to_netcdf(tmp_path / "sent.nc")  # triggers any to_netcdf warning
+            n_vars = model._xCounter
+            n_cons = model._cCounter
+            return Result(
+                status=Status.from_termination_condition("optimal"),
+                solution=Solution(
+                    primal=np.zeros(n_vars, dtype=float),
+                    dual=np.full(n_cons, np.nan, dtype=float),
+                    objective=0.0,
+                ),
+                solver_name=self.solver_name,
+            )
 
-        return cast(RemoteHandler, _Handler())
+        monkeypatch.setattr(SSH, "solve", fake_solve)
 
-    def test_remote_brackets_and_suppresses_warning(self, tmp_path: Path) -> None:
+    def test_remote_brackets_and_suppresses_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from linopy.remote.ssh import SshSettings
+
         m = self._sos_model()
         observed: dict[str, object] = {}
-        handler = self._fake_handler(observed, tmp_path)
+        self._patch_ssh_solve(monkeypatch, observed, tmp_path)
 
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
-            m.solve(solver_name="highs", remote=handler, reformulate_sos=True)
+            m.solve(
+                solver_name="highs",
+                remote=SshSettings(hostname="ignored"),
+                reformulate_sos=True,
+            )
 
-        # Reformulation was active when the handler ran (apply happened
-        # before the remote dispatch).
+        # Reformulation was active when the transport ran.
         assert observed["state_active"] is True
         assert observed["solver_name_arg"] == "highs"
 
@@ -1209,26 +1199,38 @@ class TestRemoteBracket:
         assert "_sos_reform_x_y" not in m.variables
 
     def test_remote_skips_bracket_when_reformulate_sos_false(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from linopy.remote.ssh import SshSettings
+
         m = self._sos_model()
         observed: dict[str, object] = {}
-        handler = self._fake_handler(observed, tmp_path)
+        self._patch_ssh_solve(monkeypatch, observed, tmp_path)
 
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
-            m.solve(solver_name="highs", remote=handler, reformulate_sos=False)
+            m.solve(
+                solver_name="highs",
+                remote=SshSettings(hostname="ignored"),
+                reformulate_sos=False,
+            )
 
         # No reformulation happened — model still has the original SOS var
-        # when the handler sees it, and to_netcdf never warns.
+        # when the transport sees it, and to_netcdf never warns.
         assert observed["state_active"] is False
         assert not any("active SOS reformulation" in str(w.message) for w in captured)
         assert m._sos_reformulation_state is None
 
-    def test_remote_auto_requires_solver_name_with_sos(self, tmp_path: Path) -> None:
+    def test_remote_auto_requires_solver_name_with_sos(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from linopy.remote.ssh import SshSettings
+
         m = self._sos_model()
         observed: dict[str, object] = {}
-        handler = self._fake_handler(observed, tmp_path)
+        self._patch_ssh_solve(monkeypatch, observed, tmp_path)
 
-        with pytest.raises(ValueError, match="requires an explicit `solver_name`"):
-            m.solve(remote=handler, reformulate_sos="auto")
+        # Without an explicit solver_name, the transport dispatch refuses
+        # to run because there's no inner solver to ship.
+        with pytest.raises(ValueError, match="explicit `solver_name=`"):
+            m.solve(remote=SshSettings(hostname="ignored"), reformulate_sos="auto")

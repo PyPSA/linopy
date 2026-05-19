@@ -79,11 +79,13 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
+from linopy.remote.ssh import SshSettings
 
 try:
-    from linopy.remote import OetcHandler
+    from linopy.remote import OetcHandler, OetcSettings
 except ImportError:
     OetcHandler = None  # type: ignore
+    OetcSettings = None  # type: ignore
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -94,6 +96,7 @@ from linopy.sos_reformulation import (
     SOSReformulationResult,
     reformulate_sos_constraints,
     sos_reformulation_context,
+    suppress_serialization_warning,
     undo_sos_reformulation,
 )
 from linopy.types import (
@@ -110,6 +113,14 @@ if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
 
 logger = logging.getLogger(__name__)
+
+# Types accepted as ``remote=`` for the standalone-class dispatch in
+# :meth:`Model.solve` (as opposed to the legacy ``OetcHandler`` /
+# ``RemoteHandler`` deprecation path). The OETC entry is conditional on
+# the optional google-cloud / requests deps being available.
+_REMOTE_SETTINGS_TYPES: tuple[type, ...] = (SshSettings,)
+if OetcSettings is not None:
+    _REMOTE_SETTINGS_TYPES = (*_REMOTE_SETTINGS_TYPES, OetcSettings)
 
 
 def _coords_to_dict(
@@ -196,6 +207,7 @@ class Model:
     """
 
     _solver: solvers.Solver | None
+    _remote: Any
     _variables: Variables
     _constraints: Constraints
     _objective: Objective
@@ -243,6 +255,7 @@ class Model:
         "_relaxed_registry",
         "_piecewise_formulations",
         "_solver",
+        "_remote",
         "_sos_reformulation_state",
         "__weakref__",
     )
@@ -314,6 +327,7 @@ class Model:
             gettempdir() if solver_dir is None else solver_dir
         )
         self._solver: solvers.Solver | None = None
+        self._remote: Any = None
         self._sos_reformulation_state: SOSReformulationResult | None = None
 
     @property
@@ -325,6 +339,24 @@ class Model:
         if self._solver is not None and self._solver is not value:
             self._solver.close()
         self._solver = value
+
+    @property
+    def remote(self) -> Any:
+        """
+        Standalone remote-handler instance from the most recent solve, or ``None``.
+
+        Set by :meth:`solve` when called with ``remote=<Settings>``; lets
+        callers introspect handler state after the solve (e.g.
+        ``model.remote._job_uuid`` on OETC). ``None`` for local solves
+        and after a legacy ``remote=OetcHandler/RemoteHandler`` solve
+        (those are routed through the same path but the legacy handlers
+        aren't designed for post-solve inspection).
+        """
+        return self._remote
+
+    @remote.setter
+    def remote(self, value: Any) -> None:
+        self._remote = value
 
     @property
     def solver_model(self) -> Any:
@@ -1622,7 +1654,7 @@ class Model:
         sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
-        remote: RemoteHandler | OetcHandler | None = None,
+        remote: RemoteHandler | OetcHandler | OetcSettings | SshSettings | None = None,
         progress: bool | None = None,
         mock_solve: bool = False,
         reformulate_sos: bool | Literal["auto"] = False,
@@ -1727,50 +1759,37 @@ class Model:
                 f"Keyword argument `io_api` has to be one of {IO_APIS} or None"
             )
 
-        if remote is not None:
-            # The remote branch short-circuits before reaching Solver.solve(),
-            # which is where the empty-objective check normally fires. Replicate
-            # it here. This duplication becomes obsolete once OETC is folded
-            # into the Solver pipeline (see PyPSA/linopy#683).
-            if self.objective.expression.empty:
-                raise ValueError(
-                    "No objective has been set on the model. Use "
-                    "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
-                    "for a pure feasibility problem)."
-                )
-            if isinstance(remote, OetcHandler):
-                solved = remote.solve_on_oetc(
-                    self,
-                    solver_name=solver_name,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
-            else:
-                solved = remote.solve_on_remote(
-                    self,
-                    solver_name=solver_name,
-                    io_api=io_api,
-                    problem_fn=problem_fn,
-                    solution_fn=solution_fn,
-                    log_fn=log_fn,
-                    basis_fn=basis_fn,
-                    warmstart_fn=warmstart_fn,
-                    keep_files=keep_files,
-                    sanitize_zeros=sanitize_zeros,
-                    reformulate_sos=reformulate_sos,
-                    **solver_options,
-                )
+        # New standalone Oetc / SSH remote handlers are selected by passing
+        # their settings dataclass via ``remote=``. ``solver_name`` and
+        # ``**solver_options`` describe the *inner* solver to run on the
+        # worker.
+        if isinstance(remote, _REMOTE_SETTINGS_TYPES):
+            return self._solve_with_remote_settings(
+                remote,
+                inner_solver=solver_name,
+                solver_options=solver_options,
+                reformulate_sos=reformulate_sos,
+            )
 
-            if solved.objective.value is not None:
-                self.objective.set_value(float(solved.objective.value))
-            self.status = solved.status
-            self.termination_condition = solved.termination_condition
-            for k, v in self.variables.items():
-                v.solution = solved.variables[k].solution
-            for k, c in self.constraints.items():
-                if "dual" in solved.constraints[k]:
-                    c.dual = solved.constraints[k].dual
-            return self.status, self.termination_condition
+        if remote is not None:
+            # Back-compat shim: the legacy ``remote=OetcHandler/RemoteHandler``
+            # shape pre-dates the standalone Oetc/SSH classes. Route to the
+            # new entrypoint and warn. Slated for removal once one release of
+            # overlap has shipped.
+            return self._solve_via_legacy_remote(
+                remote,
+                solver_name=solver_name,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                basis_fn=basis_fn,
+                warmstart_fn=warmstart_fn,
+                keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
+                reformulate_sos=reformulate_sos,
+                solver_options=solver_options,
+            )
 
         if len(available_solvers) == 0:
             raise RuntimeError("No solver installed.")
@@ -1854,6 +1873,173 @@ class Model:
                         os.remove(fn)
 
             return self.assign_result(result)
+
+    def _solve_with_remote_settings(
+        self,
+        settings: Any,
+        *,
+        inner_solver: str | None,
+        solver_options: dict[str, Any],
+        reformulate_sos: bool | Literal["auto"],
+    ) -> tuple[str, str]:
+        """
+        Dispatch a remote solve from an ``OetcSettings`` / ``SshSettings`` instance.
+
+        The new standalone remote handlers (``Oetc``, ``SSH`` in
+        :mod:`linopy.remote`) are *not* :class:`linopy.solvers.Solver`
+        subclasses — they're a parallel concept. The instance is attached
+        to :attr:`Model.remote` after the call so callers can introspect
+        e.g. the OETC job uuid.
+        """
+        effective_inner: str | None
+        effective_options: dict[str, Any]
+        if OetcSettings is not None and isinstance(settings, OetcSettings):
+            from linopy.remote.oetc import Oetc
+
+            remote_cls: Any = Oetc
+            # ``OetcSettings`` carries defaults for solver/solver_options
+            # (preserves the legacy ``OetcHandler(settings).solve_on_oetc``
+            # config style). Outer ``Model.solve(solver_name, **opts)``
+            # wins when given.
+            effective_inner = inner_solver or settings.solver
+            effective_options = {**settings.solver_options, **solver_options}
+        elif isinstance(settings, SshSettings):
+            from linopy.remote.ssh import SSH
+
+            remote_cls = SSH
+            effective_inner = inner_solver
+            effective_options = solver_options
+        else:
+            raise TypeError(  # pragma: no cover — checked by _REMOTE_SETTINGS_TYPES
+                f"Unknown remote settings type: {type(settings).__name__}"
+            )
+
+        if not effective_inner:
+            raise ValueError(
+                f"`m.solve(remote=<{type(settings).__name__}>)` requires "
+                "an explicit `solver_name=` for the inner solver to run "
+                "on the worker."
+            )
+
+        if self.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use "
+                "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
+                "for a pure feasibility problem)."
+            )
+
+        # Apply SOS reformulation before the remote handler serializes the
+        # model; the worker just solves a plain MILP, the lifecycle stays
+        # on this Model. ``sos_reformulation_context`` handles the
+        # apply/undo bracket, ``suppress_serialization_warning`` silences
+        # the ``to_netcdf`` UserWarning that fires when serializing in
+        # reformulated form (intentional here).
+        with sos_reformulation_context(
+            self, effective_inner, reformulate_sos
+        ) as applied:
+            with suppress_serialization_warning(active=applied):
+                remote_instance = remote_cls(
+                    settings=settings,
+                    solver_name=effective_inner,
+                    options=effective_options,
+                )
+                self.remote = remote_instance
+                self.solver = None  # remote-solve clears any prior local solver
+                result = remote_instance.solve(self)
+            return self.assign_result(result)
+
+    def _solve_via_legacy_remote(
+        self,
+        remote: Any,
+        *,
+        solver_name: str | None,
+        io_api: str | None,
+        problem_fn: str | Path | None,
+        solution_fn: str | Path | None,
+        log_fn: str | Path | None,
+        basis_fn: str | Path | None,
+        warmstart_fn: str | Path | None,
+        keep_files: bool,
+        sanitize_zeros: bool,
+        reformulate_sos: bool | Literal["auto"],
+        solver_options: dict[str, Any],
+    ) -> tuple[str, str]:
+        """
+        Back-compat path for ``Model.solve(remote=<Handler>)``.
+
+        Calls ``handler.solve_on_oetc(...)`` / ``handler.solve_on_remote(...)``
+        as before — preserves the behavior tests on master are asserting
+        against — and emits a :class:`DeprecationWarning` pointing users at
+        the new ``remote=<Settings>`` shape.
+        """
+        if OetcHandler is not None and isinstance(remote, OetcHandler):
+            warnings.warn(
+                "Passing an OetcHandler via `remote=` is deprecated; pass "
+                "the OetcSettings directly: "
+                "`m.solve(remote=OetcSettings(...))`. The "
+                "`remote=OetcHandler/RemoteHandler` shape will be removed "
+                "in a future release.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        elif isinstance(remote, RemoteHandler):
+            warnings.warn(
+                "Passing a RemoteHandler via `remote=` is deprecated; pass "
+                "an SshSettings via `remote=` with a `solver_name=` for "
+                "the inner solver (`m.solve(solver_name, remote=SshSettings"
+                "(...))`). The `remote=OetcHandler/RemoteHandler` shape "
+                "will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        else:
+            raise TypeError(
+                f"`remote` must be an OetcHandler, RemoteHandler, "
+                f"OetcSettings, or SshSettings, got {type(remote).__name__}"
+            )
+
+        # The remote handlers short-circuit before reaching Solver.solve(),
+        # which is where the empty-objective check normally fires. Replicate
+        # it here.
+        if self.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use "
+                "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
+                "for a pure feasibility problem)."
+            )
+        if OetcHandler is not None and isinstance(remote, OetcHandler):
+            solved = remote.solve_on_oetc(
+                self,
+                solver_name=solver_name,
+                reformulate_sos=reformulate_sos,
+                **solver_options,
+            )
+        else:
+            solved = remote.solve_on_remote(
+                self,
+                solver_name=solver_name,
+                io_api=io_api,
+                problem_fn=problem_fn,
+                solution_fn=solution_fn,
+                log_fn=log_fn,
+                basis_fn=basis_fn,
+                warmstart_fn=warmstart_fn,
+                keep_files=keep_files,
+                sanitize_zeros=sanitize_zeros,
+                reformulate_sos=reformulate_sos,
+                **solver_options,
+            )
+
+        if solved.objective.value is not None:
+            self.objective.set_value(float(solved.objective.value))
+        self.status = solved.status
+        self.termination_condition = solved.termination_condition
+        for k, v in self.variables.items():
+            v.solution = solved.variables[k].solution
+        for k, c in self.constraints.items():
+            if "dual" in solved.constraints[k]:
+                c.dual = solved.constraints[k].dual
+        return self.status, self.termination_condition
 
     def assign_result(
         self,
