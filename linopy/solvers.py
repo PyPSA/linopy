@@ -676,6 +676,10 @@ class Solver(ABC, Generic[EnvType]):
 
     def _update_locked(self, model: Model, apply: bool) -> ModelDiff:
         assert self.snapshot is not None
+        if apply and not type(self).supports_persistent_update:
+            diff = ModelDiff(rebuild_reason=RebuildReason.BACKEND_REJECTED)
+            self._rebuild(model, RebuildReason.BACKEND_REJECTED)
+            return diff
         same_model = model is self.model
         diff = compute_diff(self.snapshot, model, same_model=same_model)
         if not apply:
