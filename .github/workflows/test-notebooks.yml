@@ -40,8 +40,8 @@ jobs:
 
           # Skip notebooks that require credentials or special setup
           case "$name" in
-            solve-on-oetc.ipynb|solve-on-remote.ipynb)
-              echo "Skipping $name (requires credentials or special setup)"
+            remote-machines.ipynb)
+              echo "Skipping $name (requires credentials or remote machine)"
               continue
               ;;
           esac
