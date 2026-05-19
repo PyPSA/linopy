@@ -6,6 +6,7 @@ Created on Sun Feb 13 21:34:55 2022.
 """
 
 import logging
+import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -173,9 +174,10 @@ class RemoteHandler:
         Write a model on the remote machine under `self.model_unsolved_file`.
         """
         logger.info(f"Saving unsolved model at {self.model_unsolved_file} on remote")
-        with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-            model.to_netcdf(fn.name)
-            self.sftp_client.put(fn.name, self.model_unsolved_file)
+        with tempfile.TemporaryDirectory(prefix="linopy") as tmpdir:
+            local_path = os.path.join(tmpdir, "model.nc")
+            model.to_netcdf(local_path)
+            self.sftp_client.put(local_path, self.model_unsolved_file)
 
     def execute(self, cmd: str) -> None:
         """
@@ -245,9 +247,10 @@ class RemoteHandler:
             self.execute(command)
 
             logger.info("Retrieve solved model from remote.")
-            with tempfile.NamedTemporaryFile(prefix="linopy", suffix=".nc") as fn:
-                self.sftp_client.get(self.model_solved_file, fn.name)
-                solved = read_netcdf(fn.name)
+            with tempfile.TemporaryDirectory(prefix="linopy") as tmpdir:
+                local_path = os.path.join(tmpdir, "model.nc")
+                self.sftp_client.get(self.model_solved_file, local_path)
+                solved = read_netcdf(local_path)
 
             self.sftp_client.remove(self.python_file)
             self.sftp_client.remove(self.model_solved_file)
