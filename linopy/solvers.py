@@ -2612,8 +2612,8 @@ class Mosek(Solver[None]):
 
     @classmethod
     def _license_probe(cls) -> None:
-        t = mosek.Task()
-        t.optimize()
+        with mosek.Env() as env, env.Task(0, 0) as task:
+            task.optimize()
 
     def _run_direct(
         self,
@@ -2644,7 +2644,8 @@ class Mosek(Solver[None]):
         assert model is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
-        task = self._env_stack.enter_context(mosek.Task())
+        env = self._env_stack.enter_context(mosek.Env())
+        task = self._env_stack.enter_context(env.Task(0, 0))
         m = self._build_solver_model(
             model,
             task,
@@ -2759,7 +2760,8 @@ class Mosek(Solver[None]):
         assert problem_fn is not None
         self.close()
         self._env_stack = contextlib.ExitStack()
-        m = self._env_stack.enter_context(mosek.Task())
+        mosek_env = self._env_stack.enter_context(mosek.Env())
+        m = self._env_stack.enter_context(mosek_env.Task(0, 0))
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
         problem_fn_ = path_to_string(problem_fn)

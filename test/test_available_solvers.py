@@ -140,3 +140,51 @@ def test_check_solver_licenses_returns_mapping(
 
 def test_available_solvers_reexported_from_top_level() -> None:
     assert linopy.available_solvers is available_solvers
+
+
+def test_mosek_license_probe_releases_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cls = _solver_class_for("mosek")
+    assert cls is not None
+
+    events: list[str] = []
+
+    class _FakeTask:
+        def __enter__(self) -> _FakeTask:
+            events.append("task_enter")
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            events.append("task_exit")
+
+        def optimize(self) -> None:
+            events.append("task_optimize")
+
+    class _FakeEnv:
+        def __enter__(self) -> _FakeEnv:
+            events.append("env_enter")
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            events.append("env_exit")
+
+        def Task(self, numcon: int, numvar: int) -> _FakeTask:
+            events.append(f"env_task({numcon},{numvar})")
+            return _FakeTask()
+
+    class _FakeMosek:
+        Env = _FakeEnv
+
+    monkeypatch.setattr(solvers_mod, "mosek", _FakeMosek)
+
+    cls._license_probe()
+
+    assert events == [
+        "env_enter",
+        "env_task(0,0)",
+        "task_enter",
+        "task_optimize",
+        "task_exit",
+        "env_exit",
+    ]
