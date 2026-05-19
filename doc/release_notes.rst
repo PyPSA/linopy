@@ -78,7 +78,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
   Passing an existing handler via ``Model.solve(remote=handler, ...)`` is also deprecated — pass the settings dataclass instead.
 * ``linopy.remote.OetcCredentials`` is deprecated. Pass ``email`` and ``password`` directly to :class:`OetcSettings` instead of wrapping them. The ``OetcSettings(credentials=OetcCredentials(...))`` shape still works for one deprecation cycle and emits a ``DeprecationWarning``.
-* The new :class:`linopy.remote.SSH` class deliberately exposes only ``solve(model)`` — narrower than the deprecated :class:`RemoteHandler`, which also offered ``execute(cmd)`` for arbitrary remote shell commands and direct paramiko shell/SFTP access. The common env-activation case is covered by ``SshSettings.setup_commands``. For other uses of the paramiko shell, drop to :class:`RemoteHandler` directly (during deprecation) or use ``paramiko`` itself — wrapping it isn't linopy's job.
+* :class:`linopy.remote.SSH` only exposes ``solve(model)``. For env activation use ``SshSettings.setup_commands``; for arbitrary remote shell commands, drop to :class:`RemoteHandler` (during deprecation) or paramiko directly.
 
 **Bug Fixes**
 
