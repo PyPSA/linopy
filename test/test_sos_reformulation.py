@@ -6,6 +6,7 @@ import logging
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ import xarray as xr
 
 from linopy import Model, Variable, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
+from linopy.remote import RemoteHandler
 from linopy.sos_reformulation import (
     compute_big_m_values,
     reformulate_sos1,
@@ -1110,7 +1112,7 @@ class TestResolveSOSReformulation:
         m = Model()
         m.add_variables(name="x")
         for v in (True, False, "auto"):
-            assert m._resolve_sos_reformulation(None, v) is False  # type: ignore[arg-type]
+            assert m._resolve_sos_reformulation(None, v) is False
 
     def test_true_does_not_consult_solver_name(self) -> None:
         # reformulate_sos=True must not require solver_name — no lookup.
@@ -1137,7 +1139,9 @@ class TestRemoteBracket:
         m.add_objective(x * np.array([1.0, 2.0, 3.0]), sense="max")
         return m
 
-    def _fake_handler(self, observed: dict[str, object], tmp_path: Path) -> object:
+    def _fake_handler(
+        self, observed: dict[str, object], tmp_path: Path
+    ) -> RemoteHandler:
         """
         Non-OetcHandler stand-in with the SSH-shaped `solve_on_remote`.
 
@@ -1162,7 +1166,7 @@ class TestRemoteBracket:
                 solved.termination_condition = "optimal"
                 return solved
 
-        return _Handler()
+        return cast(RemoteHandler, _Handler())
 
     def test_remote_brackets_and_suppresses_warning(self, tmp_path: Path) -> None:
         m = self._sos_model()
