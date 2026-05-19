@@ -2183,20 +2183,23 @@ class Xpress(Solver[None]):
         objcoef = np.asarray(M.c, dtype=float)
         has_q = objqcol1 is not None
         has_int = coltype is not None
+        base_kwargs: dict[str, Any] = dict(
+            probname="linopy",
+            rowtype=rowtype,
+            rhs=rhs,
+            rng=None,
+            objcoef=objcoef,
+            start=start,
+            collen=None,
+            rowind=rowind,
+            rowcoef=rowcoef,
+            lb=lb,
+            ub=ub,
+        )
         try:  # Try new API first (Xpress 9.8+)
             if has_q and has_int:
                 problem.loadMIQP(
-                    probname="linopy",
-                    rowtype=rowtype,
-                    rhs=rhs,
-                    rng=None,
-                    objcoef=objcoef,
-                    start=start,
-                    collen=None,
-                    rowind=rowind,
-                    rowcoef=rowcoef,
-                    lb=lb,
-                    ub=ub,
+                    **base_kwargs,
                     objqcol1=objqcol1,
                     objqcol2=objqcol2,
                     objqcoef=objqcoef,
@@ -2205,51 +2208,19 @@ class Xpress(Solver[None]):
                 )
             elif has_q:
                 problem.loadQP(
-                    probname="linopy",
-                    rowtype=rowtype,
-                    rhs=rhs,
-                    rng=None,
-                    objcoef=objcoef,
-                    start=start,
-                    collen=None,
-                    rowind=rowind,
-                    rowcoef=rowcoef,
-                    lb=lb,
-                    ub=ub,
+                    **base_kwargs,
                     objqcol1=objqcol1,
                     objqcol2=objqcol2,
                     objqcoef=objqcoef,
                 )
             elif has_int:
                 problem.loadMIP(
-                    probname="linopy",
-                    rowtype=rowtype,
-                    rhs=rhs,
-                    rng=None,
-                    objcoef=objcoef,
-                    start=start,
-                    collen=None,
-                    rowind=rowind,
-                    rowcoef=rowcoef,
-                    lb=lb,
-                    ub=ub,
+                    **base_kwargs,
                     coltype=coltype,
                     entind=entind,
                 )
             else:
-                problem.loadLP(
-                    probname="linopy",
-                    rowtype=rowtype,
-                    rhs=rhs,
-                    rng=None,
-                    objcoef=objcoef,
-                    start=start,
-                    collen=None,
-                    rowind=rowind,
-                    rowcoef=rowcoef,
-                    lb=lb,
-                    ub=ub,
-                )
+                problem.loadLP(**base_kwargs)
         except AttributeError:  # Fallback to old API
             problem.loadproblem(
                 probname="linopy",
@@ -2366,7 +2337,10 @@ class Xpress(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = xpress.problem()
-        m.readProb(path_to_string(problem_fn))
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
 
         return self._solve(
             m,
@@ -2461,7 +2435,10 @@ class Xpress(Solver[None]):
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    dual_values = np.asarray(m.getDuals(), dtype=float)
+                    try:  # getDuals introduced in 9.5; fallback for 9.4
+                        dual_values = np.asarray(m.getDuals(), dtype=float)
+                    except AttributeError:
+                        dual_values = np.asarray(m.getDual(), dtype=float)
                     if from_file:
                         dual = _solution_from_names(
                             dual_values,
