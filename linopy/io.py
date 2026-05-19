@@ -5,10 +5,12 @@ Module containing all import/export functionalities.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 import logging
 import shutil
 import time
+import warnings
 from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
@@ -845,7 +847,29 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
         Arguments passed to ``xarray.Dataset.to_netcdf``.
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token lives only on the in-memory
+    Model and is not persisted. If the model has an active SOS
+    reformulation at serialization time, the netcdf contains the
+    reformulated MILP form (aux binaries and cardinality constraints)
+    and a :class:`UserWarning` is emitted to flag that the deserialized
+    copy will not be able to undo the reformulation.
+
+    ``Model.solve(remote=...)`` invokes ``to_netcdf`` internally on the
+    reformulated model and suppresses this warning.
     """
+    if m._sos_reformulation_state is not None:
+        warnings.warn(
+            "Serializing a model with an active SOS reformulation. The "
+            "netcdf will contain the reformulated MILP form; the "
+            "reformulation lifecycle token is not persisted, so a "
+            "reader cannot undo it. Call `model.undo_sos_reformulation()` "
+            "first if you want the original SOS form on disk.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
         to_rename = set([*ds.dims, *ds.coords, *ds])
@@ -916,6 +940,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Returns
     -------
     m : linopy.Model
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token is not persisted by
+    :func:`to_netcdf`. If the saved model was in reformulated form,
+    the deserialized Model is too, but
+    :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
     from linopy.constraints import (
         Constraint,
@@ -1116,6 +1147,9 @@ def copy(m: Model, include_solution: bool = False, deep: bool = True) -> Model:
     for attr in m.scalar_attrs:
         if include_solution or attr not in SOLVE_STATE_ATTRS:
             setattr(new_model, attr, getattr(m, attr))
+
+    if m._sos_reformulation_state is not None:
+        new_model._sos_reformulation_state = _copy.deepcopy(m._sos_reformulation_state)
 
     return new_model
 
