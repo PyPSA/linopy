@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from linopy.model import Model
@@ -639,7 +639,7 @@ class OetcHandler:
         model: Model,
         solver_name: str | None = None,
         *,
-        reformulate_sos: bool | str = False,
+        reformulate_sos: bool | Literal["auto"] = False,
         **solver_options: Any,
     ) -> Model:
         """

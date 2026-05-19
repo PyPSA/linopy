@@ -9,7 +9,7 @@ import logging
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from linopy.io import read_netcdf
 from linopy.sos_reformulation import (
@@ -208,7 +208,7 @@ class RemoteHandler:
         self,
         model: "Model",
         *,
-        reformulate_sos: bool | str = False,
+        reformulate_sos: bool | Literal["auto"] = False,
         **kwargs: Any,
     ) -> "Model":
         """

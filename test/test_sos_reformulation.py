@@ -6,7 +6,7 @@ import logging
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -1161,10 +1161,11 @@ class TestRemoteBracket:
                 _self,
                 model: Model,
                 *,
-                reformulate_sos: bool | str = False,
+                reformulate_sos: bool | Literal["auto"] = False,
                 **kwargs: object,
             ) -> Model:
                 solver_name = kwargs.get("solver_name")
+                assert solver_name is None or isinstance(solver_name, str)
                 with sos_reformulation_context(
                     model, solver_name, reformulate_sos
                 ) as applied:
