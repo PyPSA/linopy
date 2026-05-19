@@ -98,16 +98,15 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Getting Started
 
-   prerequisites
-   create-a-model
-   create-a-model-with-coordinates
+   installation
+   quick-start
+   first-real-model
 
 .. toctree::
    :hidden:
    :maxdepth: 2
    :caption: User Guide
 
-   user-guide
    creating-variables
    creating-expressions
    creating-constraints
@@ -117,50 +116,30 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Examples
-
-   transport-tutorial
-   migrating-from-pyomo
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
-   :caption: Advanced Features
-
-   sos-constraints
-   piecewise-linear-constraints
-   testing-framework
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
    :caption: Solving
 
    using-solvers
    remote-machines
    gpu-acceleration
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
-   :caption: Troubleshooting
-
    infeasible-model
    gurobi-double-logging
 
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Comparisons
+   :caption: Advanced Formulations
 
-   benchmark
-   syntax
+   sos-constraints
+   piecewise-linear-constraints
 
 .. toctree::
    :hidden:
    :maxdepth: 2
    :caption: Reference
 
+   coming-from-other-tools
+   transport-tutorial
+   testing-framework
    api
    release_notes
    contributing

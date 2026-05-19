@@ -1,7 +1,7 @@
-Getting Started
-===============
+Installation
+============
 
-This guide will provide you with the necessary steps to get started with Linopy, from installation to creating your first model and beyond.
+This page covers everything you need to install Linopy and the solver(s) you want to use. Once you have it installed, head to the :doc:`quick-start` for your first model.
 
 Before you start, make sure you have the following:
 

@@ -393,4 +393,4 @@ See Also
 
 - :doc:`creating-variables`: Creating variables with coordinates
 - :doc:`creating-constraints`: Adding regular constraints
-- :doc:`user-guide`: General linopy usage patterns
+- :doc:`piecewise-linear-constraints`: Building piecewise-linear constraints (one of its methods uses SOS2 internally)
