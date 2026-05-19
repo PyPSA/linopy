@@ -10,6 +10,7 @@ import json
 import logging
 import shutil
 import time
+import warnings
 from collections.abc import Callable, Iterable
 from io import BufferedWriter
 from pathlib import Path
@@ -847,17 +848,27 @@ def to_netcdf(m: Model, *args: Any, **kwargs: Any) -> None:
     **kwargs : TYPE
         Keyword arguments passed to ``xarray.Dataset.to_netcdf``.
 
-    Raises
-    ------
-    RuntimeError
-        If the model has an active SOS reformulation. Call
-        :meth:`Model.undo_sos_reformulation` before serializing.
+    Notes
+    -----
+    The SOS reformulation lifecycle token lives only on the in-memory
+    Model and is not persisted. If the model has an active SOS
+    reformulation at serialization time, the netcdf contains the
+    reformulated MILP form (aux binaries and cardinality constraints)
+    and a :class:`UserWarning` is emitted to flag that the deserialized
+    copy will not be able to undo the reformulation.
+
+    ``Model.solve(remote=...)`` invokes ``to_netcdf`` internally on the
+    reformulated model and suppresses this warning.
     """
     if m._sos_reformulation_state is not None:
-        raise RuntimeError(
-            "Cannot serialize a model with an active SOS reformulation. "
-            "Call `model.undo_sos_reformulation()` first to restore the "
-            "original SOS form before saving."
+        warnings.warn(
+            "Serializing a model with an active SOS reformulation. The "
+            "netcdf will contain the reformulated MILP form; the "
+            "reformulation lifecycle token is not persisted, so a "
+            "reader cannot undo it. Call `model.undo_sos_reformulation()` "
+            "first if you want the original SOS form on disk.",
+            UserWarning,
+            stacklevel=2,
         )
 
     def with_prefix(ds: xr.Dataset, prefix: str) -> xr.Dataset:
@@ -929,6 +940,13 @@ def read_netcdf(path: Path | str, **kwargs: Any) -> Model:
     Returns
     -------
     m : linopy.Model
+
+    Notes
+    -----
+    The SOS reformulation lifecycle token is not persisted by
+    :func:`to_netcdf`. If the saved model was in reformulated form,
+    the deserialized Model is too, but
+    :meth:`Model.undo_sos_reformulation` is a no-op on it.
     """
     from linopy.constraints import (
         Constraint,

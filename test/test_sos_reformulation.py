@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model, Variable, available_solvers
 from linopy.constants import SOS_TYPE_ATTR
@@ -401,19 +403,25 @@ class TestApplyUndoSOSReformulation:
         assert "_sos_reform_x_y" in m.variables
         assert len(list(m.variables.sos)) == 0
 
-    def test_to_netcdf_raises_when_state_active(self, tmp_path: Path) -> None:
+    def test_to_netcdf_warns_when_state_active(self, tmp_path: Path) -> None:
         m = self._build_sos1_model()
         m.apply_sos_reformulation()
 
-        with pytest.raises(RuntimeError, match="active SOS reformulation"):
+        with pytest.warns(UserWarning, match="active SOS reformulation"):
             m.to_netcdf(tmp_path / "m.nc")
 
-    def test_to_netcdf_works_after_undo(self, tmp_path: Path) -> None:
+        # File written despite the warning — the netcdf carries the
+        # reformulated MILP form.
+        assert (tmp_path / "m.nc").exists()
+
+    def test_to_netcdf_silent_after_undo(self, tmp_path: Path) -> None:
         m = self._build_sos1_model()
         m.apply_sos_reformulation()
         m.undo_sos_reformulation()
 
-        m.to_netcdf(tmp_path / "m.nc")  # should not raise
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning fails the test
+            m.to_netcdf(tmp_path / "m.nc")
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
@@ -1084,3 +1092,121 @@ class TestAutoReformulation:
 
         with pytest.raises(ValueError, match="Invalid value for reformulate_sos"):
             m.solve(solver_name="highs", reformulate_sos="invalid")  # type: ignore[arg-type]
+
+
+class TestResolveSOSReformulation:
+    """Helper contracts not already exercised end-to-end by ``m.solve(...)``."""
+
+    @staticmethod
+    def _sos_model() -> Model:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        return m
+
+    def test_no_sos_short_circuits(self) -> None:
+        # Fast path: no SOS variables means False regardless of args.
+        m = Model()
+        m.add_variables(name="x")
+        for v in (True, False, "auto"):
+            assert m._resolve_sos_reformulation(None, v) is False  # type: ignore[arg-type]
+
+    def test_true_does_not_consult_solver_name(self) -> None:
+        # reformulate_sos=True must not require solver_name — no lookup.
+        assert self._sos_model()._resolve_sos_reformulation(None, True) is True
+
+    def test_auto_with_none_solver_raises(self) -> None:
+        with pytest.raises(ValueError, match="requires an explicit `solver_name`"):
+            self._sos_model()._resolve_sos_reformulation(None, "auto")
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS not installed")
+class TestRemoteBracket:
+    """
+    Model.solve(remote=...) must bracket SOS reformulation around the remote
+    dispatch and suppress the to_netcdf warning that fires inside the helper.
+    """
+
+    @staticmethod
+    def _sos_model() -> Model:
+        m = Model()
+        idx = pd.Index([0, 1, 2], name="i")
+        x = m.add_variables(lower=0, upper=1, coords=[idx], name="x")
+        m.add_sos_constraints(x, sos_type=1, sos_dim="i")
+        m.add_objective(x * np.array([1.0, 2.0, 3.0]), sense="max")
+        return m
+
+    def _fake_handler(self, observed: dict[str, object], tmp_path: Path) -> object:
+        """
+        Non-OetcHandler stand-in with the SSH-shaped `solve_on_remote`.
+
+        Records whether the model arrives in reformulated form, then runs
+        `model.to_netcdf(...)` and `read_netcdf(...)` (naturally — no
+        warning recording here, so we can observe at the call-site whether
+        Model.solve's suppression worked).
+        """
+        from linopy.io import read_netcdf
+
+        class _Handler:
+            def solve_on_remote(_self, model: Model, **kwargs: object) -> Model:
+                observed["state_active"] = model._sos_reformulation_state is not None
+                observed["solver_name_arg"] = kwargs.get("solver_name")
+                model.to_netcdf(tmp_path / "sent.nc")
+                solved = read_netcdf(tmp_path / "sent.nc")
+                for _name, var in solved.variables.items():
+                    arr = np.zeros(var.labels.shape, dtype=float)
+                    var.solution = xr.DataArray(arr, dims=var.labels.dims)
+                solved.objective.set_value(0.0)
+                solved.status = "ok"
+                solved.termination_condition = "optimal"
+                return solved
+
+        return _Handler()
+
+    def test_remote_brackets_and_suppresses_warning(self, tmp_path: Path) -> None:
+        m = self._sos_model()
+        observed: dict[str, object] = {}
+        handler = self._fake_handler(observed, tmp_path)
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            m.solve(solver_name="highs", remote=handler, reformulate_sos=True)
+
+        # Reformulation was active when the handler ran (apply happened
+        # before the remote dispatch).
+        assert observed["state_active"] is True
+        assert observed["solver_name_arg"] == "highs"
+
+        # No "active SOS reformulation" warning escaped Model.solve.
+        assert not any("active SOS reformulation" in str(w.message) for w in captured)
+
+        # Lifecycle wound down: state cleared, original SOS variable restored.
+        assert m._sos_reformulation_state is None
+        assert list(m.variables.sos) == ["x"]
+        assert "_sos_reform_x_y" not in m.variables
+
+    def test_remote_skips_bracket_when_reformulate_sos_false(
+        self, tmp_path: Path
+    ) -> None:
+        m = self._sos_model()
+        observed: dict[str, object] = {}
+        handler = self._fake_handler(observed, tmp_path)
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            m.solve(solver_name="highs", remote=handler, reformulate_sos=False)
+
+        # No reformulation happened — model still has the original SOS var
+        # when the handler sees it, and to_netcdf never warns.
+        assert observed["state_active"] is False
+        assert not any("active SOS reformulation" in str(w.message) for w in captured)
+        assert m._sos_reformulation_state is None
+
+    def test_remote_auto_requires_solver_name_with_sos(self, tmp_path: Path) -> None:
+        m = self._sos_model()
+        observed: dict[str, object] = {}
+        handler = self._fake_handler(observed, tmp_path)
+
+        with pytest.raises(ValueError, match="requires an explicit `solver_name`"):
+            m.solve(remote=handler, reformulate_sos="auto")
