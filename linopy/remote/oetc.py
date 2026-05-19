@@ -45,8 +45,24 @@ class ComputeProvider(str, Enum):
 
 @dataclass
 class OetcCredentials:
+    """
+    .. deprecated::
+        Pass ``email`` and ``password`` directly to :class:`OetcSettings`
+        instead of wrapping them in ``OetcCredentials``. This class will be
+        removed in a future release.
+    """
+
     email: str
     password: str
+
+    def __post_init__(self) -> None:
+        warnings.warn(
+            "`OetcCredentials` is deprecated; pass `email=` and `password=` "
+            "directly to `OetcSettings`. `OetcCredentials` will be removed "
+            "in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 
 @dataclass
@@ -62,16 +78,31 @@ class OetcSettings:
     >>> m.solve(remote=OetcSettings(..., solver="gurobi"))  # doctest: +SKIP
     """
 
-    credentials: OetcCredentials
     name: str
     authentication_server_url: str
     orchestrator_server_url: str
+    email: str | None = None
+    password: str | None = None
+    credentials: OetcCredentials | None = None
     compute_provider: ComputeProvider = ComputeProvider.GCP
     solver: str = "highs"
     solver_options: dict[str, Any] = field(default_factory=dict)
     cpu_cores: int = 2
     disk_space_gb: int = 10
     delete_worker_on_error: bool = False
+
+    def __post_init__(self) -> None:
+        if self.credentials is not None:
+            # `credentials=` warns from its own __post_init__; carry its
+            # values over unless `email` / `password` were also explicitly
+            # given (in which case the call site wins).
+            if self.email is None:
+                self.email = self.credentials.email
+            if self.password is None:
+                self.password = self.credentials.password
+            self.credentials = None
+        if not self.email or not self.password:
+            raise ValueError("`OetcSettings` requires `email` and `password`.")
 
     @classmethod
     def from_env(
@@ -116,9 +147,8 @@ class OetcSettings:
             )
 
         kwargs: dict[str, Any] = {
-            "credentials": OetcCredentials(
-                email=resolved["email"], password=resolved["password"]
-            ),
+            "email": resolved["email"],
+            "password": resolved["password"],
             "name": resolved["name"],
             "authentication_server_url": resolved["authentication_server_url"],
             "orchestrator_server_url": resolved["orchestrator_server_url"],
@@ -242,8 +272,8 @@ class OetcHandler:
         try:
             logger.info("OETC - Signing in...")
             payload = {
-                "email": self.settings.credentials.email,
-                "password": self.settings.credentials.password,
+                "email": self.settings.email,
+                "password": self.settings.password,
             }
 
             response = requests.post(
