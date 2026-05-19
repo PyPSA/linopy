@@ -1283,11 +1283,120 @@ class Highs(Solver[None]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
         return _has_module("highspy")
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        if diff.con_sign:
+            raise UnsupportedUpdate(
+                "HiGHS does not support in-place constraint sign change"
+            )
+
+        variables = var_label_index._variables
+        constraints = con_label_index._constraints
+        var_pos = var_label_index.label_to_pos
+        con_pos = con_label_index.label_to_pos
+
+        def _container_positions_and_mask(obj: Any) -> tuple[np.ndarray, np.ndarray]:
+            labels = obj.labels.values.ravel()
+            mask = labels != -1
+            positions = var_pos[labels[mask]].astype(np.int32)
+            return positions, mask
+
+        def _con_positions_and_mask(obj: Any) -> tuple[np.ndarray, np.ndarray]:
+            labels = obj.labels.values.ravel()
+            mask = labels != -1
+            positions = con_pos[labels[mask]].astype(np.int32)
+            return positions, mask
+
+        h = self.solver_model
+
+        bounds_for_type_binary: dict[str, None] = {}
+        for name, vtype in diff.var_type.items():
+            if vtype == "binary":
+                bounds_for_type_binary[name] = None
+
+        updated_bounds: set[str] = set()
+        names_for_bounds = set(diff.var_lb) | set(diff.var_ub) | set(bounds_for_type_binary)
+        for name in names_for_bounds:
+            var = variables[name]
+            positions, mask = _container_positions_and_mask(var)
+            if name in bounds_for_type_binary:
+                lb = np.zeros(positions.size, dtype=np.float64)
+                ub = np.ones(positions.size, dtype=np.float64)
+            else:
+                lb_src = diff.var_lb.get(name, var.lower).values.ravel()[mask]
+                ub_src = diff.var_ub.get(name, var.upper).values.ravel()[mask]
+                lb = np.asarray(lb_src, dtype=np.float64)
+                ub = np.asarray(ub_src, dtype=np.float64)
+            h.changeColsBounds(positions.size, positions, lb, ub)
+            updated_bounds.add(name)
+
+        type_map = {
+            "continuous": highspy.HighsVarType.kContinuous,
+            "binary": highspy.HighsVarType.kInteger,
+            "integer": highspy.HighsVarType.kInteger,
+            "semi_continuous": highspy.HighsVarType.kSemiContinuous,
+        }
+        for name, vtype in diff.var_type.items():
+            var = variables[name]
+            positions, _ = _container_positions_and_mask(var)
+            integrality = np.full(
+                positions.size, int(type_map[vtype]), dtype=np.uint8
+            )
+            h.changeColsIntegrality(positions.size, positions, integrality)
+
+        for name, rhs in diff.con_rhs.items():
+            con = constraints[name]
+            positions, mask = _con_positions_and_mask(con)
+            rhs_values = np.asarray(rhs.values.ravel()[mask], dtype=np.float64)
+            sign_values = con.sign.values.ravel()[mask]
+            inf = np.inf
+            lower = np.where(sign_values == "<=", -inf, rhs_values)
+            upper = np.where(sign_values == ">=", inf, rhs_values)
+            for pos, lo, up in zip(positions, lower, upper):
+                h.changeRowBounds(int(pos), float(lo), float(up))
+
+        for name, values in diff.con_coef_updates.items():
+            con = constraints[name]
+            csr, _ = con.to_matrix(var_label_index)
+            csr.sort_indices()
+            csr.eliminate_zeros()
+            n_rows = csr.shape[0]
+            con_positions, _ = _con_positions_and_mask(con)
+            assert len(con_positions) == n_rows
+            for row_idx in range(n_rows):
+                row_pos = int(con_positions[row_idx])
+                start = csr.indptr[row_idx]
+                end = csr.indptr[row_idx + 1]
+                cols = csr.indices[start:end]
+                vals = csr.data[start:end]
+                for col, val in zip(cols, vals):
+                    h.changeCoeff(row_pos, int(col), float(val))
+
+        if diff.obj_linear is not None:
+            n = len(diff.obj_linear.values)
+            positions = np.arange(n, dtype=np.int32)
+            costs = np.asarray(diff.obj_linear.values, dtype=np.float64)
+            h.changeColsCost(n, positions, costs)
+
+        if diff.obj_sense is not None:
+            sense = (
+                highspy.ObjSense.kMaximize
+                if diff.obj_sense == "max"
+                else highspy.ObjSense.kMinimize
+            )
+            h.changeObjectiveSense(sense)
+            self.sense = diff.obj_sense
 
     def _build_direct(
         self,
@@ -1594,6 +1703,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             SolverFeature.MIP_DUAL_BOUND_REPORT,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
@@ -1703,6 +1813,152 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
         gm.update()
         return gm
+
+    _GUROBI_VTYPE_MAP: ClassVar[dict[str, str]] = {
+        "continuous": "C",
+        "binary": "B",
+        "integer": "I",
+        "semi_continuous": "S",
+    }
+    _GUROBI_SIGN_MAP: ClassVar[dict[str, str]] = {
+        "<=": "<",
+        ">=": ">",
+        "=": "=",
+    }
+    _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        model = self.model
+        assert model is not None
+        gm = self.solver_model
+
+        var_l2p = var_label_index.label_to_pos
+        con_l2p = con_label_index.label_to_pos
+        n_active_vars = var_label_index.n_active_vars
+        n_active_cons = con_label_index.n_active_cons
+
+        var_payloads: list[tuple[np.ndarray, np.ndarray, str]] = []
+        for name, da in diff.var_lb.items():
+            var = model.variables[name]
+            labels = var.labels.values.ravel()
+            mask = labels != -1
+            positions = var_l2p[labels[mask]]
+            if (positions < 0).any() or (positions >= n_active_vars).any():
+                raise UnsupportedUpdate(f"var positions out of range for {name}")
+            var_payloads.append((positions, da.values.ravel()[mask], "LB"))
+        for name, da in diff.var_ub.items():
+            var = model.variables[name]
+            labels = var.labels.values.ravel()
+            mask = labels != -1
+            positions = var_l2p[labels[mask]]
+            if (positions < 0).any() or (positions >= n_active_vars).any():
+                raise UnsupportedUpdate(f"var positions out of range for {name}")
+            var_payloads.append((positions, da.values.ravel()[mask], "UB"))
+
+        type_payloads: list[tuple[np.ndarray, str]] = []
+        for name, vtype in diff.var_type.items():
+            if vtype not in self._GUROBI_VTYPE_MAP:
+                raise UnsupportedUpdate(f"unknown var type {vtype}")
+            var = model.variables[name]
+            labels = var.labels.values.ravel()
+            mask = labels != -1
+            positions = var_l2p[labels[mask]]
+            if (positions < 0).any() or (positions >= n_active_vars).any():
+                raise UnsupportedUpdate(f"var positions out of range for {name}")
+            type_payloads.append((positions, self._GUROBI_VTYPE_MAP[vtype]))
+
+        rhs_payloads: list[tuple[np.ndarray, np.ndarray]] = []
+        for name, da in diff.con_rhs.items():
+            con = model.constraints[name]
+            labels = con.labels.values.ravel()
+            mask = labels != -1
+            positions = con_l2p[labels[mask]]
+            if (positions < 0).any() or (positions >= n_active_cons).any():
+                raise UnsupportedUpdate(f"con positions out of range for {name}")
+            rhs_payloads.append((positions, da.values.ravel()[mask]))
+
+        sign_payloads: list[tuple[np.ndarray, np.ndarray]] = []
+        for name, da in diff.con_sign.items():
+            sign_strs = da.values.ravel()
+            con = model.constraints[name]
+            labels = con.labels.values.ravel()
+            mask = labels != -1
+            sign_strs = sign_strs[mask]
+            mapped = np.empty(len(sign_strs), dtype=object)
+            for i, s in enumerate(sign_strs):
+                s = str(s)
+                if s not in self._GUROBI_SIGN_MAP:
+                    raise UnsupportedUpdate(f"unknown sign {s!r}")
+                mapped[i] = self._GUROBI_SIGN_MAP[s]
+            positions = con_l2p[labels[mask]]
+            if (positions < 0).any() or (positions >= n_active_cons).any():
+                raise UnsupportedUpdate(f"con positions out of range for {name}")
+            sign_payloads.append((positions, mapped))
+
+        coef_payloads: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+        for name, values in diff.con_coef_updates.items():
+            con = model.constraints[name]
+            csr, _ = con.to_matrix(var_label_index)
+            csr.sort_indices()
+            csr.eliminate_zeros()
+            if csr.data.shape != values.shape:
+                raise UnsupportedUpdate(f"coef shape mismatch for {name}")
+            row_pos_local = np.repeat(
+                np.arange(csr.shape[0], dtype=np.int64), np.diff(csr.indptr)
+            )
+            active_labels = con.active_labels()
+            row_positions = con_l2p[active_labels[row_pos_local]]
+            col_positions = csr.indices.astype(np.int64)
+            if (row_positions < 0).any() or (row_positions >= n_active_cons).any():
+                raise UnsupportedUpdate(f"con positions out of range for {name}")
+            if (col_positions < 0).any() or (col_positions >= n_active_vars).any():
+                raise UnsupportedUpdate(f"var positions out of range for {name}")
+            coef_payloads.append((row_positions, col_positions, values))
+
+        if diff.obj_sense is not None and diff.obj_sense not in self._GUROBI_SENSE_MAP:
+            raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
+
+        gurobi_vars = gm.getVars()
+        gurobi_cons = gm.getConstrs()
+        if len(gurobi_vars) != n_active_vars:
+            raise UnsupportedUpdate("gurobi var count mismatch")
+        if len(gurobi_cons) != n_active_cons:
+            raise UnsupportedUpdate("gurobi con count mismatch")
+
+        for positions, values, attr in var_payloads:
+            for pos, val in zip(positions, values):
+                gurobi_vars[int(pos)].setAttr(attr, float(val))
+
+        for positions, vtype_str in type_payloads:
+            for pos in positions:
+                gurobi_vars[int(pos)].setAttr("VType", vtype_str)
+
+        for positions, values in rhs_payloads:
+            for pos, val in zip(positions, values):
+                gurobi_cons[int(pos)].setAttr("RHS", float(val))
+
+        for positions, senses in sign_payloads:
+            for pos, s in zip(positions, senses):
+                gurobi_cons[int(pos)].setAttr("Sense", s)
+
+        for row_positions, col_positions, values in coef_payloads:
+            for r, c, v in zip(row_positions, col_positions, values):
+                gm.chgCoeff(gurobi_cons[int(r)], gurobi_vars[int(c)], float(v))
+
+        if diff.obj_linear is not None:
+            obj_values = diff.obj_linear.values
+            for pos in range(n_active_vars):
+                gurobi_vars[pos].setAttr("Obj", float(obj_values[pos]))
+
+        if diff.obj_sense is not None:
+            gm.ModelSense = self._GUROBI_SENSE_MAP[diff.obj_sense]
+
+        gm.update()
 
     def _run_direct(
         self,
