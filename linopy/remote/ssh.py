@@ -7,6 +7,7 @@ Created on Sun Feb 13 21:34:55 2022.
 
 import logging
 import tempfile
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -60,6 +61,12 @@ class SshSettings:
 class RemoteHandler:
     """
     Handler class for solving models on a remote machine via an SSH connection.
+
+    .. deprecated::
+        ``RemoteHandler`` is the legacy low-level entry point and will be
+        removed in a future release. Prefer
+        ``Model.solve("gurobi", remote=SshSettings(hostname=...))`` or
+        instantiate :class:`SSH` directly.
 
     The basic idea of the handler is to provide a workflow that:
 
@@ -152,8 +159,19 @@ class RemoteHandler:
     model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
 
+    _internal: bool = field(default=False, repr=False)
+
     def __post_init__(self) -> None:
         assert paramiko_present, "The required paramiko package is not installed."
+
+        if not self._internal:
+            warnings.warn(
+                "`RemoteHandler` is deprecated; use `SSH(settings, solver_name, "
+                "options)` from `linopy.remote` or `Model.solve(remote=SshSettings"
+                "(hostname=...))`. `RemoteHandler` will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         if self.client is None:
             client = paramiko.SSHClient()
@@ -322,16 +340,18 @@ class SSH:
 
         _validate_inner_solver(self.solver_name, model)
 
-        self._handler = RemoteHandler(
-            hostname=self.settings.hostname,
-            port=self.settings.port,
-            username=self.settings.username,
-            password=self.settings.password,
-            python_executable=self.settings.python_executable,
-            python_file=self.settings.python_file,
-            model_unsolved_file=self.settings.model_unsolved_file,
-            model_solved_file=self.settings.model_solved_file,
-        )
+        if self._handler is None:
+            self._handler = RemoteHandler(
+                hostname=self.settings.hostname,
+                port=self.settings.port,
+                username=self.settings.username,
+                password=self.settings.password,
+                python_executable=self.settings.python_executable,
+                python_file=self.settings.python_file,
+                model_unsolved_file=self.settings.model_unsolved_file,
+                model_solved_file=self.settings.model_solved_file,
+                _internal=True,
+            )
 
         solve_kwargs: dict[str, Any] = {"solver_name": self.solver_name}
         if self.options:

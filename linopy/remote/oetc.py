@@ -28,6 +28,8 @@ try:
 except ImportError:
     _oetc_deps_available = False
 
+import warnings
+
 import linopy
 from linopy.sos_reformulation import (
     sos_reformulation_context,
@@ -199,11 +201,29 @@ class JobResult:
 
 
 class OetcHandler:
-    def __init__(self, settings: OetcSettings) -> None:
+    """
+    .. deprecated::
+        Use :class:`~linopy.remote.Oetc` or :meth:`Model.solve(remote=OetcSettings(...))
+        <linopy.model.Model.solve>` instead. This class will be removed in a
+        future release. The new :class:`Oetc` class owns the public lifecycle
+        (``upload`` / ``submit`` / ``collect`` / ``solve``); ``OetcHandler``
+        remains only for back-compat with code that holds a long-lived
+        handler instance.
+    """
+
+    def __init__(self, settings: OetcSettings, *, _internal: bool = False) -> None:
         if not _oetc_deps_available:
             raise ImportError(
                 "The 'google-cloud-storage' and 'requests' packages are required "
                 "for OetcHandler. Install them with: pip install linopy[oetc]"
+            )
+        if not _internal:
+            warnings.warn(
+                "`OetcHandler` is deprecated; use `Oetc(settings, solver_name, "
+                "options)` from `linopy.remote` or `Model.solve(remote=OetcSettings"
+                "(...))`. `OetcHandler` will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
             )
         self.settings = settings
         self.jwt = self.__sign_in()
@@ -659,11 +679,17 @@ class OetcHandler:
         """
         Solve a linopy model on the OET Cloud compute app.
 
+        .. deprecated::
+            Use :class:`Oetc` or
+            :meth:`Model.solve(remote=OetcSettings(...)) <linopy.model.Model.solve>`.
+
         Parameters
         ----------
         model : linopy.model.Model
         solver_name : str, optional
             Override the solver from settings.
+        reformulate_sos : bool | "auto", optional
+            See :meth:`linopy.model.Model.solve`.
         **solver_options
             Override/extend solver_options from settings.
 
@@ -671,54 +697,35 @@ class OetcHandler:
         -------
         linopy.model.Model
             Solved model.
-
-        Raises
-        ------
-            Exception: If solving fails at any stage
         """
-        try:
-            effective_solver = solver_name or self.settings.solver
-            merged_solver_options = {**self.settings.solver_options, **solver_options}
+        # Delegates to ``Oetc.solve`` so the upload→submit→poll→download
+        # orchestration lives in one place. This handler is reused as the
+        # underlying transport so existing auth/credentials are not refetched.
+        effective_solver = solver_name or self.settings.solver
+        merged_solver_options = {**self.settings.solver_options, **solver_options}
 
+        oetc = Oetc(
+            settings=self.settings,
+            solver_name=effective_solver,
+            options=merged_solver_options,
+        )
+        oetc._handler = self
+        try:
             with sos_reformulation_context(
                 model, effective_solver, reformulate_sos
             ) as applied:
-                with tempfile.NamedTemporaryFile(prefix="linopy-", suffix=".nc") as fn:
-                    fn.file.close()
-                    with suppress_serialization_warning(active=applied):
-                        model.to_netcdf(fn.name)
-                    input_file_name = self._upload_file_to_gcp(fn.name)
-
-            job_uuid = self._submit_job_to_compute_service(
-                input_file_name, effective_solver, merged_solver_options
-            )
-            job_result = self.wait_and_get_job_data(job_uuid)
-
-            if not job_result.output_files:
-                raise Exception("No output files found in completed job")
-
-            output_file_name = job_result.output_files[0]
-            if isinstance(output_file_name, dict) and "name" in output_file_name:
-                output_file_name = output_file_name["name"]
-
-            solution_file_path = self._download_file_from_gcp(output_file_name)
-
-            solved_model = linopy.read_netcdf(solution_file_path)
-
-            os.remove(solution_file_path)
-
-            logger.info(
-                f"OETC - Model solved successfully. Status: {solved_model.status}"
-            )
-            if solved_model.objective.value is not None:
-                logger.info(
-                    f"OETC - Objective value: {solved_model.objective.value:.2e}"
-                )
-
-            return solved_model
-
+                with suppress_serialization_warning(active=applied):
+                    oetc.upload(model)
+                oetc.submit()
+                oetc.collect(model)
         except Exception as e:
             raise Exception(f"Error solving model on OETC: {e}") from e
+
+        solved_model = oetc._solved_model
+        logger.info(f"OETC - Model solved successfully. Status: {solved_model.status}")
+        if solved_model.objective.value is not None:
+            logger.info(f"OETC - Objective value: {solved_model.objective.value:.2e}")
+        return solved_model
 
     def _gzip_compress(self, source_path: str) -> str:
         """
@@ -847,11 +854,8 @@ class Oetc:
 
     def upload(self, model: Model) -> None:
         """Serialize the model to netcdf and upload it to the cloud bucket."""
-        from linopy.remote._common import _validate_inner_solver
-
-        _validate_inner_solver(self.solver_name, model)
-
-        self._handler = OetcHandler(self.settings)
+        if self._handler is None:
+            self._handler = OetcHandler(self.settings, _internal=True)
         self._n_vars = model._xCounter
         self._n_cons = model._cCounter
 
@@ -887,7 +891,7 @@ class Oetc:
 
         solution_file_path = self._handler._download_file_from_gcp(output_file_name)
         try:
-            solved = linopy.io.read_netcdf(solution_file_path)
+            solved = linopy.read_netcdf(solution_file_path)
         finally:
             with contextlib.suppress(OSError):
                 os.remove(solution_file_path)
@@ -908,6 +912,9 @@ class Oetc:
 
     def solve(self, model: Model) -> Result:
         """Run the full upload → submit → collect pipeline synchronously."""
+        from linopy.remote._common import _validate_inner_solver
+
+        _validate_inner_solver(self.solver_name, model)
         self.upload(model)
         self.submit()
         return self.collect(model)
