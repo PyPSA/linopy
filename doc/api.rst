@@ -70,6 +70,8 @@ Modifying a model
    model.Model.remove_objective
    model.Model.remove_sos_constraints
    model.Model.copy
+   model.Model.apply_sos_reformulation
+   model.Model.undo_sos_reformulation
    model.Model.reformulate_sos_constraints
 
 Solving
