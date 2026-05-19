@@ -188,3 +188,53 @@ def test_mosek_license_probe_releases_env(
         "task_exit",
         "env_exit",
     ]
+
+
+def test_copt_license_probe_closes_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cls = _solver_class_for("copt")
+    assert cls is not None
+
+    events: list[str] = []
+
+    class _FakeEnvr:
+        def __init__(self) -> None:
+            events.append("envr_init")
+
+        def close(self) -> None:
+            events.append("envr_close")
+
+    class _FakeCoptpy:
+        Envr = _FakeEnvr
+
+    monkeypatch.setattr(solvers_mod, "coptpy", _FakeCoptpy)
+
+    cls._license_probe()
+
+    assert events == ["envr_init", "envr_close"]
+
+
+def test_mindopt_license_probe_disposes_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cls = _solver_class_for("mindopt")
+    assert cls is not None
+
+    events: list[str] = []
+
+    class _FakeEnv:
+        def __init__(self) -> None:
+            events.append("env_init")
+
+        def dispose(self) -> None:
+            events.append("env_dispose")
+
+    class _FakeMindoptpy:
+        Env = _FakeEnv
+
+    monkeypatch.setattr(solvers_mod, "mindoptpy", _FakeMindoptpy)
+
+    cls._license_probe()
+
+    assert events == ["env_init", "env_dispose"]
