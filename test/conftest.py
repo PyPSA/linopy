@@ -37,13 +37,19 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Automatically skip GPU tests unless --run-gpu is passed."""
+    """
+    Auto-skip GPU-only solvers (e.g. cuPDLPx) unless --run-gpu is passed.
+
+    Solvers that *also* have a CPU mode (e.g. xpress, which carries
+    ``GPU_ACCELERATION`` from version 9.8) are not skipped — their default
+    pathway is CPU and they should run in normal CI.
+    """
     if config.getoption("--run-gpu"):
         return
 
     skip_gpu = pytest.mark.skip(reason="need --run-gpu option to run GPU tests")
     for item in items:
-        # Check if this is a parametrized test with a GPU solver
+        # Check if this is a parametrized test with a GPU-only solver
         if hasattr(item, "callspec") and "solver" in item.callspec.params:
             solver = item.callspec.params["solver"]
             # Import here to avoid circular dependency
@@ -52,7 +58,7 @@ def pytest_collection_modifyitems(
                 solver_supports,
             )
 
-            if solver_supports(solver, SolverFeature.GPU_ACCELERATION):
+            if solver_supports(solver, SolverFeature.GPU_ONLY):
                 item.add_marker(skip_gpu)
                 item.add_marker(pytest.mark.gpu)
 

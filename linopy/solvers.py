@@ -116,6 +116,7 @@ class SolverFeature(Enum):
     READ_MODEL_FROM_FILE = auto()
     SOLUTION_FILE_NOT_NEEDED = auto()
     GPU_ACCELERATION = auto()
+    GPU_ONLY = auto()
     IIS_COMPUTATION = auto()
     SOS_CONSTRAINTS = auto()
     SEMI_CONTINUOUS_VARIABLES = auto()
@@ -3355,6 +3356,7 @@ class cuPDLPx(Solver[None]):
         {
             SolverFeature.DIRECT_API,
             SolverFeature.GPU_ACCELERATION,
+            SolverFeature.GPU_ONLY,
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
