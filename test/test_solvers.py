@@ -24,6 +24,14 @@ from linopy.solvers import _installed_version_in
 
 
 @pytest.fixture
+def lp_only_solver() -> str:
+    for name in ("glpk", "cbc"):
+        if name in solvers.available_solvers:
+            return name
+    pytest.skip("Need an LP-only solver (glpk or cbc) installed")
+
+
+@pytest.fixture
 def simple_model() -> Model:
     m = Model(chunk=None)
     x = m.add_variables(name="x")
@@ -423,7 +431,10 @@ def test_gurobi_environment_with_gurobi_env(model: Model, tmp_path: Path) -> Non
         (solvers.CBC, SolverFeature.INTEGER_VARIABLES, True),
         (solvers.cuPDLPx, SolverFeature.DIRECT_API, True),
         (solvers.cuPDLPx, SolverFeature.GPU_ACCELERATION, True),
+        (solvers.cuPDLPx, SolverFeature.GPU_ONLY, True),
         (solvers.cuPDLPx, SolverFeature.QUADRATIC_OBJECTIVE, False),
+        (solvers.Gurobi, SolverFeature.GPU_ONLY, False),
+        (solvers.Xpress, SolverFeature.GPU_ONLY, False),
         (solvers.PIPS, SolverFeature.INTEGER_VARIABLES, False),
     ],
 )
@@ -464,3 +475,95 @@ def test_xpress_gpu_feature_reflects_installed_version() -> None:
     assert solvers.Xpress.supports(
         SolverFeature.GPU_ACCELERATION
     ) == _installed_version_in("xpress", ">=9.8.0")
+
+
+class TestValidateModelOnBuild:
+    """Solver._build() runs solver-feature checks regardless of entry point."""
+
+    def test_quadratic_without_qp_support_raises(self, lp_only_solver: str) -> None:
+        m = Model()
+        x = m.add_variables(name="x", lower=0, upper=10)
+        m.add_objective(x * x, sense="min")
+
+        with pytest.raises(ValueError, match="does not support quadratic"):
+            solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
+
+    def test_semi_continuous_without_support_raises(self, lp_only_solver: str) -> None:
+        m = Model()
+        x = m.add_variables(name="x", lower=1, upper=10, semi_continuous=True)
+        m.add_objective(x)
+
+        with pytest.raises(ValueError, match="does not support semi-continuous"):
+            solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
+
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_solve_without_objective_raises(self) -> None:
+        m = Model()
+        m.add_variables(name="x", lower=0, upper=10)
+        # No objective added — both entry points should raise the same error.
+        with pytest.raises(ValueError, match="No objective has been set"):
+            solvers.Solver.from_name("highs", m, io_api="lp").solve()
+        with pytest.raises(ValueError, match="No objective has been set"):
+            m.solve("highs")
+
+
+class TestSolverDoesNotMutateModel:
+    """Solver.from_model() must not mutate model state (sanitize stays Model-level)."""
+
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_from_model_leaves_constraints_untouched(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x", lower=0, upper=10)
+        # Constraint with a near-zero coefficient — would be sanitized away if
+        # the Solver path were sanitizing on build.
+        m.add_constraints(1e-12 * x + x >= 0, name="c")
+        m.add_objective(x)
+
+        before = m.constraints["c"].coeffs.values.copy()
+        solvers.Solver.from_name("highs", m, io_api="lp")
+        after = m.constraints["c"].coeffs.values
+
+        assert np.allclose(before, after, equal_nan=True), (
+            "Solver.from_model() must not mutate model constraints. "
+            "Sanitization is a Model-level primitive; call "
+            "model.constraints.sanitize_zeros() / .sanitize_infinities() "
+            "explicitly before building."
+        )
+
+
+class TestAssignResultWiring:
+    """assign_result(result, solver=...) populates model.solver."""
+
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_assign_result_with_solver_wires_model_solver(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x", lower=0, upper=10)
+        m.add_objective(x, sense="min")
+
+        assert m.solver is None
+        solver = solvers.Solver.from_name("highs", m, io_api="lp")
+        result = solver.solve()
+        m.assign_result(result, solver=solver)
+
+        assert m.solver is solver
+        assert m.solver_model is solver.solver_model
+
+    @pytest.mark.skipif(
+        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+    )
+    def test_assign_result_without_solver_kwarg_leaves_solver_unset(self) -> None:
+        m = Model()
+        x = m.add_variables(name="x", lower=0, upper=10)
+        m.add_objective(x, sense="min")
+
+        solver = solvers.Solver.from_name("highs", m, io_api="lp")
+        result = solver.solve()
+        m.assign_result(result)  # no solver kwarg
+
+        assert m.solver is None

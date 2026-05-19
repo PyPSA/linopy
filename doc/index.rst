@@ -81,7 +81,7 @@ A BibTeX entry for LaTeX users is
 License
 -------
 
-Copyright 2021-2026 Fabian Hofmann
+Copyright 2021-2026 Fabian Hofmann, Felix Bumann
 
 This package is published under MIT license.
 

@@ -71,6 +71,7 @@ from linopy.io import (
     to_highspy,
     to_mosek,
     to_netcdf,
+    to_xpress,
 )
 from linopy.matrices import MatrixAccessor
 from linopy.objective import Objective
@@ -83,13 +84,16 @@ try:
     from linopy.remote import OetcHandler
 except ImportError:
     OetcHandler = None  # type: ignore
+from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
     SolverFeature,
     available_solvers,
 )
 from linopy.sos_reformulation import (
+    SOSReformulationResult,
     reformulate_sos_constraints,
+    sos_reformulation_context,
     undo_sos_reformulation,
 )
 from linopy.types import (
@@ -239,6 +243,7 @@ class Model:
         "_relaxed_registry",
         "_piecewise_formulations",
         "_solver",
+        "_sos_reformulation_state",
         "__weakref__",
     )
 
@@ -309,6 +314,7 @@ class Model:
             gettempdir() if solver_dir is None else solver_dir
         )
         self._solver: solvers.Solver | None = None
+        self._sos_reformulation_state: SOSReformulationResult | None = None
 
     @property
     def solver(self) -> solvers.Solver | None:
@@ -1220,6 +1226,108 @@ class Model:
 
     reformulate_sos_constraints = reformulate_sos_constraints
 
+    def apply_sos_reformulation(self) -> None:
+        """
+        Reformulate SOS constraints into binary + linear form, in place.
+
+        The reformulation token is stored on the model so it can be reverted
+        with :meth:`undo_sos_reformulation`. This is the stateful counterpart
+        to :func:`linopy.sos_reformulation.reformulate_sos_constraints`, where
+        the caller owns the token.
+
+        Raises
+        ------
+        RuntimeError
+            If a reformulation has already been applied and not undone.
+        """
+        if self._sos_reformulation_state is not None:
+            raise RuntimeError(
+                "SOS reformulation has already been applied to this model. "
+                "Call `undo_sos_reformulation()` before applying again."
+            )
+        self._sos_reformulation_state = reformulate_sos_constraints(self)
+
+    def undo_sos_reformulation(self) -> None:
+        """
+        Revert a previously applied SOS reformulation.
+
+        Raises
+        ------
+        RuntimeError
+            If no reformulation is currently applied.
+        """
+        if self._sos_reformulation_state is None:
+            raise RuntimeError(
+                "No SOS reformulation is currently applied to this model."
+            )
+        state = self._sos_reformulation_state
+        self._sos_reformulation_state = None
+        undo_sos_reformulation(self, state)
+
+    def _resolve_sos_reformulation(
+        self,
+        solver_name: str | None,
+        reformulate_sos: bool | Literal["auto"],
+    ) -> bool:
+        """
+        Decide whether ``apply_sos_reformulation`` should run.
+
+        Validates ``reformulate_sos`` and returns ``True`` iff the SOS
+        constraints on this model should be reformulated for the chosen
+        solver.  ``solver_name`` is only consulted when
+        ``reformulate_sos == "auto"`` (to look up SOS support); for
+        ``True`` / ``False`` the decision is independent of the solver.
+        """
+        if reformulate_sos not in (True, False, "auto"):
+            raise ValueError(
+                f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
+                "Must be True, False, or 'auto'."
+            )
+        if not self.variables.sos:
+            return False
+
+        if reformulate_sos is False:
+            return False
+        elif reformulate_sos is True:
+            return True
+        elif solver_name is None:
+            raise ValueError(
+                "`reformulate_sos='auto'` on a model with SOS constraints "
+                "requires an explicit `solver_name` so we can check "
+                "whether the chosen solver supports SOS. Pass "
+                "`solver_name=...` or use `reformulate_sos=True`/`False` "
+                "to skip the lookup."
+            )
+        return not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
+
+    def _check_sos_unmasked(self) -> None:
+        """
+        Reject the model if any SOS variable has masked entries.
+
+        The SOS plumbing (both direct-API solvers and the LP file writer) treats
+        linopy variable labels as solver column indices / names, which breaks as
+        soon as a label is ``-1`` (linopy's ``FILL_VALUE["labels"]`` for masked
+        slots). The downstream symptoms are solver-specific — ``IndexError`` on
+        gurobipy, ``?404 Invalid column number`` on xpress, parse errors on
+        xpress/cplex LP readers, silent SOS-set corruption on gurobi's LP reader.
+
+        Surface a single clear error until #688 lands the proper fix.
+        """
+        if not self.variables.sos:
+            return
+        affected = [
+            name
+            for name in self.variables.sos
+            if (self.variables[name].labels.values == -1).any()
+        ]
+        if affected:
+            raise NotImplementedError(
+                f"SOS constraints on masked variables are not yet supported "
+                f"(affected: {affected}; "
+                "see https://github.com/PyPSA/linopy/issues/688). "
+                "Pass reformulate_sos=True as a workaround."
+            )
+
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
@@ -1593,13 +1701,12 @@ class Model:
         mock_solve : bool, optional
             Whether to run a mock solve. This will skip the actual solving. Variables will be set to have dummy values
         reformulate_sos : bool | Literal["auto"], optional
-            Whether to automatically reformulate SOS constraints as binary + linear
-            constraints for solvers that don't support them natively.
-            If True, always reformulates (warns if solver supports SOS natively).
-            If "auto", silently reformulates only when the solver lacks SOS support.
-            If False, raises if solver doesn't support SOS.
-            This uses the Big-M method and requires all SOS variables to have finite bounds.
-            Default is False.
+            Whether to reformulate SOS constraints as binary + linear constraints.
+            If True, always reformulates, even when the solver supports SOS natively.
+            If "auto", reformulates only when the solver lacks SOS support.
+            If False, raises if the solver doesn't support SOS.
+            Reformulation uses the Big-M method and requires all SOS variables
+            to have finite bounds. Default is False.
         **solver_options : kwargs
             Options passed to the solver.
 
@@ -1614,12 +1721,6 @@ class Model:
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
             )
 
-        if self.objective.expression.empty:
-            raise ValueError(
-                "No objective has been set on the model. Use `m.add_objective(...)` "
-                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
-            )
-
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
             raise ValueError(
@@ -1627,9 +1728,22 @@ class Model:
             )
 
         if remote is not None:
+            # The remote branch short-circuits before reaching Solver.solve(),
+            # which is where the empty-objective check normally fires. Replicate
+            # it here. This duplication becomes obsolete once OETC is folded
+            # into the Solver pipeline (see PyPSA/linopy#683).
+            if self.objective.expression.empty:
+                raise ValueError(
+                    "No objective has been set on the model. Use "
+                    "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
+                    "for a pure feasibility problem)."
+                )
             if isinstance(remote, OetcHandler):
                 solved = remote.solve_on_oetc(
-                    self, solver_name=solver_name, **solver_options
+                    self,
+                    solver_name=solver_name,
+                    reformulate_sos=reformulate_sos,
+                    **solver_options,
                 )
             else:
                 solved = remote.solve_on_remote(
@@ -1643,6 +1757,7 @@ class Model:
                     warmstart_fn=warmstart_fn,
                     keep_files=keep_files,
                     sanitize_zeros=sanitize_zeros,
+                    reformulate_sos=reformulate_sos,
                     **solver_options,
                 )
 
@@ -1692,96 +1807,82 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
+        with sos_reformulation_context(self, solver_name, reformulate_sos):
+            if sanitize_zeros:
+                self.constraints.sanitize_zeros()
+            if sanitize_infinities:
+                self.constraints.sanitize_infinities()
 
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
-
-        if self.is_quadratic and not solver_class.supports(
-            SolverFeature.QUADRATIC_OBJECTIVE
-        ):
-            raise ValueError(
-                f"Solver {solver_name} does not support quadratic problems."
-            )
-
-        if reformulate_sos not in (True, False, "auto"):
-            raise ValueError(
-                f"Invalid value for reformulate_sos: {reformulate_sos!r}. "
-                "Must be True, False, or 'auto'."
-            )
-
-        sos_reform_result = None
-        if self.variables.sos:
-            supports_sos = solver_class.supports(SolverFeature.SOS_CONSTRAINTS)
-            if reformulate_sos in (True, "auto") and not supports_sos:
-                logger.info(f"Reformulating SOS constraints for solver {solver_name}")
-                sos_reform_result = reformulate_sos_constraints(self)
-            elif reformulate_sos is True and supports_sos:
-                logger.warning(
-                    f"Solver {solver_name} supports SOS natively; "
-                    "reformulate_sos=True is ignored."
+            try:
+                self.solver = None  # closes any previous solver
+                if io_api == "direct":
+                    if set_names is None:
+                        set_names = self.set_names_in_solver_io
+                    build_kwargs: dict[str, Any] = {
+                        "explicit_coordinate_names": explicit_coordinate_names,
+                        "set_names": set_names,
+                        "log_fn": to_path(log_fn),
+                    }
+                    if env is not None:
+                        build_kwargs["env"] = env
+                else:
+                    build_kwargs = {
+                        "explicit_coordinate_names": explicit_coordinate_names,
+                        "slice_size": slice_size,
+                        "progress": progress,
+                        "problem_fn": to_path(problem_fn),
+                    }
+                self.solver = solver = solvers.Solver.from_name(
+                    solver_name,
+                    model=self,
+                    io_api=io_api,
+                    options=solver_options,
+                    **build_kwargs,
                 )
-            elif reformulate_sos is False and not supports_sos:
-                raise ValueError(
-                    f"Solver {solver_name} does not support SOS constraints. "
-                    "Use reformulate_sos=True or 'auto', or a solver that supports SOS (gurobi, cplex)."
+                if io_api != "direct":
+                    problem_fn = solver._problem_fn
+                result = solver.solve(
+                    solution_fn=to_path(solution_fn),
+                    log_fn=to_path(log_fn),
+                    warmstart_fn=to_path(warmstart_fn),
+                    basis_fn=to_path(basis_fn),
+                    env=env,
                 )
+            finally:
+                for fn in (problem_fn, solution_fn):
+                    if fn is not None and (os.path.exists(fn) and not keep_files):
+                        os.remove(fn)
 
-        if self.variables.semi_continuous:
-            if not solver_class.supports(SolverFeature.SEMI_CONTINUOUS_VARIABLES):
-                raise ValueError(
-                    f"Solver {solver_name} does not support semi-continuous variables. "
-                    "Use a solver that supports them (gurobi, cplex, highs)."
-                )
-
-        try:
-            self.solver = None  # closes any previous solver
-            if io_api == "direct":
-                if set_names is None:
-                    set_names = self.set_names_in_solver_io
-                build_kwargs: dict[str, Any] = {
-                    "explicit_coordinate_names": explicit_coordinate_names,
-                    "set_names": set_names,
-                    "log_fn": to_path(log_fn),
-                }
-                if env is not None:
-                    build_kwargs["env"] = env
-            else:
-                build_kwargs = {
-                    "explicit_coordinate_names": explicit_coordinate_names,
-                    "slice_size": slice_size,
-                    "progress": progress,
-                    "problem_fn": to_path(problem_fn),
-                }
-            self.solver = solver = solvers.Solver.from_name(
-                solver_name,
-                model=self,
-                io_api=io_api,
-                options=solver_options,
-                **build_kwargs,
-            )
-            if io_api != "direct":
-                problem_fn = solver._problem_fn
-            result = solver.solve(
-                solution_fn=to_path(solution_fn),
-                log_fn=to_path(log_fn),
-                warmstart_fn=to_path(warmstart_fn),
-                basis_fn=to_path(basis_fn),
-                env=env,
-            )
-        finally:
-            for fn in (problem_fn, solution_fn):
-                if fn is not None and (os.path.exists(fn) and not keep_files):
-                    os.remove(fn)
-
-        try:
             return self.assign_result(result)
-        finally:
-            if sos_reform_result is not None:
-                undo_sos_reformulation(self, sos_reform_result)
 
-    def assign_result(self, result: Result) -> tuple[str, str]:
+    def assign_result(
+        self,
+        result: Result,
+        solver: solvers.Solver | None = None,
+    ) -> tuple[str, str]:
+        """
+        Write a solver Result back onto the model.
+
+        Copies primal / dual values onto variables / constraints, sets
+        :attr:`status`, :attr:`termination_condition`, and
+        :attr:`objective.value`. When ``solver`` is provided, also stores it on
+        ``self.solver`` so post-solve introspection (``model.solver_model``,
+        ``compute_infeasibilities()``) works.
+
+        Parameters
+        ----------
+        result : Result
+            The :class:`linopy.constants.Result` returned by
+            :meth:`linopy.solvers.Solver.solve`.
+        solver : Solver, optional
+            The solver instance that produced the result. Pass it on the
+            low-level ``Solver.from_name(...).solve()`` path to attach it as
+            ``self.solver`` for post-solve introspection. ``Model.solve()``
+            attaches the solver itself and does not pass this argument.
+        """
+        if solver is not None:
+            self.solver = solver
+
         result.info()
 
         if result.solution is not None:
@@ -2115,5 +2216,7 @@ class Model:
     to_highspy = to_highspy
 
     to_cupdlpx = to_cupdlpx
+
+    to_xpress = to_xpress
 
     to_block_files = to_block_files

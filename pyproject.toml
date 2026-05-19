@@ -8,6 +8,10 @@ dynamic = ["version"]
 description = "Linear optimization with N-D labeled arrays in Python"
 readme = "README.md"
 authors = [{ name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" }]
+maintainers = [
+    { name = "Fabian Hofmann", email = "fabianmarikhofmann@gmail.com" },
+    { name = "Felix Bumann", email = "dev@fxbumann.de" },
+]
 license = { file = "LICENSE" }
 classifiers = [
     "Programming Language :: Python :: 3.10",
@@ -47,6 +51,9 @@ Source = "https://github.com/PyPSA/linopy"
 oetc = [
     "google-cloud-storage",
     "requests",
+]
+remote = [
+    "paramiko",
 ]
 docs = [
     "ipython==8.26.0",
