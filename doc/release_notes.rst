@@ -66,13 +66,18 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
   .. code-block:: python
 
       # Before
-      handler = OetcHandler(settings_with_solver)
+      handler = OetcHandler(
+          OetcSettings(credentials=OetcCredentials(email=..., password=...), ...)
+      )
       solved = handler.solve_on_oetc(m, TimeLimit=100)
 
       # After
-      m.solve("gurobi", remote=OetcSettings(...), TimeLimit=100)
+      m.solve(
+          "gurobi", remote=OetcSettings(email=..., password=..., ...), TimeLimit=100
+      )
 
   Passing an existing handler via ``Model.solve(remote=handler, ...)`` is also deprecated — pass the settings dataclass instead.
+* ``linopy.remote.OetcCredentials`` is deprecated. Pass ``email`` and ``password`` directly to :class:`OetcSettings` instead of wrapping them. The ``OetcSettings(credentials=OetcCredentials(...))`` shape still works for one deprecation cycle and emits a ``DeprecationWarning``.
 
 **Bug Fixes**
 
