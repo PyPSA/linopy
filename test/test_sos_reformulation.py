@@ -476,6 +476,55 @@ class TestSolveAutoUndoOnFailure:
 class TestSolveWithReformulation:
     """Tests for solving with SOS reformulation."""
 
+    @pytest.mark.parametrize(
+        "solver_name",
+        [
+            pytest.param(
+                "gurobi",
+                marks=pytest.mark.skipif(
+                    "gurobi" not in available_solvers, reason="Gurobi not installed"
+                ),
+            ),
+            pytest.param(
+                "highs",
+                marks=pytest.mark.skipif(
+                    "highs" not in available_solvers, reason="HiGHS not installed"
+                ),
+            ),
+        ],
+    )
+    def test_reformulate_handles_masked_sos_variables(self, solver_name: str) -> None:
+        """
+        ``reformulate_sos=True`` must handle SOS variables with masked entries.
+
+        Exercises the reformulation pipeline (``apply_sos_reformulation`` →
+        binary + linking constraints → solve → ``undo``) on a model whose SOS
+        variable has a masked slot. Parametrized to cover both the native-SOS
+        case (gurobi: reformulation runs anyway under ``reformulate_sos=True``,
+        per #689) and the no-native-SOS case (highs: reformulation is the only
+        way to solve).
+        """
+        m = Model()
+        coords = pd.Index([0, 1, 2, 3], name="i")
+        mask = pd.Series([True, True, False, True], index=coords)
+        var = m.add_variables(
+            lower=0, upper=1, coords=[coords], mask=mask, name="sos_var"
+        )
+        m.add_sos_constraints(var, sos_type=1, sos_dim="i")
+        m.add_objective(-var.sum())
+
+        m.solve(solver_name=solver_name, reformulate_sos=True)
+
+        sol = m.variables["sos_var"].solution.values
+        # SOS1 over 3 unmasked entries, all in [0, 1], obj = -sum:
+        # one slot at 1, others at 0, masked stays NaN.
+        assert m.objective.value is not None
+        assert np.isclose(m.objective.value, -1.0)
+        assert np.isnan(sol[2])
+        nonzero = np.flatnonzero(~np.isnan(sol) & (sol > 1e-6))
+        assert len(nonzero) == 1
+        assert np.isclose(sol[nonzero[0]], 1.0)
+
     def test_sos1_maximize_with_highs(self) -> None:
         """Test SOS1 maximize problem with HiGHS using reformulation."""
         m = Model()

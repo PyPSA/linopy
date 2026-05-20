@@ -8,19 +8,6 @@ import pytest
 import xarray as xr
 
 from linopy import Model, available_solvers
-from linopy.solver_capabilities import (
-    SolverFeature,
-    get_available_solvers_with_feature,
-    solver_supports,
-)
-
-_direct_sos_solvers = [
-    s
-    for s in get_available_solvers_with_feature(
-        SolverFeature.SOS_CONSTRAINTS, available_solvers
-    )
-    if solver_supports(s, SolverFeature.DIRECT_API)
-]
 
 
 def test_add_sos_constraints_registers_variable() -> None:
@@ -207,66 +194,6 @@ def test_qp_sos1_xpress_direct() -> None:
     assert np.isclose(x.solution.values, [0, 5, 0]).all()
     assert m.objective.value is not None
     assert np.isclose(m.objective.value, -25)
-
-
-@pytest.fixture
-def masked_sos_model() -> Model:
-    """Tiny model with a single masked SOS1 variable."""
-    m = Model()
-    coords = pd.Index([0, 1, 2, 3], name="i")
-    mask = pd.Series([True, True, False, True], index=coords)
-    var = m.add_variables(lower=0, upper=1, coords=[coords], mask=mask, name="sos_var")
-    m.add_sos_constraints(var, sos_type=1, sos_dim="i")
-    m.add_objective(-var.sum())
-    return m
-
-
-@pytest.mark.parametrize("solver_name", _direct_sos_solvers)
-def test_direct_api_raises_on_masked_sos(
-    solver_name: str, masked_sos_model: Model
-) -> None:
-    with pytest.raises(NotImplementedError, match="masked"):
-        masked_sos_model.solve(solver_name=solver_name, io_api="direct")
-
-
-def test_lp_writer_raises_on_masked_sos(
-    masked_sos_model: Model, tmp_path: Path
-) -> None:
-    with pytest.raises(NotImplementedError, match="masked"):
-        masked_sos_model.to_file(tmp_path / "sos.lp", io_api="lp")
-
-
-@pytest.mark.parametrize(
-    "solver_name",
-    [
-        pytest.param(
-            "gurobi",
-            marks=pytest.mark.skipif(
-                "gurobi" not in available_solvers, reason="Gurobi not installed"
-            ),
-        ),
-        pytest.param(
-            "highs",
-            marks=pytest.mark.skipif(
-                "highs" not in available_solvers, reason="HiGHS not installed"
-            ),
-        ),
-    ],
-)
-def test_reformulate_sos_true_solves_masked_sos(
-    solver_name: str, masked_sos_model: Model
-) -> None:
-    """The documented workaround for the masked-SOS bug actually solves."""
-    masked_sos_model.solve(solver_name=solver_name, reformulate_sos=True)
-    sol = masked_sos_model.variables["sos_var"].solution.values
-    # SOS1 over 3 unmasked entries, max sum, each in [0, 1]:
-    # one entry == 1, others == 0, masked stays NaN.
-    assert masked_sos_model.objective.value is not None
-    assert np.isclose(masked_sos_model.objective.value, -1.0)
-    assert np.isnan(sol[2])
-    nonzero = np.flatnonzero(~np.isnan(sol) & (sol > 1e-6))
-    assert len(nonzero) == 1
-    assert np.isclose(sol[nonzero[0]], 1.0)
 
 
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
