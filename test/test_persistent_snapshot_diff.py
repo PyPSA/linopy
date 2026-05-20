@@ -5,7 +5,8 @@ import pytest
 
 from linopy import Model
 from linopy.persistent import (
-    CoefPattern,
+    ContainerConBuffers,
+    ContainerVarBuffers,
     ModelDiff,
     ModelSnapshot,
     RebuildReason,
@@ -37,7 +38,8 @@ def test_capture_structural_key(baseline: Model) -> None:
     np.testing.assert_array_equal(
         snap.structural_key.clabels, baseline.constraints.label_index.clabels
     )
-    assert isinstance(snap.con_coef_pattern["c1"], CoefPattern)
+    assert isinstance(snap.var_buffers["x"], ContainerVarBuffers)
+    assert isinstance(snap.con_buffers["c1"], ContainerConBuffers)
 
 
 def test_is_empty_on_unmutated(baseline: Model) -> None:
@@ -53,8 +55,11 @@ def test_bounds_only_mutation(baseline: Model) -> None:
     baseline.variables["x"].lower = 1
     diff = compute_diff(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
-    assert "x" in diff.var_lb
-    assert "x" not in diff.var_ub
+    assert "x" in diff.vars
+    assert "y" not in diff.vars
+    upd = diff.vars["x"]
+    assert upd.lower is not None
+    np.testing.assert_array_equal(upd.lower, np.ones(3))
 
 
 def test_rhs_only_mutation(baseline: Model) -> None:
@@ -62,8 +67,10 @@ def test_rhs_only_mutation(baseline: Model) -> None:
     baseline.constraints["c1"].rhs = 9
     diff = compute_diff(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
-    assert "c1" in diff.con_rhs
-    assert not diff.con_coef_updates
+    assert "c1" in diff.cons
+    upd = diff.cons["c1"]
+    assert upd.rhs_values is not None
+    assert upd.coef_values is None
 
 
 def test_objective_linear_change(baseline: Model) -> None:
@@ -73,7 +80,8 @@ def test_objective_linear_change(baseline: Model) -> None:
     baseline.add_objective(3 * x.sum() + 2 * y.sum(), overwrite=True)
     diff = compute_diff(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
-    assert diff.obj_linear is not None
+    assert diff.obj_c_indices is not None
+    assert diff.obj_c_values is not None
 
 
 def test_objective_sense_flip(baseline: Model) -> None:
@@ -111,9 +119,11 @@ def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     c.coeffs = c.coeffs * 3
     diff = compute_diff(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
-    assert "c1" in diff.con_coef_updates
-    values = diff.con_coef_updates["c1"]
-    np.testing.assert_array_equal(values, np.full_like(values, 6.0))
+    assert "c1" in diff.cons
+    upd = diff.cons["c1"]
+    assert upd.coef_values is not None
+    valid = upd.coef_vars != -1
+    np.testing.assert_array_equal(upd.coef_values[valid], np.full(valid.sum(), 6.0))
 
 
 def test_coef_sparsity_change(baseline: Model) -> None:
@@ -128,7 +138,7 @@ def test_deep_copy_invariant(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.variables["x"].lower.values[...] = 99
     diff = compute_diff(snap, baseline)
-    assert "x" in diff.var_lb
+    assert "x" in diff.vars
 
 
 def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
@@ -137,9 +147,10 @@ def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
     c.coeffs = c.coeffs * 5
     c._coef_dirty = False
     diff_fast = compute_diff(snap, baseline, same_model=True)
-    assert "c1" not in diff_fast.con_coef_updates
+    assert "c1" not in diff_fast.cons or diff_fast.cons["c1"].coef_values is None
     diff_full = compute_diff(snap, baseline, same_model=False)
-    assert "c1" in diff_full.con_coef_updates
+    assert "c1" in diff_full.cons
+    assert diff_full.cons["c1"].coef_values is not None
 
 
 def test_modeldiff_default_is_empty() -> None:

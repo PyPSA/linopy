@@ -283,6 +283,65 @@ def test_concurrent_solves_serialize(solver_name: str) -> None:
         assert np.isclose(r, expected)
 
 
+_SCENARIO_PARAMS = [
+    "bound_only",
+    "rhs_only",
+    "single_cell_coef",
+    "multi_row_coef",
+    "mixed",
+]
+
+
+def _apply_scenario(model: Model, scenario: str) -> None:
+    if scenario == "bound_only":
+        model.variables["x"].lower.values[...] = 3.0
+    elif scenario == "rhs_only":
+        model.constraints["c1"].rhs = 7.0
+    elif scenario == "single_cell_coef":
+        c = model.constraints["c1"]
+        new = c.coeffs.copy()
+        new.values[0, 0] = 5.0
+        c.coeffs = new
+    elif scenario == "multi_row_coef":
+        c = model.constraints["c2"]
+        c.coeffs = c.coeffs * 2
+    elif scenario == "mixed":
+        model.variables["x"].lower.values[...] = 1.0
+        model.constraints["c1"].rhs = 6.0
+        c = model.constraints["c2"]
+        new = c.coeffs.copy()
+        new.values[0, 0] = 4.0
+        c.coeffs = new
+    else:
+        raise ValueError(scenario)
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+@pytest.mark.parametrize("scenario", _SCENARIO_PARAMS)
+@pytest.mark.parametrize("same_model", [True, False])
+def test_scenario_sweep_in_place(
+    solver_name: str, scenario: str, same_model: bool
+) -> None:
+    m = _base_model()
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    target = m if same_model else _base_model()
+    _apply_scenario(target, scenario)
+    s.solve(target, assign=True)
+
+    assert s._rebuilds == 0
+    assert s._in_place_updates == 1
+    assert s._last_rebuild_reason is RebuildReason.NONE
+
+    fresh = _base_model()
+    _apply_scenario(fresh, scenario)
+    s_fresh = _built(solver_name, fresh)
+    s_fresh.solve(assign=True)
+    assert np.isclose(float(target.objective.value), float(fresh.objective.value))
+    s_fresh.close()
+
+
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
 def test_solve_without_assign_does_not_mutate_model(solver_name: str) -> None:
     m = _base_model()

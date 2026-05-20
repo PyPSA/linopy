@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-from linopy.persistent.diff import ModelDiff, RebuildReason, compute_diff
+from linopy.persistent.diff import (
+    ContainerRowUpdate,
+    ContainerVarUpdate,
+    ModelDiff,
+    RebuildReason,
+    compute_diff,
+)
 from linopy.persistent.errors import UnsupportedUpdate
-from linopy.persistent.snapshot import CoefPattern, ModelSnapshot, StructuralKey
+from linopy.persistent.snapshot import (
+    ContainerConBuffers,
+    ContainerVarBuffers,
+    ModelSnapshot,
+    StructuralKey,
+)
 
 __all__ = [
-    "CoefPattern",
+    "ContainerConBuffers",
+    "ContainerRowUpdate",
+    "ContainerVarBuffers",
+    "ContainerVarUpdate",
     "ModelDiff",
     "ModelSnapshot",
     "RebuildReason",

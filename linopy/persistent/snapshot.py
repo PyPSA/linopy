@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
-import xarray as xr
 
 from linopy import expressions
 
@@ -12,6 +11,9 @@ if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.model import Model
     from linopy.variables import Variable
+
+
+_INT64_MAX = np.iinfo(np.int64).max
 
 
 def _variable_type(var: Variable) -> str:
@@ -25,25 +27,10 @@ def _variable_type(var: Variable) -> str:
     return "continuous"
 
 
-def _coord_snapshot(obj: Variable | ConstraintBase) -> dict[str, np.ndarray]:
-    return {str(name): np.asarray(idx) for name, idx in obj.indexes.items()}
-
-
-def _canonical_csr(
-    constraint: ConstraintBase, label_index
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    csr, _ = constraint.to_matrix(label_index)
-    csr.sort_indices()
-    csr.eliminate_zeros()
-    indptr = csr.indptr.astype(np.int64)
-    indices = csr.indices.astype(np.int64)
-    return indptr, indices, csr.data
-
-
-def _objective_linear_vector(model: Model) -> xr.DataArray:
+def _objective_linear_vector(model: Model) -> np.ndarray:
     vlabels = model.variables.label_index.vlabels
     label_to_pos = model.variables.label_index.label_to_pos
-    result = np.zeros(len(vlabels))
+    result = np.zeros(len(vlabels), dtype=np.float64)
     expr = model.objective.expression
     if isinstance(expr, expressions.QuadraticExpression):
         vars_2d = expr.data.vars.values
@@ -57,22 +44,72 @@ def _objective_linear_vector(model: Model) -> xr.DataArray:
         coeffs = expr.data.coeffs.values.ravel()
     mask = var_labels != -1
     np.add.at(result, label_to_pos[var_labels[mask]], coeffs[mask])
-    return xr.DataArray(result, dims="vlabel", coords={"vlabel": vlabels})
+    return result
 
 
-@dataclass(frozen=True)
-class CoefPattern:
-    indptr: np.ndarray
-    indices: np.ndarray
-
-    def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, CoefPattern)
-            and np.array_equal(self.indptr, other.indptr)
-            and np.array_equal(self.indices, other.indices)
+def _canonicalize_rows(
+    vars_arr: np.ndarray, coeffs_arr: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sort each row jointly by var index. -1 sentinels sort to the right."""
+    if vars_arr.size == 0:
+        return vars_arr.astype(np.int64, copy=False), coeffs_arr.astype(
+            np.float64, copy=False
         )
+    sort_key = np.where(vars_arr == -1, _INT64_MAX, vars_arr).astype(np.int64)
+    order = np.argsort(sort_key, axis=1, kind="stable")
+    rows = np.arange(vars_arr.shape[0])[:, None]
+    return (
+        vars_arr[rows, order].astype(np.int64, copy=False),
+        coeffs_arr[rows, order].astype(np.float64, copy=False),
+    )
 
-    __hash__ = None  # type: ignore[assignment]
+
+def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
+    labels_flat = var.labels.values.ravel()
+    mask = labels_flat != -1
+    return ContainerVarBuffers(
+        lower=var.lower.values.ravel()[mask].astype(np.float64, copy=True),
+        upper=var.upper.values.ravel()[mask].astype(np.float64, copy=True),
+        type=_variable_type(var),
+        active_labels=labels_flat[mask].astype(np.int64, copy=True),
+    )
+
+
+def _extract_con_buffers(
+    con: ConstraintBase, var_l2p: np.ndarray
+) -> ContainerConBuffers:
+    labels_flat = con.labels.values.ravel()
+    vars_vals = con.vars.values
+    coeffs_vals = con.coeffs.values
+    n_rows = len(labels_flat)
+    if n_rows > 0:
+        vars_2d = vars_vals.reshape(n_rows, -1)
+        coeffs_2d = coeffs_vals.reshape(vars_2d.shape)
+    else:
+        n_term = max(1, vars_vals.size)
+        vars_2d = vars_vals.reshape(0, n_term)
+        coeffs_2d = coeffs_vals.reshape(0, n_term)
+
+    row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
+    active_labels = labels_flat[row_mask].astype(np.int64, copy=True)
+
+    vars_active = vars_2d[row_mask]
+    coeffs_active = coeffs_2d[row_mask].astype(np.float64, copy=True)
+
+    valid = vars_active != -1
+    col_indices = np.full(vars_active.shape, -1, dtype=np.int64)
+    col_indices[valid] = var_l2p[vars_active[valid]]
+    coeffs_clean = np.where(valid, coeffs_active, 0.0)
+
+    vars_sorted, coeffs_sorted = _canonicalize_rows(col_indices, coeffs_clean)
+
+    return ContainerConBuffers(
+        coeffs=coeffs_sorted,
+        vars=vars_sorted,
+        rhs=con.rhs.values.ravel()[row_mask].astype(np.float64, copy=True),
+        sign=con.sign.values.ravel()[row_mask].astype("U2", copy=True),
+        active_labels=active_labels,
+    )
 
 
 @dataclass(frozen=True)
@@ -94,21 +131,31 @@ class StructuralKey:
     __hash__ = None  # type: ignore[assignment]
 
 
+@dataclass(frozen=True)
+class ContainerVarBuffers:
+    lower: np.ndarray
+    upper: np.ndarray
+    type: str
+    active_labels: np.ndarray
+
+
+@dataclass(frozen=True)
+class ContainerConBuffers:
+    coeffs: np.ndarray
+    vars: np.ndarray
+    rhs: np.ndarray
+    sign: np.ndarray
+    active_labels: np.ndarray
+
+
 @dataclass
 class ModelSnapshot:
     structural_key: StructuralKey
-
-    var_lb: dict[str, xr.DataArray] = field(default_factory=dict)
-    var_ub: dict[str, xr.DataArray] = field(default_factory=dict)
-    var_type: dict[str, str] = field(default_factory=dict)
-    var_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-
-    con_rhs: dict[str, xr.DataArray] = field(default_factory=dict)
-    con_sign: dict[str, xr.DataArray] = field(default_factory=dict)
-    con_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-    con_coef_pattern: dict[str, CoefPattern] = field(default_factory=dict)
-
-    obj_linear: xr.DataArray = field(default_factory=lambda: xr.DataArray([]))
+    var_buffers: dict[str, ContainerVarBuffers] = field(default_factory=dict)
+    con_buffers: dict[str, ContainerConBuffers] = field(default_factory=dict)
+    obj_c: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
     obj_quad_present: bool = False
     obj_sense: str = "min"
 
@@ -116,6 +163,7 @@ class ModelSnapshot:
     def capture(cls, model: Model) -> ModelSnapshot:
         var_label_index = model.variables.label_index
         con_label_index = model.constraints.label_index
+        var_l2p = var_label_index.label_to_pos
 
         structural_key = StructuralKey(
             var_container_names=tuple(model.variables),
@@ -124,42 +172,19 @@ class ModelSnapshot:
             clabels=con_label_index.clabels,
         )
 
-        var_lb: dict[str, xr.DataArray] = {}
-        var_ub: dict[str, xr.DataArray] = {}
-        var_type: dict[str, str] = {}
-        var_coords: dict[str, dict[str, np.ndarray]] = {}
-        for name, var in model.variables.items():
-            var_lb[name] = var.lower.copy(deep=True)
-            var_ub[name] = var.upper.copy(deep=True)
-            var_type[name] = _variable_type(var)
-            var_coords[name] = _coord_snapshot(var)
-
-        con_rhs: dict[str, xr.DataArray] = {}
-        con_sign: dict[str, xr.DataArray] = {}
-        con_coords: dict[str, dict[str, np.ndarray]] = {}
-        con_coef_pattern: dict[str, CoefPattern] = {}
-        for name, con in model.constraints.items():
-            con_rhs[name] = con.rhs.copy(deep=True)
-            con_sign[name] = con.sign.copy(deep=True)
-            con_coords[name] = _coord_snapshot(con)
-            indptr, indices, _ = _canonical_csr(con, var_label_index)
-            con_coef_pattern[name] = CoefPattern(indptr=indptr, indices=indices)
-
-        obj_linear = _objective_linear_vector(model).copy(deep=True)
-        obj_quad_present = model.objective.is_quadratic
-        obj_sense = model.objective.sense
+        var_buffers = {
+            name: _extract_var_buffers(var) for name, var in model.variables.items()
+        }
+        con_buffers = {
+            name: _extract_con_buffers(con, var_l2p)
+            for name, con in model.constraints.items()
+        }
 
         return cls(
             structural_key=structural_key,
-            var_lb=var_lb,
-            var_ub=var_ub,
-            var_type=var_type,
-            var_coords=var_coords,
-            con_rhs=con_rhs,
-            con_sign=con_sign,
-            con_coords=con_coords,
-            con_coef_pattern=con_coef_pattern,
-            obj_linear=obj_linear,
-            obj_quad_present=obj_quad_present,
-            obj_sense=obj_sense,
+            var_buffers=var_buffers,
+            con_buffers=con_buffers,
+            obj_c=_objective_linear_vector(model),
+            obj_quad_present=model.objective.is_quadratic,
+            obj_sense=model.objective.sense,
         )
