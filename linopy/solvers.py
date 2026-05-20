@@ -1599,7 +1599,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 c.setAttr("ConstrName", names)
 
         for sos_type, positions, weights in _iter_sos_sets(model):
-            gm.addSOS(sos_type, x[positions].tolist(), weights)
+            gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
 
         gm.update()
         return gm
