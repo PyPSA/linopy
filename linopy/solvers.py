@@ -505,14 +505,51 @@ class Solver(ABC, Generic[EnvType]):
         return instance
 
     def _build(self, **build_kwargs: Any) -> None:
-        """Dispatch to direct or file build based on ``io_api``."""
+        """
+        Dispatch to direct or file build based on ``io_api``.
+
+        The Solver never mutates ``self.model``. Constraint sanitization
+        (``model.constraints.sanitize_zeros()`` /
+        ``.sanitize_infinities()``) and SOS reformulation
+        (``model.apply_sos_reformulation()``) are Model-level operations
+        the caller applies first; this builder consumes whatever shape it
+        is handed.
+        """
         if self.model is None:
             raise RuntimeError("Solver has no model attached; cannot build.")
+        self._validate_model()
         self.model._check_sos_unmasked()
         if self.io_api == "direct":
             self._build_direct(**build_kwargs)
         else:
             self._build_file(**build_kwargs)
+
+    def _validate_model(self) -> None:
+        """Pre-build checks on whether this solver can handle ``self.model``."""
+        model = self.model
+        assert model is not None
+        solver_name = self.solver_name.value
+        cls = type(self)
+
+        if model.is_quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
+            raise ValueError(
+                f"Solver {solver_name} does not support quadratic problems."
+            )
+
+        if model.variables.semi_continuous and not cls.supports(
+            SolverFeature.SEMI_CONTINUOUS_VARIABLES
+        ):
+            raise ValueError(
+                f"Solver {solver_name} does not support semi-continuous variables. "
+                "Use a solver that supports them (gurobi, cplex, highs)."
+            )
+
+        if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
+            raise ValueError(
+                f"Solver {solver_name} does not support SOS constraints. "
+                "Reformulate first via `Model.solve(reformulate_sos=True)` or "
+                "`model.apply_sos_reformulation()`, or use a solver that supports SOS."
+            )
 
     def _build_direct(self, **build_kwargs: Any) -> None:
         """Build the native solver model from ``self.model``. Override per-solver."""
@@ -554,7 +591,30 @@ class Solver(ABC, Generic[EnvType]):
         self._cache_model_sizes(model)
 
     def solve(self, **run_kwargs: Any) -> Result:
-        """Run the prepared solver and return a :class:`Result`."""
+        """
+        Run the prepared solver and return a :class:`Result`.
+
+        The canonical low-level pattern is::
+
+            solver = Solver.from_name("gurobi", model, io_api="direct")
+            result = solver.solve()
+            model.assign_result(result, solver=solver)
+
+        Passing ``solver=`` to :meth:`Model.assign_result` wires
+        ``model.solver`` so post-solve helpers like
+        :meth:`Model.compute_infeasibilities` keep working.
+
+        Raises
+        ------
+        ValueError
+            If the attached model has no objective set. Submit-time check
+            shared by both ``Model.solve()`` and direct-Solver callers.
+        """
+        if self.model is not None and self.model.objective.expression.empty:
+            raise ValueError(
+                "No objective has been set on the model. Use `m.add_objective(...)` "
+                "first (e.g. `m.add_objective(0 * x)` for a pure feasibility problem)."
+            )
         if self.io_api == "direct" or self.solver_model is not None:
             return self._run_direct(**run_kwargs)
         if self._problem_fn is not None:
@@ -2120,34 +2180,76 @@ class Xpress(Solver[None]):
             entind = None
             coltype = None
 
-        problem.loadproblem(
+        objcoef = np.asarray(M.c, dtype=float)
+        has_q = objqcol1 is not None
+        has_int = coltype is not None
+        base_kwargs: dict[str, Any] = dict(
             probname="linopy",
             rowtype=rowtype,
             rhs=rhs,
             rng=None,
-            objcoef=np.asarray(M.c, dtype=float),
+            objcoef=objcoef,
             start=start,
             collen=None,
             rowind=rowind,
             rowcoef=rowcoef,
             lb=lb,
             ub=ub,
-            objqcol1=objqcol1,
-            objqcol2=objqcol2,
-            objqcoef=objqcoef,
-            qrowind=None,
-            nrowqcoefs=None,
-            rowqcol1=None,
-            rowqcol2=None,
-            rowqcoef=None,
-            coltype=coltype,
-            entind=entind,
-            limit=None,
-            settype=None,
-            setstart=None,
-            setind=None,
-            refval=None,
         )
+        try:  # Try new API first (Xpress 9.8+)
+            if has_q and has_int:
+                problem.loadMIQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            elif has_q:
+                problem.loadQP(
+                    **base_kwargs,
+                    objqcol1=objqcol1,
+                    objqcol2=objqcol2,
+                    objqcoef=objqcoef,
+                )
+            elif has_int:
+                problem.loadMIP(
+                    **base_kwargs,
+                    coltype=coltype,
+                    entind=entind,
+                )
+            else:
+                problem.loadLP(**base_kwargs)
+        except AttributeError:  # Fallback to old API
+            problem.loadproblem(
+                probname="linopy",
+                rowtype=rowtype,
+                rhs=rhs,
+                rng=None,
+                objcoef=objcoef,
+                start=start,
+                collen=None,
+                rowind=rowind,
+                rowcoef=rowcoef,
+                lb=lb,
+                ub=ub,
+                objqcol1=objqcol1,
+                objqcol2=objqcol2,
+                objqcoef=objqcoef,
+                qrowind=None,
+                nrowqcoefs=None,
+                rowqcol1=None,
+                rowqcol2=None,
+                rowqcoef=None,
+                coltype=coltype,
+                entind=entind,
+                limit=None,
+                settype=None,
+                setstart=None,
+                setind=None,
+                refval=None,
+            )
 
         if model.objective.sense == "max":
             problem.chgobjsense(xpress.maximize)
@@ -2158,10 +2260,20 @@ class Xpress(Solver[None]):
             )
             vnames = print_variable(M.vlabels)
             if vnames:
-                problem.addnames(xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(
+                        xpress_Namespaces.COLUMN, vnames, 0, len(vnames) - 1
+                    )
             cnames = print_constraint(M.clabels)
             if cnames:
-                problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                try:  # Try new API first (Xpress 9.8+)
+                    problem.addNames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
+                except AttributeError:  # Fallback to old API
+                    problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
         if model.variables.sos:
             for var_name in model.variables.sos:
@@ -2225,7 +2337,10 @@ class Xpress(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = xpress.problem()
-        m.read(path_to_string(problem_fn))
+        try:  # Try new API first
+            m.readProb(path_to_string(problem_fn))
+        except AttributeError:  # Fallback to old API
+            m.read(path_to_string(problem_fn))
 
         return self._solve(
             m,
@@ -2261,25 +2376,40 @@ class Xpress(Solver[None]):
             m.setControl(self.solver_options)
 
         if log_fn is not None:
-            m.setlogfile(path_to_string(log_fn))
+            try:  # Try new API first
+                m.setLogFile(path_to_string(log_fn))
+            except AttributeError:  # Fallback to old API
+                m.setlogfile(path_to_string(log_fn))
 
         if warmstart_fn is not None:
-            m.readbasis(path_to_string(warmstart_fn))
+            try:  # Try new API first
+                m.readBasis(path_to_string(warmstart_fn))
+            except AttributeError:  # Fallback to old API
+                m.readbasis(path_to_string(warmstart_fn))
 
         m.optimize()
 
         if m.attributes.solvestatus == xpress.enums.SolveStatus.STOPPED:
-            m.postsolve()
+            try:  # Try new API first
+                m.postSolve()
+            except AttributeError:  # Fallback to old API
+                m.postsolve()
 
         if basis_fn is not None:
             try:
-                m.writebasis(path_to_string(basis_fn))
+                try:  # Try new API first
+                    m.writeBasis(path_to_string(basis_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebasis(path_to_string(basis_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("No model basis stored. Raised error: %s", err)
 
         if solution_fn is not None:
             try:
-                m.writebinsol(path_to_string(solution_fn))
+                try:  # Try new API first
+                    m.writeBinSol(path_to_string(solution_fn))
+                except AttributeError:  # Fallback to old API
+                    m.writebinsol(path_to_string(solution_fn))
             except (xpress.SolverError, xpress.ModelError) as err:  # pragma: no cover
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
@@ -2305,7 +2435,10 @@ class Xpress(Solver[None]):
                 if m.attributes.rows == 0:
                     dual = np.array([], dtype=float)
                 else:
-                    dual_values = np.asarray(m.getDual(), dtype=float)
+                    try:  # getDuals introduced in 9.5; fallback for 9.4
+                        dual_values = np.asarray(m.getDuals(), dtype=float)
+                    except AttributeError:
+                        dual_values = np.asarray(m.getDual(), dtype=float)
                     if from_file:
                         dual = _solution_from_names(
                             dual_values,
