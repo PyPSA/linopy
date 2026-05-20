@@ -116,21 +116,20 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Modifying a Model
-
-   manipulating-models
-
-.. toctree::
-   :hidden:
-   :maxdepth: 2
    :caption: Solving a Model
 
    solving
    solver-api
    remote-machines
    gpu-acceleration
-   infeasible-model
-   gurobi-double-logging
+   solving-troubleshooting
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Modifying a Model
+
+   manipulating-models
 
 .. toctree::
    :hidden:
