@@ -1723,8 +1723,7 @@ class Model:
             is used to split large variables and constraints into smaller
             chunks to avoid memory issues. The default is 2_000_000.
         remote : linopy.remote.RemoteHandler | linopy.oetc.OetcHandler, optional
-            Remote handler to use for solving model on a server. Note that when
-            solving on a rSee
+            Remote handler to use for solving the model on a server. See
             linopy.remote.RemoteHandler for more details.
         progress : bool, optional
             Whether to show a progress bar of writing the lp file. The default is
