@@ -199,7 +199,7 @@ def sos_masked_model() -> Callable[..., tuple[Model, float, np.ndarray]]:  # noq
                 mask_arr = np.ones((4, 2), dtype=bool)
             else:
                 mask_arr = np.asarray(sos_mask.values, dtype=bool)
-            active_per_j = {
+            active_per_j: dict[int | None, list[int]] = {
                 j: [i for i in range(4) if mask_arr[i, j]] for j in range(2)
             }
         else:
@@ -212,7 +212,7 @@ def sos_masked_model() -> Callable[..., tuple[Model, float, np.ndarray]]:  # noq
         expected_obj = 0.0
         # Build expected_sol with the right shape and NaN-fill masked slots
         if sos_var_2d:
-            expected_sol = np.full((4, 2), 0.0)
+            expected_sol: np.ndarray = np.full((4, 2), 0.0)
             if sos_mask is not None:
                 mask_arr = np.asarray(sos_mask.values, dtype=bool)
                 expected_sol[~mask_arr] = np.nan
