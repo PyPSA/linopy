@@ -2694,58 +2694,6 @@ class Knitro(Solver[None]):
 mosek_bas_re = re.compile(r" (XL|XU)\s+([^ \t]+)\s+([^ \t]+)| (LL|UL|BS)\s+([^ \t]+)")
 
 
-def _choose_mosek_solution(task: mosek.Task) -> mosek.soltype | None:
-    """
-    Pick the Mosek solution with the best status available.
-
-    Mosek may return up to three solutions per task: interior-point
-    (``soltype.itr``), basic (``soltype.bas``), and integer
-    (``soltype.itg``). Each carries its own ``solsta``: on a numerically
-    marginal LP solved with the default IPM+crossover, the interior-point
-    solver may terminate with ``solsta.dual_infeas_cer`` while crossover
-    recovers ``solsta.optimal`` for the basic solution. Reading only the
-    interior-point solution would discard the actual optimum.
-
-    Ranking, best to worst: ``solsta.optimal`` / ``solsta.integer_optimal``
-    > any other defined status > undefined. On a tie between ``bas`` and
-    ``itr`` (e.g. both ``optimal``) we prefer ``itr`` to preserve historical
-    behaviour. If ``itg`` is defined it always wins, since integer and
-    continuous solutions do not coexist for a well-posed task.
-
-    Returns ``None`` if no solution is defined at all (e.g. the optimizer
-    crashed before producing one).
-    """
-
-    def _is_defined(soltype: mosek.soltype) -> bool:
-        try:
-            return bool(task.solutiondef(soltype))
-        except mosek.Error:
-            return False
-
-    if _is_defined(mosek.soltype.itg):
-        return mosek.soltype.itg
-
-    optimal_statuses = {mosek.solsta.optimal, mosek.solsta.integer_optimal}
-
-    best: mosek.soltype | None = None
-    best_score = -1
-    # Iterate bas first and only then itr so that on a score tie
-    # itr wins, preserving the historical default for the common LP case.
-    for candidate in [mosek.soltype.bas, mosek.soltype.itr]:
-        if not _is_defined(candidate):
-            continue
-        try:
-            solsta = task.getsolsta(candidate)
-        except mosek.Error:
-            continue
-        score = 1 if solsta in optimal_statuses else 0
-        if score >= best_score:
-            best = candidate
-            best_score = score
-
-    return best
-
-
 class Mosek(Solver[None]):
     """
     Solver subclass for the Mosek solver.
@@ -2918,6 +2866,58 @@ class Mosek(Solver[None]):
         else:
             task.putobjsense(mosek.objsense.minimize)
         return task
+
+    @staticmethod
+    def _choose_solution(task: mosek.Task) -> mosek.soltype | None:
+        """
+        Pick the Mosek solution with the best status available.
+
+        Mosek may return up to three solutions per task: interior-point
+        (``soltype.itr``), basic (``soltype.bas``), and integer
+        (``soltype.itg``). Each carries its own ``solsta``: on a numerically
+        marginal LP solved with the default IPM+crossover, the interior-point
+        solver may terminate with ``solsta.dual_infeas_cer`` while crossover
+        recovers ``solsta.optimal`` for the basic solution. Reading only the
+        interior-point solution would discard the actual optimum.
+
+        Ranking, best to worst: ``solsta.optimal`` / ``solsta.integer_optimal``
+        > any other defined status > undefined. On a tie between ``bas`` and
+        ``itr`` (e.g. both ``optimal``) we prefer ``itr`` to preserve historical
+        behaviour. If ``itg`` is defined it always wins, since integer and
+        continuous solutions do not coexist for a well-posed task.
+
+        Returns ``None`` if no solution is defined at all (e.g. the optimizer
+        crashed before producing one).
+        """
+
+        def _is_defined(soltype: mosek.soltype) -> bool:
+            try:
+                return bool(task.solutiondef(soltype))
+            except mosek.Error:
+                return False
+
+        if _is_defined(mosek.soltype.itg):
+            return mosek.soltype.itg
+
+        optimal_statuses = {mosek.solsta.optimal, mosek.solsta.integer_optimal}
+
+        best: mosek.soltype | None = None
+        best_score = -1
+        # Iterate bas first and only then itr so that on a score tie
+        # itr wins, preserving the historical default for the common LP case.
+        for candidate in [mosek.soltype.bas, mosek.soltype.itr]:
+            if not _is_defined(candidate):
+                continue
+            try:
+                solsta = task.getsolsta(candidate)
+            except mosek.Error:
+                continue
+            score = 1 if solsta in optimal_statuses else 0
+            if score >= best_score:
+                best = candidate
+                best_score = score
+
+        return best
 
     def _run_file(
         self,
@@ -3105,7 +3105,7 @@ class Mosek(Solver[None]):
         # Inspect both bas and itr (and itg for MILPs) and pick the
         # solution with the best status. Reading only the interior-point
         # solution may discard a valid crossover optimum.
-        soltype = _choose_mosek_solution(m)
+        soltype = Mosek._choose_solution(m)
 
         if solution_fn is not None and soltype is not None:
             try:
