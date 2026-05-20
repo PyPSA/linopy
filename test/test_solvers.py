@@ -678,18 +678,18 @@ def test_mosek_choose_solution_falls_back_to_itr_when_both_non_optimal() -> None
 @pytest.mark.skipif(
     "mosek" not in set(solvers.licensed_solvers), reason="Mosek is not installed"
 )
-def test_mosek_smoke_lp(tmp_path: Path) -> None:
+def test_mosek_smoke_lp() -> None:
     """End-to-end smoke test: a small bounded LP solves to a finite optimum."""
-    mosek_solver = solvers.Mosek()
-    lp_file = tmp_path / "problem.lp"
-    lp_file.write_text(free_lp_problem)
-    sol_file = tmp_path / "solution.sol"
+    m = Model()
+    x = m.add_variables(name="x", lower=0)
+    m.add_constraints(2 * x >= 10, name="c1")
+    m.add_objective(x)
 
-    result = mosek_solver.solve_problem(problem_fn=lp_file, solution_fn=sol_file)
+    result = solvers.Solver.from_name("mosek", m).solve()
 
     assert result.status.is_ok
     assert result.solution is not None
     import math
 
     assert math.isfinite(result.solution.objective)
-    assert result.solution.objective == pytest.approx(80.0 / 3.0, abs=1e-3)
+    assert result.solution.objective == pytest.approx(5.0, abs=1e-3)
