@@ -3210,7 +3210,7 @@ class COPT(Solver[None]):
                 try:
                     m.write(path_to_string(solution_fn))
                 except coptpy.CoptError as err:
-                    logger.info("No model solution stored. Raised error: %s", err)
+                    logger.warning("No model solution stored. Raised error: %s", err)
 
             # TODO: check if this suffices
             condition = m.MipStatus if m.ismip else m.LpStatus
