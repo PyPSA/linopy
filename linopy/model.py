@@ -1300,34 +1300,6 @@ class Model:
             )
         return not solver_supports(solver_name, SolverFeature.SOS_CONSTRAINTS)
 
-    def _check_sos_unmasked(self) -> None:
-        """
-        Reject the model if any SOS variable has masked entries.
-
-        The SOS plumbing (both direct-API solvers and the LP file writer) treats
-        linopy variable labels as solver column indices / names, which breaks as
-        soon as a label is ``-1`` (linopy's ``FILL_VALUE["labels"]`` for masked
-        slots). The downstream symptoms are solver-specific — ``IndexError`` on
-        gurobipy, ``?404 Invalid column number`` on xpress, parse errors on
-        xpress/cplex LP readers, silent SOS-set corruption on gurobi's LP reader.
-
-        Surface a single clear error until #688 lands the proper fix.
-        """
-        if not self.variables.sos:
-            return
-        affected = [
-            name
-            for name in self.variables.sos
-            if (self.variables[name].labels.values == -1).any()
-        ]
-        if affected:
-            raise NotImplementedError(
-                f"SOS constraints on masked variables are not yet supported "
-                f"(affected: {affected}; "
-                "see https://github.com/PyPSA/linopy/issues/688). "
-                "Pass reformulate_sos=True as a workaround."
-            )
-
     def remove_objective(self) -> None:
         """
         Remove the objective's linear expression from the model.
