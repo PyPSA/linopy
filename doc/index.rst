@@ -125,7 +125,8 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Solving a Model
 
-   using-solvers
+   solving
+   solver-api
    remote-machines
    gpu-acceleration
    infeasible-model
