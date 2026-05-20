@@ -106,18 +106,24 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: User Guide
+   :caption: Creating a Model
 
    creating-variables
    creating-expressions
    creating-constraints
    coordinate-alignment
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Modifying a Model
+
    manipulating-models
 
 .. toctree::
    :hidden:
    :maxdepth: 2
-   :caption: Solving
+   :caption: Solving a Model
 
    using-solvers
    remote-machines
