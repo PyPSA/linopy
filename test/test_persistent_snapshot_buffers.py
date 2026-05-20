@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from linopy import Model
-from linopy.persistent import ModelSnapshot, RebuildReason, compute_diff
+from linopy.persistent import ModelDiff, ModelSnapshot, RebuildReason
 from linopy.persistent.snapshot import (
     _canonicalize_rows,
     _extract_con_buffers,
@@ -86,7 +86,7 @@ def test_shape_mismatch_triggers_sparsity_rebuild(baseline_model: Model) -> None
     x = baseline_model.variables["x"]
     y = baseline_model.variables["y"]
     baseline_model.constraints["c1"].lhs = 2 * x + 0 * y.sum()
-    diff = compute_diff(snap, baseline_model)
+    diff = ModelDiff.from_snapshot(snap, baseline_model)
     assert diff.rebuild_reason in {
         RebuildReason.SPARSITY,
         RebuildReason.STRUCTURAL_LABELS,
@@ -99,7 +99,7 @@ def test_zero_row_container_capture() -> None:
     m.add_objective(0.0 * m.variables["x"].sum())
     snap = ModelSnapshot.capture(m)
     assert snap.con_buffers == {}
-    diff = compute_diff(snap, m)
+    diff = ModelDiff.from_snapshot(snap, m)
     assert diff.is_empty
 
 

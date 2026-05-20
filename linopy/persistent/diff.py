@@ -164,6 +164,40 @@ class ModelDiff:
         ]
         return "ModelDiff(" + ", ".join(parts) + ")"
 
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: ModelSnapshot,
+        model: Model,
+        same_model: bool = True,
+        ignore_dims: Iterable[str] | None = None,
+    ) -> ModelDiff:
+        """Diff ``model`` against a captured ``snapshot``.
+
+        Coordinate values are not compared by default. Pass ``ignore_dims``
+        (e.g. ``ignore_dims=()`` or ``ignore_dims={"snapshot"}``) to opt into
+        per-container coord-equality on every dim *not* in the set — a
+        mismatch triggers ``RebuildReason.COORD_REINDEX``.
+        """
+        return _compute_diff(snapshot, model, same_model, ignore_dims)
+
+    @classmethod
+    def from_models(
+        cls,
+        model_a: Model,
+        model_b: Model,
+        ignore_dims: Iterable[str] | None = None,
+    ) -> ModelDiff:
+        """Diff two linopy models directly.
+
+        ``model_a`` is the baseline (snapshotted internally), ``model_b`` is
+        the target. ``same_model`` is forced to ``False`` so the coefficient
+        compare runs unconditionally — no ``_coef_dirty`` shortcut applies
+        between independently-built models.
+        """
+        snapshot = ModelSnapshot.capture(model_a)
+        return _compute_diff(snapshot, model_b, same_model=False, ignore_dims=ignore_dims)
+
 
 def _coords_equal(
     a: dict[str, np.ndarray], b: dict[str, np.ndarray], ignored: frozenset[str]
@@ -175,19 +209,12 @@ def _coords_equal(
     return all(np.array_equal(a[k], b[k]) for k in keys_a)
 
 
-def compute_diff(
+def _compute_diff(
     snapshot: ModelSnapshot,
     model: Model,
-    same_model: bool = True,
-    ignore_dims: Iterable[str] | None = None,
+    same_model: bool,
+    ignore_dims: Iterable[str] | None,
 ) -> ModelDiff:
-    """Compute a ``ModelDiff`` between ``snapshot`` and ``model``.
-
-    Coordinate values are not compared by default. Pass ``ignore_dims``
-    (e.g. ``ignore_dims=()`` or ``ignore_dims={"snapshot"}``) to opt into
-    per-container coord-equality on every dim *not* in the set — a mismatch
-    triggers ``RebuildReason.COORD_REINDEX``.
-    """
     check_coords = ignore_dims is not None
     ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
     diff = ModelDiff()

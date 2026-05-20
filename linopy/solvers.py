@@ -50,8 +50,8 @@ from linopy.persistent import (
     ModelDiff,
     ModelSnapshot,
     RebuildReason,
+    RebuildRequiredError,
     UnsupportedUpdate,
-    compute_diff,
 )
 
 
@@ -507,15 +507,22 @@ class Solver(ABC, Generic[EnvType]):
     @staticmethod
     def from_name(
         name: str,
-        model: Model,
+        model: Model | None = None,
         io_api: str | None = None,
         options: dict[str, Any] | None = None,
         **build_kwargs: Any,
     ) -> Solver:
-        """Construct and build the solver subclass registered as ``name``."""
+        """Construct the solver subclass registered as ``name``.
+
+        With ``model`` supplied, the solver is built immediately. Without it,
+        an unbuilt instance is returned and the first ``solve(model, ...)``
+        call performs the build.
+        """
         cls = _solver_class_for(name)
         if cls is None:
             raise ValueError(f"unknown solver: {name}")
+        if model is None:
+            return cls(model=None, io_api=io_api, options=options or {})
         return cls.from_model(
             model, io_api=io_api, options=options or {}, **build_kwargs
         )
@@ -626,6 +633,7 @@ class Solver(ABC, Generic[EnvType]):
         model: Model | None = None,
         assign: bool = False,
         ignore_dims: Iterable[str] | None = None,
+        disallow_rebuild: bool = False,
         **run_kwargs: Any,
     ) -> Result:
         """
@@ -639,6 +647,12 @@ class Solver(ABC, Generic[EnvType]):
         Pass ``ignore_dims`` (e.g. ``{"snapshot"}``) to opt into per-container
         coordinate-equality checking on every dim *not* in the set. Default
         (``None``) skips the coord check entirely.
+
+        Pass ``disallow_rebuild=True`` to guarantee that an existing solver
+        model is updated in place — any condition that would force a rebuild
+        (structural change, sparsity change, backend rejection, …) raises
+        :class:`RebuildRequiredError` instead. The initial build on the first
+        ``solve(model, ...)`` is still allowed.
         """
         if model is not None:
             if self.io_api != "direct":
@@ -648,7 +662,12 @@ class Solver(ABC, Generic[EnvType]):
                     self.model = model
                     self._build()
                 else:
-                    self._update_locked(model, apply=True, ignore_dims=ignore_dims)
+                    self._update_locked(
+                        model,
+                        apply=True,
+                        ignore_dims=ignore_dims,
+                        disallow_rebuild=disallow_rebuild,
+                    )
             target = model
         else:
             target = self.model  # type: ignore[assignment]
@@ -689,19 +708,24 @@ class Solver(ABC, Generic[EnvType]):
         model: Model,
         apply: bool,
         ignore_dims: Iterable[str] | None = None,
+        disallow_rebuild: bool = False,
     ) -> ModelDiff:
         assert self.snapshot is not None
         if apply and not type(self).supports_persistent_update:
+            if disallow_rebuild:
+                raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
             diff = ModelDiff(rebuild_reason=RebuildReason.BACKEND_REJECTED)
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return diff
         same_model = model is self.model
-        diff = compute_diff(
+        diff = ModelDiff.from_snapshot(
             self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
         )
         if not apply:
             return diff
         if diff.rebuild_required:
+            if disallow_rebuild:
+                raise RebuildRequiredError(diff.rebuild_reason)
             self._rebuild(model, diff.rebuild_reason)
             return diff
         try:
@@ -710,7 +734,11 @@ class Solver(ABC, Generic[EnvType]):
                 model.variables.label_index,
                 model.constraints.label_index,
             )
-        except Exception:
+        except Exception as exc:
+            if disallow_rebuild:
+                raise RebuildRequiredError(
+                    RebuildReason.BACKEND_REJECTED, str(exc)
+                ) from exc
             self._last_rebuild_reason = RebuildReason.BACKEND_REJECTED
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return diff

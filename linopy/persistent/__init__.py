@@ -7,9 +7,8 @@ from linopy.persistent.diff import (
     ContainerVarUpdate,
     ModelDiff,
     RebuildReason,
-    compute_diff,
 )
-from linopy.persistent.errors import UnsupportedUpdate
+from linopy.persistent.errors import RebuildRequiredError, UnsupportedUpdate
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
@@ -25,7 +24,7 @@ __all__ = [
     "ModelDiff",
     "ModelSnapshot",
     "RebuildReason",
+    "RebuildRequiredError",
     "StructuralKey",
     "UnsupportedUpdate",
-    "compute_diff",
 ]

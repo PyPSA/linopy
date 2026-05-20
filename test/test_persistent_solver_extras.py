@@ -343,6 +343,34 @@ def test_scenario_sweep_in_place(
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_disallow_rebuild_raises_on_structural_change(solver_name: str) -> None:
+    from linopy.persistent import RebuildRequiredError
+
+    m = _base_model()
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    m2 = _base_model()
+    m2.add_variables(0, 5, coords=[range(3)], name="z")
+
+    with pytest.raises(RebuildRequiredError):
+        s.solve(m2, disallow_rebuild=True, assign=True)
+    assert s._rebuilds == 0
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_disallow_rebuild_passes_when_update_works(solver_name: str) -> None:
+    m = _base_model()
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    m.constraints["c1"].rhs = 6.0
+    s.solve(m, disallow_rebuild=True, assign=True)
+    assert s._in_place_updates == 1
+    assert s._rebuilds == 0
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
 def test_solve_without_assign_does_not_mutate_model(solver_name: str) -> None:
     m = _base_model()
     s = _built(solver_name, m)

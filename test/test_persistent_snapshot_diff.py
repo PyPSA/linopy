@@ -12,7 +12,6 @@ from linopy.persistent import (
     ModelSnapshot,
     RebuildReason,
     StructuralKey,
-    compute_diff,
 )
 
 
@@ -45,7 +44,7 @@ def test_capture_structural_key(baseline: Model) -> None:
 
 def test_is_empty_on_unmutated(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.is_empty
     assert diff.rebuild_reason is RebuildReason.NONE
     assert not diff.rebuild_required
@@ -54,7 +53,7 @@ def test_is_empty_on_unmutated(baseline: Model) -> None:
 def test_bounds_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.variables["x"].lower = 1
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
     assert "x" in diff.vars
     assert "y" not in diff.vars
@@ -66,7 +65,7 @@ def test_bounds_only_mutation(baseline: Model) -> None:
 def test_rhs_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.constraints["c1"].rhs = 9
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
     assert "c1" in diff.cons
     upd = diff.cons["c1"]
@@ -79,7 +78,7 @@ def test_objective_linear_change(baseline: Model) -> None:
     x = baseline.variables["x"]
     y = baseline.variables["y"]
     baseline.add_objective(3 * x.sum() + 2 * y.sum(), overwrite=True)
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
     assert diff.obj_c_indices is not None
     assert diff.obj_c_values is not None
@@ -88,7 +87,7 @@ def test_objective_linear_change(baseline: Model) -> None:
 def test_objective_sense_flip(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.objective.sense = "max"
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
     assert diff.obj_sense == "max"
 
@@ -97,7 +96,7 @@ def test_add_constraints_is_structural(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     x = baseline.variables["x"]
     baseline.add_constraints(x.sum() <= 99, name="c3")
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason in (
         RebuildReason.STRUCTURAL_LABELS,
         RebuildReason.STRUCTURAL_CONTAINERS,
@@ -107,7 +106,7 @@ def test_add_constraints_is_structural(baseline: Model) -> None:
 def test_remove_variables_is_structural(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.remove_variables("y")
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason in (
         RebuildReason.STRUCTURAL_LABELS,
         RebuildReason.STRUCTURAL_CONTAINERS,
@@ -118,7 +117,7 @@ def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     c = baseline.constraints["c1"]
     c.coeffs = c.coeffs * 3
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.NONE
     assert "c1" in diff.cons
     upd = diff.cons["c1"]
@@ -131,14 +130,14 @@ def test_coef_sparsity_change(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     x = baseline.variables["x"]
     baseline.constraints["c2"].lhs = 2 * x.sum()
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff.rebuild_reason is RebuildReason.SPARSITY
 
 
 def test_deep_copy_invariant(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     baseline.variables["x"].lower.values[...] = 99
-    diff = compute_diff(snap, baseline)
+    diff = ModelDiff.from_snapshot(snap, baseline)
     assert "x" in diff.vars
 
 
@@ -147,9 +146,9 @@ def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
     c = baseline.constraints["c1"]
     c.coeffs = c.coeffs * 5
     c._coef_dirty = False
-    diff_fast = compute_diff(snap, baseline, same_model=True)
+    diff_fast = ModelDiff.from_snapshot(snap, baseline, same_model=True)
     assert "c1" not in diff_fast.cons or diff_fast.cons["c1"].coef_values is None
-    diff_full = compute_diff(snap, baseline, same_model=False)
+    diff_full = ModelDiff.from_snapshot(snap, baseline, same_model=False)
     assert "c1" in diff_full.cons
     assert diff_full.cons["c1"].coef_values is not None
 
@@ -158,6 +157,24 @@ def test_modeldiff_default_is_empty() -> None:
     d = ModelDiff()
     assert d.is_empty
     assert not d.rebuild_required
+
+
+def test_from_models_diffs_two_models() -> None:
+    m1 = Model()
+    x1 = m1.add_variables(0, 10, coords=[range(3)], name="x")
+    m1.add_constraints(2 * x1 >= 4, name="c1")
+    m1.add_objective(x1.sum())
+
+    m2 = Model()
+    x2 = m2.add_variables(0, 10, coords=[range(3)], name="x")
+    m2.add_constraints(2 * x2 >= 7, name="c1")
+    m2.add_objective(x2.sum())
+
+    diff = ModelDiff.from_models(m1, m2)
+    assert diff.rebuild_reason is RebuildReason.NONE
+    assert "c1" in diff.cons
+    assert diff.cons["c1"].rhs_values is not None
+    np.testing.assert_array_equal(diff.cons["c1"].rhs_values, np.full(3, 7.0))
 
 
 def test_ignore_dims_detects_coord_change() -> None:
@@ -172,10 +189,10 @@ def test_ignore_dims_detects_coord_change() -> None:
     m2.add_constraints(m2.variables["x"] >= 0, name="c1")
     m2.add_objective(m2.variables["x"].sum())
 
-    assert compute_diff(snap, m2).rebuild_reason is RebuildReason.NONE
-    assert compute_diff(snap, m2, ignore_dims=()).rebuild_reason is (
+    assert ModelDiff.from_snapshot(snap, m2).rebuild_reason is RebuildReason.NONE
+    assert ModelDiff.from_snapshot(snap, m2, ignore_dims=()).rebuild_reason is (
         RebuildReason.COORD_REINDEX
     )
-    assert compute_diff(snap, m2, ignore_dims={"t"}).rebuild_reason is (
+    assert ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"}).rebuild_reason is (
         RebuildReason.NONE
     )
