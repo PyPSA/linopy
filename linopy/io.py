@@ -700,13 +700,11 @@ def to_xpress(
     set_names: bool = True,
 ) -> Any:
     """Build the xpress.problem instance for `m`."""
-    solver = solvers.Xpress.from_model(
+    return solvers.Xpress._build_solver_model(
         m,
-        io_api="direct",
         explicit_coordinate_names=explicit_coordinate_names,
         set_names=set_names,
     )
-    return solver.solver_model
 
 
 def to_cupdlpx(m: Model) -> cupdlpxModel:

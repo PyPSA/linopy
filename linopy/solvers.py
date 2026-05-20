@@ -2097,11 +2097,14 @@ class Xpress(Solver[None]):
     ) -> None:
         model = self.model
         assert model is not None
+        self.close()
+        self._env_stack = contextlib.ExitStack()
         problem = self._build_solver_model(
             model,
             explicit_coordinate_names=explicit_coordinate_names,
             set_names=set_names,
         )
+        self._env_stack.enter_context(problem)
         self.solver_model = problem
         self.io_api = "direct"
         self.sense = model.sense
@@ -2319,7 +2322,9 @@ class Xpress(Solver[None]):
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
-        m = xpress.problem()
+        self.close()
+        self._env_stack = contextlib.ExitStack()
+        m = self._env_stack.enter_context(xpress.problem())
         try:  # Try new API first
             m.readProb(path_to_string(problem_fn))
         except AttributeError:  # Fallback to old API
