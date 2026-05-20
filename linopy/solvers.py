@@ -19,7 +19,7 @@ import threading
 import warnings
 from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -625,6 +625,7 @@ class Solver(ABC, Generic[EnvType]):
         self,
         model: Model | None = None,
         assign: bool = False,
+        ignore_dims: Iterable[str] | None = None,
         **run_kwargs: Any,
     ) -> Result:
         """
@@ -634,6 +635,10 @@ class Solver(ABC, Generic[EnvType]):
         apply in place or rebuild before running. Requires ``io_api='direct'``.
         With ``assign=True`` the Result is written back to the target Model
         via :meth:`Model.assign_result`.
+
+        Pass ``ignore_dims`` (e.g. ``{"snapshot"}``) to opt into per-container
+        coordinate-equality checking on every dim *not* in the set. Default
+        (``None``) skips the coord check entirely.
         """
         if model is not None:
             if self.io_api != "direct":
@@ -643,7 +648,7 @@ class Solver(ABC, Generic[EnvType]):
                     self.model = model
                     self._build()
                 else:
-                    self._update_locked(model, apply=True)
+                    self._update_locked(model, apply=True, ignore_dims=ignore_dims)
             target = model
         else:
             target = self.model  # type: ignore[assignment]
@@ -666,22 +671,34 @@ class Solver(ABC, Generic[EnvType]):
             target.assign_result(result, solver=self)
         return result
 
-    def update(self, model: Model, apply: bool = True) -> ModelDiff:
+    def update(
+        self,
+        model: Model,
+        apply: bool = True,
+        ignore_dims: Iterable[str] | None = None,
+    ) -> ModelDiff:
         if self.io_api != "direct":
             raise ValueError("update requires io_api='direct'")
         if self.snapshot is None or self.solver_model is None:
             raise RuntimeError("Solver has not been built")
         with self._lock:
-            return self._update_locked(model, apply=apply)
+            return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
 
-    def _update_locked(self, model: Model, apply: bool) -> ModelDiff:
+    def _update_locked(
+        self,
+        model: Model,
+        apply: bool,
+        ignore_dims: Iterable[str] | None = None,
+    ) -> ModelDiff:
         assert self.snapshot is not None
         if apply and not type(self).supports_persistent_update:
             diff = ModelDiff(rebuild_reason=RebuildReason.BACKEND_REJECTED)
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return diff
         same_model = model is self.model
-        diff = compute_diff(self.snapshot, model, same_model=same_model)
+        diff = compute_diff(
+            self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
+        )
         if not apply:
             return diff
         if diff.rebuild_required:

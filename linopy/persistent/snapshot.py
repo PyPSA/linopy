@@ -148,11 +148,17 @@ class ContainerConBuffers:
     active_labels: np.ndarray
 
 
+def _coord_snapshot(obj: Variable | ConstraintBase) -> dict[str, np.ndarray]:
+    return {str(name): np.asarray(idx) for name, idx in obj.indexes.items()}
+
+
 @dataclass
 class ModelSnapshot:
     structural_key: StructuralKey
     var_buffers: dict[str, ContainerVarBuffers] = field(default_factory=dict)
     con_buffers: dict[str, ContainerConBuffers] = field(default_factory=dict)
+    var_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    con_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
     obj_c: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
@@ -179,11 +185,19 @@ class ModelSnapshot:
             name: _extract_con_buffers(con, var_l2p)
             for name, con in model.constraints.items()
         }
+        var_coords = {
+            name: _coord_snapshot(var) for name, var in model.variables.items()
+        }
+        con_coords = {
+            name: _coord_snapshot(con) for name, con in model.constraints.items()
+        }
 
         return cls(
             structural_key=structural_key,
             var_buffers=var_buffers,
             con_buffers=con_buffers,
+            var_coords=var_coords,
+            con_coords=con_coords,
             obj_c=_objective_linear_vector(model),
             obj_quad_present=model.objective.is_quadratic,
             obj_sense=model.objective.sense,

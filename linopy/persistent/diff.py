@@ -6,8 +6,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from collections.abc import Iterable
+
 from linopy.persistent.snapshot import (
     ModelSnapshot,
+    _coord_snapshot,
     _extract_con_buffers,
     _extract_var_buffers,
     _objective_linear_vector,
@@ -162,9 +165,31 @@ class ModelDiff:
         return "ModelDiff(" + ", ".join(parts) + ")"
 
 
+def _coords_equal(
+    a: dict[str, np.ndarray], b: dict[str, np.ndarray], ignored: frozenset[str]
+) -> bool:
+    keys_a = set(a) - ignored
+    keys_b = set(b) - ignored
+    if keys_a != keys_b:
+        return False
+    return all(np.array_equal(a[k], b[k]) for k in keys_a)
+
+
 def compute_diff(
-    snapshot: ModelSnapshot, model: Model, same_model: bool = True
+    snapshot: ModelSnapshot,
+    model: Model,
+    same_model: bool = True,
+    ignore_dims: Iterable[str] | None = None,
 ) -> ModelDiff:
+    """Compute a ``ModelDiff`` between ``snapshot`` and ``model``.
+
+    Coordinate values are not compared by default. Pass ``ignore_dims``
+    (e.g. ``ignore_dims=()`` or ``ignore_dims={"snapshot"}``) to opt into
+    per-container coord-equality on every dim *not* in the set — a mismatch
+    triggers ``RebuildReason.COORD_REINDEX``.
+    """
+    check_coords = ignore_dims is not None
+    ignored = frozenset(ignore_dims) if ignore_dims is not None else frozenset()
     diff = ModelDiff()
 
     var_names = tuple(model.variables)
@@ -197,6 +222,11 @@ def compute_diff(
         if not np.array_equal(new_buf.active_labels, snap_buf.active_labels):
             diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
             return diff
+        if check_coords and not _coords_equal(
+            snapshot.var_coords[name], _coord_snapshot(var), ignored
+        ):
+            diff.rebuild_reason = RebuildReason.COORD_REINDEX
+            return diff
 
         lower_diff = new_buf.lower != snap_buf.lower
         upper_diff = new_buf.upper != snap_buf.upper
@@ -225,6 +255,11 @@ def compute_diff(
             return diff
         if not np.array_equal(new_buf.active_labels, snap_buf.active_labels):
             diff.rebuild_reason = RebuildReason.STRUCTURAL_LABELS
+            return diff
+        if check_coords and not _coords_equal(
+            snapshot.con_coords[name], _coord_snapshot(con), ignored
+        ):
+            diff.rebuild_reason = RebuildReason.COORD_REINDEX
             return diff
 
         n_rows = new_buf.active_labels.size

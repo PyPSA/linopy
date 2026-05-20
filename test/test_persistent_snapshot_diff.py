@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from linopy import Model
@@ -157,3 +158,24 @@ def test_modeldiff_default_is_empty() -> None:
     d = ModelDiff()
     assert d.is_empty
     assert not d.rebuild_required
+
+
+def test_ignore_dims_detects_coord_change() -> None:
+    m1 = Model()
+    m1.add_variables(0, 10, coords=[pd.Index([0, 1, 2], name="t")], name="x")
+    m1.add_constraints(m1.variables["x"] >= 0, name="c1")
+    m1.add_objective(m1.variables["x"].sum())
+    snap = ModelSnapshot.capture(m1)
+
+    m2 = Model()
+    m2.add_variables(0, 10, coords=[pd.Index([10, 11, 12], name="t")], name="x")
+    m2.add_constraints(m2.variables["x"] >= 0, name="c1")
+    m2.add_objective(m2.variables["x"].sum())
+
+    assert compute_diff(snap, m2).rebuild_reason is RebuildReason.NONE
+    assert compute_diff(snap, m2, ignore_dims=()).rebuild_reason is (
+        RebuildReason.COORD_REINDEX
+    )
+    assert compute_diff(snap, m2, ignore_dims={"t"}).rebuild_reason is (
+        RebuildReason.NONE
+    )
