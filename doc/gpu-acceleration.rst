@@ -1,5 +1,5 @@
 ========================
-GPU-Accelerated Solving
+GPU-accelerated solving
 ========================
 
 .. warning::
@@ -8,7 +8,7 @@ GPU-Accelerated Solving
 
 Linopy supports GPU-accelerated optimization solvers that can significantly speed up solving large-scale linear programming problems by leveraging the parallel processing capabilities of modern GPUs.
 
-Supported GPU Solvers
+Supported GPU solvers
 =====================
 
 cuPDLPx
@@ -42,7 +42,7 @@ To install it, you have to have the `CUDA Toolkit <https://developer.nvidia.com/
 
 For a complete list of cuPDLPx parameters, see the `cuPDLPx documentation <https://github.com/MIT-Lu-Lab/cuPDLPx/tree/main/python#parameters>`_.
 
-Xpress with GPU Acceleration
+Xpress with GPU acceleration
 -----------------------------
 
 `FICO Xpress <https://www.fico.com/en/fico-xpress-trial-and-licensing-options>`_ version 9.8 and later includes GPU acceleration support for certain operations.
@@ -56,7 +56,7 @@ Xpress with GPU Acceleration
 Prerequisites
 =============
 
-Hardware Requirements
+Hardware requirements
 ---------------------
 
 GPU solvers require:
@@ -65,13 +65,13 @@ GPU solvers require:
 - Sufficient GPU memory for your problem size (varies by problem)
 - PCIe 3.0 or higher for optimal data transfer
 
-Software Requirements
+Software requirements
 ---------------------
 
 1. **CUDA Toolkit**: Most GPU solvers require CUDA 11.0 or later
 2. **Compatible GPU drivers**: Match your CUDA version
 
-Verifying Installation
+Verifying installation
 ======================
 
 To verify that the GPU solvers are properly installed and detected:
