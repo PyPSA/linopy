@@ -3119,7 +3119,7 @@ class Mosek(Solver[None]):
                 TerminationCondition.internal_solver_error
             )
             status.legacy_status = condition
-            return Result(status, Solution())
+            return self._make_result(status, None)
 
         condition = str(m.getsolsta(soltype))
         termination_condition = CONDITION_MAP.get(condition, condition)
