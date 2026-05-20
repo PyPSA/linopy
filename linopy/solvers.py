@@ -3216,7 +3216,7 @@ class COPT(Solver[None]):
                 try:
                     m.write(path_to_string(basis_fn))
                 except coptpy.CoptError as err:
-                    logger.info("No model basis stored. Raised error: %s", err)
+                    logger.warning("No model basis stored. Raised error: %s", err)
 
             if solution_fn:
                 try:
