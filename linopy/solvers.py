@@ -2224,7 +2224,7 @@ class Xpress(Solver[None]):
                 problem.addnames(xpress_Namespaces.ROW, cnames, 0, len(cnames) - 1)
 
         for sos_type, positions, weights in _iter_sos_sets(model):
-            problem.addSOS(positions, weights, type=sos_type)
+            problem.addSOS(positions.tolist(), weights.tolist(), type=sos_type)
 
         return problem
 
