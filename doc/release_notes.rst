@@ -99,6 +99,12 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``linopy.common`` gains ``values_to_lookup_array``; the legacy pandas-based helpers ``series_to_lookup_array`` and ``lookup_vals`` are removed.
 ``model.to_gurobipy()`` / ``model.to_highspy()`` / ``to_cupdlpx(model)`` (and similar) all return the underlying solver model as before; internally they now go through ``Solver.from_model(model, io_api="direct")``. No user-visible change.
 
+**Documentation**
+
+* The guide has been reorganised into a clearer path — *Getting Started*, *Creating a Model*, *Modifying a Model*, *Solving a Model*, *Advanced Formulations*, *Coming from Other Tools* — with a rewritten quick start and a new economic-dispatch walkthrough (*Your First Real Model*).
+* New *Coming from Other Tools* section: a *Benchmarks and syntax* page comparing linopy with JuMP, Pyomo, and GAMS; a runnable *Migrating from Pyomo* notebook for the rule-function modelling pattern; and the GAMS transport tutorial.
+* The *Using Solvers* guide is split into a task-focused *Solving a model* page and a lower-level *Solver API* reference.
+
 Version 0.7.0
 -------------
 

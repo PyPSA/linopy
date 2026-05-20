@@ -101,7 +101,6 @@ This package is published under MIT license.
    installation
    quick-start
    first-real-model
-   coming-from-other-tools
 
 .. toctree::
    :hidden:
@@ -142,9 +141,17 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
+   :caption: Coming from Other Tools
+
+   tool-comparison
+   migrating-from-pyomo
+   transport-tutorial
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
    :caption: Reference
 
-   transport-tutorial
    testing-framework
    api
    release_notes
