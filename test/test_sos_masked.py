@@ -20,6 +20,7 @@ visible failure rather than a permutation-equivalent silent pass.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -311,3 +312,27 @@ def test_sos_with_masked_variables(
             f"mask_on_sos={mask_on_sos!r} mask_on_other={mask_on_other}"
         ),
     )
+
+
+def test_sos_to_file_skips_fully_masked_sos_variable(tmp_path: Path) -> None:
+    """A fully-masked SOS variable writes no LP ``sos`` set entries."""
+    m = Model()
+    ci = pd.Index([0, 1, 2, 3], name="i")
+    free = m.add_variables(lower=0, upper=1, name="free")
+    sos_var = m.add_variables(
+        lower=0,
+        upper=1,
+        coords=[ci],
+        mask=pd.Series(False, index=ci),
+        name="sos_var",
+    )
+    m.add_sos_constraints(sos_var, sos_type=1, sos_dim="i")
+    m.add_objective(free)
+
+    fn = tmp_path / "model.lp"
+    m.to_file(fn)
+    lp = fn.read_text()
+
+    assert "x-1" not in lp
+    sos_section = lp.partition("\nsos\n")[2]
+    assert "S1 ::" not in sos_section
