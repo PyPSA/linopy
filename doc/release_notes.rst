@@ -48,7 +48,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 
 *Remote solves*
 
-* Pass ``remote=`` to ``Model.solve`` to run the inner solver on a remote worker:
+* Pass ``remote=`` to ``Model.solve`` to run the solver on a remote worker:
 
   .. code-block:: python
 

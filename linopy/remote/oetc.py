@@ -71,7 +71,7 @@ class OetcSettings:
     Config for the OET Cloud (OETC) remote service.
 
     Carries the auth/orchestrator endpoints, the worker resource sizing,
-    and **defaults** for the inner solver and its options. The defaults
+    and **defaults** for the solver and its options. The defaults
     can be overridden per call:
 
     >>> m.solve("gurobi", remote=OetcSettings(...), Method=2)  # doctest: +SKIP
@@ -855,9 +855,9 @@ class Oetc:
     settings : OetcSettings
         Auth + orchestrator config (where to talk to).
     solver_name : str
-        Inner solver to run on the worker (e.g. ``"gurobi"``, ``"highs"``).
+        Solver to run on the worker (e.g. ``"gurobi"``, ``"highs"``).
     options : dict, optional
-        Solver options passed through to the inner solver.
+        Solver options passed through to the solver.
 
     Notes
     -----

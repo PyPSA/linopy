@@ -1889,7 +1889,7 @@ class Model:
         if not effective_inner:
             raise ValueError(
                 f"`m.solve(remote=<{type(settings).__name__}>)` requires "
-                "an explicit `solver_name=` for the inner solver to run "
+                "an explicit `solver_name=` for the solver to run "
                 "on the worker."
             )
 
@@ -1958,7 +1958,7 @@ class Model:
             warnings.warn(
                 "Passing a RemoteHandler via `remote=` is deprecated; pass "
                 "an SshSettings via `remote=` with a `solver_name=` for "
-                "the inner solver (`m.solve(solver_name, remote=SshSettings"
+                "the solver (`m.solve(solver_name, remote=SshSettings"
                 "(...))`). The `remote=OetcHandler/RemoteHandler` shape "
                 "will be removed in a future release.",
                 DeprecationWarning,

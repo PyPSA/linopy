@@ -37,22 +37,22 @@ def _validate_inner_solver(inner_solver_name: str, model: Model) -> None:
     if cls is None:
         valid = ", ".join(sorted(n.value for n in SolverName))
         raise ValueError(
-            f"Unknown inner solver name {inner_solver_name!r}. Pick one of: {valid}."
+            f"Unknown solver name {inner_solver_name!r}. Pick one of: {valid}."
         )
     if model.is_quadratic and not cls.supports(SolverFeature.QUADRATIC_OBJECTIVE):
         raise ValueError(
-            f"Inner solver {inner_solver_name!r} does not support quadratic problems."
+            f"Solver {inner_solver_name!r} does not support quadratic problems."
         )
     if model.variables.semi_continuous and not cls.supports(
         SolverFeature.SEMI_CONTINUOUS_VARIABLES
     ):
         raise ValueError(
-            f"Inner solver {inner_solver_name!r} does not support semi-continuous "
+            f"Solver {inner_solver_name!r} does not support semi-continuous "
             "variables. Use a solver that supports them (gurobi, cplex, highs)."
         )
     if model.variables.sos and not cls.supports(SolverFeature.SOS_CONSTRAINTS):
         raise ValueError(
-            f"Inner solver {inner_solver_name!r} does not support SOS constraints. "
+            f"Solver {inner_solver_name!r} does not support SOS constraints. "
             "Reformulate first via `Model.solve(reformulate_sos=True)` or "
             "`model.apply_sos_reformulation()`, or pick a solver that supports SOS."
         )

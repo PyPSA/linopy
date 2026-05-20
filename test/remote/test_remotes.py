@@ -123,7 +123,7 @@ class TestOetcClass:
         m = _build_model()
         oetc = Oetc(settings=_settings_oetc(), solver_name="not-a-solver")
         oetc._handler = _fake_oetc_handler()
-        with pytest.raises(ValueError, match="Unknown inner solver"):
+        with pytest.raises(ValueError, match="Unknown solver"):
             oetc.solve(m)
 
     def test_upload_submit_collect_separable(
@@ -225,7 +225,7 @@ class TestSSHClass:
         m = _build_model()
         ssh = SSH(settings=_settings_ssh(), solver_name="not-a-solver")
         ssh._handler = MagicMock(spec=RemoteHandler)
-        with pytest.raises(ValueError, match="Unknown inner solver"):
+        with pytest.raises(ValueError, match="Unknown solver"):
             ssh.solve(m)
 
 

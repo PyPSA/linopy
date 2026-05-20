@@ -44,7 +44,7 @@ class SshSettings:
     """
     Transport-only config for the :class:`linopy.solvers.SSH` solver.
 
-    Inner solver name and solver options come from :meth:`Model.solve` —
+    Solver name and solver options come from :meth:`Model.solve` —
     ``m.solve("gurobi", remote=SshSettings(hostname=...), presolve="on")``.
 
     Use ``setup_commands`` to prepare the remote shell before the solve —
@@ -317,9 +317,9 @@ class SSH:
     settings : SshSettings
         Connection + remote-execution paths.
     solver_name : str
-        Inner solver to run on the remote (e.g. ``"gurobi"``).
+        Solver to run on the remote (e.g. ``"gurobi"``).
     options : dict, optional
-        Solver options passed through to the inner solver.
+        Solver options passed through to the solver.
 
     Notes
     -----
@@ -340,7 +340,7 @@ class SSH:
         return paramiko_present
 
     def solve(self, model: "Model") -> Result:
-        """Ship the model, run the inner solver on the remote, return a Result."""
+        """Ship the model, run the solver on the remote, return a Result."""
         from linopy.constants import Status
         from linopy.remote._common import (
             _scatter_solution_from_solved_model,
