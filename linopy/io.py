@@ -430,16 +430,13 @@ def sos_to_file(
         other_dims = [dim for dim in var.labels.dims if dim != sos_dim]
         for var_slice in var.iterate_slices(slice_size, other_dims):
             ds = var_slice.labels.to_dataset()
-            # Per-set id: max of labels along the SOS dim. Real labels are
-            # non-negative and globally unique, so max yields a valid,
-            # unique-per-set id whenever the set has any unmasked slot.
-            # Fully-masked sets get id -1 and are filtered out below.
+            # Per-set id = max member label: unique per set (labels are globally
+            # unique); a fully-masked set reduces to -1 and is dropped below.
             ds["sos_labels"] = ds["labels"].max(sos_dim)
             ds["weights"] = ds.coords[sos_dim]
             df = to_polars(ds)
 
-            # Drop masked member rows so the LP file never emits `x-1`, and
-            # drop any rows belonging to a fully-masked set (sos_labels == -1).
+            # Drop masked members
             df = df.filter((pl.col("labels") != -1) & (pl.col("sos_labels") != -1))
             if df.is_empty():
                 continue

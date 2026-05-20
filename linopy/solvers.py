@@ -19,7 +19,7 @@ import threading
 import warnings
 from abc import ABC
 from collections import namedtuple
-from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError
@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 from packaging.specifiers import SpecifierSet
 from packaging.version import parse as parse_version
 from scipy.sparse import tril, triu
@@ -106,73 +105,23 @@ def _solution_from_labels(
     return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
 
 
-def _sos_set_positions(
-    labels: np.ndarray, weights: np.ndarray, label_to_pos: np.ndarray
-) -> tuple[list[int], list[float]]:
-    """
-    Convert a SOS set's linopy labels to solver column positions.
-
-    Direct-API solvers (gurobi, xpress) accept SOS members as 0-based column
-    positions in the solver's variable array, which corresponds to the active
-    (non-masked) variable order — i.e., the order of
-    ``model.variables.label_index.vlabels``. Masked entries (label ``-1``) are
-    dropped along with their weights.
-
-    Parameters
-    ----------
-    labels : np.ndarray
-        Flat array of linopy labels for the SOS members.
-    weights : np.ndarray
-        Matching weights; same length as ``labels``.
-    label_to_pos : np.ndarray
-        ``model.variables.label_index.label_to_pos`` — lookup of label →
-        active-variable position.
-
-    Returns
-    -------
-    tuple[list[int], list[float]]
-        Solver column positions and matching weights, with masked entries
-        removed.
-    """
-    mask = labels != -1
-    return (
-        label_to_pos[labels[mask]].tolist(),
-        weights[mask].tolist(),
-    )
-
-
-def _iter_sos_sets(model: Model) -> Iterator[tuple[int, list[int], list[float]]]:
-    """
-    Yield ``(sos_type, positions, weights)`` per active SOS set in ``model``.
-
-    Iterates 1D SOS variables as a single set and multi-dim SOS variables as
-    one set per non-SOS-dim coordinate. Masked members are dropped, surviving
-    linopy labels are resolved to solver column positions via
-    ``_sos_set_positions``, and empty sets are skipped.
-
-    Shared between direct-API solvers (Gurobi, Xpress). Each solver only
-    differs in the vendor ``addSOS`` call.
-    """
+def _iter_sos_sets(model: Model) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """Yield ``(sos_type, positions, weights)`` per active SOS set in ``model``."""
     label_to_pos = model.variables.label_index.label_to_pos
     for var_name in model.variables.sos:
         var = model.variables.sos[var_name]
         sos_type = int(var.attrs[SOS_TYPE_ATTR])  # type: ignore[call-overload]
         sos_dim = str(var.attrs[SOS_DIM_ATTR])
-        others = [d for d in var.labels.dims if d != sos_dim]
 
-        if not others:
-            sets: Iterable[xr.DataArray] = [var.labels]
-        else:
-            stacked = var.labels.stack(_sos_group=others)
-            sets = (s.unstack("_sos_group") for _, s in stacked.groupby("_sos_group"))
+        labels = var.labels.transpose(sos_dim, ...)
+        weights = labels.coords[sos_dim].values
+        arr = labels.values.reshape(labels.shape[0], -1)
 
-        for s in sets:
-            s = s.squeeze()
-            labels = s.values.flatten()
-            weights = s.coords[sos_dim].values
-            positions, kept_weights = _sos_set_positions(labels, weights, label_to_pos)
-            if positions:
-                yield sos_type, positions, kept_weights
+        for i in range(arr.shape[1]):
+            col = arr[:, i]
+            mask = col != -1
+            if mask.any():
+                yield sos_type, label_to_pos[col[mask]], weights[mask]
 
 
 class SolverFeature(Enum):
