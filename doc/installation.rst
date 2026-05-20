@@ -1,7 +1,7 @@
-Getting Started
-===============
+Installation
+============
 
-This guide will provide you with the necessary steps to get started with Linopy, from installation to creating your first model and beyond.
+This page covers everything you need to install Linopy and the solver(s) you want to use. Once you have it installed, head to the :doc:`quick-start` for your first model.
 
 Before you start, make sure you have the following:
 
@@ -30,9 +30,6 @@ Install a solver
 
 Linopy won't work without a solver. Currently, the following solvers are supported:
 
-CPU-based solvers
-~~~~~~~~~~~~~~~~~
-
 -  `Cbc <https://projects.coin-or.org/Cbc>`__ - open source, free, fast
 -  `GLPK <https://www.gnu.org/software/glpk/>`__ - open source, free, not very fast
 -  `HiGHS <https://highs.dev/>`__ - open source, free, fast
@@ -58,22 +55,11 @@ We recommend the HiGHS solver, which is free, open source, and fast
 across a wide range of problem sizes. It is included in both the
 ``solvers`` and ``dev`` extras.
 
-
-GPU-accelerated solvers
-~~~~~~~~~~~~~~~~~~~~~~~
-
-For large-scale optimization problems, GPU-accelerated solvers can provide significant performance improvements:
-
--  `cuPDLPx <https://github.com/MIT-Lu-Lab/cuPDLPx>`__ - open source, GPU-accelerated first-order solver
-
-**Note:** GPU solvers require compatible NVIDIA GPU hardware and CUDA installation. See the :doc:`gpu-acceleration` guide for detailed setup instructions.
-
-.. code:: bash
-
-    uv pip install cupdlpx
-
-
 For most of the other solvers, please click on the links to get further installation information.
+
+GPU-accelerated solving (cuPDLPx, and Xpress in v9.8+) can speed up
+large-scale problems considerably; setup is covered in the
+:doc:`gpu-acceleration` guide.
 
 
 

@@ -46,9 +46,39 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * Xpress now supports ``io_api="direct"``: the linopy model is loaded via the native ``loadproblem`` array API instead of being serialised through an LP/MPS file, with SOS constraints attached in-place. Adds ``model.to_xpress()`` matching the existing ``to_gurobipy`` / ``to_highspy`` / ``to_mosek`` helpers.
 * Writing the solution back to the model after solving is faster: it no longer rebuilds the constraint matrix, and now uses positional (rather than label-based) indexing — roughly 2× faster overall.
 
+*Remote solves*
+
+* Pass ``remote=`` to ``Model.solve`` to run the inner solver on a remote worker:
+
+  .. code-block:: python
+
+      m.solve("gurobi", remote=OetcSettings(...), Method=2)
+      m.solve("highs", remote=SshSettings(hostname=...), presolve="on")
+
+  ``solver_name`` and ``**solver_options`` work the same as for local solves; ``remote=`` selects *where* to run. After the call, ``model.remote`` holds the remote instance (mirrors :attr:`Model.solver`).
+* ``SshSettings.setup_commands: list[str]`` — shell commands run on the remote before the solve, e.g. ``setup_commands=["conda activate linopy-env"]``.
+
 **Deprecations**
 
 * ``Solver.solve_problem``, ``Solver.solve_problem_from_model``, and ``Solver.solve_problem_from_file`` still work but emit a ``DeprecationWarning``. Use ``Solver.from_name(...).solve()`` (or simply ``model.solve(...)``) instead. They will be removed in a future release.
+* ``linopy.remote.OetcHandler`` and ``linopy.remote.RemoteHandler`` are deprecated. Construction emits a ``DeprecationWarning``; the ``solve_on_oetc`` / ``solve_on_remote`` return contracts are unchanged. Migrate:
+
+  .. code-block:: python
+
+      # Before
+      handler = OetcHandler(
+          OetcSettings(credentials=OetcCredentials(email=..., password=...), ...)
+      )
+      solved = handler.solve_on_oetc(m, TimeLimit=100)
+
+      # After
+      m.solve(
+          "gurobi", remote=OetcSettings(email=..., password=..., ...), TimeLimit=100
+      )
+
+  Passing an existing handler via ``Model.solve(remote=handler, ...)`` is also deprecated — pass the settings dataclass instead.
+* ``linopy.remote.OetcCredentials`` is deprecated. Pass ``email`` and ``password`` directly to :class:`OetcSettings` instead of wrapping them. The ``OetcSettings(credentials=OetcCredentials(...))`` shape still works for one deprecation cycle and emits a ``DeprecationWarning``.
+* :class:`linopy.remote.SSH` only exposes ``solve(model)``. For env activation use ``SshSettings.setup_commands``; for arbitrary remote shell commands, drop to :class:`RemoteHandler` (during deprecation) or paramiko directly.
 
 **Bug Fixes**
 
@@ -60,6 +90,7 @@ Most users should keep calling ``model.solve(...)``. If you want more control, y
 * ``available_solvers`` now lists all *installed* solvers, even ones without a working license. If you used it to decide "can I actually solve with X?", switch to ``linopy.licensed_solvers`` or ``SolverClass.license_status()``.
 * ``Model.solver_model`` and ``Model.solver_name`` are now read-only properties that delegate to ``model.solver``. You can't reassign them (only ``= None`` is allowed, which closes the solver), and ``solver_name`` is ``None`` before the first solve.
 * ``result.solution.primal`` and ``result.solution.dual`` are now ``numpy`` arrays indexed by linopy's integer labels (with ``NaN`` for slots without a value), instead of pandas Series keyed by variable/constraint name. If you accessed them by name, use ``model.variables[name].solution`` (or ``model.constraints[name].dual``) instead.
+* The pip extra ``linopy[remote]`` has been renamed to ``linopy[ssh]`` to match what it installs (only ``paramiko``, for SSH transport — OETC has its own ``linopy[oetc]`` extra). ``linopy[remote]`` no longer exists; update your install commands.
 
 **Internal**
 
