@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 from warnings import warn
 
 import numpy as np
@@ -108,8 +108,6 @@ from linopy.variables import ScalarVariable, Variable, Variables
 
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
-
-T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
