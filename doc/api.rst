@@ -519,10 +519,19 @@ Solvers
 Remote solving
 ==============
 
+Solve a model on a remote machine via SSH or on the OET Cloud (OETC).
+See :doc:`remote-machines` for usage.
+
 .. autosummary::
    :toctree: generated/
 
+   remote.SSH
+   remote.SshSettings
+   remote.Oetc
+   remote.OetcSettings
    remote.RemoteHandler
+   remote.OetcHandler
+   remote.OetcCredentials
 
 
 Solver status and result types

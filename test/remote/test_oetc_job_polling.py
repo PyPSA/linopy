@@ -16,6 +16,7 @@ from requests import RequestException  # noqa: E402
 from linopy.remote.oetc import (  # noqa: E402
     AuthenticationResult,
     ComputeProvider,
+    JobResult,
     OetcCredentials,
     OetcHandler,
     OetcSettings,
@@ -165,6 +166,32 @@ class TestJobPollingSuccess:
             sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
             assert sleep_calls[0] == 10  # Initial interval
             assert sleep_calls[1] == 15  # 10 * 1.5 = 15
+
+    def test_reauth_when_token_expired_during_poll(
+        self, mock_settings: OetcSettings
+    ) -> None:
+        """The poll loop re-signs-in when the auth token expires mid-poll."""
+        fresh = AuthenticationResult("new", "Bearer", 3600, datetime.now())
+        sign_in = Mock(return_value=fresh)
+        finished = JobResult(
+            uuid="job-1", status="FINISHED", output_files=["out.nc.gz"]
+        )
+        with (
+            patch("linopy.remote.oetc.OetcHandler._OetcHandler__sign_in", sign_in),
+            patch(
+                "linopy.remote.oetc.OetcHandler."
+                "_OetcHandler__get_cloud_provider_credentials"
+            ),
+        ):
+            handler = OetcHandler(mock_settings)
+            handler.jwt = AuthenticationResult("old", "Bearer", -1, datetime.now())
+            sign_in.reset_mock()
+            with patch.object(handler, "_get_job", return_value=finished):
+                result = handler.wait_and_get_job_data("job-1")
+
+        assert result.status == "FINISHED"
+        sign_in.assert_called_once()
+        assert handler.jwt is fresh
 
 
 class TestJobPollingErrors:

@@ -136,8 +136,7 @@ This package is published under MIT license.
    :maxdepth: 2
    :caption: Solving
 
-   solve-on-remote
-   solve-on-oetc
+   remote-machines
    gpu-acceleration
 
 .. toctree::

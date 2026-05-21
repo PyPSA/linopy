@@ -7,7 +7,6 @@ import pytest
 
 from linopy.remote.oetc import (
     ComputeProvider,
-    OetcCredentials,
     OetcHandler,
     OetcSettings,
 )
@@ -48,8 +47,8 @@ def test_from_env_all_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OETC_DELETE_WORKER_ON_ERROR", "true")
 
     s = OetcSettings.from_env()
-    assert s.credentials.email == "test@example.com"
-    assert s.credentials.password == "secret"
+    assert s.email == "test@example.com"
+    assert s.password == "secret"
     assert s.name == "test-job"
     assert s.cpu_cores == 8
     assert s.disk_space_gb == 20
@@ -62,7 +61,7 @@ def test_from_env_kwargs_override(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
 
     s = OetcSettings.from_env(email="override@example.com")
-    assert s.credentials.email == "override@example.com"
+    assert s.email == "override@example.com"
 
 
 def test_from_env_missing_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,7 +92,7 @@ def test_from_env_partial_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OETC_ORCHESTRATOR_URL", "https://orch.example.com")
 
     s = OetcSettings.from_env(email="a@b.com", password="pw")
-    assert s.credentials.email == "a@b.com"
+    assert s.email == "a@b.com"
     assert s.name == "env-name"
 
 
@@ -102,12 +101,26 @@ def test_from_env_defaults_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
 
     s = OetcSettings.from_env()
-    assert s.solver == "highs"
-    assert s.solver_options == {}
+    assert s.solver is None
+    assert s.solver_options is None
     assert s.cpu_cores == 2
     assert s.disk_space_gb == 10
     assert s.compute_provider == ComputeProvider.GCP
     assert s.delete_worker_on_error is False
+
+
+def test_solver_fields_emit_deprecation_warning() -> None:
+    base: dict[str, Any] = dict(
+        email="a@b.com",
+        password="pw",
+        name="test",
+        authentication_server_url="https://auth",
+        orchestrator_server_url="https://orch",
+    )
+    with pytest.warns(DeprecationWarning, match=r"OetcSettings\.solver"):
+        OetcSettings(**base, solver="gurobi")
+    with pytest.warns(DeprecationWarning, match=r"OetcSettings\.solver"):
+        OetcSettings(**base, solver_options={"TimeLimit": 100})
 
 
 def test_from_env_cpu_cores_valid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +170,11 @@ def test_from_env_bool_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
 def _make_handler(settings: OetcSettings) -> OetcHandler:
     with (
         patch("linopy.remote.oetc._oetc_deps_available", True),
-        patch.object(OetcHandler, "_OetcHandler__sign_in", return_value=MagicMock()),
+        patch.object(
+            OetcHandler,
+            "_OetcHandler__sign_in",
+            return_value=MagicMock(is_expired=False),
+        ),
         patch.object(
             OetcHandler,
             "_OetcHandler__get_cloud_provider_credentials",
@@ -169,7 +186,8 @@ def _make_handler(settings: OetcSettings) -> OetcHandler:
 
 def _default_settings(**overrides: Any) -> OetcSettings:
     defaults: dict[str, Any] = dict(
-        credentials=OetcCredentials(email="a@b.com", password="pw"),
+        email="a@b.com",
+        password="pw",
         name="test",
         authentication_server_url="https://auth",
         orchestrator_server_url="https://orch",
@@ -183,7 +201,7 @@ def _default_settings(**overrides: Any) -> OetcSettings:
 def test_solve_on_oetc_mutation_safety() -> None:
     settings = _default_settings()
     handler = _make_handler(settings)
-    original_opts = dict(settings.solver_options)
+    original_opts = dict(settings.solver_options or {})
 
     mock_model = MagicMock()
     mock_solved = MagicMock()

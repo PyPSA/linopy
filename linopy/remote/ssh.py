@@ -8,8 +8,9 @@ Created on Sun Feb 13 21:34:55 2022.
 import logging
 import os
 import tempfile
+import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
 from linopy.io import read_netcdf
@@ -38,9 +39,40 @@ m.to_netcdf("{model_solved_file}")
 
 
 @dataclass
+class SshSettings:
+    """
+    Connection config for the :class:`~linopy.remote.SSH` remote.
+
+    Solver name and solver options come from :meth:`Model.solve` —
+    ``m.solve("gurobi", remote=SshSettings(hostname=...), presolve="on")``.
+
+    Use ``setup_commands`` to prepare the remote shell before the solve —
+    e.g. activate a conda environment or set ``PATH``::
+
+        SshSettings(hostname=..., setup_commands=["conda activate linopy-env"])
+    """
+
+    hostname: str
+    port: int = 22
+    username: str | None = None
+    password: str | None = None
+    python_executable: str = "python"
+    python_file: str = "/tmp/linopy-execution.py"
+    model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
+    model_solved_file: str = "/tmp/linopy-solved-model.nc"
+    setup_commands: list[str] = field(default_factory=list)
+
+
+@dataclass
 class RemoteHandler:
     """
     Handler class for solving models on a remote machine via an SSH connection.
+
+    .. deprecated::
+        ``RemoteHandler`` is the legacy low-level entry point and will be
+        removed in a future release. Prefer
+        ``Model.solve("gurobi", remote=SshSettings(hostname=...))`` or
+        instantiate :class:`SSH` directly.
 
     The basic idea of the handler is to provide a workflow that:
 
@@ -133,8 +165,19 @@ class RemoteHandler:
     model_unsolved_file: str = "/tmp/linopy-unsolved-model.nc"
     model_solved_file: str = "/tmp/linopy-solved-model.nc"
 
+    _internal: bool = field(default=False, repr=False)
+
     def __post_init__(self) -> None:
         assert paramiko_present, "The required paramiko package is not installed."
+
+        if not self._internal:
+            warnings.warn(
+                "`RemoteHandler` is deprecated; use `SSH(settings)` from "
+                "`linopy.remote` or `Model.solve(remote=SshSettings(hostname=...))`. "
+                "`RemoteHandler` will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         if self.client is None:
             client = paramiko.SSHClient()
@@ -256,3 +299,56 @@ class RemoteHandler:
             self.sftp_client.remove(self.model_solved_file)
 
             return solved
+
+
+@dataclass
+class SSH:
+    """
+    A connection to a remote machine you run yourself, reached over SSH.
+
+    This is a standalone class — *not* a :class:`linopy.solvers.Solver`
+    subclass. It ships the model to a remote host and runs
+    ``read_netcdf(...).solve(solver_name=...)`` there, pulling the solved
+    model back. Where :class:`Oetc` targets a managed cloud service,
+    ``SSH`` targets a machine you provide. The SSH shell job is
+    short-lived and synchronous, so there is no submit/collect seam —
+    just :meth:`solve`.
+
+    Parameters
+    ----------
+    settings : SshSettings
+        Connection + remote-execution paths.
+    """
+
+    settings: SshSettings
+
+    _handler: "RemoteHandler | None" = field(init=False, default=None, repr=False)
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Return True iff paramiko is importable."""
+        return paramiko_present
+
+    def solve(self, model: "Model", solver_name: str, **options: Any) -> "Model":
+        """Ship the model, run the solver on the remote, return the solved model."""
+        from linopy.remote._common import _validate_inner_solver
+
+        _validate_inner_solver(solver_name, model)
+
+        if self._handler is None:
+            self._handler = RemoteHandler(
+                hostname=self.settings.hostname,
+                port=self.settings.port,
+                username=self.settings.username,
+                password=self.settings.password,
+                python_executable=self.settings.python_executable,
+                python_file=self.settings.python_file,
+                model_unsolved_file=self.settings.model_unsolved_file,
+                model_solved_file=self.settings.model_solved_file,
+                _internal=True,
+            )
+            for cmd in self.settings.setup_commands:
+                self._handler.execute(cmd)
+
+        solve_kwargs: dict[str, Any] = {"solver_name": solver_name, **options}
+        return self._handler.solve_on_remote(model, **solve_kwargs)

@@ -53,8 +53,8 @@ Where to go next
   :doc:`piecewise-linear-constraints`, and the
   :doc:`testing-framework` for asserting structural properties of a
   model.
-- **Solving** — :doc:`solve-on-remote` (SSH),
-  :doc:`solve-on-oetc` (OET Cloud), :doc:`gpu-acceleration` (cuPDLPx).
+- **Solving** — :doc:`remote-machines` (SSH or OET Cloud),
+  :doc:`gpu-acceleration` (cuPDLPx).
 - **Troubleshooting** — :doc:`infeasible-model` (diagnosing infeasible
   problems), :doc:`gurobi-double-logging` (and other solver quirks).
 - **Reference** — the full :doc:`api` listing.
