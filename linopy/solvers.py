@@ -678,11 +678,13 @@ class Solver(ABC, Generic[EnvType]):
         """
         Run the prepared solver and return a :class:`Result`.
 
-        With ``model`` supplied, diff against the held snapshot and either
-        apply in place or rebuild before running. Requires ``io_api='direct'``
-        and ``track_updates=True`` at construction time; otherwise resolving
-        with a model raises :class:`UpdatesDisabledError` (the initial build
-        on the first ``solve(model, ...)`` is still allowed).
+        With ``model`` supplied, diff against the previous build and either
+        apply in place or rebuild before running. Requires ``io_api='direct'``.
+        Diffing uses :meth:`ModelDiff.from_snapshot` when ``track_updates=True``
+        (in-place mutations of the build-time Model are detected) and
+        :meth:`ModelDiff.from_models` otherwise (only cross-instance resolves
+        are supported — passing the same Model instance after in-place
+        mutation raises :class:`UpdatesDisabledError`).
         With ``assign=True`` the Result is written back to the target Model
         via :meth:`Model.assign_result`.
 
@@ -704,12 +706,13 @@ class Solver(ABC, Generic[EnvType]):
                     self.model = model
                     self._build()
                 else:
-                    if not self.track_updates:
+                    if not self.track_updates and model is self.model:
                         raise UpdatesDisabledError(
                             "Solver was constructed with track_updates=False; "
-                            "in-place updates are not available. Reconstruct "
-                            "with Solver.from_name(..., track_updates=True) "
-                            "to enable diff-based updates across solves."
+                            "in-place mutations of the build-time Model cannot "
+                            "be detected without a snapshot. Pass a freshly "
+                            "built Model instance, or reconstruct the solver "
+                            "with Solver.from_name(..., track_updates=True)."
                         )
                     self._update_locked(
                         model,
@@ -749,12 +752,13 @@ class Solver(ABC, Generic[EnvType]):
             raise ValueError("update requires io_api='direct'")
         if self.solver_model is None:
             raise RuntimeError("Solver has not been built")
-        if not self.track_updates:
+        if not self.track_updates and model is self.model:
             raise UpdatesDisabledError(
                 "Solver was constructed with track_updates=False; "
-                "in-place updates are not available. Reconstruct with "
-                "Solver.from_name(..., track_updates=True) to enable "
-                "diff-based updates."
+                "in-place mutations of the build-time Model cannot be "
+                "detected without a snapshot. Pass a freshly built Model "
+                "instance, or reconstruct the solver with "
+                "Solver.from_name(..., track_updates=True)."
             )
         with self._lock:
             return self._update_locked(model, apply=apply, ignore_dims=ignore_dims)
@@ -766,17 +770,20 @@ class Solver(ABC, Generic[EnvType]):
         ignore_dims: Iterable[str] | None = None,
         disallow_rebuild: bool = False,
     ) -> ModelDiff:
-        assert self.snapshot is not None
         if apply and not type(self).supports_persistent_update:
             if disallow_rebuild:
                 raise RebuildRequiredError(RebuildReason.BACKEND_REJECTED)
             diff = ModelDiff(rebuild_reason=RebuildReason.BACKEND_REJECTED)
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return diff
-        same_model = model is self.model
-        diff = ModelDiff.from_snapshot(
-            self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
-        )
+        if self.snapshot is not None:
+            same_model = model is self.model
+            diff = ModelDiff.from_snapshot(
+                self.snapshot, model, same_model=same_model, ignore_dims=ignore_dims
+            )
+        else:
+            assert self.model is not None
+            diff = ModelDiff.from_models(self.model, model, ignore_dims=ignore_dims)
         if not apply:
             return diff
         if diff.rebuild_required:
@@ -799,8 +806,9 @@ class Solver(ABC, Generic[EnvType]):
             self._rebuild(model, RebuildReason.BACKEND_REJECTED)
             return diff
         self.model = model
-        self.snapshot = ModelSnapshot.capture(model)
-        _clear_coef_dirty(model.constraints)
+        if self.track_updates:
+            self.snapshot = ModelSnapshot.capture(model)
+            _clear_coef_dirty(model.constraints)
         self._in_place_updates += 1
         self._last_rebuild_reason = RebuildReason.NONE
         return diff

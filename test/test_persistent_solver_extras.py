@@ -418,3 +418,39 @@ def test_track_updates_false_rejects_update(solver_name: str) -> None:
     s._build()
     with pytest.raises(UpdatesDisabledError, match="track_updates=False"):
         s.update(m)
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_track_updates_false_cross_instance_resolve(solver_name: str) -> None:
+    cls, opts = _BACKENDS[solver_name]
+    m1 = _base_model()
+    s = cls(model=m1, io_api="direct", track_updates=False)
+    s.options = opts
+    s._build()
+    s.solve(assign=True)
+    base_obj = float(m1.objective.value)
+
+    m2 = _base_model()
+    m2.constraints["c1"].rhs = 8.0
+    result = s.solve(m2, assign=True)
+    assert s._in_place_updates == 1
+    assert s._rebuilds == 0
+    assert s.snapshot is None
+    assert s.model is m2
+    assert float(result.solution.objective) > base_obj
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_track_updates_false_cross_instance_update(solver_name: str) -> None:
+    cls, opts = _BACKENDS[solver_name]
+    m1 = _base_model()
+    s = cls(model=m1, io_api="direct", track_updates=False)
+    s.options = opts
+    s._build()
+    s.solve(assign=True)
+
+    m2 = _base_model()
+    m2.constraints["c1"].rhs = 8.0
+    diff = s.update(m2, apply=False)
+    assert diff.summary()["con_rhs"] == 1
+    assert s.snapshot is None
