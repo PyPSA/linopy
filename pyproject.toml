@@ -14,7 +14,6 @@ maintainers = [
 ]
 license = { file = "LICENSE" }
 classifiers = [
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -27,10 +26,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "numpy; python_version > '3.10'",
-    "numpy<2; python_version <= '3.10'",
+    "numpy",
     "scipy",
     "bottleneck",
     "toolz",
