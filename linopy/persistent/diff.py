@@ -378,8 +378,14 @@ class ModelDiff:
         for name, var in model.variables.items():
             base_coords = snapshot.var_coords[name] if check_coords else None
             reason = _diff_var_container(
-                builder, name, var, snapshot.var_buffers[name],
-                base_coords, var_l2p, ignored, check_coords,
+                builder,
+                name,
+                var,
+                snapshot.var_buffers[name],
+                base_coords,
+                var_l2p,
+                ignored,
+                check_coords,
             )
             if reason is not None:
                 diff.rebuild_reason = reason
@@ -389,8 +395,15 @@ class ModelDiff:
             base_coords = snapshot.con_coords[name] if check_coords else None
             skip_coef_compare = same_model and not con._coef_dirty
             reason = _diff_con_container(
-                builder, name, con, snapshot.con_buffers[name],
-                base_coords, var_label_index, con_l2p, ignored, check_coords,
+                builder,
+                name,
+                con,
+                snapshot.con_buffers[name],
+                base_coords,
+                var_label_index,
+                con_l2p,
+                ignored,
+                check_coords,
                 skip_coef_compare,
             )
             if reason is not None:
@@ -398,8 +411,11 @@ class ModelDiff:
                 return diff
 
         reason = _diff_objective(
-            builder, model,
-            snapshot.obj_c, snapshot.obj_quad_present, snapshot.obj_sense,
+            builder,
+            model,
+            snapshot.obj_c,
+            snapshot.obj_quad_present,
+            snapshot.obj_sense,
         )
         if reason is not None:
             diff.rebuild_reason = reason
@@ -428,9 +444,8 @@ class ModelDiff:
 
         var_names_a = tuple(model_a.variables)
         con_names_a = tuple(model_a.constraints)
-        if (
-            var_names_a != tuple(model_b.variables)
-            or con_names_a != tuple(model_b.constraints)
+        if var_names_a != tuple(model_b.variables) or con_names_a != tuple(
+            model_b.constraints
         ):
             diff.rebuild_reason = RebuildReason.STRUCTURAL_CONTAINERS
             return diff
@@ -455,8 +470,14 @@ class ModelDiff:
             base_buf = _extract_var_buffers(var_a)
             base_coords = _coord_snapshot(var_a) if check_coords else None
             reason = _diff_var_container(
-                builder, name, var_b, base_buf,
-                base_coords, var_l2p, ignored, check_coords,
+                builder,
+                name,
+                var_b,
+                base_buf,
+                base_coords,
+                var_l2p,
+                ignored,
+                check_coords,
             )
             if reason is not None:
                 diff.rebuild_reason = reason
@@ -467,8 +488,15 @@ class ModelDiff:
             base_buf = _extract_con_buffers(con_a, var_idx_a)
             base_coords = _coord_snapshot(con_a) if check_coords else None
             reason = _diff_con_container(
-                builder, name, con_b, base_buf,
-                base_coords, var_idx_b, con_l2p, ignored, check_coords,
+                builder,
+                name,
+                con_b,
+                base_buf,
+                base_coords,
+                var_idx_b,
+                con_l2p,
+                ignored,
+                check_coords,
                 skip_coef_compare=False,
             )
             if reason is not None:
@@ -476,7 +504,8 @@ class ModelDiff:
                 return diff
 
         reason = _diff_objective(
-            builder, model_b,
+            builder,
+            model_b,
             _objective_linear_vector(model_a),
             model_a.objective.is_quadratic,
             model_a.objective.sense,
@@ -498,9 +527,7 @@ def _coords_equal(
     return all(np.array_equal(a[k], b[k]) for k in keys)
 
 
-def _active_container_positions(
-    var: Variable, var_l2p: np.ndarray
-) -> np.ndarray:
+def _active_container_positions(var: Variable, var_l2p: np.ndarray) -> np.ndarray:
     labels = var.labels.values.ravel()
     active = labels[labels != -1]
     return var_l2p[active].astype(np.int32, copy=False)
@@ -535,9 +562,9 @@ def _diff_var_container(
     bounds_idx = lower = upper = None
     if bound_mask.any():
         local_idx = np.flatnonzero(bound_mask)
-        bounds_idx = var_l2p[
-            new_buf.active_labels[local_idx]
-        ].astype(np.int32, copy=False)
+        bounds_idx = var_l2p[new_buf.active_labels[local_idx]].astype(
+            np.int32, copy=False
+        )
         lower = new_buf.lower[local_idx].astype(np.float64, copy=False)
         upper = new_buf.upper[local_idx].astype(np.float64, copy=False)
 
@@ -607,25 +634,26 @@ def _diff_con_container(
     rhs_idx = rhs_vals = rhs_signs_arr = None
     if rhs_changed.any():
         idx = np.flatnonzero(rhs_changed)
-        rhs_idx = con_l2p[
-            new_buf.active_labels[idx]
-        ].astype(np.int32, copy=False)
+        rhs_idx = con_l2p[new_buf.active_labels[idx]].astype(np.int32, copy=False)
         rhs_vals = new_buf.rhs[idx].astype(np.float64, copy=False)
         rhs_signs_arr = new_buf.sign[idx]
 
     sign_idx = sign_vals = None
     if sign_changed.any():
         idx = np.flatnonzero(sign_changed)
-        sign_idx = con_l2p[
-            new_buf.active_labels[idx]
-        ].astype(np.int32, copy=False)
+        sign_idx = con_l2p[new_buf.active_labels[idx]].astype(np.int32, copy=False)
         sign_vals = new_buf.sign[idx]
 
     builder.push_con(
         name,
-        coef_rows, coef_cols, coef_vals,
-        rhs_idx, rhs_vals, rhs_signs_arr,
-        sign_idx, sign_vals,
+        coef_rows,
+        coef_cols,
+        coef_vals,
+        rhs_idx,
+        rhs_vals,
+        rhs_signs_arr,
+        sign_idx,
+        sign_vals,
     )
     return None
 
@@ -636,9 +664,7 @@ def _expand_coefs_coo(
     row_value_changed: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     idx = np.flatnonzero(row_value_changed)
-    row_positions = con_l2p[
-        new_buf.active_labels[idx]
-    ].astype(np.int32, copy=False)
+    row_positions = con_l2p[new_buf.active_labels[idx]].astype(np.int32, copy=False)
     indptr = new_buf.indptr
     nnz_per_changed = (indptr[idx + 1] - indptr[idx]).astype(np.int32)
     total_nnz = int(nnz_per_changed.sum())
@@ -649,8 +675,8 @@ def _expand_coefs_coo(
     for i in idx:
         s, e = int(indptr[i]), int(indptr[i + 1])
         n = e - s
-        cols[cursor:cursor + n] = new_buf.indices[s:e]
-        vals[cursor:cursor + n] = new_buf.data[s:e]
+        cols[cursor : cursor + n] = new_buf.indices[s:e]
+        vals[cursor : cursor + n] = new_buf.data[s:e]
         cursor += n
     return rows, cols, vals
 
@@ -674,8 +700,6 @@ def _diff_objective(
         c_indices = np.flatnonzero(obj_diff_mask).astype(np.int32, copy=False)
         c_values = obj_c[c_indices].astype(np.float64, copy=False)
 
-    sense = (
-        model.objective.sense if model.objective.sense != base_obj_sense else None
-    )
+    sense = model.objective.sense if model.objective.sense != base_obj_sense else None
     builder.set_objective(c_indices, c_values, sense)
     return None

@@ -45,9 +45,7 @@ def _have(name: str) -> bool:
 SOLVER_PARAMS = [
     pytest.param(
         name,
-        marks=pytest.mark.skipif(
-            not _have(name), reason=f"{name} not installed"
-        ),
+        marks=pytest.mark.skipif(not _have(name), reason=f"{name} not installed"),
     )
     for name in _BACKENDS
 ]

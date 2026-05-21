@@ -2462,8 +2462,16 @@ class Xpress(Solver[None]):
             idx = diff.var_bounds_indices
             cols = np.concatenate([idx, idx]).astype(np.int64, copy=False)
             btypes = ["L"] * idx.size + ["U"] * idx.size
-            lb = np.where(np.isneginf(diff.var_bounds_lower), -xpress.infinity, diff.var_bounds_lower)
-            ub = np.where(np.isposinf(diff.var_bounds_upper), xpress.infinity, diff.var_bounds_upper)
+            lb = np.where(
+                np.isneginf(diff.var_bounds_lower),
+                -xpress.infinity,
+                diff.var_bounds_lower,
+            )
+            ub = np.where(
+                np.isposinf(diff.var_bounds_upper),
+                xpress.infinity,
+                diff.var_bounds_upper,
+            )
             vals = np.concatenate([lb, ub]).astype(float, copy=False)
             p.chgbounds(cols.tolist(), btypes, vals.tolist())
 

@@ -125,9 +125,7 @@ class ModelSnapshot:
     con_buffers: dict[str, ContainerConBuffers] = field(default_factory=dict)
     var_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
     con_coords: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-    obj_c: np.ndarray = field(
-        default_factory=lambda: np.zeros(0, dtype=np.float64)
-    )
+    obj_c: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
     obj_quad_present: bool = False
     obj_sense: str = "min"
 
