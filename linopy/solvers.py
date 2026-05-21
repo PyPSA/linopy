@@ -2431,11 +2431,95 @@ class Xpress(Solver[None]):
             SolverFeature.SOS_CONSTRAINTS,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
+
+    _XPRESS_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
+        VarKind.CONTINUOUS: "C",
+        VarKind.BINARY: "B",
+        VarKind.INTEGER: "I",
+        VarKind.SEMI_CONTINUOUS: "S",
+    }
+    _XPRESS_ROWTYPE_MAP: ClassVar[dict[str, str]] = {
+        short_LESS_EQUAL: "L",
+        short_GREATER_EQUAL: "G",
+        EQUAL: "E",
+    }
 
     @classmethod
     @functools.cache
     def is_available(cls) -> bool:
         return _has_module("xpress")
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        p = self.solver_model
+
+        if diff.var_bounds_indices.size:
+            idx = diff.var_bounds_indices
+            cols = np.concatenate([idx, idx]).astype(np.int64, copy=False)
+            btypes = ["L"] * idx.size + ["U"] * idx.size
+            lb = np.where(np.isneginf(diff.var_bounds_lower), -xpress.infinity, diff.var_bounds_lower)
+            ub = np.where(np.isposinf(diff.var_bounds_upper), xpress.infinity, diff.var_bounds_upper)
+            vals = np.concatenate([lb, ub]).astype(float, copy=False)
+            p.chgbounds(cols.tolist(), btypes, vals.tolist())
+
+        if diff.var_type_positions.size:
+            vtype_map = self._XPRESS_VTYPE_MAP
+            positions = diff.var_type_positions
+            coltypes = [vtype_map[k] for k in diff.var_type_kinds]
+            p.chgcoltype(positions.tolist(), coltypes)
+            binary_mask = diff.var_type_kinds == VarKind.BINARY
+            if binary_mask.any():
+                bin_positions = positions[binary_mask].astype(np.int64, copy=False)
+                n = bin_positions.size
+                cols = np.concatenate([bin_positions, bin_positions])
+                btypes = ["L"] * n + ["U"] * n
+                vals = np.concatenate([np.zeros(n), np.ones(n)])
+                p.chgbounds(cols.tolist(), btypes, vals.tolist())
+
+        if diff.con_rhs_indices.size:
+            p.chgrhs(
+                diff.con_rhs_indices.astype(np.int64, copy=False).tolist(),
+                diff.con_rhs_values.astype(float, copy=False).tolist(),
+            )
+
+        if diff.con_sign_indices.size:
+            rowtype_map = self._XPRESS_ROWTYPE_MAP
+            rowtypes = []
+            for s in diff.con_sign_values:
+                s_str = str(s)
+                if s_str not in rowtype_map:
+                    raise UnsupportedUpdate(f"unknown sign {s_str!r}")
+                rowtypes.append(rowtype_map[s_str])
+            p.chgrowtype(
+                diff.con_sign_indices.astype(np.int64, copy=False).tolist(), rowtypes
+            )
+
+        if diff.con_coef_vals.size:
+            p.chgmcoef(
+                diff.con_coef_rows.astype(np.int64, copy=False).tolist(),
+                diff.con_coef_cols.astype(np.int64, copy=False).tolist(),
+                diff.con_coef_vals.astype(float, copy=False).tolist(),
+            )
+
+        if diff.obj_c_indices is not None:
+            p.chgobj(
+                diff.obj_c_indices.astype(np.int64, copy=False).tolist(),
+                diff.obj_c_values.astype(float, copy=False).tolist(),
+            )
+
+        if diff.obj_sense is not None:
+            if diff.obj_sense == "max":
+                p.chgobjsense(xpress.maximize)
+            elif diff.obj_sense == "min":
+                p.chgobjsense(xpress.minimize)
+            else:
+                raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
+            self.sense = diff.obj_sense
 
     def _build_direct(
         self,
@@ -3012,6 +3096,7 @@ class Mosek(Solver[None]):
             SolverFeature.SOLUTION_FILE_NOT_NEEDED,
         }
     )
+    supports_persistent_update: ClassVar[bool] = True
 
     @classmethod
     @functools.cache
@@ -3022,6 +3107,80 @@ class Mosek(Solver[None]):
     def _license_probe(cls) -> None:
         t = mosek.Task()
         t.optimize()
+
+    def apply_update(
+        self,
+        diff: ModelDiff,
+        var_label_index: Any,
+        con_label_index: Any,
+    ) -> None:
+        if diff.con_sign_indices.size:
+            raise UnsupportedUpdate(
+                "MOSEK does not support in-place constraint sign change"
+            )
+
+        t = self.solver_model
+
+        if diff.var_bounds_indices.size:
+            indices = diff.var_bounds_indices
+            lowers = diff.var_bounds_lower
+            uppers = diff.var_bounds_upper
+            for k in range(indices.size):
+                j = int(indices[k])
+                lb = float(lowers[k])
+                ub = float(uppers[k])
+                t.chgvarbound(j, 1, int(np.isfinite(lb)), lb)
+                t.chgvarbound(j, 0, int(np.isfinite(ub)), ub)
+
+        if diff.var_type_positions.size:
+            positions = diff.var_type_positions
+            kinds = diff.var_type_kinds
+            if (kinds == VarKind.SEMI_CONTINUOUS).any():
+                raise UnsupportedUpdate(
+                    "MOSEK does not support semi-continuous variables"
+                )
+            integer_mask = (kinds == VarKind.BINARY) | (kinds == VarKind.INTEGER)
+            vartypes = np.where(
+                integer_mask,
+                mosek.variabletype.type_int,
+                mosek.variabletype.type_cont,
+            ).tolist()
+            t.putvartypelist(positions.astype(np.int32, copy=False).tolist(), vartypes)
+            binary_mask = kinds == VarKind.BINARY
+            if binary_mask.any():
+                for j in positions[binary_mask]:
+                    t.chgvarbound(int(j), 1, 1, 0.0)
+                    t.chgvarbound(int(j), 0, 1, 1.0)
+
+        if diff.con_rhs_indices.size:
+            lower, upper = diff.con_rhs_as_bounds()
+            for k, i in enumerate(diff.con_rhs_indices):
+                lo = float(lower[k])
+                up = float(upper[k])
+                t.chgconbound(int(i), 1, int(np.isfinite(lo)), lo)
+                t.chgconbound(int(i), 0, int(np.isfinite(up)), up)
+
+        if diff.con_coef_vals.size:
+            t.putaijlist(
+                diff.con_coef_rows.astype(np.int32, copy=False).tolist(),
+                diff.con_coef_cols.astype(np.int32, copy=False).tolist(),
+                diff.con_coef_vals.astype(float, copy=False).tolist(),
+            )
+
+        if diff.obj_c_indices is not None:
+            t.putclist(
+                diff.obj_c_indices.astype(np.int32, copy=False).tolist(),
+                diff.obj_c_values.astype(float, copy=False).tolist(),
+            )
+
+        if diff.obj_sense is not None:
+            if diff.obj_sense == "max":
+                t.putobjsense(mosek.objsense.maximize)
+            elif diff.obj_sense == "min":
+                t.putobjsense(mosek.objsense.minimize)
+            else:
+                raise UnsupportedUpdate(f"unknown obj sense {diff.obj_sense!r}")
+            self.sense = diff.obj_sense
 
     def _run_direct(
         self,
