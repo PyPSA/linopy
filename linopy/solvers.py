@@ -37,6 +37,9 @@ from scipy.sparse import tril, triu
 import linopy.io
 from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
+    EQUAL,
+    GREATER_EQUAL,
+    LESS_EQUAL,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
     Result,
@@ -53,6 +56,7 @@ from linopy.persistent import (
     RebuildRequiredError,
     UnsupportedUpdate,
     UpdatesDisabledError,
+    VarKind,
 )
 
 
@@ -112,11 +116,6 @@ def _solution_from_labels(
         return np.array([], dtype=float)
     assert labels is not None
     return values_to_lookup_array(np.asarray(values, dtype=float), labels, size=size)
-
-
-def _clear_coef_dirty(constraints: Any) -> None:
-    for c in constraints.data.values():
-        c._coef_dirty = False
 
 
 class SolverFeature(Enum):
@@ -462,7 +461,6 @@ class Solver(ABC, Generic[EnvType]):
 
     @property
     def solver_options(self) -> dict[str, Any]:
-        """Back-compat alias for ``self.options``."""
         return self.options
 
     @classmethod
@@ -529,14 +527,7 @@ class Solver(ABC, Generic[EnvType]):
 
         With ``model`` supplied, the solver is built immediately. Without it,
         an unbuilt instance is returned and the first ``solve(model, ...)``
-        call performs the build.
-
-        ``track_updates=False`` (default) is the one-shot mode: no
-        :class:`ModelSnapshot` is captured at build time, and any subsequent
-        ``solver.solve(model=...)`` / ``solver.update(model)`` raises
-        :class:`UpdatesDisabledError`. Pass ``track_updates=True`` for
-        long-lived solvers that want in-place diff-based updates across
-        iterations.
+        call performs the build. See :class:`Solver` for ``track_updates``.
         """
         cls = _solver_class_for(name)
         if cls is None:
@@ -565,10 +556,7 @@ class Solver(ABC, Generic[EnvType]):
         track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
-        """Instantiate and build the solver against ``model``.
-
-        See :meth:`from_name` for ``track_updates`` semantics.
-        """
+        """Instantiate and build the solver against ``model``."""
         instance = cls(
             model=model,
             io_api=io_api,
@@ -597,7 +585,6 @@ class Solver(ABC, Generic[EnvType]):
             self._build_direct(**build_kwargs)
             if self.track_updates:
                 self.snapshot = ModelSnapshot.capture(self.model)
-                _clear_coef_dirty(self.model.constraints)
         else:
             self._build_file(**build_kwargs)
 
@@ -680,11 +667,6 @@ class Solver(ABC, Generic[EnvType]):
 
         With ``model`` supplied, diff against the previous build and either
         apply in place or rebuild before running. Requires ``io_api='direct'``.
-        Diffing uses :meth:`ModelDiff.from_snapshot` when ``track_updates=True``
-        (in-place mutations of the build-time Model are detected) and
-        :meth:`ModelDiff.from_models` otherwise (only cross-instance resolves
-        are supported — passing the same Model instance after in-place
-        mutation raises :class:`UpdatesDisabledError`).
         With ``assign=True`` the Result is written back to the target Model
         via :meth:`Model.assign_result`.
 
@@ -808,7 +790,6 @@ class Solver(ABC, Generic[EnvType]):
         self.model = model
         if self.track_updates:
             self.snapshot = ModelSnapshot.capture(model)
-            _clear_coef_dirty(model.constraints)
         self._in_place_updates += 1
         self._last_rebuild_reason = RebuildReason.NONE
         return diff
@@ -1415,15 +1396,15 @@ class Highs(Solver[None]):
         h = self.solver_model
 
         type_map = {
-            "continuous": highspy.HighsVarType.kContinuous,
-            "binary": highspy.HighsVarType.kInteger,
-            "integer": highspy.HighsVarType.kInteger,
-            "semi_continuous": highspy.HighsVarType.kSemiContinuous,
+            VarKind.CONTINUOUS: highspy.HighsVarType.kContinuous,
+            VarKind.BINARY: highspy.HighsVarType.kInteger,
+            VarKind.INTEGER: highspy.HighsVarType.kInteger,
+            VarKind.SEMI_CONTINUOUS: highspy.HighsVarType.kSemiContinuous,
         }
 
         for name, upd in diff.vars.items():
             var = variables[name]
-            if upd.type_change == "binary":
+            if upd.type_change is VarKind.BINARY:
                 labels = var.labels.values.ravel()
                 mask = labels != -1
                 container_positions = var_label_index.label_to_pos[labels[mask]].astype(
@@ -1459,8 +1440,8 @@ class Highs(Solver[None]):
                 rhs_values = np.asarray(upd.rhs_values, dtype=np.float64)
                 sign_for_rows = upd.rhs_signs
                 inf = np.inf
-                lower = np.where(sign_for_rows == "<=", -inf, rhs_values)
-                upper = np.where(sign_for_rows == ">=", inf, rhs_values)
+                lower = np.where(sign_for_rows == LESS_EQUAL, -inf, rhs_values)
+                upper = np.where(sign_for_rows == GREATER_EQUAL, inf, rhs_values)
                 for pos, lo, up in zip(positions, lower, upper):
                     h.changeRowBounds(int(pos), float(lo), float(up))
 
@@ -1903,16 +1884,16 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         gm.update()
         return gm
 
-    _GUROBI_VTYPE_MAP: ClassVar[dict[str, str]] = {
-        "continuous": "C",
-        "binary": "B",
-        "integer": "I",
-        "semi_continuous": "S",
+    _GUROBI_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
+        VarKind.CONTINUOUS: "C",
+        VarKind.BINARY: "B",
+        VarKind.INTEGER: "I",
+        VarKind.SEMI_CONTINUOUS: "S",
     }
     _GUROBI_SIGN_MAP: ClassVar[dict[str, str]] = {
-        "<=": "<",
-        ">=": ">",
-        "=": "=",
+        LESS_EQUAL: "<",
+        GREATER_EQUAL: ">",
+        EQUAL: "=",
     }
     _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
 
@@ -1945,9 +1926,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 if upd.upper is not None:
                     gm.setAttr("UB", var_subset, upd.upper.tolist())
             if upd.type_change is not None:
-                vtype = self._GUROBI_VTYPE_MAP.get(upd.type_change)
-                if vtype is None:
-                    raise UnsupportedUpdate(f"unknown var type {upd.type_change}")
+                vtype = self._GUROBI_VTYPE_MAP[upd.type_change]
                 var = variables[name]
                 labels = var.labels.values.ravel()
                 mask = labels != -1

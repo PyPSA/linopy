@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -16,15 +17,22 @@ if TYPE_CHECKING:
 _INT64_MAX = np.iinfo(np.int64).max
 
 
-def _variable_type(var: Variable) -> str:
+class VarKind(enum.Enum):
+    CONTINUOUS = "continuous"
+    BINARY = "binary"
+    INTEGER = "integer"
+    SEMI_CONTINUOUS = "semi_continuous"
+
+
+def _variable_type(var: Variable) -> VarKind:
     attrs = var.attrs
     if attrs.get("binary"):
-        return "binary"
+        return VarKind.BINARY
     if attrs.get("integer"):
-        return "integer"
+        return VarKind.INTEGER
     if attrs.get("semi_continuous"):
-        return "semi_continuous"
-    return "continuous"
+        return VarKind.SEMI_CONTINUOUS
+    return VarKind.CONTINUOUS
 
 
 def _objective_linear_vector(model: Model) -> np.ndarray:
@@ -51,27 +59,26 @@ def _canonicalize_rows(
     vars_arr: np.ndarray, coeffs_arr: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sort each row jointly by var index. -1 sentinels sort to the right."""
-    if vars_arr.size == 0:
-        return vars_arr.astype(np.int64, copy=False), coeffs_arr.astype(
-            np.float64, copy=False
-        )
-    sort_key = np.where(vars_arr == -1, _INT64_MAX, vars_arr).astype(np.int64)
+    vars_i64 = np.ascontiguousarray(vars_arr, dtype=np.int64)
+    coeffs_f64 = np.ascontiguousarray(coeffs_arr, dtype=np.float64)
+    if vars_i64.size == 0:
+        return vars_i64, coeffs_f64
+    sort_key = np.where(vars_i64 == -1, _INT64_MAX, vars_i64)
+    if vars_i64.shape[1] <= 1 or np.all(np.diff(sort_key, axis=1) >= 0):
+        return vars_i64, coeffs_f64
     order = np.argsort(sort_key, axis=1, kind="stable")
-    rows = np.arange(vars_arr.shape[0])[:, None]
-    return (
-        vars_arr[rows, order].astype(np.int64, copy=False),
-        coeffs_arr[rows, order].astype(np.float64, copy=False),
-    )
+    rows = np.arange(vars_i64.shape[0])[:, None]
+    return vars_i64[rows, order], coeffs_f64[rows, order]
 
 
 def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
     labels_flat = var.labels.values.ravel()
     mask = labels_flat != -1
     return ContainerVarBuffers(
-        lower=var.lower.values.ravel()[mask].astype(np.float64, copy=True),
-        upper=var.upper.values.ravel()[mask].astype(np.float64, copy=True),
+        lower=np.ascontiguousarray(var.lower.values.ravel()[mask], dtype=np.float64),
+        upper=np.ascontiguousarray(var.upper.values.ravel()[mask], dtype=np.float64),
         type=_variable_type(var),
-        active_labels=labels_flat[mask].astype(np.int64, copy=True),
+        active_labels=np.ascontiguousarray(labels_flat[mask], dtype=np.int64),
     )
 
 
@@ -135,7 +142,7 @@ class StructuralKey:
 class ContainerVarBuffers:
     lower: np.ndarray
     upper: np.ndarray
-    type: str
+    type: VarKind
     active_labels: np.ndarray
 
 
@@ -191,6 +198,9 @@ class ModelSnapshot:
         con_coords = {
             name: _coord_snapshot(con) for name, con in model.constraints.items()
         }
+
+        for con in model.constraints.data.values():
+            con._coef_dirty = False
 
         return cls(
             structural_key=structural_key,

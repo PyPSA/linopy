@@ -12,6 +12,7 @@ from linopy.persistent.snapshot import (
     ContainerConBuffers,
     ContainerVarBuffers,
     ModelSnapshot,
+    VarKind,
     _coord_snapshot,
     _extract_con_buffers,
     _extract_var_buffers,
@@ -36,30 +37,14 @@ class RebuildReason(enum.Enum):
 
 @dataclass
 class ContainerVarUpdate:
-    """
-    In-place variable bounds / type update for one container.
-
-    Bounds payloads share ``bounds_indices``. When only ``lower`` (or only
-    ``upper``) changes, both arrays are still populated from the new model so
-    backends with a single batched call (HiGHS ``changeColsBounds``) can be
-    fed directly.
-    """
-
     bounds_indices: np.ndarray | None = None
     lower: np.ndarray | None = None
     upper: np.ndarray | None = None
-    type_change: str | None = None
+    type_change: VarKind | None = None
 
 
 @dataclass
 class ContainerRowUpdate:
-    """
-    Per-row constraint update.
-
-    Holds views into the new model's canonicalised buffers; the orchestrator
-    diffs and applies under the same lock, so aliasing is bounded.
-    """
-
     coef_row_indices: np.ndarray | None = None
     coef_vars: np.ndarray | None = None
     coef_values: np.ndarray | None = None
@@ -78,6 +63,7 @@ class ModelDiff:
     obj_c_indices: np.ndarray | None = None
     obj_c_values: np.ndarray | None = None
     obj_sense: str | None = None
+    n_coef_updates: int = 0
 
     @property
     def is_empty(self) -> bool:
@@ -100,14 +86,6 @@ class ModelDiff:
     @property
     def changed_constraints(self) -> set[str]:
         return set(self.cons)
-
-    @property
-    def n_coef_updates(self) -> int:
-        total = 0
-        for upd in self.cons.values():
-            if upd.coef_vars is not None:
-                total += int((upd.coef_vars != -1).sum())
-        return total
 
     def summary(self) -> dict[str, int | bool | str | None]:
         n_var_lb = sum(1 for u in self.vars.values() if u.lower is not None)
@@ -317,11 +295,10 @@ class ModelDiff:
 def _coords_equal(
     a: dict[str, np.ndarray], b: dict[str, np.ndarray], ignored: frozenset[str]
 ) -> bool:
-    keys_a = set(a) - ignored
-    keys_b = set(b) - ignored
-    if keys_a != keys_b:
+    keys = a.keys() - ignored
+    if keys != b.keys() - ignored:
         return False
-    return all(np.array_equal(a[k], b[k]) for k in keys_a)
+    return all(np.array_equal(a[k], b[k]) for k in keys)
 
 
 def _diff_var_container(
@@ -410,6 +387,7 @@ def _diff_con_container(
         ].astype(np.int32, copy=False)
         update.coef_vars = new_buf.vars[idx]
         update.coef_values = new_buf.coeffs[idx]
+        diff.n_coef_updates += int((update.coef_vars != -1).sum())
     if rhs_changed.any():
         idx = np.flatnonzero(rhs_changed)
         update.rhs_row_indices = con_l2p[
@@ -434,10 +412,7 @@ def _diff_objective(
     base_obj_quad: bool,
     base_obj_sense: str,
 ) -> RebuildReason | None:
-    obj_quad_present = model.objective.is_quadratic
-    if obj_quad_present != base_obj_quad:
-        return RebuildReason.QUAD_OBJ
-    if obj_quad_present:
+    if model.objective.is_quadratic or base_obj_quad:
         return RebuildReason.QUAD_OBJ
 
     obj_c = _objective_linear_vector(model)

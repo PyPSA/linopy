@@ -18,6 +18,7 @@ from linopy.persistent.snapshot import (
     ContainerVarBuffers,
     ModelSnapshot,
     StructuralKey,
+    VarKind,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "StructuralKey",
     "UnsupportedUpdate",
     "UpdatesDisabledError",
+    "VarKind",
 ]
