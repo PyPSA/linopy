@@ -446,6 +446,32 @@ class TestAddVariablesBoundsWithCoords:
         assert (var.data.lower.sel(space="a") == [1, 2, 3]).all()
         assert (var.data.lower.sel(space="b") == [1, 2, 3]).all()
 
+    @pytest.mark.parametrize(
+        "lower, upper",
+        [
+            pytest.param(0, "da", id="scalar-lower+da-upper"),
+            pytest.param("da", 1, id="da-lower+scalar-upper"),
+            pytest.param("da", "da", id="da-lower+da-upper"),
+        ],
+    )
+    def test_dataarray_broadcast_missing_dim_order(
+        self, model: "Model", lower: Any, upper: Any
+    ) -> None:
+        """Dimension order follows coords, not the type of the bounds (#706)."""
+        x = pd.Index(["a", "b", "c"], name="x")
+        y = pd.Index(["X", "Y"], name="y")
+        full = DataArray(
+            np.arange(6).reshape(3, 2), coords={"x": x, "y": y}, dims=["x", "y"]
+        )
+        # bounds are DataArrays missing the 'y' dimension
+        da = full.sum("y")
+        lower = da if lower == "da" else lower
+        upper = da if upper == "da" else upper
+        var = model.add_variables(lower=lower, upper=upper, coords=[x, y], name="x")
+        assert var.dims == ("x", "y")
+        assert var.data.lower.dims == ("x", "y")
+        assert var.data.upper.dims == ("x", "y")
+
     # -- Special coord formats ---------------------------------------------
 
     def test_multiindex_coords(self, model: "Model") -> None:

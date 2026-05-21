@@ -135,7 +135,8 @@ def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
 
     - Raises ``ValueError`` if the array has dimensions not in coords.
     - Raises ``ValueError`` if shared dimension coordinates don't match.
-    - Expands missing dimensions via ``expand_dims``.
+    - Expands missing dimensions via ``expand_dims`` and transposes the
+      result to the ``coords`` dimension order.
     """
     if not isinstance(arr, DataArray):
         return arr
@@ -171,10 +172,18 @@ def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
                     f"expected {expected_idx.tolist()}, got {actual_idx.tolist()}"
                 )
 
-    # Expand missing dimensions
+    # expand_dims prepends new dimensions and coordinates; restore coords order.
     expand = {k: v for k, v in expected.items() if k not in arr.dims}
     if expand:
-        arr = arr.expand_dims(expand)
+        arr = arr.expand_dims(expand).transpose(*expected)
+        target = [c for c in expected if c in arr.coords]
+        target += [c for c in arr.coords if c not in expected]
+        if list(arr.coords) != target:
+            arr = DataArray(
+                arr.variable,
+                coords={c: arr.coords[c] for c in target},
+                name=arr.name,
+            )
 
     return arr
 
