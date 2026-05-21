@@ -42,7 +42,7 @@ m.to_netcdf("{model_solved_file}")
 @dataclass
 class SshSettings:
     """
-    Transport-only config for the :class:`~linopy.remote.SSH` transport.
+    Transport-only config for the :class:`~linopy.remote.SSH` remote.
 
     Solver name and solver options come from :meth:`Model.solve` —
     ``m.solve("gurobi", remote=SshSettings(hostname=...), presolve="on")``.
