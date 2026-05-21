@@ -70,7 +70,7 @@ def test_rhs_only_mutation(baseline: Model) -> None:
     assert "c1" in diff.cons
     upd = diff.cons["c1"]
     assert upd.rhs_values is not None
-    assert upd.coef_values is None
+    assert upd.coef_data is None
 
 
 def test_objective_linear_change(baseline: Model) -> None:
@@ -121,9 +121,8 @@ def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     assert diff.rebuild_reason is RebuildReason.NONE
     assert "c1" in diff.cons
     upd = diff.cons["c1"]
-    assert upd.coef_values is not None
-    valid = upd.coef_vars != -1
-    np.testing.assert_array_equal(upd.coef_values[valid], np.full(valid.sum(), 6.0))
+    assert upd.coef_data is not None
+    np.testing.assert_array_equal(upd.coef_data, np.full(upd.coef_data.size, 6.0))
 
 
 def test_coef_sparsity_change(baseline: Model) -> None:
@@ -147,10 +146,10 @@ def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
     c.coeffs = c.coeffs * 5
     c._coef_dirty = False
     diff_fast = ModelDiff.from_snapshot(snap, baseline, same_model=True)
-    assert "c1" not in diff_fast.cons or diff_fast.cons["c1"].coef_values is None
+    assert "c1" not in diff_fast.cons or diff_fast.cons["c1"].coef_data is None
     diff_full = ModelDiff.from_snapshot(snap, baseline, same_model=False)
     assert "c1" in diff_full.cons
-    assert diff_full.cons["c1"].coef_values is not None
+    assert diff_full.cons["c1"].coef_data is not None
 
 
 def test_modeldiff_default_is_empty() -> None:

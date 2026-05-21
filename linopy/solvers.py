@@ -38,8 +38,6 @@ import linopy.io
 from linopy.common import count_initial_letters, values_to_lookup_array
 from linopy.constants import (
     EQUAL,
-    GREATER_EQUAL,
-    LESS_EQUAL,
     SOS_DIM_ATTR,
     SOS_TYPE_ATTR,
     Result,
@@ -48,6 +46,8 @@ from linopy.constants import (
     SolverStatus,
     Status,
     TerminationCondition,
+    short_GREATER_EQUAL,
+    short_LESS_EQUAL,
 )
 from linopy.persistent import (
     ModelDiff,
@@ -523,7 +523,8 @@ class Solver(ABC, Generic[EnvType]):
         track_updates: bool = False,
         **build_kwargs: Any,
     ) -> Solver:
-        """Construct the solver subclass registered as ``name``.
+        """
+        Construct the solver subclass registered as ``name``.
 
         With ``model`` supplied, the solver is built immediately. Without it,
         an unbuilt instance is returned and the first ``solve(model, ...)``
@@ -1440,19 +1441,19 @@ class Highs(Solver[None]):
                 rhs_values = np.asarray(upd.rhs_values, dtype=np.float64)
                 sign_for_rows = upd.rhs_signs
                 inf = np.inf
-                lower = np.where(sign_for_rows == LESS_EQUAL, -inf, rhs_values)
-                upper = np.where(sign_for_rows == GREATER_EQUAL, inf, rhs_values)
+                lower = np.where(sign_for_rows == short_LESS_EQUAL, -inf, rhs_values)
+                upper = np.where(sign_for_rows == short_GREATER_EQUAL, inf, rhs_values)
                 for pos, lo, up in zip(positions, lower, upper):
                     h.changeRowBounds(int(pos), float(lo), float(up))
 
-            if upd.coef_values is not None:
+            if upd.coef_data is not None:
                 rows = upd.coef_row_indices
-                for r, var_row, val_row in zip(
-                    rows, upd.coef_vars, upd.coef_values
-                ):
-                    valid = var_row != -1
-                    for c, v in zip(var_row[valid], val_row[valid]):
-                        h.changeCoeff(int(r), int(c), float(v))
+                indptr = upd.coef_indptr
+                indices = upd.coef_indices
+                data = upd.coef_data
+                for i, r in enumerate(rows):
+                    for j in range(int(indptr[i]), int(indptr[i + 1])):
+                        h.changeCoeff(int(r), int(indices[j]), float(data[j]))
 
         if diff.obj_c_indices is not None:
             indices = diff.obj_c_indices
@@ -1891,8 +1892,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         VarKind.SEMI_CONTINUOUS: "S",
     }
     _GUROBI_SIGN_MAP: ClassVar[dict[str, str]] = {
-        LESS_EQUAL: "<",
-        GREATER_EQUAL: ">",
+        short_LESS_EQUAL: "<",
+        short_GREATER_EQUAL: ">",
         EQUAL: "=",
     }
     _GUROBI_SENSE_MAP: ClassVar[dict[str, int]] = {"min": 1, "max": -1}
@@ -1951,15 +1952,17 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                         raise UnsupportedUpdate(f"unknown sign {s_str!r}")
                     senses.append(self._GUROBI_SIGN_MAP[s_str])
                 gm.setAttr("Sense", con_subset, senses)
-            if upd.coef_values is not None:
+            if upd.coef_data is not None:
                 rows = upd.coef_row_indices
-                for r, var_row, val_row in zip(
-                    rows, upd.coef_vars, upd.coef_values
-                ):
-                    valid = var_row != -1
-                    for c, v in zip(var_row[valid], val_row[valid]):
+                indptr = upd.coef_indptr
+                indices = upd.coef_indices
+                data = upd.coef_data
+                for i, r in enumerate(rows):
+                    for j in range(int(indptr[i]), int(indptr[i + 1])):
                         gm.chgCoeff(
-                            gurobi_cons[int(r)], gurobi_vars[int(c)], float(v)
+                            gurobi_cons[int(r)],
+                            gurobi_vars[int(indices[j])],
+                            float(data[j]),
                         )
 
         if diff.obj_c_indices is not None:

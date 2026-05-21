@@ -6,7 +6,8 @@ class UnsupportedUpdate(Exception):
 
 
 class RebuildRequiredError(RuntimeError):
-    """Raised when an in-place update is required but a rebuild is needed.
+    """
+    Raised when an in-place update is required but a rebuild is needed.
 
     Carries the :class:`RebuildReason` that forced the rebuild attempt.
     """
@@ -17,7 +18,8 @@ class RebuildRequiredError(RuntimeError):
 
 
 class UpdatesDisabledError(RuntimeError):
-    """Raised when an in-place update is requested on a solver built with
+    """
+    Raised when an in-place update is requested on a solver built with
     ``track_updates=False``. Reconstruct the solver with ``track_updates=True``
     to enable diff-based updates.
     """

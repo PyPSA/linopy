@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import enum
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
-
-from collections.abc import Iterable
 
 from linopy.persistent.snapshot import (
     ContainerConBuffers,
@@ -22,7 +21,7 @@ from linopy.persistent.snapshot import (
 if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.model import Model
-    from linopy.variables import Variable
+    from linopy.variables import Variable, VariableLabelIndex
 
 
 class RebuildReason(enum.Enum):
@@ -46,8 +45,9 @@ class ContainerVarUpdate:
 @dataclass
 class ContainerRowUpdate:
     coef_row_indices: np.ndarray | None = None
-    coef_vars: np.ndarray | None = None
-    coef_values: np.ndarray | None = None
+    coef_indptr: np.ndarray | None = None
+    coef_indices: np.ndarray | None = None
+    coef_data: np.ndarray | None = None
     rhs_row_indices: np.ndarray | None = None
     rhs_values: np.ndarray | None = None
     rhs_signs: np.ndarray | None = None
@@ -93,7 +93,7 @@ class ModelDiff:
         n_var_type = sum(1 for u in self.vars.values() if u.type_change is not None)
         n_con_rhs = sum(1 for u in self.cons.values() if u.rhs_values is not None)
         n_con_sign = sum(1 for u in self.cons.values() if u.sign_values is not None)
-        n_con_coef = sum(1 for u in self.cons.values() if u.coef_values is not None)
+        n_con_coef = sum(1 for u in self.cons.values() if u.coef_data is not None)
         return {
             "rebuild_reason": self.rebuild_reason.value,
             "var_lb": n_var_lb,
@@ -129,8 +129,16 @@ class ModelDiff:
             entry["rhs"] = u.rhs_values
         if u.sign_values is not None:
             entry["sign"] = u.sign_values
-        if u.coef_values is not None:
-            entry["coef_values"] = u.coef_values
+        if u.coef_data is not None:
+            indptr = u.coef_indptr
+            indices = u.coef_indices
+            data = u.coef_data
+            assert indptr is not None and indices is not None
+            entry["coef_rows"] = [
+                (indices[indptr[i] : indptr[i + 1]],
+                 data[indptr[i] : indptr[i + 1]])
+                for i in range(len(indptr) - 1)
+            ]
         return entry
 
     def __repr__(self) -> str:
@@ -154,7 +162,8 @@ class ModelDiff:
         same_model: bool = True,
         ignore_dims: Iterable[str] | None = None,
     ) -> ModelDiff:
-        """Diff ``model`` against a captured ``snapshot``.
+        """
+        Diff ``model`` against a captured ``snapshot``.
 
         Coordinate values are not compared by default. Pass ``ignore_dims``
         (e.g. ``ignore_dims=()`` or ``ignore_dims={"snapshot"}``) to opt into
@@ -201,7 +210,7 @@ class ModelDiff:
             skip_coef_compare = same_model and not con._coef_dirty
             reason = _diff_con_container(
                 diff, name, con, snapshot.con_buffers[name],
-                base_coords, var_l2p, con_l2p, ignored, check_coords,
+                base_coords, var_label_index, con_l2p, ignored, check_coords,
                 skip_coef_compare,
             )
             if reason is not None:
@@ -223,7 +232,8 @@ class ModelDiff:
         model_b: Model,
         ignore_dims: Iterable[str] | None = None,
     ) -> ModelDiff:
-        """Diff two linopy models directly, without capturing a snapshot.
+        """
+        Diff two linopy models directly, without capturing a snapshot.
 
         ``model_a`` is the baseline, ``model_b`` is the target. The
         coefficient comparison runs unconditionally — no ``_coef_dirty``
@@ -270,11 +280,11 @@ class ModelDiff:
 
         for name, con_b in model_b.constraints.items():
             con_a = model_a.constraints[name]
-            base_buf = _extract_con_buffers(con_a, var_l2p)
+            base_buf = _extract_con_buffers(con_a, var_idx_a)
             base_coords = _coord_snapshot(con_a) if check_coords else None
             reason = _diff_con_container(
                 diff, name, con_b, base_buf,
-                base_coords, var_l2p, con_l2p, ignored, check_coords,
+                base_coords, var_idx_b, con_l2p, ignored, check_coords,
                 skip_coef_compare=False,
             )
             if reason is not None:
@@ -345,19 +355,23 @@ def _diff_con_container(
     con: ConstraintBase,
     base_buf: ContainerConBuffers,
     base_coords: dict[str, np.ndarray] | None,
-    var_l2p: np.ndarray,
+    var_label_index: VariableLabelIndex,
     con_l2p: np.ndarray,
     ignored: frozenset[str],
     check_coords: bool,
     skip_coef_compare: bool,
 ) -> RebuildReason | None:
-    new_buf = _extract_con_buffers(con, var_l2p)
-    if new_buf.coeffs.shape != base_buf.coeffs.shape:
-        return RebuildReason.SPARSITY
+    new_buf = _extract_con_buffers(con, var_label_index)
+    if new_buf.indptr.shape != base_buf.indptr.shape:
+        return RebuildReason.COORD_REINDEX
     if not np.array_equal(new_buf.active_labels, base_buf.active_labels):
         return RebuildReason.STRUCTURAL_LABELS
     if check_coords and not _coords_equal(base_coords, _coord_snapshot(con), ignored):
         return RebuildReason.COORD_REINDEX
+    if not np.array_equal(new_buf.indptr, base_buf.indptr):
+        return RebuildReason.SPARSITY
+    if not np.array_equal(new_buf.indices, base_buf.indices):
+        return RebuildReason.SPARSITY
 
     n_rows = new_buf.active_labels.size
     if n_rows == 0:
@@ -365,13 +379,15 @@ def _diff_con_container(
 
     if skip_coef_compare:
         row_value_changed = np.zeros(n_rows, dtype=bool)
-        row_struct_changed = np.zeros(n_rows, dtype=bool)
     else:
-        row_struct_changed = np.any(new_buf.vars != base_buf.vars, axis=-1)
-        row_value_changed = np.any(new_buf.coeffs != base_buf.coeffs, axis=-1)
-
-    if row_struct_changed.any():
-        return RebuildReason.SPARSITY
+        data_diff = new_buf.data != base_buf.data
+        if data_diff.any():
+            nnz_per_row = np.diff(new_buf.indptr)
+            row_idx_per_nnz = np.repeat(np.arange(n_rows), nnz_per_row)
+            row_value_changed = np.zeros(n_rows, dtype=bool)
+            row_value_changed[row_idx_per_nnz[data_diff]] = True
+        else:
+            row_value_changed = np.zeros(n_rows, dtype=bool)
 
     rhs_changed = new_buf.rhs != base_buf.rhs
     sign_changed = new_buf.sign != base_buf.sign
@@ -385,9 +401,23 @@ def _diff_con_container(
         update.coef_row_indices = con_l2p[
             new_buf.active_labels[idx]
         ].astype(np.int32, copy=False)
-        update.coef_vars = new_buf.vars[idx]
-        update.coef_values = new_buf.coeffs[idx]
-        diff.n_coef_updates += int((update.coef_vars != -1).sum())
+        new_indptr = new_buf.indptr
+        nnz_per_changed = (new_indptr[idx + 1] - new_indptr[idx]).astype(np.int32)
+        payload_indptr = np.empty(len(idx) + 1, dtype=np.int32)
+        payload_indptr[0] = 0
+        np.cumsum(nnz_per_changed, out=payload_indptr[1:])
+        total_nnz = int(payload_indptr[-1])
+        payload_indices = np.empty(total_nnz, dtype=new_buf.indices.dtype)
+        payload_data = np.empty(total_nnz, dtype=np.float64)
+        for j, i in enumerate(idx):
+            s, e = int(new_indptr[i]), int(new_indptr[i + 1])
+            ps, pe = int(payload_indptr[j]), int(payload_indptr[j + 1])
+            payload_indices[ps:pe] = new_buf.indices[s:e]
+            payload_data[ps:pe] = new_buf.data[s:e]
+        update.coef_indptr = payload_indptr
+        update.coef_indices = payload_indices
+        update.coef_data = payload_data
+        diff.n_coef_updates += total_nnz
     if rhs_changed.any():
         idx = np.flatnonzero(rhs_changed)
         update.rhs_row_indices = con_l2p[

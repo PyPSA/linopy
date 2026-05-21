@@ -5,34 +5,7 @@ import pytest
 
 from linopy import Model
 from linopy.persistent import ModelDiff, ModelSnapshot, RebuildReason
-from linopy.persistent.snapshot import (
-    _canonicalize_rows,
-    _extract_con_buffers,
-)
-
-
-def test_canonicalize_rows_sorts_by_var_label() -> None:
-    vars_in = np.array([[5, 2, 9], [1, 3, 0]], dtype=np.int64)
-    coeffs_in = np.array([[0.5, 0.2, 0.9], [0.1, 0.3, 0.0]], dtype=np.float64)
-    vars_out, coeffs_out = _canonicalize_rows(vars_in, coeffs_in)
-    np.testing.assert_array_equal(vars_out, [[2, 5, 9], [0, 1, 3]])
-    np.testing.assert_array_equal(coeffs_out, [[0.2, 0.5, 0.9], [0.0, 0.1, 0.3]])
-
-
-def test_canonicalize_rows_minus_one_to_right() -> None:
-    vars_in = np.array([[5, -1, 2], [-1, 0, -1]], dtype=np.int64)
-    coeffs_in = np.array([[0.5, 0.0, 0.2], [0.0, 0.1, 0.0]], dtype=np.float64)
-    vars_out, coeffs_out = _canonicalize_rows(vars_in, coeffs_in)
-    np.testing.assert_array_equal(vars_out[:, 0], [2, 0])
-    assert (vars_out[:, -1] == -1).all()
-
-
-def test_canonicalize_empty_buffers_round_trip() -> None:
-    vars_in = np.empty((0, 3), dtype=np.int64)
-    coeffs_in = np.empty((0, 3), dtype=np.float64)
-    vars_out, coeffs_out = _canonicalize_rows(vars_in, coeffs_in)
-    assert vars_out.shape == (0, 3)
-    assert coeffs_out.shape == (0, 3)
+from linopy.persistent.snapshot import _extract_con_buffers
 
 
 def _build_permuted_pair() -> tuple[Model, Model]:
@@ -54,10 +27,11 @@ def test_permuted_term_order_produces_equal_buffers() -> None:
     m1, m2 = _build_permuted_pair()
     s1 = ModelSnapshot.capture(m1)
     s2 = ModelSnapshot.capture(m2)
-    np.testing.assert_array_equal(s1.con_buffers["c1"].vars, s2.con_buffers["c1"].vars)
-    np.testing.assert_array_equal(
-        s1.con_buffers["c1"].coeffs, s2.con_buffers["c1"].coeffs
-    )
+    b1 = s1.con_buffers["c1"]
+    b2 = s2.con_buffers["c1"]
+    np.testing.assert_array_equal(b1.indptr, b2.indptr)
+    np.testing.assert_array_equal(b1.indices, b2.indices)
+    np.testing.assert_array_equal(b1.data, b2.data)
 
 
 def test_active_labels_match_label_index(baseline_model: Model) -> None:
@@ -82,7 +56,6 @@ def baseline_model() -> Model:
 
 def test_shape_mismatch_triggers_sparsity_rebuild(baseline_model: Model) -> None:
     snap = ModelSnapshot.capture(baseline_model)
-    # Mutate to widen the term dim of c1 via lhs replacement
     x = baseline_model.variables["x"]
     y = baseline_model.variables["y"]
     baseline_model.constraints["c1"].lhs = 2 * x + 0 * y.sum()
@@ -103,13 +76,14 @@ def test_zero_row_container_capture() -> None:
     assert diff.is_empty
 
 
-def test_con_buffers_rhs_and_sign_dtypes(baseline_model: Model) -> None:
+def test_con_buffers_dtypes(baseline_model: Model) -> None:
     snap = ModelSnapshot.capture(baseline_model)
     buf = snap.con_buffers["c1"]
     assert buf.rhs.dtype == np.float64
-    assert buf.sign.dtype.kind == "U"
-    assert buf.coeffs.dtype == np.float64
-    assert buf.vars.dtype == np.int64
+    assert buf.sign.dtype == np.dtype("U1")
+    assert buf.data.dtype == np.float64
+    assert buf.indices.dtype == np.int32
+    assert buf.indptr.dtype == np.int32
 
 
 def test_masked_rows_excluded_from_active_labels() -> None:
@@ -121,6 +95,30 @@ def test_masked_rows_excluded_from_active_labels() -> None:
     snap = ModelSnapshot.capture(m)
     buf = snap.con_buffers["c1"]
     assert buf.active_labels.size == 3
-    var_l2p = m.variables.label_index.label_to_pos
-    rebuilt = _extract_con_buffers(m.constraints["c1"], var_l2p)
+    rebuilt = _extract_con_buffers(m.constraints["c1"], m.variables.label_index)
     np.testing.assert_array_equal(rebuilt.active_labels, buf.active_labels)
+
+
+def test_csr_capture_deterministic(baseline_model: Model) -> None:
+    s1 = ModelSnapshot.capture(baseline_model)
+    s2 = ModelSnapshot.capture(baseline_model)
+    for name in s1.con_buffers:
+        b1, b2 = s1.con_buffers[name], s2.con_buffers[name]
+        np.testing.assert_array_equal(b1.indptr, b2.indptr)
+        np.testing.assert_array_equal(b1.indices, b2.indices)
+        np.testing.assert_array_equal(b1.data, b2.data)
+
+
+def test_duplicate_variable_terms_summed() -> None:
+    m1 = Model()
+    x1 = m1.add_variables(0, 10, coords=[range(3)], name="x")
+    m1.add_constraints(2 * x1 + 3 * x1 >= 1, name="c1")
+    m1.add_objective(x1.sum())
+
+    m2 = Model()
+    x2 = m2.add_variables(0, 10, coords=[range(3)], name="x")
+    m2.add_constraints(5 * x2 >= 1, name="c1")
+    m2.add_objective(x2.sum())
+
+    diff = ModelDiff.from_models(m1, m2)
+    assert diff.is_empty

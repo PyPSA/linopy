@@ -11,10 +11,7 @@ from linopy import expressions
 if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.model import Model
-    from linopy.variables import Variable
-
-
-_INT64_MAX = np.iinfo(np.int64).max
+    from linopy.variables import Variable, VariableLabelIndex
 
 
 class VarKind(enum.Enum):
@@ -55,22 +52,6 @@ def _objective_linear_vector(model: Model) -> np.ndarray:
     return result
 
 
-def _canonicalize_rows(
-    vars_arr: np.ndarray, coeffs_arr: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Sort each row jointly by var index. -1 sentinels sort to the right."""
-    vars_i64 = np.ascontiguousarray(vars_arr, dtype=np.int64)
-    coeffs_f64 = np.ascontiguousarray(coeffs_arr, dtype=np.float64)
-    if vars_i64.size == 0:
-        return vars_i64, coeffs_f64
-    sort_key = np.where(vars_i64 == -1, _INT64_MAX, vars_i64)
-    if vars_i64.shape[1] <= 1 or np.all(np.diff(sort_key, axis=1) >= 0):
-        return vars_i64, coeffs_f64
-    order = np.argsort(sort_key, axis=1, kind="stable")
-    rows = np.arange(vars_i64.shape[0])[:, None]
-    return vars_i64[rows, order], coeffs_f64[rows, order]
-
-
 def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
     labels_flat = var.labels.values.ravel()
     mask = labels_flat != -1
@@ -83,39 +64,16 @@ def _extract_var_buffers(var: Variable) -> ContainerVarBuffers:
 
 
 def _extract_con_buffers(
-    con: ConstraintBase, var_l2p: np.ndarray
+    con: ConstraintBase, var_label_index: VariableLabelIndex
 ) -> ContainerConBuffers:
-    labels_flat = con.labels.values.ravel()
-    vars_vals = con.vars.values
-    coeffs_vals = con.coeffs.values
-    n_rows = len(labels_flat)
-    if n_rows > 0:
-        vars_2d = vars_vals.reshape(n_rows, -1)
-        coeffs_2d = coeffs_vals.reshape(vars_2d.shape)
-    else:
-        n_term = max(1, vars_vals.size)
-        vars_2d = vars_vals.reshape(0, n_term)
-        coeffs_2d = coeffs_vals.reshape(0, n_term)
-
-    row_mask = (labels_flat != -1) & (vars_2d != -1).any(axis=1)
-    active_labels = labels_flat[row_mask].astype(np.int64, copy=True)
-
-    vars_active = vars_2d[row_mask]
-    coeffs_active = coeffs_2d[row_mask].astype(np.float64, copy=True)
-
-    valid = vars_active != -1
-    col_indices = np.full(vars_active.shape, -1, dtype=np.int64)
-    col_indices[valid] = var_l2p[vars_active[valid]]
-    coeffs_clean = np.where(valid, coeffs_active, 0.0)
-
-    vars_sorted, coeffs_sorted = _canonicalize_rows(col_indices, coeffs_clean)
-
+    csr, con_labels, b, sense = con.to_matrix_with_rhs(var_label_index)
     return ContainerConBuffers(
-        coeffs=coeffs_sorted,
-        vars=vars_sorted,
-        rhs=con.rhs.values.ravel()[row_mask].astype(np.float64, copy=True),
-        sign=con.sign.values.ravel()[row_mask].astype("U2", copy=True),
-        active_labels=active_labels,
+        indptr=csr.indptr.astype(np.int32, copy=True),
+        indices=csr.indices.astype(np.int32, copy=True),
+        data=csr.data.astype(np.float64, copy=True),
+        rhs=np.asarray(b, dtype=np.float64).copy(),
+        sign=np.asarray(sense, dtype="U1").copy(),
+        active_labels=np.asarray(con_labels, dtype=np.int64).copy(),
     )
 
 
@@ -148,8 +106,9 @@ class ContainerVarBuffers:
 
 @dataclass(frozen=True)
 class ContainerConBuffers:
-    coeffs: np.ndarray
-    vars: np.ndarray
+    indptr: np.ndarray
+    indices: np.ndarray
+    data: np.ndarray
     rhs: np.ndarray
     sign: np.ndarray
     active_labels: np.ndarray
@@ -176,7 +135,6 @@ class ModelSnapshot:
     def capture(cls, model: Model) -> ModelSnapshot:
         var_label_index = model.variables.label_index
         con_label_index = model.constraints.label_index
-        var_l2p = var_label_index.label_to_pos
 
         structural_key = StructuralKey(
             var_container_names=tuple(model.variables),
@@ -189,7 +147,7 @@ class ModelSnapshot:
             name: _extract_var_buffers(var) for name, var in model.variables.items()
         }
         con_buffers = {
-            name: _extract_con_buffers(con, var_l2p)
+            name: _extract_con_buffers(con, var_label_index)
             for name, con in model.constraints.items()
         }
         var_coords = {
