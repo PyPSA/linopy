@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 from warnings import warn
 
 import numpy as np
@@ -109,6 +109,8 @@ from linopy.variables import ScalarVariable, Variable, Variables
 if TYPE_CHECKING:
     from linopy.piecewise import PiecewiseFormulation
 
+T = TypeVar("T")
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,45 +128,57 @@ def _coords_to_dict(
     return result
 
 
-def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
+def _validate_dataarray_bounds(
+    arr: DataArray | pd.Series | pd.DataFrame | Any, coords: Any
+) -> Any:
     """
-    Validate and expand DataArray bounds against explicit coords.
+    Validate and expand DataArray or pandas bounds against explicit coords.
 
-    If ``arr`` is not a DataArray, return it unchanged (``as_dataarray``
-    will handle conversion). For DataArray inputs:
+    If ``arr`` is not a DataArray or pandas, it will be returned unchanged.
+    If ``arr`` is a pandas series or dataframe, it will be converted to a DataArray.
 
     - Raises ``ValueError`` if the array has dimensions not in coords.
     - Raises ``ValueError`` if shared dimension coordinates don't match.
     - Expands missing dimensions via ``expand_dims``.
     """
-    if not isinstance(arr, DataArray):
+    if not isinstance(arr, (DataArray, pd.Series, pd.DataFrame)):
         return arr
+
+    type_name = "DataArray"
+    if isinstance(arr, pd.Series):
+        type_name = "Series"
+        xarr: DataArray = arr.to_xarray()
+    elif isinstance(arr, pd.DataFrame):
+        type_name = "DataFrame"
+        xarr: DataArray = arr.unstack().to_xarray()  # type: ignore
+    else:
+        xarr = arr
 
     expected = _coords_to_dict(coords)
     if not expected:
-        return arr
+        return xarr
 
-    extra = set(arr.dims) - set(expected)
+    extra = set(xarr.dims) - set(expected)
     if extra:
-        raise ValueError(f"DataArray has extra dimensions not in coords: {extra}")
+        raise ValueError(f"{type_name} has extra dimensions not in coords: {extra}")
 
     for dim, coord_values in expected.items():
-        if dim not in arr.dims:
+        if dim not in xarr.dims:
             continue
-        if isinstance(arr.indexes.get(dim), pd.MultiIndex):
+        if isinstance(xarr.indexes.get(dim), pd.MultiIndex):
             continue
         expected_idx = (
             coord_values
             if isinstance(coord_values, pd.Index)
             else pd.Index(coord_values)
         )
-        actual_idx = arr.coords[dim].to_index()
+        actual_idx = xarr.coords[dim].to_index()
         if not actual_idx.equals(expected_idx):
             # Same values, different order → reindex to match expected order
             if len(actual_idx) == len(expected_idx) and set(actual_idx) == set(
                 expected_idx
             ):
-                arr = arr.reindex({dim: expected_idx})
+                xarr = xarr.reindex({dim: expected_idx})
             else:
                 raise ValueError(
                     f"Coordinates for dimension '{dim}' do not match: "
@@ -172,11 +186,11 @@ def _validate_dataarray_bounds(arr: Any, coords: Any) -> Any:
                 )
 
     # Expand missing dimensions
-    expand = {k: v for k, v in expected.items() if k not in arr.dims}
+    expand = {k: v for k, v in expected.items() if k not in xarr.dims}
     if expand:
-        arr = arr.expand_dims(expand)
+        xarr = xarr.expand_dims(expand)
 
-    return arr
+    return xarr
 
 
 class Model:

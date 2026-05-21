@@ -433,18 +433,43 @@ class TestAddVariablesBoundsWithCoords:
             model.add_variables(lower=lower, coords=self.DICT_COORDS, name="x")
 
     # -- Broadcasting missing dims -----------------------------------------
-
-    def test_dataarray_broadcast_missing_dim(self, model: "Model") -> None:
+    @pytest.mark.parametrize(
+        "bound",
+        [
+            pytest.param(
+                DataArray([1, 2, 3], dims=["time"], coords={"time": range(3)}),
+                id="xr.DataArray",
+            ),
+            pytest.param(
+                pd.Series(index=pd.RangeIndex(3, name="time"), data=[1, 2, 3]),
+                id="pd.Series",
+            ),
+            pytest.param(
+                pd.DataFrame(
+                    index=pd.RangeIndex(3, name="time"),
+                    columns=pd.Index(["red"], name="colour"),
+                    data=[1, 2, 3],
+                ),
+                id="pd.DataFrame",
+            ),
+        ],
+    )
+    def test_broadcast_missing_dim(
+        self, model: "Model", bound: DataArray | pd.Series
+    ) -> None:
         time = pd.RangeIndex(3, name="time")
         space = pd.Index(["a", "b"], name="space")
-        lower = DataArray([1, 2, 3], dims=["time"], coords={"time": range(3)})
-        var = model.add_variables(lower=lower, coords=[time, space], name="x")
-        assert set(var.data.dims) == {"time", "space"}
-        assert var.data.sizes == {"time": 3, "space": 2}
+        colour = pd.Index(["red"], name="colour")
+
+        var = model.add_variables(
+            lower=-bound, upper=bound, coords=[time, space, colour], name="x"
+        )
+        assert set(var.data.dims) == {"time", "space", "colour"}
+        assert var.data.sizes == {"time": 3, "space": 2, "colour": 1}
         # Verify broadcast filled with actual values, not NaN
         assert not var.data.lower.isnull().any()
-        assert (var.data.lower.sel(space="a") == [1, 2, 3]).all()
-        assert (var.data.lower.sel(space="b") == [1, 2, 3]).all()
+        assert (var.data.lower.sel(space="a", colour="red") == [-1, -2, -3]).all()
+        assert (var.data.lower.sel(space="b", colour="red") == [-1, -2, -3]).all()
 
     # -- Special coord formats ---------------------------------------------
 
